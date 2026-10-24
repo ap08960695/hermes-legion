@@ -2,7 +2,7 @@
 
 **Role-based bots. Parallel work. Less wasted inference.**
 
-Hermes Legion is an independent companion kit for [Hermes Agent](https://github.com/NousResearch/hermes-agent): a reviewed cumulative patch, reusable operating skills, and eight English role templates. It is not an official Hermes release or a hosted service.
+Hermes Legion is an independent companion kit for [Hermes Agent](https://github.com/NousResearch/hermes-agent): a reviewed cumulative patch, reusable operating skills, and fifteen English role templates. It is not an official Hermes release or a hosted service.
 
 The design is simple: give each bot a clear responsibility, dispatch independent ready work within existing limits, preserve a stable prompt prefix, and stop a worker when its verified native completion is already durable.
 
@@ -11,7 +11,7 @@ The design is simple: give each bot a clear responsibility, dispatch independent
 - **279 patched or added source/test files** against one explicitly pinned upstream revision, including 109 Python test files. See [patch inventory](patches/manifest.json) for the exact files and hashes.
 - Native task/run ownership checks; exactly-once dispatch; input preflight; recoverable compact handoffs; worker completion that avoids a needless follow-up model turn.
 - Bounded file/status reads, cache diagnostics, task/run usage attribution, waiting without repeated model calls, and worker phase timing.
-- Eight renamed role templates and ten reusable English skills. They contain no account configuration, credentials, personal persona or production transcripts.
+- Fifteen renamed role templates and ten reusable English skills. They contain no account configuration, credentials, personal persona or production transcripts.
 
 Read the [feature catalog](docs/features.md), [role guide](docs/bot-roles.md), and [verification record](docs/verification.md). A feature's inclusion does not establish a live performance saving for your workload.
 
@@ -24,20 +24,23 @@ Read the [feature catalog](docs/features.md), [role guide](docs/bot-roles.md), a
 
 No model call, account login, live session resume, service restart, dependency installation or user configuration change is performed by this repository's verification scripts.
 
-## Roles
+## A Captain-led team, not just role names
 
-| Name | Responsibility |
-|---|---|
-| Legatus | Coordination and independent ready-work dispatch |
-| Strategist | Planning and dependency decomposition |
-| Scout | Research and source verification |
-| Artificer | Implementation and bounded offline testing |
-| Auditor | Independent review and evidence checks |
-| Scribe | Writing, documentation and compact handoffs |
-| Prism | Visual analysis when an eligible route supports it |
-| Sentinel | Operations, health observation and safe recovery planning |
+The [full team example](examples/team.full.json) describes **34 profiles**: Captain/planner, native-provider twins for thirteen specialist families, and six purpose-specific Web bots. Code, analysis, research, review, testing, documents, media, voice preparation, operations and maintenance have distinct responsibilities. No private bot names, accounts, avatars or persona files are copied.
 
-Roles and providers are separate. A Web label does not prove capability, authorization, available quota, audio support or guaranteed free access.
+- [Team and workflow](docs/team-workflow.md) · [complete role roster](docs/bot-roles.md)
+- [Multiple accounts and native pool ownership](docs/multi-account.md)
+- [Manual native setup with config fragments](docs/setup-multi-account.md)
+- [Session stability and shared quota](docs/shared-quota.md)
+- [Offline routing dry-run](docs/offline-planner.md)
+
+```sh
+python3 scripts/legion_plan.py --team examples/team.full.json \
+  --snapshot examples/snapshots/synthetic-ready.json \
+  --tasks examples/scenarios/parallel-production.json --now 1
+```
+
+The dry-run makes no model request or live change. Synthetic examples do not certify runtime routing: actual account selection, quotas, ownership and dispatch remain native. The patch itself remains the same pinned compatibility unit.
 
 ## Privacy and licensing
 

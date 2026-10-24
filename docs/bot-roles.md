@@ -1,11 +1,36 @@
-# Bot roles
+# Bot team, families and provider twins
 
-The public names below are new role labels. There is no public mapping to private bot names, personas, accounts or avatars. The role templates are plain English reference instructions under `profiles/`; `roles.json` is Legion metadata, **not** a Hermes configuration file to copy over a live profile.
+Legion now describes a working team topology: a Captain, role-specific workers, native-provider twins, and six Web specialists. A role is a job contract; a profile is an executable Hermes identity; a provider lane supplies capability; a native credential pool supplies authorized account access. These are different things.
 
-Legatus coordinates independent ready work, Strategist shapes dependencies, Scout verifies sources, Artificer implements, Auditor reviews independently, Scribe writes and hands off, Prism handles supported visual work, and Sentinel observes operations.
+| Public role | Job |
+|---|---|
+| Legatus | Captain: coordinate, specify, route, inspect evidence, ask only material owner questions |
+| Strategist | Architecture, planning and dependency decomposition |
+| Scout | Research and source/reference collection |
+| Oracle | Evidence analysis and decision briefs |
+| Artificer | Implementation |
+| Auditor | Independent review |
+| Prober | Testing and acceptance evidence |
+| Archivist | Documents and structured deliverables |
+| Studio | Media/visual production |
+| Vox | Voice scripting and authorized audio-workflow preparation |
+| Scribe | Writing and compact recoverable handoffs |
+| Prism | Visual analysis on a verified image-capable route |
+| Sentinel | Operator and process observation |
+| Steward | DevOps, release preparation and rollback |
+| Custodian | Genuine incident/maintenance investigation |
 
-Create or select your own Hermes profiles using the commands supported by your installed version. Review a role's `SOUL.md`, merge the applicable guidance manually, and bind only an existing authorized route. Inspect native profile/session model restoration rules before changing a route: a saved conversation may retain its previous model binding. Do not rewrite a running conversation's system prompt to load new guidance.
+The full example has **34 profiles**: Captain and planner, two native-provider variants for each of thirteen other families, and six Web specialists. The provider twins use distinct `-codex` / `-claude` profile IDs but follow the same family contract. Preferences vary by role; the example does not default every job to the same model/provider. Actual model IDs are deliberately operator-selected placeholders.
 
-For each route, record actual capabilities locally: text, tools, browser/Web, visual input, audio, quota and cooldown. Do not infer audio from an SDK type or image input from a model name. Keep account identity, tokens and availability state out of this repository.
+| Web specialist | Suitable role |
+|---|---|
+| Forge Web | Coding |
+| Atlas Web | Research and documents |
+| Citadel Web | Architecture and planning |
+| Tribunal Web | Deep independent review |
+| Spark Web | Short triage and tests |
+| Press Web | Document batch preparation |
 
-For parallel work, use distinct task ownership and independent write scopes. A reviewer should not approve its own implementation. Shared access does not waive project rights, owner decisions or publication gates. Do not dispatch a Web bot merely to consume otherwise-unused quota.
+A suitable, genuinely ready public-data Web route is considered alongside native twins. Private data cannot enter a public-only route. A name or subscription label proves neither quota nor tools, vision or audio support. An independent reviewer is a different worker/run with the appropriate gates, not merely a second account name.
+
+Start with `examples/team.small.json` if the full roster is unnecessary. Reference metadata in `roles.json` / `examples/` is **not** raw Hermes configuration. Native configuration fragments live under `profiles/native/`; follow [setup](setup-multi-account.md). No original private bot name, persona, account or rename map is included.
