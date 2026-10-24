@@ -1,0 +1,7 @@
+# Compatibility
+
+`patches/manifest.json` pins the upstream repository, base commit, patch hash and before/after hash of each target file. New files have a null before hash. The cumulative patch includes source, tests and generated contract changes that belong together.
+
+The base verifier rejects a different HEAD, pre-existing changes, an unexpected new target or a symlink. The installed verifier checks exact resulting target bytes and rejects unrelated changes. Git's normal apply check is an additional independent guard.
+
+This release does not claim general compatibility with the latest upstream, a provider's future API, every desktop platform or all imported skills. Model/provider identifiers and private account configuration are intentionally not supplied. Cross-platform tests must be run on their actual platform before claiming platform acceptance.
