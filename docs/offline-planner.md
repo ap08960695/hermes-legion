@@ -41,7 +41,7 @@ The pinned route is cooling down, so the recommendation is HOLD; it does not jum
 python3 scripts/legion_plan.py --team examples/team.full.json   --tasks examples/scenarios/parallel-production.json --now 1
 ```
 
-Ready work is held when the snapshot is absent. An expired snapshot, absent budget counter, unknown account/profile readiness or unverified required capability also holds. `--now 1` is for deterministic fabricated examples only. Never use a fake observation time to make real expired data usable.
+Ready work is held when the snapshot is absent. An expired snapshot, absent budget counter, unknown account/profile readiness or unverified required capability also holds. Running sessions and sessions already selected in the same plan are busy: no second task is selected for them. Non-finite times and nonstandard JSON `NaN`/`Infinity` are refused rather than treated as permanently current evidence. `--now 1` is for deterministic fabricated examples only. Never use a fake observation time to make real expired data usable.
 
 ## Boundaries
 

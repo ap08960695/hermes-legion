@@ -107,6 +107,34 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(row["status"], "keep-running")
         self.assertNotIn("profile", row)
 
+    def test_ready_task_does_not_reuse_a_running_session_even_if_listed_first(self):
+        rows = self.plan([task("next"), task("existing", state="running")])["decisions"]
+        self.assertEqual(rows[0]["status"], "hold")
+        self.assertEqual(rows[0]["reason"], "session-busy")
+        self.assertEqual(rows[1]["status"], "keep-running")
+
+    def test_one_plan_never_selects_two_tasks_for_the_same_session(self):
+        self.state["quota_groups"]["group-a"]["max_parallel"] = 3
+        rows = self.plan([task(), task("other")])["decisions"]
+        self.assertEqual([x["status"] for x in rows], ["selected", "hold"])
+
+    def test_nonfinite_observation_times_are_refused(self):
+        for key, value in [("captured_at", float("-inf")), ("expires_at", float("inf"))]:
+            with self.subTest(key=key):
+                state = copy.deepcopy(self.state)
+                state[key] = value
+                with self.assertRaises(ValueError):
+                    self.mod.plan(self.team, state, [task()], now=150)
+        with self.assertRaises(ValueError):
+            self.mod.plan(self.team, self.state, [task()], now=float("nan"))
+
+    def test_json_parser_rejects_nonstandard_infinity(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "snapshot.json"
+            path.write_text('{"expires_at": Infinity}')
+            with self.assertRaises(ValueError):
+                self.mod.read_json(path)
+
     def test_declared_vision_without_verified_vision_is_not_eligible(self):
         for p in self.team["profiles"]:
             p["capabilities"].append("image")

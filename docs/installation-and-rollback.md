@@ -2,13 +2,21 @@
 
 ## Supported target
 
-This first release supports the **exact** upstream Git revision in `patches/manifest.json`. Compatibility with later upstream releases, arbitrary local patches or another OS is not assumed. The verification helper reads files and Git metadata only; it does not import Hermes or run a model.
+This kit supports the **exact** upstream Git revision in `patches/manifest.json`. Compatibility with later upstream releases, arbitrary local patches or another OS is not assumed. The verification helper reads files and Git metadata only; it does not import Hermes or run a model.
 
 ## Apply to a separate clean checkout
 
-Keep your running installation untouched. Prepare a new checkout of upstream Hermes and check out the pinned revision. Set `LEGION_ROOT` and `HERMES_CHECKOUT` to your two directories. These are ordinary shell variables, not credentials.
+Keep your running installation untouched. Start in the Legion repository root, choose a **new, nonexistent** checkout directory and obtain the exact public base revision. The clone requires network access but does not authenticate a provider or call a model. These are ordinary shell variables, not credentials.
 
 ```sh
+set -eu
+export LEGION_ROOT="$(pwd)"
+# Replace this with a NEW directory outside your running installation:
+export HERMES_CHECKOUT="/absolute/path/to/new-hermes-legion-checkout"
+legion_base_commit="$(python3 -c 'import json; print(json.load(open("patches/manifest.json"))["upstream_commit"])')"
+test ! -e "$HERMES_CHECKOUT"
+git clone --no-checkout https://github.com/NousResearch/hermes-agent.git "$HERMES_CHECKOUT"
+git -C "$HERMES_CHECKOUT" checkout --detach "$legion_base_commit"
 python3 "$LEGION_ROOT/scripts/verify_checkout.py" "$HERMES_CHECKOUT" --phase base
 git -C "$HERMES_CHECKOUT" apply --check "$LEGION_ROOT/patches/0001-legion.patch"
 git -C "$HERMES_CHECKOUT" apply "$LEGION_ROOT/patches/0001-legion.patch"

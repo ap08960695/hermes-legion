@@ -3,6 +3,7 @@
 import argparse
 import copy
 import json
+import math
 from pathlib import Path
 import re
 import sys
@@ -104,7 +105,7 @@ def validate(team, snapshot, tasks, pins):
                 "legion-synthetic-snapshot", "legion-operator-snapshot"}:
             raise ValueError("unsupported snapshot")
         for key in ["captured_at", "expires_at"]:
-            if type(snapshot[key]) not in {int, float}:
+            if type(snapshot[key]) not in {int, float} or not math.isfinite(snapshot[key]):
                 raise ValueError("invalid snapshot time")
         for key in ["accounts", "profiles", "quota_groups"]:
             if not isinstance(snapshot[key], dict):
@@ -130,11 +131,12 @@ def quota_available(row, budget, now):
 def plan(team, snapshot, tasks, *, now, pins=None):
     pins = {} if pins is None else pins
     accounts, profiles = validate(team, snapshot, tasks, pins)
-    if type(now) not in {int, float}:
+    if type(now) not in {int, float} or not math.isfinite(now):
         raise ValueError("invalid observation time")
     ledger = copy.deepcopy(snapshot.get("quota_groups", {}))
     result_pins = copy.deepcopy(pins)
     completed = {t["id"] for t in tasks if t["state"] == "completed"}
+    busy_sessions = {t["session"] for t in tasks if t["state"] == "running"}
     decisions = []
     ordered = sorted(profiles.values(), key=lambda p: (p["priority"], p["id"]))
 
@@ -154,6 +156,8 @@ def plan(team, snapshot, tasks, *, now, pins=None):
             row.update(status="keep-running", reason="existing-worker-owns-work")
         elif task["state"] != "ready":
             row.update(status="skip", reason="not-ready")
+        elif task["session"] in busy_sessions:
+            row["reason"] = "session-busy"
         elif not set(task.get("depends_on", [])) <= completed:
             row["reason"] = "dependency-unfinished"
         elif not snapshot:
@@ -182,6 +186,7 @@ def plan(team, snapshot, tasks, *, now, pins=None):
                            quota_group=group, provider=profile["provider"], model=profile["model"],
                            reason="retained-session-pin" if pin else "eligible-role-route")
                 result_pins[task["session"]] = {"profile": profile["id"], "account": account["id"]}
+                busy_sessions.add(task["session"])
         decisions.append(row)
     return {"mode": "offline-only", "executed": False, "decisions": decisions,
             "session_pins": result_pins, "quota_reservations": ledger}
@@ -195,7 +200,9 @@ def read_json(path):
                 raise ValueError("duplicate JSON key")
             result[key] = value
         return result
-    return json.loads(Path(path).read_text(), object_pairs_hook=unique)
+    def invalid_constant(value):
+        raise ValueError("nonstandard JSON number")
+    return json.loads(Path(path).read_text(), object_pairs_hook=unique, parse_constant=invalid_constant)
 
 
 def main():
