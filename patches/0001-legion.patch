@@ -998,57 +998,6 @@ index 13b1d4a08b3d3ab5cfc69ac6fad8302735219f04..6000d85a142dd9e9cd4c6cee53a722cd
 +            self._last_summary_auth_failure = True
 +            return None
          # Only a genuine no-provider RuntimeError gets the long cooldown; empty/invalid-response
-diff --git a/agent/context_references.py b/agent/context_references.py
-index fa1c455800..350d4a6362 100644
---- a/agent/context_references.py
-+++ b/agent/context_references.py
-@@ -100,6 +100,10 @@ _TEXT_EXTENSIONS = (".py", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".j
- # Bound the work one message can force: each expanded ref reads at most a bounded prefix /
- # window, and at most this many refs are expanded per message.
- _MAX_EXPANDED_REFERENCES = 16
-+# Local patch 20: per-reference inline cap. The 50%-of-window limit let a 153k-token HTML attachment into a
-+# 1M-window Opus session (2026-10-09), past the 180k LCM threshold where it could not be compacted. Bigger
-+# files become the existing on-disk block (path + size + read_file guidance) instead of inline text.
-+_MAX_INLINE_REFERENCE_TOKENS = 20_000
- # Folder-listing line counts stop paying I/O past this size; bigger files report bytes only.
- _LINE_COUNT_MAX_BYTES = 4 * 1024 * 1024
- # Per-command stdout/stderr ceiling for the ``git``/``rg`` helpers; past it the child is
-@@ -203,6 +207,17 @@ async def preprocess_context_references_async(
-     refs = parse_context_references(message)
-     if not refs:
-         return ContextReferenceResult(message=message, original_message=message)
-+    # Repeating a built-in attachment in one message must not repeat I/O or
-+    # consume its context budget twice. Plugin expansions may be stateful.
-+    unique_refs = []
-+    seen = set()
-+    for ref in refs:
-+        key = (ref.kind, ref.target, ref.line_start, ref.line_end)
-+        if ref.kind in BUILTIN_PREFIXES:
-+            if key in seen:
-+                continue
-+            seen.add(key)
-+        unique_refs.append(ref)
-     cwd_path = Path(cwd).expanduser().resolve()
-     # Default root = cwd so @ references cannot escape the workspace unless a caller widens it.
-     allowed_root_path = Path(allowed_root).expanduser().resolve() if allowed_root is not None else cwd_path
-@@ -213,14 +228,14 @@ async def preprocess_context_references_async(
-     soft_limit = max(1, int(context_length * 0.25))
-     tasks = (
-         _expand_reference(ref, cwd_path, url_fetcher=url_fetcher, allowed_root=allowed_root_path,
--                          max_inline_tokens=hard_limit)
--        for ref in refs[:_MAX_EXPANDED_REFERENCES]
-+                          max_inline_tokens=min(hard_limit, _MAX_INLINE_REFERENCE_TOKENS))
-+        for ref in unique_refs[:_MAX_EXPANDED_REFERENCES]
-     )
-     expanded = await asyncio.gather(*tasks)
-     warnings = [warning for warning, _ in expanded if warning]
-     warnings.extend(
-         f"{ref.raw}: not expanded (maximum {_MAX_EXPANDED_REFERENCES} @-references per message)"
--        for ref in refs[_MAX_EXPANDED_REFERENCES:]
-+        for ref in unique_refs[_MAX_EXPANDED_REFERENCES:]
-     )
-     blocks = [block for _, block in expanded if block]
-     injected_tokens = sum(estimate_tokens_rough(block) for block in blocks)
 diff --git a/agent/conversation_compression.py b/agent/conversation_compression.py
 index 38757fd7e6558db1243948974b750e2e79f93121..b833e5f9a7b2b1a7f41948e03204b1b62d33e39d 100644
 --- a/agent/conversation_compression.py
@@ -22952,3 +22901,190 @@ new file mode 100644
 +def test_invalid_budget_refused_before_reading_home(tmp_path,budget):
 +    with pytest.raises(ValueError,match="max_log_files"):
 +        collect(tmp_path/"absent",0,1,max_log_files=budget)
+diff --git a/agent/context_references.py b/agent/context_references.py
+index fa1c455800..d83024df9e 100644
+--- a/agent/context_references.py
++++ b/agent/context_references.py
+@@ -100,6 +100,10 @@ _TEXT_EXTENSIONS = (".py", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".j
+ # Bound the work one message can force: each expanded ref reads at most a bounded prefix /
+ # window, and at most this many refs are expanded per message.
+ _MAX_EXPANDED_REFERENCES = 16
++# Local patch 20: per-reference inline cap. The 50%-of-window limit let a 153k-token HTML attachment into a
++# 1M-window Opus session (2026-10-09), past the 180k LCM threshold where it could not be compacted. Bigger
++# files become the existing on-disk block (path + size + read_file guidance) instead of inline text.
++_MAX_INLINE_REFERENCE_TOKENS = 20_000
+ # Folder-listing line counts stop paying I/O past this size; bigger files report bytes only.
+ _LINE_COUNT_MAX_BYTES = 4 * 1024 * 1024
+ # Per-command stdout/stderr ceiling for the ``git``/``rg`` helpers; past it the child is
+@@ -203,6 +207,17 @@ async def preprocess_context_references_async(
+     refs = parse_context_references(message)
+     if not refs:
+         return ContextReferenceResult(message=message, original_message=message)
++    # Repeating a built-in attachment in one message must not repeat I/O or
++    # consume its context budget twice. Plugin expansions may be stateful.
++    unique_refs = []
++    seen = set()
++    for ref in refs:
++        key = (ref.kind, ref.target, ref.line_start, ref.line_end)
++        if ref.kind in BUILTIN_PREFIXES:
++            if key in seen:
++                continue
++            seen.add(key)
++        unique_refs.append(ref)
+     cwd_path = Path(cwd).expanduser().resolve()
+     # Default root = cwd so @ references cannot escape the workspace unless a caller widens it.
+     allowed_root_path = Path(allowed_root).expanduser().resolve() if allowed_root is not None else cwd_path
+@@ -213,14 +228,14 @@ async def preprocess_context_references_async(
+     soft_limit = max(1, int(context_length * 0.25))
+     tasks = (
+         _expand_reference(ref, cwd_path, url_fetcher=url_fetcher, allowed_root=allowed_root_path,
+-                          max_inline_tokens=hard_limit)
+-        for ref in refs[:_MAX_EXPANDED_REFERENCES]
++                          max_inline_tokens=min(hard_limit, _MAX_INLINE_REFERENCE_TOKENS))
++        for ref in unique_refs[:_MAX_EXPANDED_REFERENCES]
+     )
+     expanded = await asyncio.gather(*tasks)
+     warnings = [warning for warning, _ in expanded if warning]
+     warnings.extend(
+         f"{ref.raw}: not expanded (maximum {_MAX_EXPANDED_REFERENCES} @-references per message)"
+-        for ref in refs[_MAX_EXPANDED_REFERENCES:]
++        for ref in unique_refs[_MAX_EXPANDED_REFERENCES:]
+     )
+     blocks = [block for _, block in expanded if block]
+     injected_tokens = sum(estimate_tokens_rough(block) for block in blocks)
+@@ -368,7 +383,14 @@ def _read_file_reference(
+         size = path.stat().st_size
+         if max_inline_tokens is not None and size > max_inline_tokens * CHARS_PER_TOKEN:
+             return (None, _oversized_text_reference_block(ref, path, size // CHARS_PER_TOKEN)), ""
+-        text = path.read_text(encoding="utf-8-sig")
++        # Stat is advisory: a log can grow before this open. Bound the actual
++        # read too, with one sentinel character to detect an oversized preview.
++        char_budget = None if max_inline_tokens is None else max_inline_tokens * CHARS_PER_TOKEN
++        with path.open(encoding="utf-8-sig") as fh:
++            text = fh.read() if char_budget is None else fh.read(char_budget + 1)
++        if char_budget is not None and len(text) > char_budget:
++            tokens = max(max_inline_tokens + 1, path.stat().st_size // CHARS_PER_TOKEN)
++            return (None, _oversized_text_reference_block(ref, path, tokens)), ""
+     return None, text
+ 
+ 
+@@ -693,7 +715,16 @@ def _file_metadata(path: Path) -> str:
+             with path.open("rb") as fh:
+                 # UTF-8 never embeds 0x0A inside a multibyte sequence, so counting bytes
+                 # matches a decoded newline while streaming instead of read_text.
+-                lines = sum(chunk.count(b"\n") for chunk in iter(lambda: fh.read(1 << 20), b""))
+-            return f"{lines + 1} lines"
++                lines, remaining = 0, _LINE_COUNT_MAX_BYTES
++                while True:
++                    chunk = fh.read(min(1 << 20, remaining + 1))
++                    if not chunk:
++                        return f"{lines + 1} lines"
++                    remaining -= len(chunk)
++                    if remaining < 0:
++                        # Growth after stat must not turn a summary into an
++                        # unbounded scan or report a partial line count.
++                        return f"{path.stat().st_size} bytes"
++                    lines += chunk.count(b"\n")
+     except (LiveConnectionError, OSError):
+         return f"{size} bytes"
+diff --git a/tests/agent/test_context_reference_growing_files.py b/tests/agent/test_context_reference_growing_files.py
+new file mode 100644
+--- /dev/null
++++ b/tests/agent/test_context_reference_growing_files.py
+@@ -0,0 +1,96 @@
++"""A file growing after stat must not bypass context-preview read budgets."""
++import asyncio
++from pathlib import Path
++
++from agent.context_references import _file_metadata, preprocess_context_references_async
++
++
++class _CountedFile:
++    def __init__(self, stream, stats, key):
++        self.stream, self.stats, self.key = stream, stats, key
++
++    def __enter__(self):
++        return self
++
++    def __exit__(self, *args):
++        return self.stream.__exit__(*args)
++
++    def __getattr__(self, name):
++        return getattr(self.stream, name)
++
++    def read(self, *args, **kwargs):
++        data = self.stream.read(*args, **kwargs)
++        self.stats[self.key] += len(data)
++        return data
++
++
++def _grow_on_open(monkeypatch, path, *, metadata=False):
++    """Real append at the stat/open boundary, with actual consumed bytes counted."""
++    original_open = Path.open
++    stats = {"text_chars": 0, "binary_bytes": 0, "binary_opens": 0, "grew": False}
++
++    def open_file(current, mode="r", *args, **kwargs):
++        if current != path:
++            return original_open(current, mode, *args, **kwargs)
++        binary = "b" in mode
++        if binary:
++            stats["binary_opens"] += 1
++        trigger = stats["binary_opens"] == 2 if metadata else not binary
++        if trigger and not stats["grew"]:
++            with original_open(path, "ab") as writer:
++                chunk = b"x" * 65536
++                for _ in range(128):
++                    writer.write(chunk)
++            stats["grew"] = True
++        stream = original_open(current, mode, *args, **kwargs)
++        return _CountedFile(stream, stats, "binary_bytes" if binary else "text_chars")
++
++    monkeypatch.setattr(Path, "open", open_file)
++    return stats
++
++
++def test_growing_attachment_reads_only_inline_budget(tmp_path, monkeypatch):
++    path = tmp_path / "growing.txt"
++    path.write_text("small\n")
++    stats = _grow_on_open(monkeypatch, path)
++    result = asyncio.run(preprocess_context_references_async(
++        "Inspect @file:growing.txt", cwd=tmp_path, context_length=1024))
++    assert stats["grew"]
++    assert result.message.startswith("Inspect @file:growing.txt")
++    assert "too large to inline safely" in result.message
++    assert not result.blocked
++    assert stats["text_chars"] <= 2049
++
++
++def test_growing_folder_entry_does_not_scan_to_eof(tmp_path, monkeypatch):
++    path = tmp_path / "growing.txt"
++    path.write_text("small\n")
++    stats = _grow_on_open(monkeypatch, path, metadata=True)
++    result = _file_metadata(path)
++    assert stats["grew"]
++    assert result == f"{path.stat().st_size} bytes"
++    assert stats["binary_bytes"] <= 4 * 1024 * 1024 + 4097
++
++
++def test_small_bom_and_unicode_attachment_keeps_complete_text(tmp_path):
++    path = tmp_path / "small.txt"
++    path.write_text("First line\nUnicode: café 世界\n", encoding="utf-8-sig")
++    result = asyncio.run(preprocess_context_references_async(
++        "Inspect @file:small.txt", cwd=tmp_path, context_length=4000))
++    assert "First line\nUnicode: café 世界\n" in result.message
++    assert "\ufeff" not in result.message
++    assert not result.blocked
++
++
++def test_small_folder_entry_still_reports_line_count(tmp_path):
++    path = tmp_path / "small.txt"
++    path.write_text("first\nsecond")
++    assert _file_metadata(path) == "2 lines"
++
++
++def test_metadata_file_exactly_at_read_limit_is_not_truncated(tmp_path):
++    path = tmp_path / "boundary.txt"
++    with path.open("wb") as stream:
++        for _ in range(64):
++            stream.write(b"x" * 65536)
++    assert _file_metadata(path) == "1 lines"

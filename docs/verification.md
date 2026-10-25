@@ -191,3 +191,30 @@ before release. Offline results establish regression coverage, not measured
 production RAM, latency, billing or cross-bot cache savings. No model requests
 are used for release verification, and no live limits or provider settings are
 changed by packaging.
+
+
+## Growing-file preview bounds (after v0.3.1)
+
+A pre-read file size is advisory: an ordinary log can grow between stat and open.
+Bare file references now bound the actual decoded read to the existing inline
+character budget plus one sentinel character. Oversized content retains the
+existing on-disk guidance rather than injecting a partial preview. Folder-entry
+line counting likewise reads at most its existing 4 MiB ceiling plus one sentinel
+byte; growth beyond that produces a fresh byte-size summary. Binary sniffing,
+BOM decoding, allowed-root checks and SQLite read admission remain in place.
+
+Two native regressions reproduced the unbounded reads before the fix; five final
+cases cover growth and unchanged small/BOM/Unicode/exact-boundary behavior. All
+67 cases in eight relevant reference, CLI, Gateway and SQLite inspection test
+files pass offline with zero failures and zero retries. Ruff reports no findings
+for the changed source and new regression file.
+
+A synthetic file grew from six bytes to 8,388,614 bytes at the stat/open boundary.
+With an existing 2,048-character inline budget, decoded text consumed fell from
+8,388,614 to 2,049 characters. After warming the same metadata/import path, peak
+traced Python allocations for this attachment sample fell from 16,920,866 to
+209,393 bytes. Metadata-only reading fell from 8,388,620 to 4,194,311 bytes, including
+the binary sniff. These are deterministic offline samples, not production RSS,
+billed token or latency savings. No model requests, quota changes or paid
+fallback are involved. The immutable v0.3.1 download does not include this newer
+main-branch change.
