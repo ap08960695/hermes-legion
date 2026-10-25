@@ -8,7 +8,7 @@ The design is simple: give each bot a clear responsibility, dispatch independent
 
 ## What is included
 
-- **286 patched or added source/test files** against one explicitly pinned upstream revision, including 114 Python test files. See [patch inventory](patches/manifest.json) for the exact files and hashes.
+- **287 patched or added source/test files** against one explicitly pinned upstream revision, including 115 Python test files. See [patch inventory](patches/manifest.json) for the exact files and hashes.
 - Native task/run ownership checks; exactly-once dispatch; input preflight; recoverable compact handoffs; worker completion that avoids a needless follow-up model turn.
 - Bounded file/status reads, cache diagnostics, task/run usage attribution, waiting without repeated model calls, and worker phase timing.
 - Fifteen renamed role templates and ten reusable English skills. They contain no account configuration, credentials, personal persona or production transcripts.

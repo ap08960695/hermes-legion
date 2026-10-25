@@ -138,3 +138,31 @@ release-order and bounded-cache assertions remain intact. No model calls are use
 This intentionally favors conversation preservation over RAM reduction during a
 persistence failure. It does not repair a failed database or impose a hard memory
 limit. No production memory-savings percentage is claimed.
+
+
+## Explicit usage-log coverage (after v0.3.0)
+
+The read-only usage attribution CLI now accepts an explicit log-file budget:
+
+```sh
+python -m hermes_cli.usage_attribution --home /path/to/hermes-home --hours 24 --max-log-files 512
+```
+
+The default remains 32 recent uncompressed files. The accepted range is 1–512,
+with at most 2 MiB read per file. The report includes the chosen budget, files
+sampled, omitted files, cut tails and unknown time coverage. An expanded scan can
+read up to 1 GiB; use it for a deliberate audit rather than frequent polling.
+Compressed logs and profiles beyond the existing 128-profile bound are still not
+read. Zero omitted files does not establish complete time-window coverage.
+
+Five new offline cases verify expanded CLI collection, unchanged lightweight
+defaults, invalid-budget rejection before I/O and private-record exclusion.
+Together with the existing attribution tests, all 13 cases pass. The installed
+standalone CLI was exercised read-only against existing logs before publication;
+no Desktop or Gateway restart is required. No model calls, new keys, database
+initialization, quota changes or paid fallback are involved.
+
+Compare before/after using equal coverage and matched time windows. More observed
+attempts after increasing the budget means improved visibility, not increased
+usage; fewer rows in a partial scan do not prove savings. Runtime logs, identifiers
+and measurements from private projects are not part of this public package.

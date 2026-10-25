@@ -8492,253 +8492,6 @@ index 4779ac89476d5e8d7beb507c4a35dacff99ab8dc..f664227eb11765efb552809f273b44ba
 +        "--all-accounts", action="store_true",
 +        help="Report each persisted Claude/Codex account and configured external observations without rotating or refreshing credentials")
      usage_parser.set_defaults(func=cmd_usage)
-diff --git a/hermes_cli/usage_attribution.py b/hermes_cli/usage_attribution.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..cb09eb3b69cbdfbf5a172b180f47a437c4667960
---- /dev/null
-+++ b/hermes_cli/usage_attribution.py
-@@ -0,0 +1,150 @@
-+"""Read-only observed usage attribution: python -m hermes_cli.usage_attribution --home PATH.
-+
-+Matching logged fields and failed calls are investigation signals, never proof of waste.
-+"""
-+import argparse
-+from collections import Counter, defaultdict
-+import json
-+import math
-+from pathlib import Path
-+import re
-+import time
-+
-+_REASONS={'initial','revision','reopened','review_reopened','review_handoff','quota_retry','recovery','unknown'}
-+
-+
-+def mapping(value):
-+    return value if isinstance(value,dict) else {}
-+
-+
-+def number(value):
-+    return isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value) and value>=0
-+
-+
-+def digest(value):
-+    value=mapping(value)
-+    text=value.get('hash')
-+    return text if value.get('complete') is True and isinstance(text,str) and re.fullmatch('[0-9a-f]{64}',text) else None
-+
-+
-+def normalize(raw,start,end):
-+    raw=mapping(raw);fp=mapping(raw.get('fingerprint'));cross=mapping(fp.get('cross_bot'));fields=mapping(cross.get('fields'))
-+    stamp=cross.get('started_at_ns');pid=raw.get('process_id');namespace=cross.get('namespace')
-+    if not number(stamp) or not number(pid) or not isinstance(namespace,str) or not re.fullmatch('[0-9a-f]{16}',namespace):return None
-+    at=stamp/1e9
-+    profile,request=digest(fields.get('profile')),digest(fields.get('request'))
-+    if not start<=at<end or not profile or not request:return None
-+    values=tuple(digest(fp.get(k)) for k in ('session','route','instructions','tools','options','history'))
-+    key=fp.get('key_id');key=key if isinstance(key,str) and re.fullmatch('[0-9a-f]{16}',key) else None
-+    signature=(namespace,profile,key,*values) if all(values) and isinstance(key,str) and re.fullmatch('[0-9a-f]{16}',key) else None
-+    usage=mapping(raw.get('usage'));total=usage.get('input_tokens');cached=usage.get('cached_tokens')
-+    total=total if type(total) is int and total>=0 else None
-+    cached=cached if type(cached) is int and total is not None and 0<=cached<=total else None
-+    status=raw.get('status') if raw.get('status') in ('returned','failed_or_interrupted') else 'unknown'
-+    return {'identity':(namespace,profile,pid,stamp,request),'signature':signature,'at':at,'pid':pid,'status':status,'input':total,'cached':cached,'binding':digest(fp.get('task_run')),'key_id':key,'has_binding': 'task_run' in fp}
-+
-+
-+def correlate(records,runs,end):
-+    by_pid=defaultdict(list);by_binding=defaultdict(list)
-+    for run in runs:
-+        if number(run.get('worker_pid')):by_pid[run['worker_pid']].append(run)
-+        for binding in run.get('bindings',[]):by_binding[binding].append(run)
-+    reasons={};outcomes={};matched=0;ambiguous=0;completed={};exact=0;legacy=0
-+    for record in records:
-+        if record['has_binding']:
-+            candidates=[r for r in by_binding[(record['key_id'],record['binding'])] if _run_contains(r,record['at'],end)] if record['binding'] else []
-+        else:
-+            candidates=[r for r in by_pid[record['pid']] if _contains(r,record['at'],end)]
-+        if len(candidates)!=1:
-+            ambiguous+=len(candidates)>1
-+            continue
-+        run=candidates[0];matched+=1;exact+=record['has_binding'];legacy+=not record['has_binding']
-+        _add_reason(reasons,run,record)
-+        _add_outcome(outcomes,run,record)
-+        if run.get('outcome')=='completed':
-+            key=(run['board'],run['task_id']);value=completed.setdefault(key,{'tokens':0,'known':False})
-+            value['tokens']+=record['input'] or 0;value['known']|=record['input'] is not None
-+    known=[r['tokens'] for r in completed.values() if r['known']]
-+    return {'evidence':'dispatcher-pinned HMAC binding validated against native run/time; legacy PID correlation reported separately',
-+            'matched_attempts':matched,'bound_attempts':exact,'legacy_pid_correlated_attempts':legacy,
-+            'binding_present_attempts':sum(r['binding'] is not None for r in records),
-+            'ambiguous_attempts':ambiguous,'unmatched_attempts':len(records)-matched,
-+            'by_reason':reasons,'by_native_outcome':outcomes,'completed_cards_with_known_sample':len(known),
-+            'completed_card_input_tokens_per_card':sum(known)/len(known) if known else None}
-+
-+
-+def _add_reason(reasons,run,record):
-+    reason=run.get('attempt_reason')
-+    reason=reason if isinstance(reason,str) and reason in _REASONS else 'unknown'
-+    row=reasons.setdefault(reason,{'attempts':0,'input_tokens':0,'unknown_usage_attempts':0})
-+    row['attempts']+=1;row['input_tokens']+=record['input'] or 0;row['unknown_usage_attempts']+=record['input'] is None
-+
-+
-+
-+def _add_outcome(outcomes,run,record):
-+    outcome=run.get('outcome')
-+    allowed={'completed','blocked','review_requested','rate_limited','crashed','timed_out','reclaimed','spawn_failed','protocol_violation','cancelled','interrupted'}
-+    outcome=outcome if isinstance(outcome,str) and outcome in allowed else 'running_or_unknown'
-+    row=outcomes.setdefault(outcome,{'attempts':0,'input_tokens':0,'cached_tokens':0,'unknown_usage_attempts':0})
-+    row['attempts']+=1;row['input_tokens']+=record['input'] or 0;row['cached_tokens']+=record['cached'] or 0
-+    row['unknown_usage_attempts']+=record['input'] is None
-+
-+def _run_contains(run,at,end):
-+    start=run.get('started_at');stop=run.get('ended_at')
-+    stop=end if stop is None else stop
-+    return all(number(v) for v in (start,stop)) and start<=at<=stop
-+
-+
-+def _contains(run,at,end):
-+    start=run.get('started_at');created=run.get('worker_started_at');stop=run.get('ended_at')
-+    stop=end if stop is None else stop
-+    return all(number(v) for v in (start,created,stop)) and max(start,created)<=at<=stop
-+
-+
-+def analyze(raw_records,runs,start,end):
-+    if not number(start) or not number(end) or end<=start:raise ValueError('invalid observation window')
-+    unique={};copies=0;unusable=0
-+    for raw in raw_records:
-+        row=normalize(raw,start,end)
-+        if row is None:unusable+=1;continue
-+        if row['identity'] in unique:copies+=1;continue
-+        unique[row['identity']]=row
-+    rows=sorted(unique.values(),key=lambda x:x['at']);groups=defaultdict(list)
-+    for row in rows:
-+        if row['signature'] is not None:groups[row['signature']].append(row)
-+    extras=[r for group in groups.values() for r in group[1:]]
-+    total=sum(r['input'] for r in rows if r['input'] is not None)
-+    return {'window_start':start,'window_end':end,'window_hours':(end-start)/3600,
-+            'observed_attempts':len(rows),'duplicate_log_copies':copies,'unusable_or_outside_window':unusable,
-+            'status_counts':dict(Counter(r['status'] for r in rows)),
-+            'failed_or_interrupted_attempts':sum(r['status']=='failed_or_interrupted' for r in rows),
-+            'known_input_tokens':total,'known_cached_tokens':sum(r['cached'] or 0 for r in rows),
-+            'unknown_usage_attempts':sum(r['input'] is None for r in rows),
-+            'unknown_cached_usage_attempts':sum(r['cached'] is None for r in rows),
-+            'per_24h_input_tokens_observed_scaled':total*86400/(end-start),
-+            'per_24h_attempts_observed_scaled':len(rows)*86400/(end-start),
-+            'matching_logged_fields':{'extra_attempts':len(extras),'known_input_tokens':sum(r['input'] or 0 for r in extras),
-+                                     'unknown_usage_attempts':sum(r['input'] is None for r in extras),
-+                                     'proven_duplicate_work':False},
-+            'run_correlation':correlate(rows,runs,end),'proven_wasted_tokens':None,
-+            'read_redundancy_cost':None,'cancelled_work_cost':None,
-+            'first_observed_start':rows[0]['at'] if rows else None,'last_observed_start':rows[-1]['at'] if rows else None,
-+            'limits':['Only logged preparation fields match, not complete SDK wire bytes; intentional repeats remain possible.',
-+                      'Failures/interruption cannot be separated by this logger; missing usage is unknown, never zero.',
-+                      'Read arguments and cancellation cause are unavailable; native attempt reasons do not establish waste or authorize suppression.',
-+                      'Cached input is still usage; neither cache hits nor recovery attempts are inherently waste.',
-+                      'Totals and per-completed-card samples have incomplete log coverage and are lower bounds, not causal savings.']}
-+
-+
-+def main():
-+    from hermes_cli.usage_attribution_sources import collect
-+    parser=argparse.ArgumentParser(description=__doc__)
-+    parser.add_argument('--home',type=Path,required=True);parser.add_argument('--hours',type=float,default=24)
-+    args=parser.parse_args()
-+    if not 0<args.hours<=168:parser.error('--hours must be within (0,168]')
-+    end=time.time();start=end-args.hours*3600
-+    records,runs,coverage=collect(args.home,start,end)
-+    print(json.dumps({**analyze(records,runs,start,end),'coverage':coverage,'model_calls':0,'runtime_mutations':0},indent=2))
-+
-+
-+if __name__=='__main__':main()
-diff --git a/hermes_cli/usage_attribution_sources.py b/hermes_cli/usage_attribution_sources.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..befaec797f2d7e97e1a2588b510756c73c3838f9
---- /dev/null
-+++ b/hermes_cli/usage_attribution_sources.py
-@@ -0,0 +1,85 @@
-+"""Bounded existing-log and SQLite reader; never initializes a board or imports an agent."""
-+from contextlib import closing
-+import json
-+from pathlib import Path
-+import sqlite3
-+
-+_MAX_FILES=32
-+_TAIL_BYTES=2*1024*1024
-+_MAX_RUNS=10000
-+
-+
-+def read_logs(paths):
-+    records=[];coverage=[];invalid=0
-+    for path in paths:
-+        try:
-+            size=path.stat().st_size;offset=max(0,size-_TAIL_BYTES)
-+            with path.open('rb') as stream:
-+                stream.seek(offset);data=stream.read(_TAIL_BYTES)
-+            lines=data.splitlines()[1:] if offset else data.splitlines()
-+            count=0
-+            for line in lines:
-+                if b'CACHE_DIAGNOSTIC ' not in line:continue
-+                try:record=json.loads(line.split(b'CACHE_DIAGNOSTIC ',1)[1])
-+                except (ValueError,UnicodeDecodeError):invalid+=1;continue
-+                if isinstance(record,dict):records.append(record);count+=1
-+            coverage.append({'path':str(path),'bytes_sampled':len(data),'tail_cut':bool(offset),'diagnostic_rows':count})
-+        except OSError:
-+            coverage.append({'path':str(path),'unavailable':True})
-+    return records,{'files':coverage,'invalid_json_rows':invalid}
-+
-+
-+def read_board(path,start,end,keys=None):
-+    with closing(sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True,timeout=2)) as conn:
-+        conn.row_factory=sqlite3.Row;conn.execute('PRAGMA query_only=ON')
-+        columns={r['name'] for r in conn.execute('PRAGMA table_info(task_runs)')}
-+        if 'worker_started_at' not in columns:return [],{'status':'unsupported_run_identity_schema'}
-+        rows=conn.execute('SELECT id,task_id,worker_pid,worker_started_at,started_at,ended_at,outcome '
-+                          'FROM task_runs WHERE started_at<? AND (ended_at IS NULL OR ended_at>=?) '
-+                          'ORDER BY id DESC LIMIT ?',(end,start,_MAX_RUNS+1)).fetchall()
-+        runs=[]
-+        for row in rows[:_MAX_RUNS]:
-+            run=dict(row);run['board']=str(path);run['attempt_reason']='unknown'
-+            from agent.usage_run_binding import run_digest
-+            run['bindings']=[(kid,run_digest(key,path,run['task_id'],run['id'])) for kid,key in (keys or {}).items()]
-+            event=conn.execute("SELECT payload FROM task_events WHERE task_id=? AND run_id=? AND kind='claimed' ORDER BY id DESC LIMIT 1",(run['task_id'],run['id'])).fetchone()
-+            if event and event['payload'] and len(event['payload'])<65536:
-+                try:
-+                    payload=json.loads(event['payload']);attempt=payload.get('attempt') if isinstance(payload,dict) else None
-+                    if isinstance(attempt,dict):run['attempt_reason']=attempt.get('reason','unknown')
-+                except (ValueError,TypeError):run['attempt_reason']='unknown'
-+            runs.append(run)
-+        outcomes=dict(conn.execute('SELECT outcome,COUNT(*) FROM task_runs WHERE started_at>=? AND started_at<? GROUP BY outcome',(start,end)).fetchall())
-+        done=conn.execute("SELECT COUNT(DISTINCT task_id) FROM task_runs WHERE outcome='completed' AND ended_at>=? AND ended_at<?",(start,end)).fetchone()[0]
-+        return runs,{'status':'read_only','rows_sampled':len(runs),'truncated':len(rows)>_MAX_RUNS,
-+                     'started_run_outcomes':{str(k):v for k,v in outcomes.items()},'completed_cards':done}
-+
-+
-+def collect(home,start,end):
-+    home=Path(home).resolve(strict=True)
-+    profiles=sorted(p for p in (home/'profiles').glob('*') if p.is_dir())
-+    paths=[p for h in [home,*profiles[:128]] for p in (h/'logs').glob('*.log*') if p.is_file() and p.suffix!='.gz']
-+    paths.sort(key=lambda p:p.stat().st_mtime,reverse=True)
-+    records,coverage=read_logs(paths[:_MAX_FILES]);coverage.update({'log_files_found':len(paths),'log_files_omitted':max(0,len(paths)-_MAX_FILES),'profile_dirs_omitted':max(0,len(profiles)-128),'compressed_logs_read':False,'missing_time_spans':'unknown; tails/rotation prevent full-window accounting'})
-+    boards=[p for p in [home/'kanban.db',*sorted((home/'kanban/boards').glob('*/kanban.db'))] if p.is_file()]
-+    keys,key_coverage=_existing_keys([home,*profiles[:128]])
-+    needed={r.get('fingerprint',{}).get('key_id') for r in records if isinstance(r.get('fingerprint'),dict) and isinstance(r['fingerprint'].get('key_id'),str)}
-+    keys={kid:key for kid,key in keys.items() if kid in needed}
-+    key_coverage['used_for_matching']=len(keys)
-+    runs=[];coverage['boards']={};coverage['boards_omitted']=max(0,len(boards)-64)
-+    coverage['binding_keys']=key_coverage
-+    for path in boards[:64]:
-+        try:rows,status=read_board(path,start,end,keys);runs.extend(rows)
-+        except sqlite3.Error as exc:status={'status':'unavailable','error_type':type(exc).__name__}
-+        coverage['boards'][str(path)]=status
-+    return records,runs,coverage
-+
-+
-+def _existing_keys(homes):
-+    from agent.usage_run_binding import existing_key,key_id
-+    keys={};unavailable=0
-+    for home in homes:
-+        try:key=existing_key(home)
-+        except (OSError,ValueError):unavailable+=1;continue
-+        keys[key_id(key)]=key
-+    return keys,{'read_only_existing':len(keys),'unavailable':unavailable,'created':0}
 diff --git a/hermes_state_compression.py b/hermes_state_compression.py
 index 49d02ded151b52dd66245741b9d1eb2315bef604..4676e776556e1c03da87432b989f33edac7eccc0 100644
 --- a/hermes_state_compression.py
@@ -22916,3 +22669,286 @@ new file mode 100644
 +    assert "old" not in runner._agent_cache
 +    assert released==[old]
 +    assert "recent" in runner._agent_cache
+diff --git a/hermes_cli/usage_attribution.py b/hermes_cli/usage_attribution.py
+new file mode 100644
+--- /dev/null
++++ b/hermes_cli/usage_attribution.py
+@@ -0,0 +1,152 @@
++"""Read-only observed usage attribution: python -m hermes_cli.usage_attribution --home PATH.
++
++Matching logged fields and failed calls are investigation signals, never proof of waste.
++"""
++import argparse
++from collections import Counter, defaultdict
++import json
++import math
++from pathlib import Path
++import re
++import time
++
++_REASONS={'initial','revision','reopened','review_reopened','review_handoff','quota_retry','recovery','unknown'}
++
++
++def mapping(value):
++    return value if isinstance(value,dict) else {}
++
++
++def number(value):
++    return isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value) and value>=0
++
++
++def digest(value):
++    value=mapping(value)
++    text=value.get('hash')
++    return text if value.get('complete') is True and isinstance(text,str) and re.fullmatch('[0-9a-f]{64}',text) else None
++
++
++def normalize(raw,start,end):
++    raw=mapping(raw);fp=mapping(raw.get('fingerprint'));cross=mapping(fp.get('cross_bot'));fields=mapping(cross.get('fields'))
++    stamp=cross.get('started_at_ns');pid=raw.get('process_id');namespace=cross.get('namespace')
++    if not number(stamp) or not number(pid) or not isinstance(namespace,str) or not re.fullmatch('[0-9a-f]{16}',namespace):return None
++    at=stamp/1e9
++    profile,request=digest(fields.get('profile')),digest(fields.get('request'))
++    if not start<=at<end or not profile or not request:return None
++    values=tuple(digest(fp.get(k)) for k in ('session','route','instructions','tools','options','history'))
++    key=fp.get('key_id');key=key if isinstance(key,str) and re.fullmatch('[0-9a-f]{16}',key) else None
++    signature=(namespace,profile,key,*values) if all(values) and isinstance(key,str) and re.fullmatch('[0-9a-f]{16}',key) else None
++    usage=mapping(raw.get('usage'));total=usage.get('input_tokens');cached=usage.get('cached_tokens')
++    total=total if type(total) is int and total>=0 else None
++    cached=cached if type(cached) is int and total is not None and 0<=cached<=total else None
++    status=raw.get('status') if raw.get('status') in ('returned','failed_or_interrupted') else 'unknown'
++    return {'identity':(namespace,profile,pid,stamp,request),'signature':signature,'at':at,'pid':pid,'status':status,'input':total,'cached':cached,'binding':digest(fp.get('task_run')),'key_id':key,'has_binding': 'task_run' in fp}
++
++
++def correlate(records,runs,end):
++    by_pid=defaultdict(list);by_binding=defaultdict(list)
++    for run in runs:
++        if number(run.get('worker_pid')):by_pid[run['worker_pid']].append(run)
++        for binding in run.get('bindings',[]):by_binding[binding].append(run)
++    reasons={};outcomes={};matched=0;ambiguous=0;completed={};exact=0;legacy=0
++    for record in records:
++        if record['has_binding']:
++            candidates=[r for r in by_binding[(record['key_id'],record['binding'])] if _run_contains(r,record['at'],end)] if record['binding'] else []
++        else:
++            candidates=[r for r in by_pid[record['pid']] if _contains(r,record['at'],end)]
++        if len(candidates)!=1:
++            ambiguous+=len(candidates)>1
++            continue
++        run=candidates[0];matched+=1;exact+=record['has_binding'];legacy+=not record['has_binding']
++        _add_reason(reasons,run,record)
++        _add_outcome(outcomes,run,record)
++        if run.get('outcome')=='completed':
++            key=(run['board'],run['task_id']);value=completed.setdefault(key,{'tokens':0,'known':False})
++            value['tokens']+=record['input'] or 0;value['known']|=record['input'] is not None
++    known=[r['tokens'] for r in completed.values() if r['known']]
++    return {'evidence':'dispatcher-pinned HMAC binding validated against native run/time; legacy PID correlation reported separately',
++            'matched_attempts':matched,'bound_attempts':exact,'legacy_pid_correlated_attempts':legacy,
++            'binding_present_attempts':sum(r['binding'] is not None for r in records),
++            'ambiguous_attempts':ambiguous,'unmatched_attempts':len(records)-matched,
++            'by_reason':reasons,'by_native_outcome':outcomes,'completed_cards_with_known_sample':len(known),
++            'completed_card_input_tokens_per_card':sum(known)/len(known) if known else None}
++
++
++def _add_reason(reasons,run,record):
++    reason=run.get('attempt_reason')
++    reason=reason if isinstance(reason,str) and reason in _REASONS else 'unknown'
++    row=reasons.setdefault(reason,{'attempts':0,'input_tokens':0,'unknown_usage_attempts':0})
++    row['attempts']+=1;row['input_tokens']+=record['input'] or 0;row['unknown_usage_attempts']+=record['input'] is None
++
++
++
++def _add_outcome(outcomes,run,record):
++    outcome=run.get('outcome')
++    allowed={'completed','blocked','review_requested','rate_limited','crashed','timed_out','reclaimed','spawn_failed','protocol_violation','cancelled','interrupted'}
++    outcome=outcome if isinstance(outcome,str) and outcome in allowed else 'running_or_unknown'
++    row=outcomes.setdefault(outcome,{'attempts':0,'input_tokens':0,'cached_tokens':0,'unknown_usage_attempts':0})
++    row['attempts']+=1;row['input_tokens']+=record['input'] or 0;row['cached_tokens']+=record['cached'] or 0
++    row['unknown_usage_attempts']+=record['input'] is None
++
++def _run_contains(run,at,end):
++    start=run.get('started_at');stop=run.get('ended_at')
++    stop=end if stop is None else stop
++    return all(number(v) for v in (start,stop)) and start<=at<=stop
++
++
++def _contains(run,at,end):
++    start=run.get('started_at');created=run.get('worker_started_at');stop=run.get('ended_at')
++    stop=end if stop is None else stop
++    return all(number(v) for v in (start,created,stop)) and max(start,created)<=at<=stop
++
++
++def analyze(raw_records,runs,start,end):
++    if not number(start) or not number(end) or end<=start:raise ValueError('invalid observation window')
++    unique={};copies=0;unusable=0
++    for raw in raw_records:
++        row=normalize(raw,start,end)
++        if row is None:unusable+=1;continue
++        if row['identity'] in unique:copies+=1;continue
++        unique[row['identity']]=row
++    rows=sorted(unique.values(),key=lambda x:x['at']);groups=defaultdict(list)
++    for row in rows:
++        if row['signature'] is not None:groups[row['signature']].append(row)
++    extras=[r for group in groups.values() for r in group[1:]]
++    total=sum(r['input'] for r in rows if r['input'] is not None)
++    return {'window_start':start,'window_end':end,'window_hours':(end-start)/3600,
++            'observed_attempts':len(rows),'duplicate_log_copies':copies,'unusable_or_outside_window':unusable,
++            'status_counts':dict(Counter(r['status'] for r in rows)),
++            'failed_or_interrupted_attempts':sum(r['status']=='failed_or_interrupted' for r in rows),
++            'known_input_tokens':total,'known_cached_tokens':sum(r['cached'] or 0 for r in rows),
++            'unknown_usage_attempts':sum(r['input'] is None for r in rows),
++            'unknown_cached_usage_attempts':sum(r['cached'] is None for r in rows),
++            'per_24h_input_tokens_observed_scaled':total*86400/(end-start),
++            'per_24h_attempts_observed_scaled':len(rows)*86400/(end-start),
++            'matching_logged_fields':{'extra_attempts':len(extras),'known_input_tokens':sum(r['input'] or 0 for r in extras),
++                                     'unknown_usage_attempts':sum(r['input'] is None for r in extras),
++                                     'proven_duplicate_work':False},
++            'run_correlation':correlate(rows,runs,end),'proven_wasted_tokens':None,
++            'read_redundancy_cost':None,'cancelled_work_cost':None,
++            'first_observed_start':rows[0]['at'] if rows else None,'last_observed_start':rows[-1]['at'] if rows else None,
++            'limits':['Only logged preparation fields match, not complete SDK wire bytes; intentional repeats remain possible.',
++                      'Failures/interruption cannot be separated by this logger; missing usage is unknown, never zero.',
++                      'Read arguments and cancellation cause are unavailable; native attempt reasons do not establish waste or authorize suppression.',
++                      'Cached input is still usage; neither cache hits nor recovery attempts are inherently waste.',
++                      'Totals and per-completed-card samples have incomplete log coverage and are lower bounds, not causal savings.']}
++
++
++def main():
++    from hermes_cli.usage_attribution_sources import collect
++    parser=argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--home',type=Path,required=True);parser.add_argument('--hours',type=float,default=24)
++    parser.add_argument("--max-log-files",type=int,default=32,help="Maximum recent uncompressed logs to read (1-512; default 32, up to 2 MiB per file)")
++    args=parser.parse_args()
++    if not 1<=args.max_log_files<=512:parser.error("--max-log-files must be within [1,512]")
++    if not 0<args.hours<=168:parser.error('--hours must be within (0,168]')
++    end=time.time();start=end-args.hours*3600
++    records,runs,coverage=collect(args.home,start,end,max_log_files=args.max_log_files)
++    print(json.dumps({**analyze(records,runs,start,end),'coverage':coverage,'model_calls':0,'runtime_mutations':0},indent=2))
++
++
++if __name__=='__main__':main()
+diff --git a/hermes_cli/usage_attribution_sources.py b/hermes_cli/usage_attribution_sources.py
+new file mode 100644
+--- /dev/null
++++ b/hermes_cli/usage_attribution_sources.py
+@@ -0,0 +1,87 @@
++"""Bounded existing-log and SQLite reader; never initializes a board or imports an agent."""
++from contextlib import closing
++import json
++from pathlib import Path
++import sqlite3
++
++_MAX_FILES=32
++_TAIL_BYTES=2*1024*1024
++_MAX_RUNS=10000
++
++
++def read_logs(paths):
++    records=[];coverage=[];invalid=0
++    for path in paths:
++        try:
++            size=path.stat().st_size;offset=max(0,size-_TAIL_BYTES)
++            with path.open('rb') as stream:
++                stream.seek(offset);data=stream.read(_TAIL_BYTES)
++            lines=data.splitlines()[1:] if offset else data.splitlines()
++            count=0
++            for line in lines:
++                if b'CACHE_DIAGNOSTIC ' not in line:continue
++                try:record=json.loads(line.split(b'CACHE_DIAGNOSTIC ',1)[1])
++                except (ValueError,UnicodeDecodeError):invalid+=1;continue
++                if isinstance(record,dict):records.append(record);count+=1
++            coverage.append({'path':str(path),'bytes_sampled':len(data),'tail_cut':bool(offset),'diagnostic_rows':count})
++        except OSError:
++            coverage.append({'path':str(path),'unavailable':True})
++    return records,{'files':coverage,'invalid_json_rows':invalid}
++
++
++def read_board(path,start,end,keys=None):
++    with closing(sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True,timeout=2)) as conn:
++        conn.row_factory=sqlite3.Row;conn.execute('PRAGMA query_only=ON')
++        columns={r['name'] for r in conn.execute('PRAGMA table_info(task_runs)')}
++        if 'worker_started_at' not in columns:return [],{'status':'unsupported_run_identity_schema'}
++        rows=conn.execute('SELECT id,task_id,worker_pid,worker_started_at,started_at,ended_at,outcome '
++                          'FROM task_runs WHERE started_at<? AND (ended_at IS NULL OR ended_at>=?) '
++                          'ORDER BY id DESC LIMIT ?',(end,start,_MAX_RUNS+1)).fetchall()
++        runs=[]
++        for row in rows[:_MAX_RUNS]:
++            run=dict(row);run['board']=str(path);run['attempt_reason']='unknown'
++            from agent.usage_run_binding import run_digest
++            run['bindings']=[(kid,run_digest(key,path,run['task_id'],run['id'])) for kid,key in (keys or {}).items()]
++            event=conn.execute("SELECT payload FROM task_events WHERE task_id=? AND run_id=? AND kind='claimed' ORDER BY id DESC LIMIT 1",(run['task_id'],run['id'])).fetchone()
++            if event and event['payload'] and len(event['payload'])<65536:
++                try:
++                    payload=json.loads(event['payload']);attempt=payload.get('attempt') if isinstance(payload,dict) else None
++                    if isinstance(attempt,dict):run['attempt_reason']=attempt.get('reason','unknown')
++                except (ValueError,TypeError):run['attempt_reason']='unknown'
++            runs.append(run)
++        outcomes=dict(conn.execute('SELECT outcome,COUNT(*) FROM task_runs WHERE started_at>=? AND started_at<? GROUP BY outcome',(start,end)).fetchall())
++        done=conn.execute("SELECT COUNT(DISTINCT task_id) FROM task_runs WHERE outcome='completed' AND ended_at>=? AND ended_at<?",(start,end)).fetchone()[0]
++        return runs,{'status':'read_only','rows_sampled':len(runs),'truncated':len(rows)>_MAX_RUNS,
++                     'started_run_outcomes':{str(k):v for k,v in outcomes.items()},'completed_cards':done}
++
++
++def collect(home,start,end,*,max_log_files=_MAX_FILES):
++    if type(max_log_files) is not int or not 1<=max_log_files<=512:
++        raise ValueError("max_log_files must be an integer within [1,512]")
++    home=Path(home).resolve(strict=True)
++    profiles=sorted(p for p in (home/'profiles').glob('*') if p.is_dir())
++    paths=[p for h in [home,*profiles[:128]] for p in (h/'logs').glob('*.log*') if p.is_file() and p.suffix!='.gz']
++    paths.sort(key=lambda p:p.stat().st_mtime,reverse=True)
++    records,coverage=read_logs(paths[:max_log_files]);coverage.update({'max_log_files':max_log_files,'log_files_found':len(paths),'log_files_omitted':max(0,len(paths)-max_log_files),'profile_dirs_omitted':max(0,len(profiles)-128),'compressed_logs_read':False,'missing_time_spans':'unknown; tails/rotation prevent full-window accounting'})
++    boards=[p for p in [home/'kanban.db',*sorted((home/'kanban/boards').glob('*/kanban.db'))] if p.is_file()]
++    keys,key_coverage=_existing_keys([home,*profiles[:128]])
++    needed={r.get('fingerprint',{}).get('key_id') for r in records if isinstance(r.get('fingerprint'),dict) and isinstance(r['fingerprint'].get('key_id'),str)}
++    keys={kid:key for kid,key in keys.items() if kid in needed}
++    key_coverage['used_for_matching']=len(keys)
++    runs=[];coverage['boards']={};coverage['boards_omitted']=max(0,len(boards)-64)
++    coverage['binding_keys']=key_coverage
++    for path in boards[:64]:
++        try:rows,status=read_board(path,start,end,keys);runs.extend(rows)
++        except sqlite3.Error as exc:status={'status':'unavailable','error_type':type(exc).__name__}
++        coverage['boards'][str(path)]=status
++    return records,runs,coverage
++
++
++def _existing_keys(homes):
++    from agent.usage_run_binding import existing_key,key_id
++    keys={};unavailable=0
++    for home in homes:
++        try:key=existing_key(home)
++        except (OSError,ValueError):unavailable+=1;continue
++        keys[key_id(key)]=key
++    return keys,{'read_only_existing':len(keys),'unavailable':unavailable,'created':0}
+diff --git a/tests/hermes_cli/test_usage_attribution_log_budget.py b/tests/hermes_cli/test_usage_attribution_log_budget.py
+new file mode 100644
+--- /dev/null
++++ b/tests/hermes_cli/test_usage_attribution_log_budget.py
+@@ -0,0 +1,29 @@
++"""Expanded diagnostics remain bounded, explicit and read-only."""
++import json
++import sys
++import pytest
++from hermes_cli.usage_attribution import main
++from hermes_cli.usage_attribution_sources import collect
++
++
++def test_expanded_cli_reads_omitted_logs_without_exposing_records(tmp_path, monkeypatch, capsys):
++    logs=tmp_path/"logs";logs.mkdir()
++    for n in range(33):
++        (logs/f"sample{n}.log").write_text('CACHE_DIAGNOSTIC {"private_payload":"DO_NOT_ECHO"}\n')
++    _,_,limited=collect(tmp_path,0,1)
++    assert len(limited["files"])==32 and limited["log_files_omitted"]==1
++    monkeypatch.setattr(sys,"argv",["usage_attribution","--home",str(tmp_path),"--max-log-files","33"])
++    main()
++    output=capsys.readouterr().out;result=json.loads(output)
++    assert len(result["coverage"]["files"])==33
++    assert result["coverage"]["log_files_omitted"]==0
++    assert result["coverage"]["max_log_files"]==33
++    assert "DO_NOT_ECHO" not in output
++    assert not (tmp_path/"kanban.db").exists()
++    assert not (tmp_path/"telemetry").exists()
++
++
++@pytest.mark.parametrize("budget",[0,513,True,1.5])
++def test_invalid_budget_refused_before_reading_home(tmp_path,budget):
++    with pytest.raises(ValueError,match="max_log_files"):
++        collect(tmp_path/"absent",0,1,max_log_files=budget)
