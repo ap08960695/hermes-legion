@@ -8,7 +8,7 @@ The design is simple: give each bot a clear responsibility, dispatch independent
 
 ## What is included
 
-- **309 patched or added source/test files** against one explicitly pinned upstream revision, including 124 Python test files. See [patch inventory](patches/manifest.json) for the exact files and hashes.
+- **312 patched or added source/test files** against one explicitly pinned upstream revision, including 125 Python test files. See [patch inventory](patches/manifest.json) for the exact files and hashes.
 - Native task/run ownership checks; exactly-once dispatch; input preflight; recoverable compact handoffs; worker completion that avoids a needless follow-up model turn.
 - Bounded file/status reads, cache diagnostics, task/run usage attribution, waiting without repeated model calls, and worker phase timing.
 - Fifteen renamed role templates and eleven reusable English skills. They contain no account configuration, credentials, personal persona or production transcripts.
@@ -24,13 +24,15 @@ Use the [storage and backup guide](docs/storage-and-backups.md) to avoid redunda
 Clone the release and run from its repository root; the same commands work after extracting the release archive and entering its top-level directory. Only Python and Git are needed for this companion-only walkthrough. Native profile setup has the additional upstream prerequisites documented separately.
 
 ```sh
-git clone --branch v0.3.5 --single-branch https://github.com/ap08960695/hermes-legion.git
+git clone --branch v0.3.6 --single-branch https://github.com/ap08960695/hermes-legion.git
 cd hermes-legion
 python3 scripts/verify_release.py
 python3 scripts/legion_plan.py --team examples/team.full.json --snapshot examples/snapshots/synthetic-ready.json --tasks examples/scenarios/parallel-production.json --now 1
 ```
 
-The walkthrough pins the immutable v0.3.5 release. Its atomic continuation-state transfer and verification limits are described in the [verification record](docs/verification.md).
+The walkthrough pins the immutable v0.3.6 release. Its local memory diagnostics and verification limits are described in the [verification record](docs/verification.md).
+
+Use [on-demand memory diagnostics](docs/runtime-memory-diagnostics.md) to distinguish process memory from native cache counts without reading conversations or starting inference. Optional allocation tracing is disabled by default and belongs in an idle maintenance window.
 
 ## Prepare and diagnose a team offline
 

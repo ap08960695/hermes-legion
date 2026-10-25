@@ -390,3 +390,39 @@ A trace of the actual native SQLite writer measured these successful single-migr
 | Loop | 2 | 1 |
 
 This is an offline transaction-count measurement, not production usage, disk-byte, latency or RAM savings. The observed retained live orphan-goal metadata has not been attributed to this failure class and was left unchanged. Current public inventory: **309 source/test targets**, including **185 runtime files and 124 Python test files**. Historical acceptance above remains historical.
+
+## Local memory attribution (v0.3.6)
+
+The private Gateway control socket now accepts an explicit `memory-stats` request.
+It reads scalar process/cache/tool/registry observations without formatting cached
+values, opening a session database, trimming memory or starting inference. Normal
+status stays unchanged. The optional allocation query observes an existing Python
+profiler; it never enables one. A registered native startup option permits a
+deliberate idle profiling window and defaults to disabled. The Gateway's runtime
+settings initialization moved into a small sibling, reusing one effective config
+snapshot for timing and diagnostic settings while retaining existing getters.
+
+Fresh native acceptance passed **72 cases across nine relevant files**, with
+zero failures, zero retries and **one legitimate skip**. Eighteen passing cases
+in the new file cover real local-socket dispatch, private-value exclusion,
+nonblocking registry counts, unavailable SQLite tracking, no database/trim side
+effects, allocation-path sanitization, bounded startup settings and real native
+Gateway configuration consumption. The SQLite allocator integration case skips
+when the host extension does not export the required symbols; a skip is not a
+successful allocator measurement. Companion examples/tools are checked separately
+and historical overlapping test counts are not added.
+
+Installed-source acceptance observed the actual Gateway through its native local
+socket after an idle-only lifecycle change, matched the runtime source inventory
+and preserved configuration. A temporary startup profiling window produced
+aggregate allocation metadata without a model request. Returning to a normal
+process was verified separately. Profiling itself consumes RAM/CPU; its overhead
+must not be presented as a leak, workload speed or savings. These observations
+identify areas for further investigation and do not establish a root cause or
+production reduction in memory, tokens or latency.
+
+The cumulative inventory contains **312 source/test targets: 187 runtime files
+and 125 Python test files**. Full patch compatibility is checked against the same
+pinned upstream revision. Public release artifacts include generic source,
+examples and documentation only; private runtime measurements, configuration,
+backup files and operational receipts remain excluded.

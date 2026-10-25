@@ -18,6 +18,7 @@ The cumulative patch is one coherent compatibility unit. Do not cherry-pick arbi
 | Worker phases | Persisted phase/timing readbacks and bounded visual-request reuse | Claim-to-first-tool is not provider TTFT or whole-task speed |
 | Desktop | Manual suggestions, native usage presentation and clipboard/focus improvements | No automatic paid route or typing/idle inference policy |
 | Operations | Profile-aware paths, durable notifications, memory-flush and entrypoint fixes | No bundled production units, state, account configuration or auto restart |
+| Memory diagnosis | On-demand local process, cache, registry and available SQLite allocator counts; opt-in startup allocation tracing | Counts contain no cached values; tracing adds overhead and is disabled by default; diagnostics do not prove savings |
 
 Role and skills content lives at the edges. The patch does not install an additional orchestration service or replace Hermes' native Kanban source of truth.
 
