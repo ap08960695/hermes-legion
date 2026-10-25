@@ -557,3 +557,42 @@ archives are reviewed before publication; private measurements, source locations
 configuration, credentials and operational receipts remain excluded. Quotas,
 models, accounts, goals, user pauses, project gates and embedding services are
 unchanged by this source repair.
+
+## Trustworthy compact bot activity (v0.3.9)
+
+The cumulative inventory now has **332 source/test targets**, including **131
+Python test files**. This update fixes three reproduced presentation boundaries:
+compression-tip rows retaining root activity fields; worker projections omitting
+bounded detail and terminal time; and recently completed/offline workers still
+qualifying for worker-driven activity. Bot rows now use the native tools icon
+with a short description and a full localized tooltip, keeping the canonical
+conversation preview and opening route unchanged.
+
+Regressions were observed failing before implementation. Fresh offline native
+acceptance passed **64 cases across seven files**, with zero failures or retries.
+Separately, **67 renderer cases across six files** passed, including canonical
+opening, no pre-warm on paint, terminal/offline behavior and locale coverage.
+The renderer type check and production renderer build passed; the changed scope's
+native code-health comparison reported zero new findings. These are separate
+checks, not a sum of historical suites.
+
+The installed native source was then checked with **nine cases across two files**
+using the canonical runner. This is a subset repeated against the installed
+location, not nine additional unique cases. Only selected source/test files were
+published locally; permissions and ownership were restored, configuration hashes
+were preserved and no database backup/restore was performed.
+
+Browser validation used actual native components, production-generated styles
+and synthetic data. Active detail, terminal clearing, offline exclusion, title
+fallback and unchanged canonical preview were verified; the final observed
+console had no errors or warnings. Private fixture issues were corrected without
+changing production behavior: home isolation was incomplete, a generated Vite
+cache was eligible for source transformation, and rebuild output was being watched
+as fixture styles. The same 2 GiB child heap cap was retained; no dependencies,
+model requests, quota settings or paid routes were added.
+
+Native worker recency is not process-liveness proof. No end-to-end live workload
+or model-token saving is claimed from this UI change. The current local source
+is installed, but activation of the already-open Desktop and Gateway remains a
+separate idle-lifecycle check; the redesigned Workbench mockup is not deployed.
+Historical benchmark and regression counts above remain separate.

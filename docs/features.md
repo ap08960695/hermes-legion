@@ -15,6 +15,7 @@ The cumulative patch is one coherent compatibility unit. Do not cherry-pick arbi
 | Search and web | Bounded result caches, extraction validation, contention protection and eviction | Cached output is not new source verification |
 | Model context | Stable shared prompt/tool prefixes and atomic compaction-related publication | Do not mutate past context to manufacture cache hits |
 | Usage | Read-only account views, bounded task/run diagnostics and HMAC correlation | No prompt bodies or runtime HMAC keys are shipped; missing evidence stays unknown |
+| Bot activity | An icon with bounded recent-worker detail, separate from the canonical conversation preview; compression-tip activity follows the displayed session | A recent stamp is not live process proof; finished and unreachable workers are excluded; no new poll or model request |
 | Worker phases | Persisted phase/timing readbacks and bounded visual-request reuse | Claim-to-first-tool is not provider TTFT or whole-task speed |
 | Desktop | Manual suggestions, native usage presentation and clipboard/focus improvements | No automatic paid route or typing/idle inference policy |
 | Operations | Profile-aware paths, durable notifications, memory-flush and entrypoint fixes | No bundled production units, state, account configuration or auto restart |
