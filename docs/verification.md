@@ -166,3 +166,28 @@ Compare before/after using equal coverage and matched time windows. More observe
 attempts after increasing the budget means improved visibility, not increased
 usage; fewer rows in a partial scan do not prove savings. Runtime logs, identifiers
 and measurements from private projects are not part of this public package.
+
+## v0.3.1 release verification
+
+This release includes the four post-v0.3.0 changes above: repeated attachment
+deduplication, correct cache memory-boundary selection, durable idle-cache
+eviction and an explicit usage-log scan budget. The cumulative inventory contains
+287 source/test files, including 115 Python test files. Earlier release tags
+remain unchanged.
+
+The release integration run passed 143 distinct native cases in 12 relevant
+test files, with zero failures and zero retries. The companion tools and examples
+are checked separately; historical overlapping runs are not added to this count.
+The source patch and pinned upstream revision are unchanged by release packaging.
+
+Memory-boundary detection does not configure MemoryHigh or MemoryMax. An operator's
+MemoryHigh can throttle work; MemoryMax can trigger an OOM kill. This release
+preserves active agents and unflushed conversations during automatic cache
+eviction. It does not promise that an externally imposed hard limit is safe for
+every workload.
+
+The locally installed runtime files were compared with the public inventory
+before release. Offline results establish regression coverage, not measured
+production RAM, latency, billing or cross-bot cache savings. No model requests
+are used for release verification, and no live limits or provider settings are
+changed by packaging.
