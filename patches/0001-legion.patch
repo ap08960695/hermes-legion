@@ -22784,3 +22784,135 @@ new file mode 100644
 +            for key,value in (("high",high),("max",maximum))}
 +    monkeypatch.setattr(pressure, "_finite_limit", lambda path: limits.get(str(path)))
 +    assert pressure.resolve_memory_high_mb("auto") == int(expected * 1024 * 0.65)
+diff --git a/gateway/run_agent_cache.py b/gateway/run_agent_cache.py
+index 2225f4a166..5536cc7292 100644
+--- a/gateway/run_agent_cache.py
++++ b/gateway/run_agent_cache.py
+@@ -13,6 +13,7 @@ from pathlib import Path
+ from typing import TYPE_CHECKING, Any, Dict, List, Optional
+ 
+ from agent.interrupt_compat import _accepts_keyword
++from gateway.agent_cache_pressure import transcript_persistence_caught_up
+ from gateway.config import Platform
+ from gateway.session import SessionSource, build_session_context_prompt
+ from gateway.session_prompt_pin import PROMPT_PIN_VERSION, sanitize_prompt_pin
+@@ -1051,7 +1052,7 @@ class GatewayAgentCacheMixin:
+ 
+     def _enforce_agent_cache_cap(self) -> None:
+         """Evict oldest cached agents past the LRU cap (requires _agent_cache_lock); cleanup on a
+-        daemon thread. Mid-turn agents are SKIPPED, so the cache may stay over cap until the next
++        daemon thread. Mid-turn or unflushed agents are SKIPPED, so the cache may stay over cap until the next
+         insert."""
+         _cache = getattr(self, "_agent_cache", None)
+         # OrderedDict.popitem(last=False) pops oldest; plain dict lacks the arg so skip enforcement
+@@ -1066,14 +1067,17 @@ class GatewayAgentCacheMixin:
+         # history) to protect a long-running one. Cache may stay over cap until the next insert.
+         cap = self._agent_cache_cap()
+         candidates = [(key, _tuple_agent(_cache.get(key))) for key in list(_cache.keys())[:max(0, len(_cache) - cap)]]
+-        evict_plan = [(key, agent) for key, agent in candidates if agent is None or id(agent) not in running_ids]
++        evict_plan = [
++            (key, agent) for key, agent in candidates
++            if agent is None or (id(agent) not in running_ids and transcript_persistence_caught_up(agent))
++        ]
+         for key, _ in evict_plan:
+             _cache.pop(key, None)
+         remaining_over_cap = len(_cache) - cap
+         if remaining_over_cap > 0:
+             logger.warning(
+                 "Agent cache over cap (%d > %d); %d excess slot(s) held by "
+-                "mid-turn agents — will re-check on next insert.",
++                "mid-turn or unflushed agents — will re-check on next insert.",
+                 len(_cache), cap, remaining_over_cap,
+             )
+         for key, agent in evict_plan:
+@@ -1086,7 +1090,7 @@ class GatewayAgentCacheMixin:
+ 
+     def _sweep_idle_cached_agents(self) -> int:
+         """Evict cached agents idle past the idle TTL (lock acquired internally; cleanup on daemon
+-        threads; mid-turn agents SKIPPED); returns the number evicted."""
++        threads; mid-turn or unflushed agents SKIPPED); returns the number evicted."""
+         _cache = getattr(self, "_agent_cache", None)
+         _lock = getattr(self, "_agent_cache_lock", None)
+         if _cache is None or _lock is None:
+@@ -1098,8 +1102,8 @@ class GatewayAgentCacheMixin:
+         with _lock:
+             for key, entry in list(_cache.items()):
+                 agent = _tuple_agent(entry)
+-                if agent is None or id(agent) in running_ids:
+-                    continue  # mid-turn — don't tear it down
++                if agent is None or id(agent) in running_ids or not transcript_persistence_caught_up(agent):
++                    continue  # Never discard a live or not-yet-durable transcript.
+                 last_activity = getattr(agent, "_last_activity_ts", None)
+                 if last_activity is None or (now - last_activity) <= idle_ttl:
+                     continue
+diff --git a/tests/gateway/test_agent_cache.py b/tests/gateway/test_agent_cache.py
+index 2ee3083328..80e18c5531 100644
+--- a/tests/gateway/test_agent_cache.py
++++ b/tests/gateway/test_agent_cache.py
+@@ -331,6 +331,7 @@ class TestAgentCacheBoundedGrowth:
+         old_agent = self._fake_agent()
+         old_agent._memory_manager = MagicMock()  # has an external provider
+         old_agent._session_messages = [{"role": "user", "content": "hi"}]
++        old_agent._last_flushed_db_idx = 1  # Transcript persisted before resource eviction.
+         old_agent.commit_memory_session = lambda msgs=None: commit_calls.append(msgs)
+         new_agent = self._fake_agent()
+ 
+diff --git a/tests/gateway/test_agent_cache_pressure.py b/tests/gateway/test_agent_cache_pressure.py
+index daeeece18a..8d6b8de8d0 100644
+--- a/tests/gateway/test_agent_cache_pressure.py
++++ b/tests/gateway/test_agent_cache_pressure.py
+@@ -382,7 +382,7 @@ class TestConfiguredBoundsReachTheCache:
+ 
+         with runner._agent_cache_lock:
+             for i in range(5):
+-                runner._agent_cache[f"s{i}"] = (MagicMock(), "sig")
++                runner._agent_cache[f"s{i}"] = (MagicMock(_session_messages=[], _last_flushed_db_idx=0), "sig")
+             runner._enforce_agent_cache_cap()
+ 
+         assert len(runner._agent_cache) == 2
+@@ -398,7 +398,7 @@ class TestConfiguredBoundsReachTheCache:
+         runner._release_evicted_agent_soft = lambda agent: None
+         runner.session_store = None
+ 
+-        stale = MagicMock()
++        stale = MagicMock(_session_messages=[], _last_flushed_db_idx=0)
+         stale._last_activity_ts = _t.time() - 5.0
+         runner._agent_cache["s-stale"] = (stale, "sig")
+ 
+diff --git a/tests/gateway/test_agent_cache_durability.py b/tests/gateway/test_agent_cache_durability.py
+new file mode 100644
+--- /dev/null
++++ b/tests/gateway/test_agent_cache_durability.py
+@@ -0,0 +1,32 @@
++"""Resource eviction must not discard the only up-to-date transcript."""
++from collections import OrderedDict
++from types import SimpleNamespace
++import threading
++import pytest
++from gateway.agent_cache_pressure import AgentCacheBounds
++from gateway.run import GatewayRunner
++
++@pytest.mark.parametrize("policy", ["cap", "ttl"])
++def test_unflushed_history_survives_until_persistence_catches_up(policy):
++    runner=GatewayRunner.__new__(GatewayRunner)
++    runner._agent_cache_lock=threading.Lock()
++    runner._running_agents={}
++    runner._agent_cache_bounds_cache=AgentCacheBounds(max_size=1,idle_ttl_secs=1)
++    old=SimpleNamespace(_session_messages=[{"role":"user","content":"not saved yet"}],
++                        _last_flushed_db_idx=0,_last_activity_ts=1)
++    recent=SimpleNamespace(_session_messages=[],_last_flushed_db_idx=0,_last_activity_ts=float("inf"))
++    runner._agent_cache=OrderedDict(old=(old,"sig"),recent=(recent,"sig"))
++    released=[]
++    runner._spawn_release_thread=lambda target,args,*a,**k: released.append(args[0])
++    def sweep():
++        if policy=="ttl":runner._sweep_idle_cached_agents()
++        else:
++            with runner._agent_cache_lock:runner._enforce_agent_cache_cap()
++    sweep()
++    assert "old" in runner._agent_cache
++    assert not released
++    old._last_flushed_db_idx=1
++    sweep()
++    assert "old" not in runner._agent_cache
++    assert released==[old]
++    assert "recent" in runner._agent_cache

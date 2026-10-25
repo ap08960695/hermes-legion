@@ -118,3 +118,23 @@ produced a 5,324 MiB auto budget; it now produces 1,331 MiB, preserving the exis
 All 43 tests across the boundary regression and existing cache-pressure suite pass.
 No model calls or live memory-limit changes are involved. These are correctness
 results, not measured production RSS savings. Immutable release tags are unchanged.
+
+
+## Durable idle-cache eviction (after v0.3.0)
+
+Idle-TTL and cache-size eviction now use the same persisted-transcript check as
+memory-pressure eviction. Previously, both paths could remove the only current
+copy of a conversation while the session DB lagged behind. Unflushed or unknown
+transcript state now retains the agent; a later sweep may evict it once the flush
+index catches up. Active agents remain protected. Explicit user-directed session
+reset/model changes retain their existing semantics.
+
+Two native regression cases first failed on the prior source (one per policy),
+then passed with the fix. All 73 cases across the new durability regression,
+existing agent-cache tests and cache-pressure tests pass offline. Three existing
+eviction fixtures now explicitly represent persisted transcripts; their original
+release-order and bounded-cache assertions remain intact. No model calls are used.
+
+This intentionally favors conversation preservation over RAM reduction during a
+persistence failure. It does not repair a failed database or impose a hard memory
+limit. No production memory-savings percentage is claimed.
