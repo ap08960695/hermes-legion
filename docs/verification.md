@@ -629,3 +629,18 @@ The new release inventory carries its own version label; earlier immutable tags
 and archives are not rewritten. The redesigned Focus/Workspace interface remains
 an interactive prototype and is not included as a deployed redesign in this
 source release. Prior overlapping test counts remain historical.
+
+
+## Native Focus and Workspace (v0.4.0)
+
+The exported patch now contains **352 source/test targets**, including **134 Python test files**. Unlike the earlier prototype-only work, this release contains native renderer components and an owned-session configuration intent. The original composer, transcript, bot roster, layout tree and plugin routes remain in use.
+
+Fresh UI acceptance passed **85 cases across ten files**, with zero failures. These cover navigation and native session doors, late plugin registration, separate layout scopes, goal drafts and explicit saves, busy/stale refusal behavior, Ctrl/Cmd+Enter containment, unknown evidence and existing session-control behavior. A render regression exercises 100 unrelated streaming updates without another shell commit or an implicit read while Catch up is closed. This is a component-level observation, not a whole-app speed or token measurement.
+
+The native session-control file passed **31 cases**, including the new goal form, preserved counters/gates/waits, busy refusal, stale revision, declared input shape, configured turn limits and malformed-limit refusal. Generated TypeScript/OpenRPC checks also passed. A wider goal-command/gate run passed during development; its overlapping counts are not added here.
+
+Renderer typechecking and the production renderer build passed. The scoped before/after code-health comparison covered 23 changed files with no new blocking or advisory findings. No dependencies, account bindings, quotas, fallback routes or embedding services were changed.
+
+Rendered review used the actual native presentation components with synthetic data and no live transport. It covered desktop Focus/Workspace, goal and feature dialogs, and 320/360-pixel child viewports. Review found and corrected a wrapped rail caption, crowded secondary form fields and narrow-screen navigation overflow. Browser tests used a test-only registered language pack to check the Thai strings; production language selection was not altered. The desktop package was built using existing admitted tools and verified staged assets; replacing or loading an already-open app remains a separate graceful idle-lifecycle step.
+
+English guides and the complete cumulative patch are distributed; private host reports, configuration, conversations and screenshot fixtures are not. Public files, all reachable Git history, and the exact release archive are reviewed before publication. Companion/archive acceptance is recorded separately from native regression evidence. Real workload billing, cross-bot cache sharing and live model behavior are not inferred from these tests.

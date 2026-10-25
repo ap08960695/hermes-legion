@@ -4,6 +4,9 @@ The cumulative patch is one coherent compatibility unit. Do not cherry-pick arbi
 
 | Area | Included behavior | Boundary |
 |---|---|---|
+| Desktop interface | Focus/Workspace, four primary destinations and a searchable native/plugin feature catalog | Existing chat, canonical bot sessions, layout scopes and advanced tools remain native; no implicit plugin enable or worker dispatch |
+| Goal form | Owner-scoped skills, explicit completion criteria and revision-checked idle saves | Preserves existing turn counters, limits, gates and waits; no model kickoff or budget override |
+| Catch up | Existing event-backed goal/wait state and links to original conversations, runs and outputs | Unknown stays unknown; a finished reply is not a completed goal or publication approval; no added polling |
 | Completion | Exact native task/run/claim/PID/fingerprint checks stop verified completed workers before another inference turn | Rejected, ambiguous, interactive and review paths retain correction behavior; submitted tool batches finish normally |
 | Dispatch | Exactly-once callback invocation, ready-work wakeups, fair unlock ordering and declared input preflight | Existing profile/host capacity, cooldown, claim and approval gates remain authoritative |
 | Work isolation | Declared write scopes and stale brief/input checks | A declaration is not a filesystem sandbox or global lock |
