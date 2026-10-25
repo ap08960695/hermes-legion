@@ -20,10 +20,19 @@ Read the [feature catalog](docs/features.md), [role guide](docs/bot-roles.md), a
 Clone the release and run from its repository root; the same commands work after extracting the release archive and entering its top-level directory. Only Python and Git are needed for this companion-only walkthrough. Native profile setup has the additional upstream prerequisites documented separately.
 
 ```sh
-git clone --branch v0.2.1 --single-branch https://github.com/ap08960695/hermes-legion.git
+git clone --branch v0.3.0 --single-branch https://github.com/ap08960695/hermes-legion.git
 cd hermes-legion
 python3 scripts/verify_release.py
 python3 scripts/legion_plan.py --team examples/team.full.json --snapshot examples/snapshots/synthetic-ready.json --tasks examples/scenarios/parallel-production.json --now 1
+```
+
+## Prepare and diagnose a team offline
+
+Use the [doctor and setup bundle guide](docs/offline-setup-tools.md) to inspect placeholders, preview a new-file diff and export config/SOUL into a fresh private directory. Nothing is installed or authenticated. The starter team and model map below are synthetic; model availability and runtime readiness remain unknown.
+
+```sh
+python3 scripts/legion_setup.py --team examples/team.small.json --models examples/models.small.synthetic.json
+python3 scripts/legion_plan.py --team examples/team.full.json --snapshot examples/snapshots/synthetic-codex-cooldown.json --tasks examples/scenarios/sticky-session.json --pins examples/session-pins.synthetic.json --now 1 --explain
 ```
 
 ## Start safely

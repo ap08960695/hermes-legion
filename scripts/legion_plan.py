@@ -120,15 +120,7 @@ def validate(team, snapshot, tasks, pins):
     return accounts, profiles
 
 
-def quota_available(row, budget, now):
-    names = ["max_parallel", "active", "remaining_hour", "remaining_day", "cooldown_until"]
-    if not row or any(type(row.get(k)) is not int or row[k] < 0 for k in names):
-        return False
-    return (row["cooldown_until"] <= now and row["active"] < row["max_parallel"]
-            and row["remaining_hour"] >= budget and row["remaining_day"] >= budget)
-
-
-def plan(team, snapshot, tasks, *, now, pins=None):
+def plan(team, snapshot, tasks, *, now, pins=None, explain=False):
     pins = {} if pins is None else pins
     accounts, profiles = validate(team, snapshot, tasks, pins)
     if type(now) not in {int, float} or not math.isfinite(now):
@@ -140,15 +132,35 @@ def plan(team, snapshot, tasks, *, now, pins=None):
     decisions = []
     ordered = sorted(profiles.values(), key=lambda p: (p["priority"], p["id"]))
 
-    def eligible(profile, account, task):
+    def rejection_reasons(profile, account, task):
         account_state = snapshot.get("accounts", {}).get(account["id"], {})
         profile_state = snapshot.get("profiles", {}).get(profile["id"], {})
         requires = set(task["requires"])
-        return (profile["role"] == task["role"] and task["data_class"] in profile["data_classes"]
-                and requires <= set(profile["capabilities"])
-                and requires <= set(profile_state.get("verified_capabilities", []))
-                and profile_state.get("status") == "ready" and account_state.get("status") == "ready"
-                and quota_available(ledger.get(account["quota_group"]), task["request_budget"], now))
+        reasons = []
+        for condition, code in [
+            (profile["role"] != task["role"], "role-mismatch"),
+            (task["data_class"] not in profile["data_classes"], "data-class-not-permitted"),
+            (not requires <= set(profile["capabilities"]), "capability-not-declared"),
+            (not requires <= set(profile_state.get("verified_capabilities", [])), "capability-unverified"),
+            (profile_state.get("status") != "ready", "profile-not-ready"),
+            (account_state.get("status") != "ready", "account-not-ready"),
+        ]:
+            if condition:
+                reasons.append(code)
+        quota = ledger.get(account["quota_group"], {})
+        names = ["max_parallel", "active", "remaining_hour", "remaining_day", "cooldown_until"]
+        if not quota or any(type(quota.get(k)) is not int or quota[k] < 0 for k in names):
+            reasons.append("quota-evidence-missing-or-invalid")
+        else:
+            for condition, code in [
+                (quota["cooldown_until"] > now, "account-cooldown"),
+                (quota["active"] >= quota["max_parallel"], "parallel-limit-reached"),
+                (quota["remaining_hour"] < task["request_budget"], "hour-budget-exhausted"),
+                (quota["remaining_day"] < task["request_budget"], "day-budget-exhausted"),
+            ]:
+                if condition:
+                    reasons.append(code)
+        return reasons
 
     for task in tasks:
         row = {"task": task["id"], "status": "hold"}
@@ -173,7 +185,16 @@ def plan(team, snapshot, tasks, *, now, pins=None):
                     choices = [(profile, account)]
             else:
                 choices = [(profile, accounts[key]) for profile in ordered for key in profile["accounts"]]
-            chosen = next(((p, a) for p, a in choices if eligible(p, a, task)), None)
+            evaluated = ((p, a, rejection_reasons(p, a, task)) for p, a in choices)
+            if explain:
+                evaluated = list(evaluated)
+            chosen = next(((p, a) for p, a, reasons in evaluated if not reasons), None)
+            if explain:
+                row["explanation"] = {"gate": None, "candidates": [
+                    {"profile": p["id"], "account": a["id"], "reasons": reasons,
+                     "selection": "rejected" if reasons else
+                         ("selected" if chosen == (p, a) else "lower-priority")}
+                    for p, a, reasons in evaluated]}
             if chosen is None:
                 row["reason"] = "pinned-route-unavailable" if pin else "no-eligible-route"
             else:
@@ -187,6 +208,10 @@ def plan(team, snapshot, tasks, *, now, pins=None):
                            reason="retained-session-pin" if pin else "eligible-role-route")
                 result_pins[task["session"]] = {"profile": profile["id"], "account": account["id"]}
                 busy_sessions.add(task["session"])
+        if explain and "explanation" not in row:
+            row["explanation"] = {"gate": row.get("reason"), "candidates": []}
+        if explain and row["status"] == "hold" and not row["explanation"]["candidates"]:
+            row["explanation"]["gate"] = row.get("reason")
         decisions.append(row)
     return {"mode": "offline-only", "executed": False, "decisions": decisions,
             "session_pins": result_pins, "quota_reservations": ledger}
@@ -211,13 +236,14 @@ def main():
     parser.add_argument("--snapshot", type=Path)
     parser.add_argument("--tasks", type=Path)
     parser.add_argument("--pins", type=Path)
+    parser.add_argument("--explain", action="store_true", help="Explain candidate rejections without changing the plan")
     parser.add_argument("--now", type=float, default=None)
     args = parser.parse_args()
     try:
         result = plan(read_json(args.team), read_json(args.snapshot) if args.snapshot else {},
                       read_json(args.tasks) if args.tasks else [],
                       now=args.now if args.now is not None else time.time(),
-                      pins=read_json(args.pins) if args.pins else None)
+                      pins=read_json(args.pins) if args.pins else None, explain=args.explain)
     except (ValueError, OSError, TypeError, KeyError, AttributeError):
         print("REFUSED: invalid team, snapshot, task or policy; input values omitted", file=sys.stderr)
         return 1

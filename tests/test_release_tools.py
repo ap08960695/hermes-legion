@@ -51,6 +51,15 @@ class CheckoutTests(unittest.TestCase):
         (self.root / "new.py").write_text("new = True\n")
         self.assertEqual(checkout.verify(self.root, self.manifest, "installed"), 2)
 
+    def test_readonly_verifier_does_not_run_a_checkout_fsmonitor_hook(self):
+        hook = self.root / '.git' / 'monitor-hook'
+        marker = self.root / '.git' / 'monitor-called'
+        hook.write_text('#!/bin/sh\ntouch "' + str(marker) + '"\nexit 0\n')
+        hook.chmod(0o700)
+        self.git('config', 'core.fsmonitor', str(hook))
+        self.assertEqual(checkout.verify(self.root, self.manifest, 'base'), 2)
+        self.assertFalse(marker.exists(), 'read-only inspection executed a configured helper')
+
     def test_wrong_revision_refused(self):
         self.manifest["upstream_commit"] = "0" * 40
         with self.assertRaises(ValueError):

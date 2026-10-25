@@ -2,6 +2,8 @@
 
 This guide is a **manual setup recipe**. The companion scripts do not run any command below, authenticate, write a live profile, install a service or call a model. Begin with a separate supported checkout/private home, not the installation currently running your work.
 
+You can first [preview and validate an offline setup bundle](offline-setup-tools.md). The exporter prepares files only; the native steps below remain explicit operator actions.
+
 ## Prerequisites and scope
 
 Use the exact supported Hermes checkout from [installation](installation-and-rollback.md), with its dependencies already prepared through the upstream package manager. These examples are POSIX-shell/Linux instructions. `HERMES_BIN` must point to the native Hermes CLI belonging to that isolated installation. Changing `HERMES_HOME` alone does **not** change which checkout a launcher executes. Do not reuse a launcher that forcibly selects your active home or an unrelated checkout.

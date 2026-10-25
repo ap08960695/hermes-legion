@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import subprocess
 import sys
@@ -10,8 +11,11 @@ import sys
 
 def git(root, *args):
     result = subprocess.run(
-        ["git", "--no-optional-locks", "-C", str(root), *args],
+        ["git", "--no-pager", "--no-optional-locks", "-c", "core.fsmonitor=false",
+         "-C", str(root), *args],
         capture_output=True, check=True, text=True,
+        env={**os.environ, "GIT_NO_LAZY_FETCH": "1", "GIT_OPTIONAL_LOCKS": "0",
+             "GIT_TERMINAL_PROMPT": "0"},
     )
     return result.stdout.strip()
 
@@ -39,7 +43,7 @@ def verify(root, manifest, phase):
                 raise ValueError("new target already exists")
         elif not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != want:
             raise ValueError("target content differs from manifest")
-    changes = set(git(root, "diff", "--name-only", "HEAD").splitlines())
+    changes = set(git(root, "diff", "--no-ext-diff", "--no-textconv", "--name-only", "HEAD").splitlines())
     untracked = set(git(root, "ls-files", "--others", "--exclude-standard").splitlines())
     if (phase == "base" and (changes or untracked)) or ((changes | untracked) - expected):
         raise ValueError("checkout contains unrelated changes")

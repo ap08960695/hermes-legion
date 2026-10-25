@@ -46,3 +46,15 @@ Ready work is held when the snapshot is absent. An expired snapshot, absent budg
 ## Boundaries
 
 This is a reference planner, **not a live router or quota service**. A recommendation does not pin a credential in Hermes, change an existing session, guarantee cache reuse, establish account eligibility or reserve a native slot. Runtime application remains an operator/native-workflow step with fresh gates and actual provider selection. Do not point it at native `auth.json`, `.env` or a personal profile; those are deliberately not its input formats.
+
+## Explain why a route was selected or held
+
+```sh
+python3 scripts/legion_plan.py --team examples/team.full.json --snapshot examples/snapshots/synthetic-codex-cooldown.json --tasks examples/scenarios/sticky-session.json --pins examples/session-pins.synthetic.json --now 1 --explain
+```
+
+`--explain` adds an `explanation` object to each decision, without changing decisions, pins, reservations or input files. A busy session, unfinished dependency, stale/missing snapshot or existing worker is explained as a `gate` with no candidate search. An unavailable pinned reference remains pinned; alternatives are not considered.
+
+For tasks reaching route selection, `candidates` reports each allowed profile/account alias and its rejection codes. Codes distinguish role/privacy mismatches, undeclared or unverified capabilities, profile/account readiness, missing/invalid quota evidence, cooldown, parallel capacity, and hour/day budgets. A candidate can have several reasons. Eligible alternatives are labeled `lower-priority` (including native account-list order); the selected route is labeled `selected`. Candidate evidence is evaluated before that task's simulated reservation, so the selected candidate does not appear to exhaust its own slot.
+
+Explanations use only the supplied offline metadata. They do not probe accounts, reveal credential values, discover actual native credential selection or authorize a retry. Without the flag, the original output structure is preserved. See [offline doctor and setup](offline-setup-tools.md) for configuration preparation.
