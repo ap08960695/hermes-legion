@@ -653,3 +653,12 @@ An offline native-component regression reproduced a dismissed Goal draft appeari
 The editor now starts a separate component instance when its pinned runtime session changes. Reopening it in the same chat still retains the dismissed draft; opening it in another chat starts from that chat's native goal state. Background state updates continue to leave the open, pinned draft alone. No model prompt, automatic goal start, quota change or new persistence store was added.
 
 The regression failed before the change and passed afterward. The relevant UI suite passed **85 cases across ten files**, with zero failures; this run overlaps the v0.4.0 evidence and is not an additional 85 independent cases. The full renderer TypeScript check passed, and the two-file native health comparison reported zero blocking or advisory findings. Native Python behavior was unchanged and its earlier suites were not repeated. Desktop package loading remains a separate graceful lifecycle step.
+
+
+## Per-Captain setup checks (v0.4.2)
+
+This documentation update makes profile-scoped goal opt-in and skill discovery explicit for every intended Captain, including the terminal's current launch home. A Desktop selection does not select the terminal profile. The native source patch, its 352 targets and all default permissions are unchanged. The guide supplies a short on-demand instruction pointer instead of copying the whole execution method into every conversation prefix.
+
+A separate local adoption check used the native configuration writer to enable only the requested profile's self-management permission. A raw semantic comparison preserved every other configuration value, including model/provider settings and existing limits. The existing published skill was installed without modification, and native skill discovery/view resolved the exact published bytes. Session-database access and network/model actions were denied during those checks; no goal was created, resumed or replaced. A plugin initializer was refused by the strict inspection guard, so this is not whole-plugin runtime acceptance. Existing file permissions and process identities were checked separately.
+
+These are configuration and discoverability results, not evidence that a cached Captain has consumed the guidance or completed autonomous work. Actual behavior still needs a normal authorized task. No source or UI suite was repeated for this documentation-only update. Earlier test counts remain historical; exact release inventory, archive, privacy and Git-history checks are performed for this release.
