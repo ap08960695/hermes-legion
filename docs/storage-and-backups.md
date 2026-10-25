@@ -31,7 +31,7 @@ migration or held rollback backup to save space.
 
 ## Compact explicitly selected older standalone snapshots
 
-The main-branch companion helper operates only on files explicitly selected under
+The companion helper operates only on files explicitly selected under
 an existing `HOME/backups` directory. It does not import Hermes, query SQL rows,
 scan your conversation contents, contact a model or restart a service.
 
@@ -100,7 +100,19 @@ Prefer bounded disposable caches and preserve a free-space margin before large
 downloads or builds. Use a durable project/worktree location for work that must
 resume after days. Age alone does not prove that a scratch tree is abandoned;
 an active process can keep using files without updating their modification time.
-Inspect process ownership and worktree state before removing a workspace.
+From v0.3.2, the source patch preserves active paths, Git worktrees, project or
+environment markers and explicit `.keep` markers during automatic retention. Put
+a `.keep` file in an artifact directory that must survive; a marker in the scratch
+root preserves that whole root. Store long-term work outside disposable scratch.
+
+The existing 24-hour idle threshold remains for eligible disposable entries. The
+Gateway checks them hourly under each served profile. Existing opportunistic boot
+checks share this policy. Process visibility failures or incomplete workspace
+scans retain data, and automatic cleanup never signals a process. Closed stale
+artifacts can be removed when their ownership is observable. Fresh directories
+skip recursive scans. This policy is intentionally conservative: retained workspaces
+can still consume substantial space and need an operator's separate disposition.
+Do not interpret a skipped sweep as successful reclamation.
 Do not run a broad scratch/cache deletion merely because a dashboard reports
 disk pressure. Reports, raw backup files and private cleanup plans do not belong
 in this public repository.

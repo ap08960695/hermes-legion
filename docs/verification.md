@@ -233,3 +233,56 @@ exclusion, sidecar/recent/link/path refusal, low space, existing outputs, source
 growth, sync failure and canonical duplicate selections. The CLI examples are
 also exercised against temporary synthetic SQLite snapshots. The native source
 patch remains unchanged; this helper is newer than the immutable v0.3.1 release.
+
+
+## Active and resumable scratch retention (after v0.3.1)
+
+Automatic scratch retention no longer reaps processes by idle mtime. It checks
+same-user working directories, executables, open files and command paths; unknown
+process visibility defers the sweep. Git worktrees, environment/project markers
+and `.keep` markers are preserved, including their registrations and uncommitted
+files. Incomplete workspace scans retain data. Explicit operator-directed reaping
+utilities remain separate from automatic retention.
+
+Fresh entries skip recursive traversal. The native Gateway housekeeping table
+runs protected scratch cleanup hourly under each served profile, with no added
+startup sweep from that table. Existing opportunistic boot retention uses the
+same protected policy. The original 24-hour idle threshold for eligible disposable
+entries is unchanged. No extra model turn, provider, quota or fallback is involved.
+
+Five failures on the old source reproduced live-process termination, deletion of
+an open file, deletion of the caller's cwd, deletion after failed ownership
+inspection and loss of resumable workspace data. Nine final regressions use
+real kernel-backed child processes and controlled process visibility, and cover
+missing inspectors, incomplete scans, normal disposal and fresh-entry behavior.
+An additional cadence/scope test verifies two profile homes after the first hour.
+All 52 cases across nine relevant native files pass offline, with zero retries.
+Existing explicit reaping tests still verify their audit and cleanup contract;
+the worktree test now verifies retention rather than automatic destruction.
+
+These checks do not establish recovered production bytes or response-time savings.
+An unreadable process must remain unknown. No live sweep should bypass that refusal
+to manufacture a successful cleanup. The immutable v0.3.1 release is unchanged.
+
+
+## v0.3.2 release verification
+
+This release packages growing-file preview bounds, active/resumable scratch
+retention and the explicit offline backup-compaction helper. The cumulative
+source inventory contains 295 files, including 120 native Python test files.
+A fresh integration run passed 209 distinct cases in 23 relevant native files,
+with zero failures and zero retries. Companion tools and examples separately
+passed all 75 cases. These counts do not add earlier overlapping runs.
+
+The full patch passed fresh base/apply/installed verification on the pinned
+upstream revision. Locally installed runtime bytes were matched against all
+175 runtime inventory entries. Installed-source retention was separately
+exercised with network/process/signal actions denied. Unknown process ownership
+correctly deferred deletion; this is preservation evidence, not reclaimed bytes.
+Runtime lifecycle acceptance is deployment-specific and does not certify an
+actual hourly sweep or production usage/RAM/latency improvements.
+
+Release files, reachable Git history, private-identifier checks and known private
+credential comparisons are reviewed before publication. Runtime data, backup
+archives, local configuration and operational receipts are excluded from the
+public archive. Earlier releases remain immutable.

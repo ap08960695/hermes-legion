@@ -8,21 +8,21 @@ The design is simple: give each bot a clear responsibility, dispatch independent
 
 ## What is included
 
-- **288 patched or added source/test files** against one explicitly pinned upstream revision, including 116 Python test files. See [patch inventory](patches/manifest.json) for the exact files and hashes.
+- **295 patched or added source/test files** against one explicitly pinned upstream revision, including 120 Python test files. See [patch inventory](patches/manifest.json) for the exact files and hashes.
 - Native task/run ownership checks; exactly-once dispatch; input preflight; recoverable compact handoffs; worker completion that avoids a needless follow-up model turn.
 - Bounded file/status reads, cache diagnostics, task/run usage attribution, waiting without repeated model calls, and worker phase timing.
 - Fifteen renamed role templates and ten reusable English skills. They contain no account configuration, credentials, personal persona or production transcripts.
 
 Read the [feature catalog](docs/features.md), [role guide](docs/bot-roles.md), and [verification record](docs/verification.md). A feature's inclusion does not establish a live performance saving for your workload.
 
-Use the [storage and backup guide](docs/storage-and-backups.md) to avoid redundant full backups and review the main-branch helper for compacting explicitly selected older standalone snapshots.
+Use the [storage and backup guide](docs/storage-and-backups.md) to avoid redundant full backups and review the offline helper for compacting explicitly selected older standalone snapshots.
 
 ## Try the offline examples from a public download
 
 Clone the release and run from its repository root; the same commands work after extracting the release archive and entering its top-level directory. Only Python and Git are needed for this companion-only walkthrough. Native profile setup has the additional upstream prerequisites documented separately.
 
 ```sh
-git clone --branch v0.3.1 --single-branch https://github.com/ap08960695/hermes-legion.git
+git clone --branch v0.3.2 --single-branch https://github.com/ap08960695/hermes-legion.git
 cd hermes-legion
 python3 scripts/verify_release.py
 python3 scripts/legion_plan.py --team examples/team.full.json --snapshot examples/snapshots/synthetic-ready.json --tasks examples/scenarios/parallel-production.json --now 1
