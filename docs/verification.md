@@ -358,3 +358,15 @@ predate these fixes; they do not establish after-patch RAM, latency or usage
 savings. Production impact and autonomous goal/skill behavior remain separate
 acceptance work. Public archives contain source/examples only, never private
 operational receipts, live databases or credential stores.
+
+## Native Captain goals and delegated decisions (v0.3.4)
+
+The Captain policy and new on-demand goal-driven-execution skill describe authority for reversible implementation choices, bounded correction, parallel ready work and verified delivery. Material scope/cost/access/irreversibility and rights/review/publication decisions retain their gates. This is guidance within existing native permissions, not a guarantee of autonomous model behavior.
+
+The native `hermes goal status|show|ensure` command uses the current bound session/profile and existing GoalState/contract store. Self-setting defaults off and requires profile opt-in. It preserves active/paused/cleared goals, existing caps and concurrent owner changes. Status avoids transcript/system-prompt materialization. Setting metadata invokes no judge, kickoff, dispatch or model. The CLI refreshes goal state at its existing post-turn boundary, preserving cached state and skipping evaluation if observation fails.
+
+Final new-file acceptance: **26 native tests passed, zero failures**, with zero retries. Controls cover actual SQLite state/contract persistence, parser integration, profile/session scope, missing/closed sessions, disabled profiles, preserved pauses and budgets, concurrent writes, worker refusal, bounded stdin, stale CLI state and a committed write whose readback fails. The initial adoption harness used the wrong mixin; after correction, all three stale-state cases failed against the unchanged implementation and passed with the fix. A separate full relevant goal/parser run passed **182 cases in eleven files**, including the earlier 25-case revision of the new file. These overlapping results are not added together.
+
+Installed-source acceptance used native read-only session metadata and skill discovery/view with network denied. Existing retained paused goal metadata remained byte-identical; when its session record was absent, the helper correctly refused to reactivate it. A current existing open session was inspected without setting a test goal. The profile changed only its explicit self-management permission plus generic instruction/skill content; models, quotas and existing turn caps were preserved. Source-only rollback backed up approximately 529 KB of source and two small profile files, with no database snapshot.
+
+No model request or live synthetic worker was used for these checks. Skill discovery and metadata inspection do not prove that an existing cached Captain has already read new guidance or completed autonomous work. Use normal authorized work to establish that evidence, and retain the idle activation and prompt-prefix constraints described in the goal guide. The patch inventory now contains 305 source/test targets: 182 runtime files and 123 Python test files. Historical acceptance counts above remain historical.

@@ -8,6 +8,7 @@ The cumulative patch is one coherent compatibility unit. Do not cherry-pick arbi
 | Dispatch | Exactly-once callback invocation, ready-work wakeups, fair unlock ordering and declared input preflight | Existing profile/host capacity, cooldown, claim and approval gates remain authoritative |
 | Work isolation | Declared write scopes and stale brief/input checks | A declaration is not a filesystem sandbox or global lock |
 | Waiting | Durable receipt handling, self-origin notification protection and no repeated work to manufacture proof | Admission is not terminal acknowledgement; uncertain deliveries are never blindly replayed |
+| Goals and decisions | Opt-in current-session native goal setup, fresh CLI post-turn metadata and an on-demand delegated-execution skill | Existing goals, pauses, turn caps and material approval gates remain; metadata setup calls no model |
 | Handoffs | Prioritized bounded summaries, artifact references and explicit omissions | Canonical full context remains recoverable; a summary grants no approval |
 | File tools | Native/raw/byte reads, repeated/concurrent read suppression and document extraction bounds | Preserve path/credential scope and invalidation; no cross-user content cache |
 | Search and web | Bounded result caches, extraction validation, contention protection and eviction | Cached output is not new source verification |

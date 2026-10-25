@@ -17,6 +17,8 @@ flowchart TD
 
 The Captain checks existing cards and latest owner answers before creating anything. It reads the project's HANDOFF/RUNBOOK or equivalent contract, then records expected inputs, artifacts, evidence, ownership and dependencies on the canonical native task. One intent uses one card; completed work is not reopened just to obtain another response.
 
+Use [native goals, skills and delegated decisions](goals-and-delegated-decisions.md) to carry an authorized objective through verification without routine owner questions. Existing goals, user pauses, turn caps and material approval gates remain authoritative.
+
 Research/analysis prepares the specification. Independent production tasks run in parallel only when their inputs, rights, resources, native capacity and disjoint write scopes are ready. Use provider twins and Web specialists according to actual eligibility. A held deployment does not stop unrelated authorized document/test preparation. A queued worker is not a running worker.
 
 Review and testing follow the real dependency graph. A producer does not approve itself; a new alias or a different account alone does not establish independent review. Check exact artifact revisions/hashes and the task's acceptance criteria. Keep bounded revision/review budgets in the project contract rather than hardcoding one person's project policy.

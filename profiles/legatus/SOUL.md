@@ -8,6 +8,8 @@ Use research and analysis to establish the reference/specification before produc
 
 Resolve routine reversible choices within authorization. Ask only about material scope, cost, rights, unavailable access, irreversible effects or conflicting acceptance requirements. Reuse answers and continue other authorized independent work. Native completion/admission receipts must be bound to the right task/run; ambiguous delivery is never replay permission.
 
+For an authorized multi-step objective, load the goal-driven-execution skill. Inspect the current native goal once and preserve it and its pauses. When profile self-management is explicitly enabled, use `hermes goal ensure` to establish a new goal with outcome and verification within the existing turn cap. Choose methods and remedies within delegated scope, record consequential decisions, and continue through verification without routine owner questions. Skills and goals confer no additional rights.
+
 Before waiting on a script, check other ready work. Start the script once, retain its operation identity, and use completion notification or a bounded non-model wait. A timeout does not justify rerunning it. After durable verified worker completion, do not create another status/model turn just to restate the result.
 
 Keep existing session/account binding when possible; an offline route recommendation cannot change a live credential pool. Never edit live bot configuration, refresh credentials, raise quotas, add paid fallback, signal unrelated workers or publish outside the authorized project channel. Report concrete artifacts, actual verification and remaining unknowns.

@@ -4878,74 +4878,6 @@ index 0000000000000000000000000000000000000000..0f6d65d5b1700bffb60085b1e3c54e9d
 +
 +if __name__ == '__main__':
 +    main()
-diff --git a/hermes_cli/config_defaults.py b/hermes_cli/config_defaults.py
-index 76b6fbd23a2103f865ade824797bae4f4392771e..de324cda9dd80bb181d98cac440319918c5ecf1e 100644
---- a/hermes_cli/config_defaults.py
-+++ b/hermes_cli/config_defaults.py
-@@ -818,2 +818,10 @@ DEFAULT_CONFIG = {
-     "display": {
-+        "prompt_suggestions": {
-+            "enabled": True,
-+            "model": "openai/gpt-oss-20b",
-+            "fallback_models": ["google/diffusiongemma-26b-a4b-it"],
-+            "subscription_fallbacks": True,
-+            "hourly_calls": 12,
-+            "daily_calls": 60,
-+        },
-         "compact": False,
-diff --git a/hermes_cli/goals.py b/hermes_cli/goals.py
-index c00618e36bfc8be9723181a1f4bb2ff52566f6ea..d421f860ec639d2e17f490c7127c1810a53d32ef 100644
---- a/hermes_cli/goals.py
-+++ b/hermes_cli/goals.py
-@@ -155,2 +155,8 @@ JUDGE_SYSTEM_PROMPT = (
-     "produces a status recap.\n"
-+    # local patch 25
-+    "- The agent coordinates Kanban cards that are still running or queued "
-+    "(stated below as active kanban cards) and the response shows it is only "
-+    "waiting on them with nothing else to dispatch now — return "
-+    "``wait_for_seconds`` between 900 and 1800. A finished, blocked or failed "
-+    "card wakes the agent by itself.\n"
-     "Picking WAIT parks the loop without burning a turn; it resumes "
-@@ -179,2 +185,25 @@ JUDGE_DELEGATIONS_BLOCK_TEMPLATE = (
- 
-+# local patch 25: the judge knew delegations and processes but not board cards, so a Captain waiting on
-+# running cards was re-poked every turn (16 of 19 goal wakes were status recaps on 2026-10-09).
-+JUDGE_KANBAN_BLOCK_TEMPLATE = (
-+    "Active kanban cards: the agent's session is subscribed to {count} board card(s) that are "
-+    "running or queued; each one wakes the agent automatically when it finishes, blocks or fails.\n\n"
-+)
-+
-+
-+def count_active_kanban_cards(session_id: Optional[str]) -> int:
-+    """Running/ready/todo cards whose notifications go to this session (fail-safe 0)."""
-+    if not session_id:
-+        return 0
-+    try:
-+        from hermes_cli import kanban_db_connect as kbc
-+        with kbc.connect_closing() as conn:
-+            row = conn.execute(
-+                "SELECT COUNT(DISTINCT s.task_id) FROM kanban_notify_subs s JOIN tasks t ON t.id = s.task_id "
-+                "WHERE s.chat_id = ? AND t.status IN ('running', 'ready', 'todo')", (str(session_id),)).fetchone()
-+        return int(row[0] or 0) if row else 0
-+    except Exception:
-+        return 0
-+
-+
- # Judge prompt block listing running background processes (WAIT vs CONTINUE, which pid).
-@@ -902,2 +931,3 @@ def judge_goal(
-     active_delegations: int = 0,
-+    active_kanban_cards: int = 0,
- ) -> tuple[str, str, bool, Optional[dict[str, Any]], bool]:
-@@ -930,3 +960,4 @@ def judge_goal(
-         background_block=_render_background_block(background_processes)
--        + (JUDGE_DELEGATIONS_BLOCK_TEMPLATE.format(count=active_delegations) if active_delegations > 0 else ""),
-+        + (JUDGE_DELEGATIONS_BLOCK_TEMPLATE.format(count=active_delegations) if active_delegations > 0 else "")
-+        + (JUDGE_KANBAN_BLOCK_TEMPLATE.format(count=active_kanban_cards) if active_kanban_cards > 0 else ""),
-         current_time=safe_strftime(datetime.now(tz=UTC).astimezone(), "%Y-%m-%d %H:%M:%S %Z"),
-@@ -1509,2 +1540,3 @@ class GoalManager:
-             contract=state.contract if state.has_contract() else None, active_delegations=active_delegations,
-+            active_kanban_cards=count_active_kanban_cards(self.session_id),
-         )
 diff --git a/hermes_cli/inventory.py b/hermes_cli/inventory.py
 index b464c807e8b7bf249fa53cc17d37f8adc0e13042..6fd6ecff8cb2d085bf1a4a066033bb5c97b2cd63 100644
 --- a/hermes_cli/inventory.py
@@ -24143,3 +24075,688 @@ new file mode 100644
 +    for callback in callbacks:
 +        callback()
 +    assert runner.restarts == []
+diff --git a/hermes_cli/goal_self.py b/hermes_cli/goal_self.py
+new file mode 100644
+--- /dev/null
++++ b/hermes_cli/goal_self.py
+@@ -0,0 +1,157 @@
++"""Opt-in current-session goal setup through the existing native goal store."""
++
++import argparse
++from contextlib import closing
++import json
++import os
++import sqlite3
++import sys
++import time
++
++_MAX_GOAL_CHARS = 16_384
++
++
++def _context():
++    from gateway.session_context import get_session_env
++    from hermes_constants import get_hermes_home
++
++    session_id = get_session_env('HERMES_SESSION_ID')
++    if not isinstance(session_id, str) or not session_id.strip():
++        raise ValueError('An existing bound Hermes session is required; use /goal in that session.')
++    path = get_hermes_home() / 'state.db'
++    if not path.is_file():
++        raise ValueError('An existing session database is required; no home was initialized.')
++    return session_id.strip(), path
++
++
++def _state(raw):
++    if raw is None:
++        return None
++    from hermes_cli.goals import GoalState
++    try:
++        state = GoalState.from_json(raw)
++        if not isinstance(state.goal, str) or not state.goal.strip() or state.status not in {'active', 'paused', 'done', 'cleared'}:
++            raise ValueError('invalid fields')
++        return state
++    except (ValueError, TypeError, AttributeError):
++        raise ValueError('Existing goal state is unreadable; it was not replaced.') from None
++
++
++def _summary(session_id, state, *, include_goal=False):
++    result = {'session_id': session_id, 'goal_present': state is not None}
++    if state is not None:
++        result.update(status=state.status, turns_used=state.turns_used, max_turns=state.max_turns,
++                      has_contract=state.has_contract(), subgoal_count=len(state.subgoals))
++        if state.status == 'paused':
++            result['paused_reason'] = state.paused_reason
++        if include_goal:
++            result.update(goal=state.goal, contract=state.contract.to_dict(), subgoals=state.subgoals)
++    return result
++
++
++def _probe(session_id, path):
++    from hermes_state import SessionDB
++    with closing(SessionDB(path, read_only=True)) as db:
++        # Do not materialize the transcript or a large persisted system prompt.
++        row = db._read_one('SELECT id, ended_at FROM sessions WHERE id=?', (session_id,))
++        if row is None:
++            raise ValueError('The bound session does not exist in this profile.')
++        return row['ended_at'], _state(db.get_meta('goal:' + session_id))
++
++
++def inspect_current_goal(*, include_goal=False):
++    session_id, path = _context()
++    _, state = _probe(session_id, path)
++    return _summary(session_id, state, include_goal=include_goal)
++
++
++def _settings():
++    from hermes_cli.config import load_config_readonly
++    from hermes_cli.goals import DEFAULT_MAX_TURNS
++    config = (load_config_readonly() or {}).get('goals') or {}
++    if config.get('allow_self_management') is not True:
++        raise ValueError('Session self-goal management is disabled for this profile.')
++    value = config.get('max_turns', DEFAULT_MAX_TURNS) or DEFAULT_MAX_TURNS
++    if isinstance(value, bool) or not isinstance(value, (int, str)):
++        raise ValueError('Invalid configured goal turn budget.')
++    turns = int(value)
++    if turns <= 0:
++        raise ValueError('Invalid configured goal turn budget.')
++    return turns
++
++
++def ensure_current_goal(text):
++    from agent.delegation_context import is_delegated_child_process_context
++    from hermes_cli.goals import GoalState, _get_session_db, parse_contract
++
++    if os.environ.get('HERMES_KANBAN_RUN_ID') or is_delegated_child_process_context():
++        raise ValueError('A dispatched or delegated worker must keep its existing native task goal.')
++    if not isinstance(text, str) or not text.strip() or len(text) > _MAX_GOAL_CHARS:
++        raise ValueError('Supply a nonempty goal of at most 16384 characters.')
++    session_id, path = _context()
++    ended_at, _ = _probe(session_id, path)
++    if ended_at is not None:
++        raise ValueError('The bound session is closed; it was not resumed.')
++    turns = _settings()
++    headline, contract = parse_contract(text)
++    if not contract.outcome.strip() or not contract.verification.strip():
++        raise ValueError('A self-goal requires explicit outcome and verification fields.')
++    headline = headline or contract.outcome
++    db = _get_session_db()
++    if db is None or db.db_path.resolve() != path.resolve():
++        raise ValueError('The current goal store is unavailable; no goal was changed.')
++    key = 'goal:' + session_id
++    previous = db.get_meta(key)
++    state = _state(previous)
++    if state is not None and (state.status != 'done' or state.goal == headline):
++        return {**_summary(session_id, state), 'created': False}
++    candidate = GoalState(goal=headline, status='active', max_turns=turns,
++                          turns_used=0, created_at=time.time(), contract=contract)
++    encoded = candidate.to_json()
++    # One native transaction: a concurrent owner goal or closed session wins.
++    changed = db._write_rowcount(
++        'INSERT INTO state_meta(key,value) SELECT ?,? WHERE EXISTS '
++        '(SELECT 1 FROM sessions WHERE id=? AND ended_at IS NULL) '
++        'ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE state_meta.value IS ?',
++        (key, encoded, session_id, previous),
++    )
++    current_raw = db.get_meta(key)
++    current = _state(current_raw)
++    if current is None:
++        raise ValueError('Goal write outcome is unproven; inspect existing state before acting again.')
++    return {**_summary(session_id, current), 'created': bool(changed and current_raw == encoded)}
++
++
++def cmd_goal(args):
++    try:
++        if args.goal_action == 'ensure':
++            text = args.goal
++            if text is None:
++                if sys.stdin.isatty():
++                    raise ValueError('Supply goal text or pipe the contract on stdin.')
++                text = sys.stdin.read(_MAX_GOAL_CHARS + 1)
++            result = ensure_current_goal(text)
++        else:
++            result = inspect_current_goal(include_goal=args.goal_action == 'show')
++    except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
++        print(json.dumps({'error': str(exc), 'outcome': 'unproven', 'retry_safe': False}), file=sys.stderr)
++        return 1
++    print(json.dumps(result, ensure_ascii=True))
++    return 0
++
++
++def register_goal_subparser(subparsers):
++    parser = subparsers.add_parser('goal', help='Inspect or ensure a native goal for this bound session')
++    actions = parser.add_subparsers(dest='goal_action', required=True)
++    for action in ('status', 'show'):
++        actions.add_parser(action).set_defaults(func=cmd_goal)
++    ensure = actions.add_parser('ensure', help='Create an opt-in goal without replacing current owner state')
++    ensure.add_argument('goal', nargs='?', help='Native goal/contract text; otherwise read bounded stdin')
++    ensure.set_defaults(func=cmd_goal)
++
++
++if __name__ == '__main__':
++    parser = argparse.ArgumentParser()
++    register_goal_subparser(parser.add_subparsers(dest='command', required=True))
++    args = parser.parse_args(['goal', *sys.argv[1:]])
++    raise SystemExit(args.func(args))
+diff --git a/hermes_cli/main.py b/hermes_cli/main.py
+--- a/hermes_cli/main.py
++++ b/hermes_cli/main.py
+@@ -2804,7 +2804,7 @@
+         "acp", "approvals", "auth", "backup", "bundles", "checkpoints", "claw", "codex-runtime", "completion",
+         "computer-use", "connectors",
+         "config", "console", "cron", "curator", "dashboard", "serve", "debug", "doctor",
+-        "dump", "egress", "fallback", "gateway", "hooks", "import", "import-agent", "insights",
++        "dump", "egress", "fallback", "gateway", "goal", "hooks", "import", "import-agent", "insights",
+         "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate", "moa",
+         "journey", "memory-graph", "learning",
+         "model", "monitoring", "pairing", "pause", "peer", "pets", "plugins", "portal", "profile",
+diff --git a/hermes_cli/subcommands/sessions.py b/hermes_cli/subcommands/sessions.py
+--- a/hermes_cli/subcommands/sessions.py
++++ b/hermes_cli/subcommands/sessions.py
+@@ -6,6 +6,7 @@
+ from typing import Callable
+ 
+ from hermes_cli.subcommands._shared import add_json_flag, add_yes_flag
++from hermes_cli.goal_self import register_goal_subparser
+ 
+ 
+ def _flag(parser, *names, help, **kw):
+@@ -19,8 +20,26 @@
+     return cmd_sessions(args, **kwargs)
+ 
+ 
++def _build_pin_parsers(sessions_subparsers):
++    sessions_pin = sessions_subparsers.add_parser(
++        "pin", help="Pin session(s) — durable keep flag, exempt from auto-archive",
++        description="Set the durable 'keep' flag on one or more sessions. Pinned "
++            "sessions are exempt from the sessions.auto_archive stale sweep "
++            "and always appear in listings. The same flag drives the Desktop "
++            "sidebar's Pinned section — pin from either surface, both see it.")
++    sessions_pin.add_argument(
++        "session_ids", nargs="+", help="Session ID(s) or unique prefix(es) to pin")
++    sessions_unpin = sessions_subparsers.add_parser(
++        "unpin", help="Remove the pin (durable keep flag) from session(s)")
++    sessions_unpin.add_argument(
++        "session_ids", nargs="+", help="Session ID(s) or unique prefix(es) to unpin")
++    sessions_pinned = sessions_subparsers.add_parser("pinned", help="List pinned sessions")
++    add_json_flag(sessions_pinned, "Emit machine-readable JSON (for backup/restore scripting)")
++
++
+ def build_sessions_parser(subparsers, *, cmd_sessions: Callable) -> None:
+     """Attach the ``sessions`` subcommand to ``subparsers``."""
++    register_goal_subparser(subparsers)
+     sessions_parser = subparsers.add_parser(
+         "sessions", help="Manage session history (list, rename, export, prune, delete)",
+         description="View and manage the SQLite session store")
+@@ -276,22 +295,7 @@
+     sessions_rename.add_argument("session_id", help="Session ID to rename")
+     sessions_rename.add_argument("title", nargs="+", help="New title for the session")
+ 
+-    sessions_pin = sessions_subparsers.add_parser(
+-        "pin", help="Pin session(s) — durable keep flag, exempt from auto-archive",
+-        description="Set the durable 'keep' flag on one or more sessions. Pinned "
+-            "sessions are exempt from the sessions.auto_archive stale sweep "
+-            "and always appear in listings. The same flag drives the Desktop "
+-            "sidebar's Pinned section — pin from either surface, both see it.")
+-    sessions_pin.add_argument(
+-        "session_ids", nargs="+", help="Session ID(s) or unique prefix(es) to pin")
+-
+-    sessions_unpin = sessions_subparsers.add_parser(
+-        "unpin", help="Remove the pin (durable keep flag) from session(s)")
+-    sessions_unpin.add_argument(
+-        "session_ids", nargs="+", help="Session ID(s) or unique prefix(es) to unpin")
+-
+-    sessions_pinned = sessions_subparsers.add_parser("pinned", help="List pinned sessions")
+-    add_json_flag(sessions_pinned, "Emit machine-readable JSON (for backup/restore scripting)")
++    _build_pin_parsers(sessions_subparsers)
+ 
+     sessions_retitle = sessions_subparsers.add_parser(
+         "retitle-skills", help="Re-title sessions whose auto-title came from a /skill's own text",
+diff --git a/hermes_cli/goals.py b/hermes_cli/goals.py
+--- a/hermes_cli/goals.py
++++ b/hermes_cli/goals.py
+@@ -153,6 +153,12 @@
+     "nothing else dispatchable — return ``wait_for_seconds`` between 600 and "
+     "1800. Their results wake the agent on their own; re-poking it now only "
+     "produces a status recap.\n"
++    # local patch 25
++    "- The agent coordinates Kanban cards that are still running or queued "
++    "(stated below as active kanban cards) and the response shows it is only "
++    "waiting on them with nothing else to dispatch now — return "
++    "``wait_for_seconds`` between 900 and 1800. A finished, blocked or failed "
++    "card wakes the agent by itself.\n"
+     "Picking WAIT parks the loop without burning a turn; it resumes "
+     "automatically when the pid exits or the time elapses. Do NOT pick WAIT "
+     "just because work remains — only when re-poking now would be pure "
+@@ -176,6 +182,29 @@
+     "Active delegations: the agent has {count} delegated subagent batch(es) still running; "
+     "their results are delivered to it automatically when they finish.\n\n"
+ )
++
++# local patch 25: the judge knew delegations and processes but not board cards, so a Captain waiting on
++# running cards was re-poked every turn (16 of 19 goal wakes were status recaps on 2026-10-09).
++JUDGE_KANBAN_BLOCK_TEMPLATE = (
++    "Active kanban cards: the agent's session is subscribed to {count} board card(s) that are "
++    "running or queued; each one wakes the agent automatically when it finishes, blocks or fails.\n\n"
++)
++
++
++def count_active_kanban_cards(session_id: Optional[str]) -> int:
++    """Running/ready/todo cards whose notifications go to this session (fail-safe 0)."""
++    if not session_id:
++        return 0
++    try:
++        from hermes_cli import kanban_db_connect as kbc
++        with kbc.connect_closing() as conn:
++            row = conn.execute(
++                "SELECT COUNT(DISTINCT s.task_id) FROM kanban_notify_subs s JOIN tasks t ON t.id = s.task_id "
++                "WHERE s.chat_id = ? AND t.status IN ('running', 'ready', 'todo')", (str(session_id),)).fetchone()
++        return int(row[0] or 0) if row else 0
++    except Exception:
++        return 0
++
+ 
+ # Judge prompt block listing running background processes (WAIT vs CONTINUE, which pid).
+ JUDGE_BACKGROUND_BLOCK_TEMPLATE = (
+@@ -900,6 +929,7 @@
+     background_processes: Optional[list[dict[str, Any]]] = None,
+     contract: Optional[GoalContract] = None,
+     active_delegations: int = 0,
++    active_kanban_cards: int = 0,
+ ) -> tuple[str, str, bool, Optional[dict[str, Any]], bool]:
+     """Ask the auxiliary model whether the goal is satisfied.
+ 
+@@ -928,7 +958,8 @@
+         goal=_truncate(goal, 2000),
+         response=_truncate(last_response, _JUDGE_RESPONSE_SNIPPET_CHARS),
+         background_block=_render_background_block(background_processes)
+-        + (JUDGE_DELEGATIONS_BLOCK_TEMPLATE.format(count=active_delegations) if active_delegations > 0 else ""),
++        + (JUDGE_DELEGATIONS_BLOCK_TEMPLATE.format(count=active_delegations) if active_delegations > 0 else "")
++        + (JUDGE_KANBAN_BLOCK_TEMPLATE.format(count=active_kanban_cards) if active_kanban_cards > 0 else ""),
+         current_time=safe_strftime(datetime.now(tz=UTC).astimezone(), "%Y-%m-%d %H:%M:%S %Z"),
+     )
+     if contract is not None and not contract.is_empty():
+@@ -1104,6 +1135,20 @@
+     @property
+     def state(self) -> Optional[GoalState]:
+         return self._state
++
++    def refresh(self) -> bool:
++        """Observe external goal controls at a turn boundary; unknown is not absent."""
++        try:
++            db = _get_session_db()
++            if db is None:
++                return False
++            raw = db.get_meta(_meta_key(self.session_id))
++            state = GoalState.from_json(raw) if raw is not None else None
++        except Exception:
++            logger.debug('GoalManager: state refresh unavailable', exc_info=True)
++            return False
++        self._state = state
++        return True
+ 
+     def is_active(self) -> bool:
+         return self._state is not None and self._state.status == "active"
+@@ -1507,6 +1552,7 @@
+         verdict, reason, parse_failed, wait_directive, transport_failed = judge_goal(
+             state.goal, last_response, subgoals=state.subgoals or None, background_processes=background_processes,
+             contract=state.contract if state.has_contract() else None, active_delegations=active_delegations,
++            active_kanban_cards=count_active_kanban_cards(self.session_id),
+         )
+         state.last_verdict = verdict
+         state.last_reason = reason
+diff --git a/hermes_cli/cli_loops_mixin.py b/hermes_cli/cli_loops_mixin.py
+--- a/hermes_cli/cli_loops_mixin.py
++++ b/hermes_cli/cli_loops_mixin.py
+@@ -698,7 +698,7 @@
+         via ``/goal resume``. Empty-response skip mirrors ``gateway/run.py``."""
+         from cli import _DIM, _RST, _cprint, _looks_like_slash_command
+         mgr = self._get_goal_manager()
+-        if mgr is None or not mgr.is_active():
++        if mgr is None or not mgr.refresh() or not mgr.is_active():
+             return
+ 
+         # Slash commands don't count as "real user messages": they're dispatched via
+diff --git a/hermes_cli/config_defaults.py b/hermes_cli/config_defaults.py
+--- a/hermes_cli/config_defaults.py
++++ b/hermes_cli/config_defaults.py
+@@ -816,6 +816,14 @@
+     },
+ 
+     "display": {
++        "prompt_suggestions": {
++            "enabled": True,
++            "model": "openai/gpt-oss-20b",
++            "fallback_models": ["google/diffusiongemma-26b-a4b-it"],
++            "subscription_fallbacks": True,
++            "hourly_calls": 12,
++            "daily_calls": 60,
++        },
+         "compact": False,
+         "personality": "",
+         "resume_display": "full",
+@@ -1400,6 +1408,8 @@
+     # goal is satisfied, else a continuation prompt re-enters the session until done, budget
+     # exhausted, or paused. Judge failures fail OPEN; the budget is the backstop.
+     "goals": {
++        # Allow a bound agent's CLI to create its own goal under the existing turn cap.
++        "allow_self_management": False,
+         # Max continuation turns before auto-pause (/goal resume) — guards against judge false
+         # negatives and unbounded spend.
+         "max_turns": 20,
+diff --git a/tests/hermes_cli/test_goal_self_management.py b/tests/hermes_cli/test_goal_self_management.py
+new file mode 100644
+--- /dev/null
++++ b/tests/hermes_cli/test_goal_self_management.py
+@@ -0,0 +1,312 @@
++"""Native self-goals preserve profile/session scope, owner state and turn limits."""
++
++import argparse
++from concurrent.futures import ThreadPoolExecutor
++import json
++from pathlib import Path
++import queue
++import threading
++from types import SimpleNamespace
++
++import pytest
++
++from hermes_cli import goals
++from gateway.session_context import scoped_current_session_id
++
++OBJECTIVE = ('Deliver the approved artifact\n'
++             'outcome: The artifact exists and all requested checks pass\n'
++             'verification: Inspect the artifact and run the offline test suite\n'
++             'constraints: Keep current quotas, permissions and provider settings\n'
++             'boundaries: The assigned working directory')
++
++
++@pytest.fixture
++def own_session(tmp_path, monkeypatch):
++    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
++    home = tmp_path / 'owner'
++    home.mkdir()
++    monkeypatch.setenv('HERMES_HOME', str(home))
++    monkeypatch.setenv('HERMES_SESSION_ID', 'self')
++    (home / 'config.yaml').write_text('goals:\n  max_turns: 7\n  allow_self_management: true\n')
++    goals._DB_CACHE.clear()
++    db = goals._get_session_db()
++    assert db is not None
++    db.create_session('self', source='cli')
++    db.create_session('other', source='cli')
++    with scoped_current_session_id('self'):
++        yield home, db
++    goals._DB_CACHE.clear()
++
++
++def _parse(argv):
++    from hermes_cli.subcommands.sessions import build_sessions_parser
++    parser = argparse.ArgumentParser()
++    build_sessions_parser(parser.add_subparsers(dest='command'), cmd_sessions=lambda args: None)
++    return parser.parse_args(argv)
++
++
++def test_native_goal_subcommand_is_available_without_starting_a_chat(own_session, capsys):
++    args = _parse(['goal', 'status'])
++    assert args.func(args) == 0
++    result = json.loads(capsys.readouterr().out)
++    assert result['session_id'] == 'self' and result['goal_present'] is False
++
++
++def test_ensure_creates_native_contract_once_without_judge_or_budget_change(own_session, monkeypatch):
++    from hermes_cli import goal_self
++    home, db = own_session
++    config = (home / 'config.yaml').read_bytes()
++
++    def forbidden(*args, **kwargs):
++        pytest.fail('Setting a self-goal must not request inference')
++
++    monkeypatch.setattr(goals, 'judge_goal', forbidden)
++    first = goal_self.ensure_current_goal(OBJECTIVE)
++    raw = db.get_meta('goal:self')
++    state = goals.load_goal('self')
++    assert first['created'] is True and first['status'] == 'active'
++    assert state.goal == 'Deliver the approved artifact'
++    assert state.max_turns == 7 and state.turns_used == 0
++    assert state.contract.outcome == 'The artifact exists and all requested checks pass'
++    assert state.contract.verification == 'Inspect the artifact and run the offline test suite'
++    assert goal_self.ensure_current_goal(OBJECTIVE)['created'] is False
++    assert db.get_meta('goal:self') == raw
++    assert db.get_meta('goal:other') is None
++    assert (home / 'config.yaml').read_bytes() == config
++
++
++@pytest.mark.parametrize('status', ['active', 'paused', 'cleared'])
++def test_existing_owner_state_is_not_replaced_or_resumed(own_session, status):
++    from hermes_cli import goal_self
++    _, db = own_session
++    state = goals.GoalState(goal='Existing owner objective', status=status, max_turns=11, turns_used=4)
++    db.set_meta('goal:self', state.to_json())
++    before = db.get_meta('goal:self')
++    result = goal_self.ensure_current_goal(OBJECTIVE)
++    assert result['created'] is False and result['status'] == status
++    assert db.get_meta('goal:self') == before
++
++
++def test_a_completed_identical_goal_is_not_reopened(own_session):
++    from hermes_cli import goal_self
++    _, db = own_session
++    goal_self.ensure_current_goal(OBJECTIVE)
++    state = goals.load_goal('self')
++    state.status = 'done'
++    db.set_meta('goal:self', state.to_json())
++    before = db.get_meta('goal:self')
++    assert goal_self.ensure_current_goal(OBJECTIVE)['status'] == 'done'
++    assert db.get_meta('goal:self') == before
++
++
++def test_a_new_request_after_completion_uses_the_existing_profile_cap(own_session):
++    from hermes_cli import goal_self
++    _, db = own_session
++    state = goals.GoalState(goal='Previous completed objective', status='done', max_turns=11, turns_used=4)
++    db.set_meta('goal:self', state.to_json())
++    assert goal_self.ensure_current_goal(OBJECTIVE)['created'] is True
++    current = goals.load_goal('self')
++    assert current.max_turns == 7 and current.turns_used == 0
++
++
++def test_a_closed_session_is_not_reopened(own_session):
++    from hermes_cli import goal_self
++    _, db = own_session
++    db._write_rowcount('UPDATE sessions SET ended_at=? WHERE id=?', (1, 'self'))
++    with pytest.raises(ValueError, match='closed'):
++        goal_self.ensure_current_goal(OBJECTIVE)
++    assert db.get_meta('goal:self') is None
++
++
++def test_an_explicitly_cleared_context_does_not_fall_back_to_stale_environment(own_session):
++    from hermes_cli import goal_self
++    with scoped_current_session_id(''):
++        with pytest.raises(ValueError, match='bound'):
++            goal_self.inspect_current_goal()
++
++
++def test_stdin_is_bounded_before_any_goal_write(own_session, monkeypatch, capsys):
++    from hermes_cli import goal_self
++    import io
++    _, db = own_session
++    monkeypatch.setattr(goal_self.sys, 'stdin', io.StringIO('x' * 20_000))
++    args = _parse(['goal', 'ensure'])
++    assert args.func(args) == 1
++    assert json.loads(capsys.readouterr().err)['retry_safe'] is False
++    assert db.get_meta('goal:self') is None
++
++
++@pytest.mark.parametrize('override', ['--session-id', '--max-turns'])
++def test_the_cli_has_no_foreign_session_or_budget_override(override):
++    with pytest.raises(SystemExit):
++        _parse(['goal', 'ensure', OBJECTIVE, override, 'other'])
++
++
++def test_a_committed_goal_with_lost_readback_is_not_reported_as_unchanged(own_session, monkeypatch, capsys):
++    _, db = own_session
++    original = db.get_meta
++    count = 0
++
++    def lose_readback(key):
++        nonlocal count
++        count += 1
++        if count == 2:
++            raise OSError('fixture lost the write receipt')
++        return original(key)
++
++    monkeypatch.setattr(db, 'get_meta', lose_readback)
++    args = _parse(['goal', 'ensure', OBJECTIVE])
++    assert args.func(args) == 1
++    error = json.loads(capsys.readouterr().err)
++    assert error.get('outcome') == 'unproven' and error.get('retry_safe') is False
++    assert original('goal:self') is not None
++
++
++def test_disabled_profile_refuses_creation(own_session):
++    from hermes_cli import goal_self
++    home, db = own_session
++    (home / 'config.yaml').write_text('goals:\n  max_turns: 7\n  allow_self_management: false\n')
++    with pytest.raises(ValueError, match='disabled'):
++        goal_self.ensure_current_goal(OBJECTIVE)
++    assert db.get_meta('goal:self') is None
++
++
++@pytest.mark.parametrize('goal', ['Vague request', 'outcome: Something exists'])
++def test_self_goal_requires_outcome_and_verification(own_session, goal):
++    from hermes_cli import goal_self
++    _, db = own_session
++    with pytest.raises(ValueError, match='outcome.*verification'):
++        goal_self.ensure_current_goal(goal)
++    assert db.get_meta('goal:self') is None
++
++
++@pytest.mark.parametrize('marker', ['HERMES_KANBAN_RUN_ID', 'HERMES_DELEGATED_CHILD_CONTEXT'])
++def test_worker_cannot_extend_its_work_with_a_new_session_goal(own_session, monkeypatch, marker):
++    from hermes_cli import goal_self
++    _, db = own_session
++    monkeypatch.setenv(marker, '1')
++    with pytest.raises(ValueError, match='worker'):
++        goal_self.ensure_current_goal(OBJECTIVE)
++    assert db.get_meta('goal:self') is None
++
++
++def test_current_context_does_not_fall_back_to_another_session(own_session):
++    from hermes_cli import goal_self
++    _, db = own_session
++    with scoped_current_session_id('missing'):
++        with pytest.raises(ValueError, match='session'):
++            goal_self.ensure_current_goal(OBJECTIVE)
++    assert db.get_meta('goal:self') is None
++
++
++def test_missing_database_is_not_initialized(tmp_path, monkeypatch):
++    from hermes_cli import goal_self
++    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
++    with scoped_current_session_id('missing'):
++        with pytest.raises(ValueError, match='existing'):
++            goal_self.inspect_current_goal()
++    assert not (tmp_path / 'state.db').exists()
++
++
++def test_corrupt_goal_is_not_interpreted_as_absent(own_session):
++    from hermes_cli import goal_self
++    _, db = own_session
++    db.set_meta('goal:self', '{invalid')
++    with pytest.raises(ValueError, match='goal state'):
++        goal_self.ensure_current_goal(OBJECTIVE)
++    assert db.get_meta('goal:self') == '{invalid'
++
++
++def test_competing_self_goals_commit_only_one_native_state(own_session, monkeypatch):
++    from hermes_cli import goal_self
++    _, db = own_session
++    read = db.get_meta
++    barrier = threading.Barrier(2)
++    entered = threading.local()
++
++    def simultaneous(key):
++        value = read(key)
++        if key == 'goal:self' and value is None and not getattr(entered, 'once', False):
++            entered.once = True
++            barrier.wait(timeout=10)
++        return value
++
++    monkeypatch.setattr(db, 'get_meta', simultaneous)
++
++    def ensure(text):
++        with scoped_current_session_id('self'):
++            return goal_self.ensure_current_goal(text)
++
++    with ThreadPoolExecutor(max_workers=2) as pool:
++        results = list(pool.map(ensure, [OBJECTIVE, OBJECTIVE.replace('approved artifact', 'approved report')]))
++    assert sorted(result['created'] for result in results) == [False, True]
++    assert goals.load_goal('self').goal in ['Deliver the approved artifact', 'Deliver the approved report']
++
++
++def test_status_and_show_are_read_only_and_avoid_transcript_reads(own_session, monkeypatch):
++    from hermes_cli import goal_self
++    from hermes_state import SessionDB
++    _, db = own_session
++    goal_self.ensure_current_goal(OBJECTIVE)
++    before = db.get_meta('goal:self')
++
++    def forbidden(*args, **kwargs):
++        pytest.fail('Goal status must not open a writer or materialize transcript/prompt data')
++
++    monkeypatch.setattr(SessionDB, 'get_session', forbidden)
++    monkeypatch.setattr(SessionDB, '_execute_write', forbidden)
++    status = goal_self.inspect_current_goal()
++    assert status['status'] == 'active' and 'goal' not in status
++    shown = goal_self.inspect_current_goal(include_goal=True)
++    assert shown['goal'] == 'Deliver the approved artifact'
++    assert db.get_meta('goal:self') == before
++
++
++def _cli(cached):
++    from hermes_cli.cli_loops_mixin import CLILoopsMixin
++    cli = CLILoopsMixin.__new__(CLILoopsMixin)
++    cli.session_id = 'self'
++    cli._goal_manager = cached
++    cli.agent = SimpleNamespace(session_id='self')
++    cli._last_turn_interrupted = False
++    cli._pending_input = queue.Queue()
++    cli.conversation_history = [{'role': 'assistant', 'content': 'The next authorized step remains.'}]
++    return cli
++
++
++def test_cli_post_turn_adopts_the_goal_created_during_its_tool_call(own_session, monkeypatch):
++    cached = goals.GoalManager('self')
++    assert not cached.is_active()
++    goals.GoalManager('self').set('Finish the assigned artifact')
++    cli = _cli(cached)
++
++    def continue_goal(manager, *args, **kwargs):
++        return {'should_continue': True, 'continuation_prompt': manager.next_continuation_prompt()}
++
++    monkeypatch.setattr(goals.GoalManager, 'evaluate_after_turn', continue_goal)
++    cli._maybe_continue_goal_after_turn()
++    assert not cli._pending_input.empty()
++    assert 'Finish the assigned artifact' in cli._pending_input.get_nowait()
++    assert cached.is_active()
++
++
++@pytest.mark.parametrize('unreadable', [False, True])
++def test_cli_post_turn_does_not_judge_stale_or_unreadable_goal_state(own_session, monkeypatch, unreadable):
++    _, db = own_session
++    cached = goals.GoalManager('self')
++    cached.set('Existing owner work')
++    cli = _cli(cached)
++    if unreadable:
++        def refused(key):
++            raise OSError('fixture cannot observe goal state')
++        monkeypatch.setattr(db, 'get_meta', refused)
++    else:
++        goals.GoalManager('self').pause('user-paused')
++
++    def forbidden(*args, **kwargs):
++        pytest.fail('A stale or unreadable goal must not spend a judge/model call')
++
++    monkeypatch.setattr(goals.GoalManager, 'evaluate_after_turn', forbidden)
++    cli._maybe_continue_goal_after_turn()
++    assert cli._pending_input.empty()
++    assert cached.state is not None
