@@ -25182,161 +25182,6 @@ new file mode 100644
 +    with _lock:
 +        catalog = _parse_verified(resolved, _fingerprint(resolved))
 +    return dict(catalog)
-diff --git a/gateway/runtime_memory.py b/gateway/runtime_memory.py
-new file mode 100644
---- /dev/null
-+++ b/gateway/runtime_memory.py
-@@ -0,0 +1,150 @@
-+"""On-demand process counters; no heap contents, user data or cache mutation."""
-+
-+import ctypes
-+from functools import lru_cache
-+import os
-+from pathlib import Path
-+import sys
-+import time
-+import weakref
-+
-+
-+def start_requested_profiler(config):
-+    """Explicit startup-only diagnostic for isolated launchers; disabled by default."""
-+    section = config.get('runtime') if isinstance(config, dict) else None
-+    frames = section.get('memory_profile_frames', 0) if isinstance(section, dict) else 0
-+    if type(frames) is not int or not 1 <= frames <= 8:
-+        return False
-+    import tracemalloc
-+
-+    if tracemalloc.is_tracing():
-+        return False
-+    tracemalloc.start(frames)
-+    return True
-+
-+
-+@lru_cache(maxsize=1)
-+def _sqlite_functions():
-+    """Use the Python connection module's loaded SQLite library, never a guessed system copy."""
-+    import _sqlite3
-+
-+    path = getattr(_sqlite3, '__file__', None)
-+    if not path:
-+        return None
-+    try:
-+        library = ctypes.CDLL(path)
-+        used, highwater = library.sqlite3_memory_used, library.sqlite3_memory_highwater
-+        used.argtypes, used.restype = [], ctypes.c_longlong
-+        highwater.argtypes, highwater.restype = [ctypes.c_int], ctypes.c_longlong
-+        return used, highwater
-+    except (OSError, AttributeError):
-+        return None
-+
-+
-+def _sqlite_snapshot():
-+    result = {'available': False, 'current_bytes': None, 'highwater_bytes': None,
-+              'reset_highwater': False}
-+    functions = _sqlite_functions()
-+    if functions is not None:
-+        current, highwater = int(functions[0]()), int(functions[1](0))
-+        # Zero can mean disabled tracking, so it cannot certify an empty allocator.
-+        if current > 0 and highwater >= current:
-+            result.update(available=True, current_bytes=current, highwater_bytes=highwater)
-+    return result
-+
-+
-+def _current_runner():
-+    reference = getattr(sys.modules.get('gateway.run'), '_gateway_runner_ref', None)
-+    return reference() if isinstance(reference, weakref.ReferenceType) else None
-+
-+
-+def _loaded_dict_count(module_name, attribute):
-+    module = sys.modules.get(module_name)
-+    value = vars(module).get(attribute) if module is not None else None
-+    return len(value) if isinstance(value, dict) else None
-+
-+
-+def _bundled_locale_counters():
-+    module = sys.modules.get('agent.i18n_bundled')
-+    cache = vars(module).get('_parse_verified') if module is not None else None
-+    if cache is None:
-+        return None
-+    info = cache.cache_info()
-+    return {'hits': info.hits, 'misses': info.misses,
-+            'entries': info.currsize, 'max_entries': info.maxsize}
-+
-+
-+def _tool_counters():
-+    result = {'global_entries': None, 'scopes': None, 'scoped_entries': None,
-+              'definition_cache_entries': _loaded_dict_count('model_tools', '_tool_defs_cache'),
-+              'mcp_server_entries': _loaded_dict_count('tools.mcp_tool', '_servers'),
-+              'mcp_lazy_entries': _loaded_dict_count('tools.mcp_tool', '_lazy_server_configs')}
-+    module = sys.modules.get('tools.registry')
-+    registry = vars(module).get('registry') if module is not None else None
-+    attributes = vars(registry) if registry is not None else {}
-+    lock = attributes.get('_lock')
-+    if lock is None or not lock.acquire(blocking=False):
-+        return result
-+    try:
-+        global_tools, scopes = attributes.get('_tools'), attributes.get('_scoped_tools')
-+        if isinstance(global_tools, dict):
-+            result['global_entries'] = len(global_tools)
-+        if isinstance(scopes, dict):
-+            result['scopes'] = len(scopes)
-+            result['scoped_entries'] = sum(len(value) for value in scopes.values() if isinstance(value, dict))
-+    finally:
-+        lock.release()
-+    return result
-+
-+
-+def _core_site(frames, roots):
-+    packages = {'agent', 'gateway', 'hermes_cli', 'tools', 'tui_gateway', 'pm', 'hermes_platform'}
-+    for frame in reversed(frames):
-+        for root in roots:
-+            if frame.filename.startswith(root):
-+                relative = frame.filename[len(root):].replace(os.sep, '/')
-+                if '..' not in relative.split('/') and (
-+                    relative.split('/')[0] in packages or relative.startswith('hermes_state')
-+                    or relative in {'run_agent.py', 'model_tools.py', 'utils.py'}
-+                ):
-+                    return relative + ':' + str(frame.lineno)
-+    return '<python-or-extension>'
-+
-+
-+def _allocation_snapshot():
-+    import tracemalloc
-+
-+    if not tracemalloc.is_tracing():
-+        return {'available': False, 'current_bytes': None, 'peak_bytes': None, 'sites': []}
-+    current, peak = tracemalloc.get_traced_memory()
-+    roots = {str(Path(__file__).absolute().parents[1]) + os.sep,
-+             str(Path(__file__).resolve().parents[1]) + os.sep}
-+    totals = {}
-+    for row in tracemalloc.take_snapshot().statistics('traceback'):
-+        site = _core_site(row.traceback, roots)
-+        size, count = totals.get(site, (0, 0))
-+        totals[site] = size + row.size, count + row.count
-+    sites = [{'site': site, 'bytes': size, 'count': count}
-+             for site, (size, count) in sorted(totals.items(), key=lambda row: row[1][0], reverse=True)[:30]]
-+    return {'available': True, 'current_bytes': current, 'peak_bytes': peak, 'sites': sites}
-+
-+
-+def collect_runtime_memory(*, include_allocations=False):
-+    """Best-effort scalar observations for diagnosis, not an admission/eviction decision."""
-+    from hermes_cli.mem_trim import collect_memory_snapshot
-+
-+    runner = _current_runner()
-+    attributes = vars(runner) if runner is not None else {}
-+    caches = {}
-+    for label, name in [('agents', '_agent_cache'), ('session_states', '_sessions'),
-+                        ('profile_configs', '_profile_configs')]:
-+        value = attributes.get(name)
-+        caches[label] = len(value) if isinstance(value, dict) else None
-+    registry = sys.modules.get('hermes_state_registry')
-+    result = {'pid': os.getpid(), 'sampled_at': time.time(), 'process': collect_memory_snapshot(),
-+              'sqlite': _sqlite_snapshot(), 'caches': caches, 'tools': _tool_counters(),
-+              'bundled_locales': _bundled_locale_counters(),
-+              'session_db_registry': registry.stats() if registry is not None else None}
-+    if include_allocations:
-+        result['allocations'] = _allocation_snapshot()
-+    return result
 diff --git a/tests/agent/test_i18n_bundled_reuse.py b/tests/agent/test_i18n_bundled_reuse.py
 new file mode 100644
 --- /dev/null
@@ -25488,11 +25333,526 @@ new file mode 100644
 +    monkeypatch.setenv('HERMES_BUNDLED_LOCALES', str(catalogs))
 +    assert i18n._load_bundled('en')['approval.denied'] == 'Bundled A'
 +    assert len(reads) == 2, 'An old bundle remained pinned after many distinct source roots'
+diff --git a/hermes_cli/plugins_loader.py b/hermes_cli/plugins_loader.py
+--- a/hermes_cli/plugins_loader.py
++++ b/hermes_cli/plugins_loader.py
+@@ -719,6 +719,9 @@
+             module_name, init_file, submodule_search_locations=[str(plugin_dir)])
+         if spec is None or spec.loader is None:
+             raise ImportError(f"Cannot create module spec for {init_file}")
++        if manifest.source == 'bundled':
++            from hermes_cli.plugin_code_cache import prepare_plugin_spec
++            prepare_plugin_spec(spec, plugin_dir)
+         module = importlib.util.module_from_spec(spec)
+         module.__package__ = module_name
+         module.__path__ = [str(plugin_dir)]  # type: ignore[attr-defined]
+diff --git a/hermes_cli/plugin_code_cache.py b/hermes_cli/plugin_code_cache.py
+new file mode 100644
+--- /dev/null
++++ b/hermes_cli/plugin_code_cache.py
+@@ -0,0 +1,91 @@
++"""Reuse immutable plugin code while native imports retain separate module state."""
++
++from functools import lru_cache
++import hashlib
++from importlib.machinery import (
++    BYTECODE_SUFFIXES, EXTENSION_SUFFIXES, SOURCE_SUFFIXES,
++    ExtensionFileLoader, FileFinder, SourceFileLoader, SourcelessFileLoader,
++)
++import os
++import sys
++import threading
++
++
++_MAX_SOURCE_BYTES = 1024 * 1024
++_compile_lock = threading.RLock()
++_finder_lock = threading.RLock()
++_missing = object()
++_native_details = (
++    (ExtensionFileLoader, EXTENSION_SUFFIXES),
++    (SourceFileLoader, SOURCE_SUFFIXES),
++    (SourcelessFileLoader, BYTECODE_SUFFIXES),
++)
++_native_pairs = tuple((suffix, loader) for loader, suffixes in _native_details for suffix in suffixes)
++
++
++@lru_cache(maxsize=128)
++def _compile_verified(path: str, digest: bytes, optimize: int):
++    loader = SourceFileLoader('', path)
++    source = loader.get_data(path)
++    if hashlib.sha256(source).digest() != digest:
++        raise OSError('Plugin source changed during compilation')
++    return loader.source_to_code(source, path, _optimize=optimize)
++
++
++class _SharedSourceLoader(SourceFileLoader):
++    def get_code(self, fullname):
++        path = self.get_filename(fullname)
++        # Reading on hits preserves current access checks and detects edits hidden by .pyc timestamps.
++        source = self.get_data(path)
++        if len(source) > _MAX_SOURCE_BYTES:
++            return self.source_to_code(source, path)
++        digest = hashlib.sha256(source).digest()
++        with _compile_lock:
++            return _compile_verified(path, digest, sys.flags.optimize)
++
++
++class _PluginFileFinder(FileFinder):
++    def __init__(self, path):
++        super().__init__(path, (ExtensionFileLoader, EXTENSION_SUFFIXES),
++                         (_SharedSourceLoader, SOURCE_SUFFIXES),
++                         (SourcelessFileLoader, BYTECODE_SUFFIXES))
++
++    def find_spec(self, fullname, target=None):
++        spec = super().find_spec(fullname, target)
++        if spec is not None:
++            for location in spec.submodule_search_locations or ():
++                prepare_plugin_imports(location)
++        return spec
++
++
++def prepare_plugin_imports(directory):
++    """Use the existing path-importer cache; retain custom importers and normal lazy timing."""
++    path = os.path.abspath(os.fspath(directory))
++    with _finder_lock:
++        previous = sys.path_importer_cache.get(path, _missing)
++        if isinstance(previous, _PluginFileFinder):
++            previous.invalidate_caches()
++            return
++        default = (type(previous) is FileFinder
++                   and tuple(getattr(previous, '_loaders', ())) == _native_pairs)
++        if previous is not _missing and previous is not None and not default:
++            return
++        finder = _PluginFileFinder(path)
++        if sys.path_importer_cache.get(path, _missing) is previous:
++            sys.path_importer_cache[path] = finder
++
++
++def prepare_plugin_spec(spec, directory):
++    """Extend native source loaders only; custom root loaders retain their complete behavior."""
++    loader = spec.loader
++    if type(loader) is not SourceFileLoader or set(vars(loader)) != {'name', 'path'}:
++        return
++    prepare_plugin_imports(directory)
++    spec.loader = _SharedSourceLoader(loader.name, loader.path)
++
++
++def cache_counts():
++    """Scalar observation only: never expose source paths, digests or code constants."""
++    info = _compile_verified.cache_info()
++    return {'hits': info.hits, 'misses': info.misses,
++            'entries': info.currsize, 'max_entries': info.maxsize}
+diff --git a/gateway/runtime_memory.py b/gateway/runtime_memory.py
+new file mode 100644
+--- /dev/null
++++ b/gateway/runtime_memory.py
+@@ -0,0 +1,156 @@
++"""On-demand process counters; no heap contents, user data or cache mutation."""
++
++import ctypes
++from functools import lru_cache
++import os
++from pathlib import Path
++import sys
++import time
++import weakref
++
++
++def start_requested_profiler(config):
++    """Explicit startup-only diagnostic for isolated launchers; disabled by default."""
++    section = config.get('runtime') if isinstance(config, dict) else None
++    frames = section.get('memory_profile_frames', 0) if isinstance(section, dict) else 0
++    if type(frames) is not int or not 1 <= frames <= 8:
++        return False
++    import tracemalloc
++
++    if tracemalloc.is_tracing():
++        return False
++    tracemalloc.start(frames)
++    return True
++
++
++@lru_cache(maxsize=1)
++def _sqlite_functions():
++    """Use the Python connection module's loaded SQLite library, never a guessed system copy."""
++    import _sqlite3
++
++    path = getattr(_sqlite3, '__file__', None)
++    if not path:
++        return None
++    try:
++        library = ctypes.CDLL(path)
++        used, highwater = library.sqlite3_memory_used, library.sqlite3_memory_highwater
++        used.argtypes, used.restype = [], ctypes.c_longlong
++        highwater.argtypes, highwater.restype = [ctypes.c_int], ctypes.c_longlong
++        return used, highwater
++    except (OSError, AttributeError):
++        return None
++
++
++def _sqlite_snapshot():
++    result = {'available': False, 'current_bytes': None, 'highwater_bytes': None,
++              'reset_highwater': False}
++    functions = _sqlite_functions()
++    if functions is not None:
++        current, highwater = int(functions[0]()), int(functions[1](0))
++        # Zero can mean disabled tracking, so it cannot certify an empty allocator.
++        if current > 0 and highwater >= current:
++            result.update(available=True, current_bytes=current, highwater_bytes=highwater)
++    return result
++
++
++def _current_runner():
++    reference = getattr(sys.modules.get('gateway.run'), '_gateway_runner_ref', None)
++    return reference() if isinstance(reference, weakref.ReferenceType) else None
++
++
++def _loaded_dict_count(module_name, attribute):
++    module = sys.modules.get(module_name)
++    value = vars(module).get(attribute) if module is not None else None
++    return len(value) if isinstance(value, dict) else None
++
++
++def _bundled_locale_counters():
++    module = sys.modules.get('agent.i18n_bundled')
++    cache = vars(module).get('_parse_verified') if module is not None else None
++    if cache is None:
++        return None
++    info = cache.cache_info()
++    return {'hits': info.hits, 'misses': info.misses,
++            'entries': info.currsize, 'max_entries': info.maxsize}
++
++
++def _plugin_code_counters():
++    module = sys.modules.get('hermes_cli.plugin_code_cache')
++    return module.cache_counts() if module is not None else None
++
++
++def _tool_counters():
++    result = {'global_entries': None, 'scopes': None, 'scoped_entries': None,
++              'definition_cache_entries': _loaded_dict_count('model_tools', '_tool_defs_cache'),
++              'mcp_server_entries': _loaded_dict_count('tools.mcp_tool', '_servers'),
++              'mcp_lazy_entries': _loaded_dict_count('tools.mcp_tool', '_lazy_server_configs')}
++    module = sys.modules.get('tools.registry')
++    registry = vars(module).get('registry') if module is not None else None
++    attributes = vars(registry) if registry is not None else {}
++    lock = attributes.get('_lock')
++    if lock is None or not lock.acquire(blocking=False):
++        return result
++    try:
++        global_tools, scopes = attributes.get('_tools'), attributes.get('_scoped_tools')
++        if isinstance(global_tools, dict):
++            result['global_entries'] = len(global_tools)
++        if isinstance(scopes, dict):
++            result['scopes'] = len(scopes)
++            result['scoped_entries'] = sum(len(value) for value in scopes.values() if isinstance(value, dict))
++    finally:
++        lock.release()
++    return result
++
++
++def _core_site(frames, roots):
++    packages = {'agent', 'gateway', 'hermes_cli', 'tools', 'tui_gateway', 'pm', 'hermes_platform'}
++    for frame in reversed(frames):
++        for root in roots:
++            if frame.filename.startswith(root):
++                relative = frame.filename[len(root):].replace(os.sep, '/')
++                if '..' not in relative.split('/') and (
++                    relative.split('/')[0] in packages or relative.startswith('hermes_state')
++                    or relative in {'run_agent.py', 'model_tools.py', 'utils.py'}
++                ):
++                    return relative + ':' + str(frame.lineno)
++    return '<python-or-extension>'
++
++
++def _allocation_snapshot():
++    import tracemalloc
++
++    if not tracemalloc.is_tracing():
++        return {'available': False, 'current_bytes': None, 'peak_bytes': None, 'sites': []}
++    current, peak = tracemalloc.get_traced_memory()
++    roots = {str(Path(__file__).absolute().parents[1]) + os.sep,
++             str(Path(__file__).resolve().parents[1]) + os.sep}
++    totals = {}
++    for row in tracemalloc.take_snapshot().statistics('traceback'):
++        site = _core_site(row.traceback, roots)
++        size, count = totals.get(site, (0, 0))
++        totals[site] = size + row.size, count + row.count
++    sites = [{'site': site, 'bytes': size, 'count': count}
++             for site, (size, count) in sorted(totals.items(), key=lambda row: row[1][0], reverse=True)[:30]]
++    return {'available': True, 'current_bytes': current, 'peak_bytes': peak, 'sites': sites}
++
++
++def collect_runtime_memory(*, include_allocations=False):
++    """Best-effort scalar observations for diagnosis, not an admission/eviction decision."""
++    from hermes_cli.mem_trim import collect_memory_snapshot
++
++    runner = _current_runner()
++    attributes = vars(runner) if runner is not None else {}
++    caches = {}
++    for label, name in [('agents', '_agent_cache'), ('session_states', '_sessions'),
++                        ('profile_configs', '_profile_configs')]:
++        value = attributes.get(name)
++        caches[label] = len(value) if isinstance(value, dict) else None
++    registry = sys.modules.get('hermes_state_registry')
++    result = {'pid': os.getpid(), 'sampled_at': time.time(), 'process': collect_memory_snapshot(),
++              'sqlite': _sqlite_snapshot(), 'caches': caches, 'tools': _tool_counters(),
++              'bundled_locales': _bundled_locale_counters(),
++              'plugin_code': _plugin_code_counters(),
++              'session_db_registry': registry.stats() if registry is not None else None}
++    if include_allocations:
++        result['allocations'] = _allocation_snapshot()
++    return result
+diff --git a/tests/plugins/test_plugin_code_reuse.py b/tests/plugins/test_plugin_code_reuse.py
+new file mode 100644
+--- /dev/null
++++ b/tests/plugins/test_plugin_code_reuse.py
+@@ -0,0 +1,240 @@
++"""Compiled plugin code can be shared; module state, scopes and reloads cannot."""
++
++from concurrent.futures import ThreadPoolExecutor
++import gc
++import importlib.machinery
++import os
++from pathlib import Path
++import py_compile
++import shutil
++import sys
++import weakref
++
++import pytest
++
++from hermes_cli.plugins import PluginManager
++
++
++@pytest.fixture
++def plugin_homes(tmp_path, monkeypatch):
++    root = tmp_path / 'bundled'
++    plugin = root / 'code-reuse'
++    plugin.mkdir(parents=True)
++    (plugin / 'plugin.yaml').write_text('name: code-reuse\nkind: backend\nversion: 1.0.0\n')
++    (plugin / '__init__.py').write_text('from .worker import read, bump\ndef register(ctx):\n    pass\n')
++    (plugin / 'worker.py').write_text(
++        'from hermes_constants import get_hermes_home\n'
++        'OWNER = str(get_hermes_home())\nSTATE = []\nVERSION = "one"\n'
++        'def read():\n    return OWNER, len(STATE), VERSION\n'
++        'def bump():\n    STATE.append(1)\n')
++    monkeypatch.setenv('HERMES_BUNDLED_PLUGINS', str(root))
++    monkeypatch.setenv('HERMES_HOME', str(tmp_path / 'launch'))
++    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: tmp_path / 'os-home'))
++    managers = []
++
++    def load(name):
++        home = tmp_path / name
++        home.mkdir(exist_ok=True)
++        manager = PluginManager(scope_key=str(home))
++        manager.discover_and_load()
++        managers.append(manager)
++        loaded = manager._plugins['code-reuse']
++        assert loaded.enabled and not loaded.error
++        return manager, loaded.module, home
++
++    yield plugin, load
++    for manager in reversed(managers):
++        manager.unload()
++
++
++def test_scoped_modules_reuse_code_but_keep_separate_state(plugin_homes):
++    _, load = plugin_homes
++    _, first, home_a = load('a')
++    _, second, home_b = load('b')
++    first.bump()
++    assert first.read() == (str(home_a), 1, 'one')
++    assert second.read() == (str(home_b), 0, 'one')
++    assert first is not second and first.read.__globals__ is not second.read.__globals__
++    assert first.read.__code__ is second.read.__code__, 'Unchanged source was decoded once per profile'
++
++
++def test_initializer_code_is_reused_with_fresh_module_globals(plugin_homes):
++    plugin, load = plugin_homes
++    (plugin / '__init__.py').write_text(
++        'STATE = []\ndef register(ctx):\n    pass\n'
++        'def read():\n    return len(STATE)\ndef bump():\n    STATE.append(1)\n')
++    _, first, _ = load('a')
++    _, second, _ = load('b')
++    first.bump()
++    assert first.read() == 1 and second.read() == 0
++    assert first.read.__code__ is second.read.__code__
++
++
++def test_nested_relative_packages_reuse_code_without_sharing_globals(plugin_homes):
++    plugin, load = plugin_homes
++    nested = plugin / 'nested'
++    nested.mkdir()
++    (nested / '__init__.py').write_text('')
++    (plugin / 'worker.py').replace(nested / 'worker.py')
++    (plugin / '__init__.py').write_text('from .nested.worker import read, bump\ndef register(ctx):\n    pass\n')
++    _, first, _ = load('a')
++    _, second, _ = load('b')
++    first.bump()
++    assert first.read()[1] == 1 and second.read()[1] == 0
++    assert first.read.__code__ is second.read.__code__
++
++
++def test_force_reload_reexecutes_state_while_reusing_unchanged_code(plugin_homes):
++    _, load = plugin_homes
++    manager, first, home = load('a')
++    _, sibling, _ = load('b')
++    first.bump()
++    manager.discover_and_load(force=True)
++    current = manager._plugins['code-reuse'].module
++    assert current is not first and current.read() == (str(home), 0, 'one')
++    assert sibling.read()[1] == 0
++    assert current.read.__code__ is first.read.__code__ is sibling.read.__code__
++
++
++def test_same_size_edit_with_restored_mtime_preserves_running_sibling(plugin_homes):
++    plugin, load = plugin_homes
++    manager_a, first, _ = load('a')
++    manager_b, second, _ = load('b')
++    path = plugin / 'worker.py'
++    previous = path.stat()
++    path.write_text(path.read_text().replace('VERSION = "one"', 'VERSION = "two"'))
++    os.utime(path, ns=(previous.st_atime_ns, previous.st_mtime_ns))
++    manager_a.discover_and_load(force=True)
++    current = manager_a._plugins['code-reuse'].module
++    assert current.read()[2] == 'two'
++    assert first.read()[2] == second.read()[2] == 'one'
++    assert current.read.__code__ is not second.read.__code__
++    manager_b.discover_and_load(force=True)
++    assert manager_b._plugins['code-reuse'].module.read.__code__ is current.read.__code__
++
++
++@pytest.mark.parametrize('custom_finder_type', [False, True])
++def test_custom_source_importers_keep_their_behavior(plugin_homes, monkeypatch, custom_finder_type):
++    plugin, load = plugin_homes
++
++    class CustomLoader(importlib.machinery.SourceFileLoader):
++        def get_code(self, fullname):
++            return compile('def read():\n    return "custom"\ndef bump():\n    pass\n', self.path, 'exec')
++
++    class CustomFinder(importlib.machinery.FileFinder):
++        pass
++
++    finder_type = CustomFinder if custom_finder_type else importlib.machinery.FileFinder
++    finder = finder_type(str(plugin), (CustomLoader, importlib.machinery.SOURCE_SUFFIXES))
++    monkeypatch.setitem(sys.path_importer_cache, str(plugin), finder)
++    _, module, _ = load('a')
++    assert module.read() == 'custom'
++
++
++def test_large_sources_are_not_pinned_in_the_shared_cache(plugin_homes):
++    plugin, load = plugin_homes
++    path = plugin / 'worker.py'
++    path.write_text('#' + 'padding' * 300_000 + '\n' + path.read_text())
++    _, first, _ = load('a')
++    _, second, _ = load('b')
++    assert first.read()[2] == second.read()[2] == 'one'
++    assert first.read.__code__ is not second.read.__code__
++
++
++def test_failed_module_is_removed_and_later_load_reexecutes(plugin_homes):
++    plugin, load = plugin_homes
++    _, first, _ = load('a')
++    path = plugin / 'worker.py'
++    body = path.read_text()
++    path.write_text('raise RuntimeError("synthetic failed module")\n' + body)
++    manager = PluginManager(scope_key=str(plugin.parent / 'failed-home'))
++    manager.discover_and_load()
++    loaded = manager._plugins['code-reuse']
++    assert not loaded.enabled and loaded.error
++    prefix = manager._directory_module_name(loaded.manifest)
++    assert not any(name == prefix or name.startswith(prefix + '.') for name in sys.modules)
++    path.write_text(body)
++    _, recovered, _ = load('recovered')
++    assert recovered.read()[2] == first.read()[2] == 'one'
++
++
++def test_parallel_profile_loads_keep_owners_and_share_code(plugin_homes):
++    _, load = plugin_homes
++    with ThreadPoolExecutor(max_workers=8) as pool:
++        loaded = list(pool.map(load, [f'parallel-{i}' for i in range(8)]))
++    code = loaded[0][1].read.__code__
++    for _, module, home in loaded:
++        assert module.read() == (str(home), 0, 'one')
++        assert module.read.__code__ is code
++    loaded[0][1].bump()
++    assert all(module.read()[1] == 0 for _, module, _ in loaded[1:])
++
++
++def test_cached_code_cannot_bypass_a_current_source_read_failure(plugin_homes, monkeypatch):
++    plugin, load = plugin_homes
++    _, existing, _ = load('a')
++    original = importlib.machinery.SourceFileLoader.get_data
++
++    def denied(loader, path):
++        if Path(path) == plugin / 'worker.py':
++            raise PermissionError('Synthetic source read refusal')
++        return original(loader, path)
++
++    monkeypatch.setattr(importlib.machinery.SourceFileLoader, 'get_data', denied)
++    manager = PluginManager(scope_key=str(plugin.parent / 'denied-home'))
++    manager.discover_and_load()
++    loaded = manager._plugins['code-reuse']
++    assert not loaded.enabled and loaded.error
++    assert existing.read()[2] == 'one'
++
++
++def test_sourceless_siblings_keep_native_import_behavior(plugin_homes):
++    plugin, load = plugin_homes
++    path = plugin / 'worker.py'
++    py_compile.compile(str(path), cfile=str(plugin / 'worker.pyc'), doraise=True)
++    path.unlink()
++    _, first, home_a = load('a')
++    _, second, home_b = load('b')
++    assert first.read() == (str(home_a), 0, 'one')
++    assert second.read() == (str(home_b), 0, 'one')
++
++
++def test_old_compiled_objects_are_released_at_the_reported_cache_bound(tmp_path):
++    from hermes_cli.plugin_code_cache import cache_counts, prepare_plugin_imports
++
++    prepare_plugin_imports(tmp_path)
++    finder = sys.path_importer_cache[str(tmp_path)]
++    path = tmp_path / 'first.py'
++    path.write_text('value = 1\n')
++    code = finder.find_spec('first').loader.get_code('first')
++    reference = weakref.ref(code)
++    del code
++    limit = cache_counts()['max_entries']
++    assert isinstance(limit, int) and limit > 0
++    for index in range(limit):
++        name = f'item_{index}'
++        (tmp_path / (name + '.py')).write_text(f'value = {index}\n')
++        finder.invalidate_caches()
++        finder.find_spec(name).loader.get_code(name)
++    gc.collect()
++    assert cache_counts()['entries'] <= limit
++    assert reference() is None
++
++
++def test_private_profile_plugins_keep_native_imports_outside_the_shared_cache(plugin_homes, tmp_path):
++    from hermes_cli.plugin_code_cache import cache_counts
++
++    plugin, load = plugin_homes
++    before = cache_counts()
++    for name in ['a', 'b']:
++        home = tmp_path / name
++        (home / 'plugins').mkdir(parents=True)
++        shutil.copytree(plugin, home / 'plugins/code-reuse')
++        (home / 'config.yaml').write_text('plugins:\n  enabled:\n    - code-reuse\n')
++    _, first, home_a = load('a')
++    _, second, home_b = load('b')
++    first.bump()
++    assert first.read() == (str(home_a), 1, 'one')
++    assert second.read() == (str(home_b), 0, 'one')
++    assert first.read.__code__ is not second.read.__code__
++    assert cache_counts() == before
 diff --git a/tests/gateway/test_runtime_memory.py b/tests/gateway/test_runtime_memory.py
 new file mode 100644
 --- /dev/null
 +++ b/tests/gateway/test_runtime_memory.py
-@@ -0,0 +1,249 @@
+@@ -0,0 +1,280 @@
 +"""On-demand local memory counters expose no session, prompt or credential content."""
 +
 +import asyncio
@@ -25617,6 +25977,37 @@ new file mode 100644
 +    result = runtime_memory.collect_runtime_memory()
 +    assert result['bundled_locales'] is None
 +    assert 'agent.i18n_bundled' not in sys.modules
++
++
++def test_plugin_code_observation_exposes_counts_without_constants_or_paths(tmp_path):
++    import sys
++    from hermes_cli import plugin_code_cache
++    from gateway import runtime_memory
++
++    path = tmp_path / 'private_source.py'
++    marker = 'private-source-constant-must-stay-private'
++    path.write_text('value = ' + repr(marker) + '\n')
++    plugin_code_cache.prepare_plugin_imports(tmp_path)
++    loader = sys.path_importer_cache[str(tmp_path)].find_spec('private_source').loader
++    before = plugin_code_cache.cache_counts()
++    loader.get_code('private_source')
++    loader.get_code('private_source')
++    expected = plugin_code_cache.cache_counts()
++    assert expected['hits'] == before['hits'] + 1 and expected['misses'] == before['misses'] + 1
++    result = runtime_memory.collect_runtime_memory()
++    assert result['plugin_code'] == expected
++    assert marker not in json.dumps(result) and str(tmp_path) not in json.dumps(result)
++    assert plugin_code_cache.cache_counts() == expected
++
++
++def test_plugin_code_observation_does_not_initialize_an_absent_cache(monkeypatch):
++    import sys
++    from gateway import runtime_memory
++
++    monkeypatch.delitem(sys.modules, 'hermes_cli.plugin_code_cache', raising=False)
++    result = runtime_memory.collect_runtime_memory()
++    assert result['plugin_code'] is None
++    assert 'hermes_cli.plugin_code_cache' not in sys.modules
 +
 +
 +def test_tool_counters_expose_only_counts_and_do_not_copy_schemas(monkeypatch):

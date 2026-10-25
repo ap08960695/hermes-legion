@@ -48,6 +48,32 @@ modules and model context keep their existing isolation. Language/overlay resets
 rebuild merged views without re-parsing an unchanged bundle. Read or validation
 errors are not cached as successful parses.
 
+Since v0.3.8, `plugin_code` reports the same four scalar fields for an already-loaded
+compiled-source cache. Observation never initializes it or exposes paths, source
+digests, code constants, globals or credentials. A miss is a compilation-cache
+attempt, not a model request or a unit of token usage.
+
+Eligible bundled directory imports can reuse immutable Python code objects while
+executing each profile's module with its own globals. Native activation and
+registration still run. The cache holds at most 128 source versions and excludes
+source files larger than one MiB. Larger sources still load without shared
+caching. Those are admission bounds, not a hard process
+RAM limit. Source is read on every request: access failures remain failures, and
+content changes produce a different cache key even when size/mtime are restored.
+Previously loaded sibling modules keep their code until their own native reload.
+
+The implementation uses Python's existing per-directory importer cache. Custom
+root loaders and custom directory finders are preserved, and extension/sourceless
+imports retain their native paths. Non-bundled profile plugins retain their native
+import behavior and do not fill the shared code cache. No second disk cache or
+new service is installed, and existing native bytecode files are left alone.
+
+A first cold profile incurs source compilation work; the measured benefit is in
+a persistent process serving many profiles. Do not assume a saving for every
+short-lived single-profile process. Compare equal native configurations and
+module/registration counts when measuring; lower RAM obtained by silently
+omitting a plugin is not a successful optimization.
+
 SQLite allocator measurements use symbols from Python's own loaded SQLite
 extension. If symbols or tracking are unavailable, `sqlite.available` is false
 and byte counts are null. The diagnostic never loads a different SQLite library

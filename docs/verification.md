@@ -489,3 +489,71 @@ test files** against the same pinned upstream revision. Release files, reachable
 history, metadata and archives undergo the existing privacy review before
 publication. User goals/pauses, quotas, accounts, models, project gates and
 embedding services remain outside this change.
+
+## Share immutable bundled plugin code (v0.3.8)
+
+Native plugin discovery followed by Gateway configuration materializes platform
+adapters under separate profile namespaces. A four-home reproduction created
+328 modules from 82 source files with no messaging platform enabled. The dominant
+allocation site was Python's repeated bytecode decoding. Module isolation is
+intentional: sharing module objects or skipping configuration hooks would change
+behavior. This repair shares only immutable compiled code and its constants.
+
+Eligible bundled imports use Python's existing per-directory importer cache with
+a bounded source loader. Each execution receives a new native module/globals
+dictionary. Source paths, content digests and interpreter optimization distinguish
+code versions; current source access is checked on hits. Changed files cannot
+inherit stale timestamp-only bytecode. Old sibling modules remain unchanged until
+their own reload. Native private-plugin imports, host routing, custom importers,
+extension/sourceless loaders, permissions and activation/registration gates are
+preserved. The cache does not store module globals or live configuration.
+
+A controlled offline comparison ran the original loader and the installed
+candidate's logic in fresh processes, with networking and process actions denied
+apart from native checkout-local read-only version metadata. The original loader
+was observed loaded before restoring the isolated development checkout; canonical
+runtime source was not changed by the baseline experiment. Both workloads served
+36 synthetic homes, materialized 2,952 scoped modules from 82 source files, kept
+the same registry/compatibility outcomes and enabled zero messaging platforms.
+
+| Untraced offline workload, 36 homes | Original | Candidate |
+|---|---:|---:|
+| Process RSS after discovery/configuration | 486,899,712 bytes | 224,198,656 bytes |
+| Process PSS at the same stage | 475,310,080 bytes | 212,675,584 bytes |
+| Elapsed discovery/configuration | 10.161 s | 8.985 s |
+
+This single-run workload observed about **250.5 MiB less RSS** and a shorter
+component startup time. Allocation tracing was disabled for these rows. The first
+cold profile incurred extra compilation/allocator cost; benefits are established
+for this multi-profile reproduction, not every single-profile process, end-user
+response time or token usage. The cache retains at most 128 code versions and
+loads sources above one MiB without caching; it is not an application-wide RAM cap.
+
+Fresh native acceptance passed **242 cases across thirteen relevant files**, with
+zero failures, zero retries and one existing SQLite-symbol skip. Four initial
+reuse/reload tests failed on the prior implementation; a later initializer control
+also failed before its corresponding change. The new file now passes fourteen
+cases covering independent scopes/state, nested imports, force reload, same-size
+edits with restored mtime, unaffected siblings, concurrent loads, current source
+read refusal, custom finders/loaders, large sources, failure cleanup, sourceless
+imports, cache eviction and private-plugin passthrough. Two new diagnostic cases
+verify count-only observation and no initialization of an absent cache. Existing
+plugin lifecycle, historical compatibility, event, host-isolation, registry and
+config-loader tests are included; earlier overlapping runs are not added.
+
+Installed canonical-source offline acceptance separately verified code reuse,
+independent profile state, fresh reload and preservation of a sibling's old code,
+with live-state reads and network actions denied. Native idle-only activation then
+produced positive code-cache reuse counters from the actual Gateway. Runtime
+source hashes and unchanged configuration were checked. Idle RSS snapshots across
+that restart are operational observations, not a controlled benchmark for every
+production workload. No inference work was created to obtain evidence.
+
+Only three affected runtime source paths were installed after small source-only
+backups; no database snapshot was made. Cumulative inventory: **318 source/test
+targets, including 191 runtime files and 127 Python test files**, against the same
+pinned upstream revision. Public files, reachable history, metadata and release
+archives are reviewed before publication; private measurements, source locations,
+configuration, credentials and operational receipts remain excluded. Quotas,
+models, accounts, goals, user pauses, project gates and embedding services are
+unchanged by this source repair.
