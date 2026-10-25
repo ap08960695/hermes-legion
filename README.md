@@ -8,7 +8,7 @@ The design is simple: give each bot a clear responsibility, dispatch independent
 
 ## What is included
 
-- **296 patched or added source/test files** against one explicitly pinned upstream revision, including 121 Python test files. See [patch inventory](patches/manifest.json) for the exact files and hashes.
+- **300 patched or added source/test files** against one explicitly pinned upstream revision, including 122 Python test files. See [patch inventory](patches/manifest.json) for the exact files and hashes.
 - Native task/run ownership checks; exactly-once dispatch; input preflight; recoverable compact handoffs; worker completion that avoids a needless follow-up model turn.
 - Bounded file/status reads, cache diagnostics, task/run usage attribution, waiting without repeated model calls, and worker phase timing.
 - Fifteen renamed role templates and ten reusable English skills. They contain no account configuration, credentials, personal persona or production transcripts.
@@ -22,13 +22,13 @@ Use the [storage and backup guide](docs/storage-and-backups.md) to avoid redunda
 Clone the release and run from its repository root; the same commands work after extracting the release archive and entering its top-level directory. Only Python and Git are needed for this companion-only walkthrough. Native profile setup has the additional upstream prerequisites documented separately.
 
 ```sh
-git clone --branch v0.3.2 --single-branch https://github.com/ap08960695/hermes-legion.git
+git clone --branch v0.3.3 --single-branch https://github.com/ap08960695/hermes-legion.git
 cd hermes-legion
 python3 scripts/verify_release.py
 python3 scripts/legion_plan.py --team examples/team.full.json --snapshot examples/snapshots/synthetic-ready.json --tasks examples/scenarios/parallel-production.json --now 1
 ```
 
-The walkthrough pins the immutable v0.3.2 release. Current `main` additionally contains the derived-cache disk-pressure fix described in the [verification record](docs/verification.md); use a reviewed commit from `main` for that post-release change.
+The walkthrough pins the immutable v0.3.3 release. Its storage-pressure and idle-only update changes are described in the [verification record](docs/verification.md).
 
 ## Prepare and diagnose a team offline
 
@@ -38,6 +38,8 @@ Use the [doctor and setup bundle guide](docs/offline-setup-tools.md) to inspect 
 python3 scripts/legion_setup.py --team examples/team.small.json --models examples/models.small.synthetic.json
 python3 scripts/legion_plan.py --team examples/team.full.json --snapshot examples/snapshots/synthetic-codex-cooldown.json --tasks examples/scenarios/sticky-session.json --pins examples/session-pins.synthetic.json --now 1 --explain
 ```
+
+See [idle-only Gateway updates](docs/idle-updates.md) for the native opt-in request that refuses live or unreadable background work without forcing a restart.
 
 ## Start safely
 

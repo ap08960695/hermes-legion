@@ -292,7 +292,7 @@ public archive. Earlier releases remain immutable.
 
 ## Derived-cache disk-pressure preservation (after v0.3.2)
 
-Current main adds one regression file, bringing the cumulative inventory to 296
+The first post-v0.3.2 change added one regression file, bringing that inventory to 296
 source/test files, including 121 native Python test files. A fresh relevant native
 run passed 59 cases across eight files, with zero failures and zero retries. These
 cover document conversion, persistent search reuse, cross-process exclusion and
@@ -321,3 +321,40 @@ quota changes, hard RAM limits or embedding-service actions are introduced.
 The v0.3.2 release and its archive remain immutable. This post-release change is
 identified separately on main and passes fresh full-patch compatibility checks
 against the same pinned upstream revision before publication.
+
+
+## v0.3.3: storage pressure and idle-only update safety
+
+The cumulative patch now contains 300 source/test files, including 122 native
+Python test files. A fresh combined run passed 144 native cases across 15
+relevant files with zero failures and zero retries; two existing platform cases
+were skipped on the test host. The 75 companion cases are checked separately.
+Earlier overlapping results above are historical and are not added to this count.
+
+Two reproduced predicate failures showed that unreadable background-process or
+delegation observations could be interpreted as idle. The predicate now keeps
+the host awake on either failure. The new opt-in control request uses a separate
+verb, so an older server cannot ignore an idle condition and silently run the
+legacy bounded-drain request. Admission checks native work on the Gateway loop
+immediately before restart. Old explicit pause behavior remains covered.
+
+New control tests use the production socket setup and a real native registry
+process: an idle-only update is refused while its script is alive, then the same
+script resumes and finishes after release. Other cases cover active agents,
+unreadable cron/API work, clean idle acceptance, older servers and expired queued
+callbacks. The first legacy test harness used a different temporary home than
+the serving socket; correcting its home made the unchanged legacy control pass.
+That harness failure is not counted as a runtime defect.
+
+Local publication backs up only affected source files and records prior absence
+for a new sibling. Bootstrap of the first strict-capable server requires a fresh
+idle audit; future automatic activation requests require its strict ACK and do
+not fall back to signals or legacy pause. Serving-process identity, canonical
+source binding, file hashes and unchanged configuration are verified separately.
+No model calls or live workload are created to manufacture acceptance.
+
+The prior two native completed-card samples have incomplete log coverage and
+predate these fixes; they do not establish after-patch RAM, latency or usage
+savings. Production impact and autonomous goal/skill behavior remain separate
+acceptance work. Public archives contain source/examples only, never private
+operational receipts, live databases or credential stores.

@@ -23054,35 +23054,6 @@ index dc3dfd1599..5c924e9f32 100644
      from hermes_constants_scratch import prune_idle_entries
  
      root = scratch if scratch is not None else get_scratch_dir(prune=False)
-diff --git a/gateway/run.py b/gateway/run.py
-index a9e9855ec9..69fbe6d2cf 100644
---- a/gateway/run.py
-+++ b/gateway/run.py
-@@ -4594,6 +4594,16 @@ def _housekeeping_media_caches() -> None:
-         _housekeeping_chore(f"{cache_name} cache cleanup", _one)
- 
- 
-+def _housekeeping_scratch_cache() -> None:
-+    """Retain active/resumable work while expiring observable disposable scratch data."""
-+    from hermes_constants import get_hermes_home, prune_scratch_dir
-+
-+    root = get_hermes_home() / "cache" / "scratch"
-+    if root.is_dir() and not root.is_symlink():
-+        if removed := prune_scratch_dir(root):
-+            logger.info("Scratch cache cleanup: removed %d idle unused entry(s)", removed)
-+
-+
- def _housekeeping_paste_sweep() -> None:
-     from hermes_cli.debug import _sweep_expired_pastes
-     deleted, remaining = _sweep_expired_pastes()
-@@ -4762,6 +4772,7 @@ def _start_gateway_housekeeping(
-     chores += [
-         (5, "Channel directory refresh", lambda: adapters and _housekeeping_channel_directory(adapters, loop)),
-         (60, "Media cache cleanup", _housekeeping_media_caches),
-+        (60, "Scratch cache cleanup", profile_scoped_chore(runner, _housekeeping_scratch_cache)),
-         (60, "Paste sweep", _housekeeping_paste_sweep)]
-     if cron_provider is not None:
-         chores.append((5, "Misfire catch-up sweep", lambda: _housekeeping_misfire_catch_up(cron_provider, adapters, loop)))
 diff --git a/tests/test_scratch_dir.py b/tests/test_scratch_dir.py
 index d4596a75d0..8909c93774 100644
 --- a/tests/test_scratch_dir.py
@@ -23813,3 +23784,362 @@ new file mode 100644
 +    assert target.exists() is stored
 +    if stored:
 +        assert target.read_bytes() == b'\xe0\xb8\x81'
+diff --git a/gateway/run.py b/gateway/run.py
+--- a/gateway/run.py
++++ b/gateway/run.py
+@@ -4594,6 +4594,16 @@
+         _housekeeping_chore(f"{cache_name} cache cleanup", _one)
+ 
+ 
++def _housekeeping_scratch_cache() -> None:
++    """Retain active/resumable work while expiring observable disposable scratch data."""
++    from hermes_constants import get_hermes_home, prune_scratch_dir
++
++    root = get_hermes_home() / "cache" / "scratch"
++    if root.is_dir() and not root.is_symlink():
++        if removed := prune_scratch_dir(root):
++            logger.info("Scratch cache cleanup: removed %d idle unused entry(s)", removed)
++
++
+ def _housekeeping_paste_sweep() -> None:
+     from hermes_cli.debug import _sweep_expired_pastes
+     deleted, remaining = _sweep_expired_pastes()
+@@ -4762,6 +4772,7 @@
+     chores += [
+         (5, "Channel directory refresh", lambda: adapters and _housekeeping_channel_directory(adapters, loop)),
+         (60, "Media cache cleanup", _housekeeping_media_caches),
++        (60, "Scratch cache cleanup", profile_scoped_chore(runner, _housekeeping_scratch_cache)),
+         (60, "Paste sweep", _housekeeping_paste_sweep)]
+     if cron_provider is not None:
+         chores.append((5, "Misfire catch-up sweep", lambda: _housekeeping_misfire_catch_up(cron_provider, adapters, loop)))
+@@ -5563,27 +5574,7 @@
+         # manager) relaunches after the code swap.
+         _main_loop = asyncio.get_running_loop()
+ 
+-        def _pause_for_update_handler() -> dict:
+-            try:
+-                from hermes_cli.gateway import _get_restart_drain_timeout
+-                _drain = float(_get_restart_drain_timeout())
+-            except Exception:
+-                _drain = 30.0
+-            accepted_box: list[bool] = []
+-            _done = threading.Event()
+-
+-            def _request() -> None:
+-                try:
+-                    accepted_box.append(runner.request_restart(detached=False, via_service=True))
+-                finally:
+-                    _done.set()
+-
+-            _main_loop.call_soon_threadsafe(_request)
+-            _done.wait(timeout=5.0)
+-            accepted = bool(accepted_box and accepted_box[0])
+-            return {
+-                "pausing": accepted, "already_stopping": not accepted,
+-                "pid": os.getpid(), "drain_timeout": _drain}
++        from gateway.run_update_control import make_pause_handler
+ 
+         def _rescan_profiles_handler() -> dict:
+             """``hermes profile create/delete`` asks the multiplexer to reconcile ``profiles/`` now
+@@ -5601,7 +5592,8 @@
+                 return {"multiplex": True, "pending": True, "served_profiles": runner.served_profile_names()}
+ 
+         _control_server = GatewayControlServer(
+-            verb_handlers={"pause-for-update": _pause_for_update_handler,
++            verb_handlers={"pause-for-update": make_pause_handler(runner, _main_loop),
++                           "pause-if-idle": make_pause_handler(runner, _main_loop, only_if_idle=True),
+                            "rescan-profiles": _rescan_profiles_handler,
+                            "unserve-profile": unserve_profile_verb(runner),
+                            "serve-profile": serve_profile_verb(runner),
+diff --git a/gateway/run_shutdown.py b/gateway/run_shutdown.py
+--- a/gateway/run_shutdown.py
++++ b/gateway/run_shutdown.py
+@@ -336,9 +336,12 @@
+             return bool(process_registry.has_any_active() or process_registry.pending_watchers)
+ 
+         for label, probe in (("async-delegation", _delegations_active), ("bg-work", _processes_active)):
+-            with _log_suppressed(logging.DEBUG, f"scale-to-zero {label} check failed", exc_info=True):
++            try:
+                 if probe():
+                     return True
++            except Exception:
++                logger.debug("scale-to-zero %s check failed — staying awake", label, exc_info=True)
++                return True
+         return False
+ 
+     @staticmethod
+diff --git a/gateway/control_socket.py b/gateway/control_socket.py
+--- a/gateway/control_socket.py
++++ b/gateway/control_socket.py
+@@ -352,13 +352,23 @@
+     return query_gateway_control(home, "identify", timeout=timeout)
+ 
+ 
+-def pause_gateway_for_update(home: Path, *, timeout: float = _DEFAULT_CLIENT_TIMEOUT) -> Optional[dict[str, Any]]:
++def pause_gateway_for_update(
++    home: Path, *, timeout: float = _DEFAULT_CLIENT_TIMEOUT, only_if_idle: bool = False,
++) -> Optional[dict[str, Any]]:
+     """Ask the gateway serving ``home`` to drain and exit for an update. Returns the ACK ``{"pausing",
+     "already_stopping", "pid", "drain_timeout"}`` or None when no gateway answers (old gateway without
+     the verb, no/dead socket) — the caller then uses the legacy signal/tree-kill pause path.
+ 
+-    Step 2 of the socket migration (#92091).
++    ``only_if_idle=True`` uses a separate verb so an older server cannot silently
++    ignore the safety condition. None is unavailable/unsupported/ambiguous: strict
++    callers must defer, never fall back to legacy pause, signals or a replay.
+     """
++    if only_if_idle:
++        result = query_gateway_control(
++            home, 'pause-if-idle', timeout=timeout,
++            params={'deadline_ns': time.monotonic_ns() + int(timeout * 1e9)},
++        )
++        return result if result and result.get('idle_only') is True else None
+     return query_gateway_control(home, "pause-for-update", timeout=timeout)
+ 
+ 
+diff --git a/gateway/run_update_control.py b/gateway/run_update_control.py
+new file mode 100644
+--- /dev/null
++++ b/gateway/run_update_control.py
+@@ -0,0 +1,66 @@
++"""Native update-pause admission, with an opt-in idle-only request path."""
++
++import os
++import threading
++import time
++
++
++def _idle_update_blocker(runner):
++    try:
++        if (runner._active_work_count() > 0 or runner._running_cron_job_count() > 0
++                or runner._api_server_hook('active_agent_work_count') > 0):
++            return 'active_work'
++        if runner._scale_to_zero_has_live_background_work():
++            return 'background_work'
++    except Exception:
++        return 'observation_unavailable'
++    return None
++
++
++def make_pause_handler(runner, loop, *, only_if_idle=False):
++    """Check idle state and request restart on the same Gateway event-loop turn."""
++    def handler(params=None):
++        try:
++            from hermes_cli.gateway import _get_restart_drain_timeout
++            drain = float(_get_restart_drain_timeout())
++        except Exception:
++            drain = 30.0
++        result = {'pausing': False, 'already_stopping': False,
++                  'pid': os.getpid(), 'drain_timeout': drain}
++        done, cancelled = threading.Event(), threading.Event()
++        deadline = (params or {}).get('deadline_ns') if only_if_idle else None
++        if only_if_idle:
++            result['idle_only'] = True
++            if type(deadline) is not int or deadline <= time.monotonic_ns():
++                return {**result, 'reason': 'expired'}
++        wait = min(5.0, max(0.0, (deadline - time.monotonic_ns()) / 1e9)) if only_if_idle else 5.0
++
++        def expired():
++            return only_if_idle and (cancelled.is_set() or time.monotonic_ns() >= deadline)
++
++        def request():
++            try:
++                if expired():
++                    result['reason'] = 'expired'
++                    return
++                if only_if_idle:
++                    blocker = _idle_update_blocker(runner)
++                    if blocker:
++                        result.update(busy=True, reason=blocker)
++                        return
++                    if expired():
++                        result['reason'] = 'expired'
++                        return
++                accepted = runner.request_restart(detached=False, via_service=True)
++                result.update(pausing=bool(accepted), already_stopping=not accepted)
++            finally:
++                done.set()
++
++        loop.call_soon_threadsafe(request)
++        if not done.wait(timeout=wait) and only_if_idle:
++            # Do not leave a queued callback armed after its caller's deadline.
++            cancelled.set()
++            return {**result, 'reason': 'expired'}
++        return dict(result)
++
++    return handler
+diff --git a/tests/gateway/test_idle_update_safety.py b/tests/gateway/test_idle_update_safety.py
+new file mode 100644
+--- /dev/null
++++ b/tests/gateway/test_idle_update_safety.py
+@@ -0,0 +1,170 @@
++"""Idle-only update requests preserve live scripts and refuse unknown observations."""
++
++import asyncio
++import shlex
++import socket
++import sys
++import time
++from pathlib import Path
++from types import SimpleNamespace
++
++import pytest
++
++from gateway.control_socket import GatewayControlServer, pause_gateway_for_update
++from gateway.run import _start_gateway_start_control_socket
++from gateway.run_shutdown import GatewayShutdownMixin
++
++
++@pytest.fixture(autouse=True)
++def control_home(tmp_path, monkeypatch):
++    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
++    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
++
++
++class IdleRunner(GatewayShutdownMixin):
++    def __init__(self):
++        self._background_tasks = set()
++        self.config = SimpleNamespace(multiplex_profiles=False)
++        self.restarts = []
++
++    def _active_work_count(self):
++        return 0
++
++    def _running_cron_job_count(self):
++        return 0
++
++    def _api_server_hook(self, name):
++        return 0
++
++    def request_restart(self, **kwargs):
++        self.restarts.append(kwargs)
++        return True
++
++
++@pytest.mark.parametrize('probe', ['delegations', 'processes'])
++def test_unknown_background_observation_keeps_gateway_awake(monkeypatch, probe):
++    from tools import async_delegation, process_registry
++
++    def unavailable():
++        raise OSError('fixture observation refusal')
++
++    target = async_delegation if probe == 'delegations' else process_registry.process_registry
++    monkeypatch.setattr(target, 'active_count' if probe == 'delegations' else 'has_any_active', unavailable)
++    assert IdleRunner()._scale_to_zero_has_live_background_work() is True
++
++
++def _request(tmp_path, runner, *, only_if_idle):
++    async def scenario():
++        server = await _start_gateway_start_control_socket(runner)
++        assert server is not None
++        try:
++            return await asyncio.to_thread(
++                pause_gateway_for_update, tmp_path, timeout=5,
++                **({'only_if_idle': True} if only_if_idle else {}),
++            )
++        finally:
++            await server.stop()
++
++    return asyncio.run(scenario())
++
++
++@pytest.mark.platforms('posix')
++def test_idle_request_refuses_live_native_process_then_script_resumes(tmp_path, monkeypatch):
++    from tools import process_registry as processes
++
++    monkeypatch.setattr(processes, '_systemd_run_user_scope_available', lambda: False)
++    registry = processes.ProcessRegistry()
++    monkeypatch.setattr(processes, 'process_registry', registry)
++    runner = IdleRunner()
++    with socket.socket() as listener:
++        listener.bind(('127.0.0.1', 0))
++        listener.listen()
++        listener.settimeout(10)
++        code = ('import socket; s=socket.create_connection(("127.0.0.1", '
++                f'{listener.getsockname()[1]})); s.sendall(b"ready"); '
++                'assert s.recv(1)==b"x"; s.sendall(b"done"); print("finished", flush=True)')
++        session = registry.spawn_local(shlex.join([sys.executable, '-c', code]), cwd=str(tmp_path))
++        try:
++            with listener.accept()[0] as connection:
++                connection.settimeout(10)
++                assert connection.recv(5) == b'ready'
++                assert registry.has_any_active()
++                result = _request(tmp_path, runner, only_if_idle=True)
++                assert result['pausing'] is False and result['idle_only'] is True
++                assert result['reason'] == 'background_work'
++                assert runner.restarts == []
++                assert session.process.poll() is None
++                connection.sendall(b'x')
++                assert connection.recv(4) == b'done'
++            result = registry.wait(session.id, timeout=10)
++            assert result['exit_code'] == 0 and 'finished' in result['output']
++        finally:
++            registry.kill_all(source='test-cleanup')
++
++
++@pytest.mark.parametrize('busy', [False, True])
++@pytest.mark.platforms('posix')
++def test_idle_request_distinguishes_clean_and_active_agent_work(tmp_path, monkeypatch, busy):
++    runner = IdleRunner()
++    monkeypatch.setattr(runner, '_active_work_count', lambda: int(busy))
++    result = _request(tmp_path, runner, only_if_idle=True)
++    assert result['idle_only'] is True and result['pausing'] is (not busy)
++    assert len(runner.restarts) == (0 if busy else 1)
++
++
++@pytest.mark.platforms('posix')
++def test_explicit_legacy_pause_keeps_its_drain_contract(tmp_path, monkeypatch):
++    runner = IdleRunner()
++    monkeypatch.setattr(runner, '_active_work_count', lambda: 1)
++    result = _request(tmp_path, runner, only_if_idle=False)
++    assert result['pausing'] is True
++    assert runner.restarts == [{'detached': False, 'via_service': True}]
++
++
++@pytest.mark.parametrize('probe', ['_running_cron_job_count', '_api_server_hook'])
++@pytest.mark.platforms('posix')
++def test_idle_request_refuses_unreadable_work_source(tmp_path, monkeypatch, probe):
++    runner = IdleRunner()
++
++    def unavailable(*args):
++        raise OSError('fixture unavailable work source')
++
++    monkeypatch.setattr(runner, probe, unavailable)
++    result = _request(tmp_path, runner, only_if_idle=True)
++    assert result['pausing'] is False and result['reason'] == 'observation_unavailable'
++    assert runner.restarts == []
++
++
++@pytest.mark.platforms('posix')
++def test_strict_client_does_not_fall_back_to_old_server(tmp_path):
++    calls = []
++
++    async def scenario():
++        def legacy():
++            calls.append('legacy shutdown requested')
++            return {'pausing': True}
++
++        server = GatewayControlServer(tmp_path, verb_handlers={'pause-for-update': legacy})
++        assert await server.start()
++        try:
++            return await asyncio.to_thread(pause_gateway_for_update, tmp_path, only_if_idle=True)
++        finally:
++            await server.stop()
++
++    assert asyncio.run(scenario()) is None
++    assert calls == []
++
++
++def test_expired_queued_request_cannot_restart_later(monkeypatch):
++    from gateway.run_update_control import make_pause_handler
++
++    callbacks = []
++    loop = SimpleNamespace(call_soon_threadsafe=callbacks.append)
++    runner = IdleRunner()
++    monkeypatch.setattr('threading.Event.wait', lambda self, timeout=None: False)
++    handler = make_pause_handler(runner, loop, only_if_idle=True)
++    result = handler({'deadline_ns': time.monotonic_ns() + 1_000_000_000})
++    assert result['pausing'] is False and result['reason'] == 'expired'
++    for callback in callbacks:
++        callback()
++    assert runner.restarts == []
