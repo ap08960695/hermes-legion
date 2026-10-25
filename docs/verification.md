@@ -70,3 +70,33 @@ A checkout-inspection regression proved that Git could execute a configured file
 Separately, **37 native cases passed, zero failures**, using all **34 newly generated synthetic config fragments** as the native harness inputs, plus parser/legacy-fallback/three-profile setup checks. Use the existing native verification recipe; for generated fragments, copy each `profiles/<id>/config.example.json` to the fixture directory as `<id>.config.example.json`. The approved existing upstream-managed test environment and canonical runner were used with zero retries. No dependencies were installed. This is offline config acceptance, not actual provider authorization, model capability, packaged startup or live routing.
 
 The 279-file cumulative source patch remains unchanged. Source/profile guards are compared around the work, and public files, reachable Git history and release payloads are scanned before publishing. Historical source/UI counts above are not rerun or added to these results.
+
+
+## Repeated attachment fix (after v0.3.0)
+
+The current main branch extends the cumulative patch to 280 files. Repeated built-in
+references in one message now expand once per kind, target and line range. Original
+user text and reference metadata remain intact. Distinct ranges remain separate;
+plugin references retain their existing behavior. No cache survives to the next message.
+The 16-expansion work limit applies to distinct built-in attachments.
+
+Offline regressions first reproduced two failures: duplicate URL extraction and
+16 copies of the same file preventing a later distinct file from being attached.
+The final new regression file passes 5 cases; the existing reference, plugin,
+concurrency, CLI and Gateway files pass 48 cases. These are separate cases, not
+summed historical test runs. No model or real URL request was made.
+
+One synthetic 30,000-character file referenced 16 times, with a 1,000,000-token
+context limit, produced these results using the native preprocessor:
+
+| Metric | Before | After |
+|---|---:|---:|
+| Estimated injected tokens | 120,176 | 7,511 |
+| Output characters | 480,985 | 30,340 |
+| Peak traced Python allocations (bytes) | 6,134,460 | 257,107 |
+
+This single offline sample is not a whole-process RSS benchmark, billed token
+measurement or evidence of savings across production workloads. Already-running
+processes must load the changed module through their normal safe lifecycle before
+runtime activation can be claimed. Provider quotas and fallback settings are unchanged.
+The v0.3.0 tag and release remain immutable; these results describe the newer main branch.

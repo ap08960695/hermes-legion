@@ -999,21 +999,56 @@ index 13b1d4a08b3d3ab5cfc69ac6fad8302735219f04..6000d85a142dd9e9cd4c6cee53a722cd
 +            return None
          # Only a genuine no-provider RuntimeError gets the long cooldown; empty/invalid-response
 diff --git a/agent/context_references.py b/agent/context_references.py
-index fa1c455800b5c9bcbf4deef95f89204d0c504b10..4b93782619aa3cc44cca916bca46758c896cd5b0 100644
+index fa1c455800..350d4a6362 100644
 --- a/agent/context_references.py
 +++ b/agent/context_references.py
-@@ -102,2 +102,6 @@ _TEXT_EXTENSIONS = (".py", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".j
+@@ -100,6 +100,10 @@ _TEXT_EXTENSIONS = (".py", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".j
+ # Bound the work one message can force: each expanded ref reads at most a bounded prefix /
+ # window, and at most this many refs are expanded per message.
  _MAX_EXPANDED_REFERENCES = 16
 +# Local patch 20: per-reference inline cap. The 50%-of-window limit let a 153k-token HTML attachment into a
 +# 1M-window Opus session (2026-10-09), past the 180k LCM threshold where it could not be compacted. Bigger
 +# files become the existing on-disk block (path + size + read_file guidance) instead of inline text.
 +_MAX_INLINE_REFERENCE_TOKENS = 20_000
  # Folder-listing line counts stop paying I/O past this size; bigger files report bytes only.
-@@ -215,3 +219,3 @@ async def preprocess_context_references_async(
+ _LINE_COUNT_MAX_BYTES = 4 * 1024 * 1024
+ # Per-command stdout/stderr ceiling for the ``git``/``rg`` helpers; past it the child is
+@@ -203,6 +207,17 @@ async def preprocess_context_references_async(
+     refs = parse_context_references(message)
+     if not refs:
+         return ContextReferenceResult(message=message, original_message=message)
++    # Repeating a built-in attachment in one message must not repeat I/O or
++    # consume its context budget twice. Plugin expansions may be stateful.
++    unique_refs = []
++    seen = set()
++    for ref in refs:
++        key = (ref.kind, ref.target, ref.line_start, ref.line_end)
++        if ref.kind in BUILTIN_PREFIXES:
++            if key in seen:
++                continue
++            seen.add(key)
++        unique_refs.append(ref)
+     cwd_path = Path(cwd).expanduser().resolve()
+     # Default root = cwd so @ references cannot escape the workspace unless a caller widens it.
+     allowed_root_path = Path(allowed_root).expanduser().resolve() if allowed_root is not None else cwd_path
+@@ -213,14 +228,14 @@ async def preprocess_context_references_async(
+     soft_limit = max(1, int(context_length * 0.25))
+     tasks = (
          _expand_reference(ref, cwd_path, url_fetcher=url_fetcher, allowed_root=allowed_root_path,
 -                          max_inline_tokens=hard_limit)
+-        for ref in refs[:_MAX_EXPANDED_REFERENCES]
 +                          max_inline_tokens=min(hard_limit, _MAX_INLINE_REFERENCE_TOKENS))
-         for ref in refs[:_MAX_EXPANDED_REFERENCES]
++        for ref in unique_refs[:_MAX_EXPANDED_REFERENCES]
+     )
+     expanded = await asyncio.gather(*tasks)
+     warnings = [warning for warning, _ in expanded if warning]
+     warnings.extend(
+         f"{ref.raw}: not expanded (maximum {_MAX_EXPANDED_REFERENCES} @-references per message)"
+-        for ref in refs[_MAX_EXPANDED_REFERENCES:]
++        for ref in unique_refs[_MAX_EXPANDED_REFERENCES:]
+     )
+     blocks = [block for _, block in expanded if block]
+     injected_tokens = sum(estimate_tokens_rough(block) for block in blocks)
 diff --git a/agent/conversation_compression.py b/agent/conversation_compression.py
 index 38757fd7e6558db1243948974b750e2e79f93121..b833e5f9a7b2b1a7f41948e03204b1b62d33e39d 100644
 --- a/agent/conversation_compression.py
@@ -22633,3 +22668,70 @@ index 66e72242300272fa8fcb2b6e7c4bc09c2a4138e2..d2fe6a5aa6a60a78c0ee5e194dcd8a87
 +independent review/apply gates are separate from installing this command.
 +
  `--delivery-mode` controls **how** the notifier reacts to a terminal event. Every subscription is in one of three modes (`notify` is the default and the original behavior):
+diff --git a/tests/agent/test_context_reference_dedup.py b/tests/agent/test_context_reference_dedup.py
+new file mode 100644
+--- /dev/null
++++ b/tests/agent/test_context_reference_dedup.py
+@@ -0,0 +1,62 @@
++"""Repeated built-in attachments should not multiply I/O or context."""
++import asyncio
++
++from agent.context_references import preprocess_context_references_async
++
++
++def test_repeated_url_fetches_once_and_keeps_original_text(tmp_path):
++    calls = []
++    async def fetch(url):
++        calls.append(url)
++        return "unique_payload_" * 200
++    message = "Compare @url:https://example.com/a with @url:https://example.com/a"
++    result = asyncio.run(preprocess_context_references_async(
++        message, cwd=tmp_path, context_length=10000, url_fetcher=fetch))
++    assert calls == ["https://example.com/a"]
++    assert result.message.startswith(message)
++    assert result.message.count("unique_payload_") == 200
++    assert len(result.references) == 2
++    assert not result.blocked
++
++
++def test_duplicate_file_does_not_consume_unique_attachment_slot(tmp_path):
++    (tmp_path / "a.txt").write_text("first_payload")
++    (tmp_path / "b.txt").write_text("last_payload")
++    message = " ".join(["@file:a.txt"] * 16 + ["@file:b.txt"])
++    result = asyncio.run(preprocess_context_references_async(
++        message, cwd=tmp_path, context_length=10000))
++    assert result.message.count("first_payload") == 1
++    assert "last_payload" in result.message
++    assert len(result.references) == 17
++
++
++def test_distinct_file_ranges_remain_distinct(tmp_path):
++    (tmp_path / "a.txt").write_text("first_payload\nsecond_payload\n")
++    result = asyncio.run(preprocess_context_references_async(
++        "@file:a.txt:1-1 @file:a.txt:2-2", cwd=tmp_path, context_length=10000))
++    assert "first_payload" in result.message
++    assert "second_payload" in result.message
++
++
++def test_later_message_reads_new_file_content(tmp_path):
++    path = tmp_path / "a.txt"
++    path.write_text("old_payload")
++    first = asyncio.run(preprocess_context_references_async(
++        "@file:a.txt @file:a.txt", cwd=tmp_path, context_length=10000))
++    path.write_text("new_payload")
++    second = asyncio.run(preprocess_context_references_async(
++        "@file:a.txt @file:a.txt", cwd=tmp_path, context_length=10000))
++    assert first.message.count("old_payload") == 1
++    assert second.message.count("new_payload") == 1
++    assert "old_payload" not in second.message
++
++
++def test_distinct_attachments_still_obey_work_limit(tmp_path):
++    for n in range(17):
++        (tmp_path / f"f{n}.txt").write_text(f"payload_{n:02d}")
++    message = " ".join(f"@file:f{n}.txt" for n in range(17))
++    result = asyncio.run(preprocess_context_references_async(
++        message, cwd=tmp_path, context_length=10000))
++    assert "payload_15" in result.message
++    assert "payload_16" not in result.message
++    assert any("maximum 16" in warning for warning in result.warnings)
