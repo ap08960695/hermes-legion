@@ -15,6 +15,8 @@ The design is simple: give each bot a clear responsibility, dispatch independent
 
 Read the [feature catalog](docs/features.md), [role guide](docs/bot-roles.md), and [verification record](docs/verification.md). A feature's inclusion does not establish a live performance saving for your workload.
 
+Use the [storage and backup guide](docs/storage-and-backups.md) to avoid redundant full backups and review the main-branch helper for compacting explicitly selected older standalone snapshots.
+
 ## Try the offline examples from a public download
 
 Clone the release and run from its repository root; the same commands work after extracting the release archive and entering its top-level directory. Only Python and Git are needed for this companion-only walkthrough. Native profile setup has the additional upstream prerequisites documented separately.

@@ -218,3 +218,18 @@ the binary sniff. These are deterministic offline samples, not production RSS,
 billed token or latency savings. No model requests, quota changes or paid
 fallback are involved. The immutable v0.3.1 download does not include this newer
 main-branch change.
+
+## Explicit backup compaction (after v0.3.1)
+
+The companion storage helper previews or compacts explicitly selected old SQLite
+backup files. It streams compression and decompression, verifies exact SHA-256
+and source identity, publishes an archive plus restoration metadata without
+overwriting existing outputs, syncs before unlinking the original, and preserves
+a free-space reserve. It does not operate on live databases or introduce SQL,
+model calls, retention timers, provider changes or paid fallback.
+
+Eleven offline cases cover read-only planning, byte-exact recovery, private-content
+exclusion, sidecar/recent/link/path refusal, low space, existing outputs, source
+growth, sync failure and canonical duplicate selections. The CLI examples are
+also exercised against temporary synthetic SQLite snapshots. The native source
+patch remains unchanged; this helper is newer than the immutable v0.3.1 release.
