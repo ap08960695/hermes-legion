@@ -100,3 +100,21 @@ measurement or evidence of savings across production workloads. Already-running
 processes must load the changed module through their normal safe lifecycle before
 runtime activation can be claimed. Provider quotas and fallback settings are unchanged.
 The v0.3.0 tag and release remain immutable; these results describe the newer main branch.
+
+
+## Cache memory boundary correction (after v0.3.0)
+
+The current main branch now contains 282 patched or added files. Automatic cache
+budgeting uses the smaller finite memory.high/memory.max value in the selected
+cgroup, rather than blindly preferring memory.high. The own-cgroup/root lookup
+order and v1 fallback remain unchanged. This does not add ancestor traversal or
+change operator-configured limits, quotas, provider selection or fallback policy.
+
+The Linux [cgroup v2 documentation](https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html)
+distinguishes the high throttling threshold from the maximum memory boundary.
+An offline regression with memory.high=8 GiB and memory.max=2 GiB previously
+produced a 5,324 MiB auto budget; it now produces 1,331 MiB, preserving the existing
+65% headroom policy. Three control combinations retained their expected budgets.
+All 43 tests across the boundary regression and existing cache-pressure suite pass.
+No model calls or live memory-limit changes are involved. These are correctness
+results, not measured production RSS savings. Immutable release tags are unchanged.

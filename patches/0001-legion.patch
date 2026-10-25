@@ -22735,3 +22735,52 @@ new file mode 100644
 +    assert "payload_15" in result.message
 +    assert "payload_16" not in result.message
 +    assert any("maximum 16" in warning for warning in result.warnings)
+diff --git a/gateway/agent_cache_pressure.py b/gateway/agent_cache_pressure.py
+index d737ae11b2..ddc0637c04 100644
+--- a/gateway/agent_cache_pressure.py
++++ b/gateway/agent_cache_pressure.py
+@@ -67,7 +67,7 @@ def _finite_limit(path: Path) -> Optional[int]:
+ def _cgroup_limit_bytes() -> Optional[int]:
+     """Memory limit this process runs under, if cgroup-capped.
+ 
+-    Prefers v2 ``memory.high`` (the throttling point) over ``memory.max``, then v1.
++    Uses the tighter v2 ``memory.high`` / ``memory.max`` boundary, then v1.
+     Own cgroup first (where a systemd unit's ``MemoryHigh=``/``MemoryMax=`` lands —
+     root reads ``max`` there), then root for container-style limits.
+     """
+@@ -80,11 +80,12 @@ def _cgroup_limit_bytes() -> Optional[int]:
+     except Exception:
+         own = None
+     roots = ([f"/sys/fs/cgroup{own}"] if own and own != "/" else []) + ["/sys/fs/cgroup"]
+-    for candidate in [f"{r}/memory.{f}" for r in roots for f in ("high", "max")] + ["/sys/fs/cgroup/memory/memory.limit_in_bytes"]:
+-        limit = _finite_limit(Path(candidate))
+-        if limit is not None:
+-            return limit
+-    return None
++    for root in roots:
++        limits = [_finite_limit(Path(root) / f"memory.{kind}") for kind in ("high", "max")]
++        finite = [limit for limit in limits if limit is not None]
++        if finite:
++            return min(finite)
++    return _finite_limit(Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"))
+ 
+ 
+ def _total_memory_bytes() -> Optional[int]:
+diff --git a/tests/gateway/test_agent_cache_limit_order.py b/tests/gateway/test_agent_cache_limit_order.py
+new file mode 100644
+--- /dev/null
++++ b/tests/gateway/test_agent_cache_limit_order.py
+@@ -0,0 +1,13 @@
++"""Auto cache budget must respect both local cgroup memory boundaries."""
++import pytest
++from gateway import agent_cache_pressure as pressure
++from gateway import cgroup_cleanup
++
++@pytest.mark.platforms("linux")
++@pytest.mark.parametrize("high,maximum,expected", [(8,2,2),(2,8,2),(None,2,2),(2,None,2)])
++def test_auto_budget_respects_tighter_local_boundary(monkeypatch, high, maximum, expected):
++    monkeypatch.setattr(cgroup_cleanup, "_own_cgroup_path", lambda: "/synthetic.service")
++    limits={f"/sys/fs/cgroup/synthetic.service/memory.{key}": value * 1024**3 if value else None
++            for key,value in (("high",high),("max",maximum))}
++    monkeypatch.setattr(pressure, "_finite_limit", lambda path: limits.get(str(path)))
++    assert pressure.resolve_memory_high_mb("auto") == int(expected * 1024 * 0.65)
