@@ -596,3 +596,36 @@ or model-token saving is claimed from this UI change. The current local source
 is installed, but activation of the already-open Desktop and Gateway remains a
 separate idle-lifecycle check; the redesigned Workbench mockup is not deployed.
 Historical benchmark and regression counts above remain separate.
+
+## Metadata-only runtime bindings (v0.3.10)
+
+The cumulative patch now has **333 source/test targets**, including **132 Python
+test files**. Small model-config reads no longer hydrate a session's full system
+prompt or tool context. The full-session reader and existing runtime binding
+semantics are preserved; this is a projection change, not an additional cache.
+
+Two native read-policy regressions first failed on the previous implementation
+when SQLite denied prompt access. Fresh acceptance passed **73 cases across seven
+files**, with zero failures or retries. The new file contains three cases:
+normal/read-only thread binding under the read policy, plus default/null/nested
+value and committed-update controls. Existing read-pool, session-route and
+onboarding consumers are covered by the wider run. The scoped native code-health
+comparison found no new findings.
+
+The same three new cases then passed against the installed canonical source.
+This installed check is a subset, not three additional unique cases. Installation
+changed one source file and one test file after fresh idle/ownership checks, with
+a small source-only rollback, exact permission restoration and unchanged
+configuration. No database copy or restore was performed.
+
+The [isolated measurement](session-metadata-reads.md) uses a synthetic context and
+reports lookup time and traced Python allocations only. It does not establish a
+whole-process RAM, production token, total response-time or billing improvement.
+No model call or provider/allowance probe was made for this change. Existing
+quotas, fallback policy, session models, user gates and embedding services remain
+unchanged. Runtime activation is a separate native idle-lifecycle observation.
+
+The new release inventory carries its own version label; earlier immutable tags
+and archives are not rewritten. The redesigned Focus/Workspace interface remains
+an interactive prototype and is not included as a deployed redesign in this
+source release. Prior overlapping test counts remain historical.

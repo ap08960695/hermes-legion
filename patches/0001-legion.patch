@@ -26808,17 +26808,6 @@ diff --git a/apps/desktop/src/plugins/hermes-bots/row-helpers.test.ts b/apps/des
 +    expect(botWorkingMood(bot, null, false, 'local', 2000_000)).toBe('idle')
 +  })
 +})
-diff --git a/hermes_state_sessions.py b/hermes_state_sessions.py
---- a/hermes_state_sessions.py
-+++ b/hermes_state_sessions.py
-@@ -1171,6 +1171,7 @@
-             merged = dict(s)
-             for key in (
-                 "id", "ended_at", "end_reason", "message_count", "tool_call_count", "title", "last_active",
-+                "last_activity_at", "last_activity_description", "last_activity_provenance",
-                 "preview", "model", "system_prompt", "cwd", "git_branch", "git_repo_root",
-             ):
-                 if key in tip_row:
 diff --git a/tests/tui_gateway/test_profiles_list_session_field_cache.py b/tests/tui_gateway/test_profiles_list_session_field_cache.py
 --- a/tests/tui_gateway/test_profiles_list_session_field_cache.py
 +++ b/tests/tui_gateway/test_profiles_list_session_field_cache.py
@@ -27392,3 +27381,84 @@ new file mode 100644
 +        assert row["last_activity_provenance"] == "unknown"
 +        assert row["last_activity_at"] == tip["last_activity_at"]
 +        assert (row["ended_at"] is not None) is ended
+diff --git a/hermes_state_sessions.py b/hermes_state_sessions.py
+--- a/hermes_state_sessions.py
++++ b/hermes_state_sessions.py
+@@ -829,8 +829,8 @@
+ 
+     def get_session_model_config_value(self, session_id: str, key: str, default: Any = None) -> Any:
+         """Read one key out of a session's model_config JSON (tolerant parse)."""
+-        session = self.get_session(session_id) or {}
+-        return _parse_model_config(session.get("model_config")).get(key, default)
++        row = self._read_one("SELECT model_config FROM sessions WHERE id = ?", (session_id,))
++        return _parse_model_config(row[0] if row else None).get(key, default)
+ 
+     def update_conversation_model_config_value(self, session_id: str, key: str,
+                                                update: Callable[[Any], Any]) -> Optional[str]:
+@@ -1171,6 +1171,7 @@
+             merged = dict(s)
+             for key in (
+                 "id", "ended_at", "end_reason", "message_count", "tool_call_count", "title", "last_active",
++                "last_activity_at", "last_activity_description", "last_activity_provenance",
+                 "preview", "model", "system_prompt", "cwd", "git_branch", "git_repo_root",
+             ):
+                 if key in tip_row:
+diff --git a/tests/hermes_state/test_session_config_read.py b/tests/hermes_state/test_session_config_read.py
+new file mode 100644
+--- /dev/null
++++ b/tests/hermes_state/test_session_config_read.py
+@@ -0,0 +1,54 @@
++"""Small runtime bindings must not hydrate a session's prompt and transcript context."""
++from types import SimpleNamespace
++import sqlite3
++
++import pytest
++
++from agent.codex_runtime import _stored_codex_thread_id
++from hermes_state import SessionDB
++
++
++@pytest.mark.parametrize("read_only", [False, True])
++def test_codex_thread_binding_does_not_require_prompt_reads(tmp_path, read_only):
++    path = tmp_path / "state.db"
++    with SessionDB(db_path=path) as writer:
++        writer.create_session(
++            "session", "desktop", system_prompt="Synthetic context. " * 16384,
++            model_config={"codex_thread_id": "example-thread"},
++        )
++        if read_only:
++            db = SessionDB(db_path=path, read_only=True)
++        else:
++            db = writer
++
++        def metadata_only(action, table, column, *_args):
++            if action == sqlite3.SQLITE_READ and (
++                (table == "system_prompts" and column == "prompt")
++                or (table == "sessions" and column in {"system_prompt", "tool_names"})
++            ):
++                return sqlite3.SQLITE_DENY
++            return sqlite3.SQLITE_OK
++
++        # Apply the policy to the next borrowed native read connection.
++        with db._read_ctx() as connection:
++            connection.set_authorizer(metadata_only)
++        try:
++            agent = SimpleNamespace(_session_db=db, session_id="session")
++            assert _stored_codex_thread_id(agent) == "example-thread"
++        finally:
++            with db._read_ctx() as connection:
++                connection.set_authorizer(None)
++            if read_only:
++                db.close()
++
++
++def test_config_read_preserves_missing_defaults_and_fresh_committed_values(tmp_path):
++    with SessionDB(db_path=tmp_path / "state.db") as db:
++        fallback = object()
++        assert db.get_session_model_config_value("absent", "key", fallback) is fallback
++        db.create_session("session", "desktop", model_config={"key": {"ready": False}, "empty": None})
++        assert db.get_session_model_config_value("session", "key") == {"ready": False}
++        assert db.get_session_model_config_value("session", "missing", fallback) is fallback
++        assert db.get_session_model_config_value("session", "empty", fallback) is None
++        db.patch_session_model_config("session", {"key": {"ready": True}})
++        assert db.get_session_model_config_value("session", "key") == {"ready": True}
