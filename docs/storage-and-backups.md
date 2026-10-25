@@ -108,7 +108,9 @@ root preserves that whole root. Store long-term work outside disposable scratch.
 The existing 24-hour idle threshold remains for eligible disposable entries. The
 Gateway checks them hourly under each served profile. Existing opportunistic boot
 checks share this policy. Process visibility failures or incomplete workspace
-scans retain data, and automatic cleanup never signals a process. Closed stale
+scans retain data, and automatic cleanup never signals a process. Command paths are resolved
+through symlinks and relative to the owning process cwd, including option values.
+Closed stale
 artifacts can be removed when their ownership is observable. Fresh directories
 skip recursive scans. This policy is intentionally conservative: retained workspaces
 can still consume substantial space and need an operator's separate disposition.

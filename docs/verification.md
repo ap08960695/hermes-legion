@@ -252,11 +252,13 @@ entries is unchanged. No extra model turn, provider, quota or fallback is involv
 
 Five failures on the old source reproduced live-process termination, deletion of
 an open file, deletion of the caller's cwd, deletion after failed ownership
-inspection and loss of resumable workspace data. Nine final regressions use
+inspection and loss of resumable workspace data. Fifteen final regressions use
 real kernel-backed child processes and controlled process visibility, and cover
 missing inspectors, incomplete scans, normal disposal and fresh-entry behavior.
+Four further failures exposed symlink/relative command paths; six combinations
+now verify that the same process resumes reading its input after the sweep.
 An additional cadence/scope test verifies two profile homes after the first hour.
-All 52 cases across nine relevant native files pass offline, with zero retries.
+All 58 cases across nine relevant native files pass offline, with zero retries.
 Existing explicit reaping tests still verify their audit and cleanup contract;
 the worktree test now verifies retention rather than automatic destruction.
 
@@ -270,7 +272,7 @@ to manufacture a successful cleanup. The immutable v0.3.1 release is unchanged.
 This release packages growing-file preview bounds, active/resumable scratch
 retention and the explicit offline backup-compaction helper. The cumulative
 source inventory contains 295 files, including 120 native Python test files.
-A fresh integration run passed 209 distinct cases in 23 relevant native files,
+A fresh integration run passed 215 distinct cases in 23 relevant native files,
 with zero failures and zero retries. Companion tools and examples separately
 passed all 75 cases. These counts do not add earlier overlapping runs.
 

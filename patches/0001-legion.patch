@@ -23088,163 +23088,6 @@ new file mode 100644
 +        for _ in range(64):
 +            stream.write(b"x" * 65536)
 +    assert _file_metadata(path) == "1 lines"
-diff --git a/hermes_constants_scratch.py b/hermes_constants_scratch.py
-index ec14a164ec..373a01ba74 100644
---- a/hermes_constants_scratch.py
-+++ b/hermes_constants_scratch.py
-@@ -1,9 +1,7 @@
--"""Scratch-dir retention: idle detection plus the reaping an idle tree needs before it goes.
-+"""Scratch retention preserves active and resumable work, even when its mtime is old.
- 
--Deleting an idle ``cache/scratch/<entry>`` is not enough on its own: a lane's e2e run leaves
--headless browsers whose cwd was inside the tree (they survived for days with a ``(deleted)``
--cwd), and a repo whose linked worktree lived in the tree keeps a dangling registration until
--someone runs ``git worktree prune``. Both are reaped here, right before ``rmtree``.
-+Explicit process/worktree reaping helpers remain available for operator-directed
-+cleanup; automatic age-based retention never signals a process.
- """
- from __future__ import annotations
- 
-@@ -26,6 +24,9 @@ _GIT_FILE_MAX_DEPTH = 4
- # fixed rotation as tool_calls.log.
- _PRUNE_LOG_MAX_BYTES = 5 * 1024 * 1024
- _PRUNE_LOG_BACKUPS = 3
-+_RESUME_MARKERS = frozenset({".git", ".keep", "pyvenv.cfg", ".venv", "venv",
-+                             "package.json", "pyproject.toml", "Cargo.toml"})
-+_RESUME_SCAN_MAX_ENTRIES = 4096
- # Paths and process names go in with %r: a control character (a newline in a legal POSIX name)
- # is written escaped, so it cannot split a record or forge one.
- 
-@@ -128,6 +129,78 @@ def _under(path: str, root: str) -> bool:
-     return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
- 
- 
-+def _resumable_entry(entry: Path) -> bool:
-+    """Keep worktrees, environments and explicit keep markers. Incomplete scans keep data."""
-+    try:
-+        if entry.is_symlink() or entry.name in _RESUME_MARKERS:
-+            return True
-+        if not entry.is_dir():
-+            return False
-+        stack = [(entry, 0)]
-+        seen = 0
-+        while stack:
-+            current, depth = stack.pop()
-+            with os.scandir(current) as children:
-+                for child in children:
-+                    if child.name in _RESUME_MARKERS:
-+                        return True
-+                    seen += 1
-+                    if seen > _RESUME_SCAN_MAX_ENTRIES:
-+                        return True
-+                    if child.is_dir(follow_symlinks=False):
-+                        if depth >= _GIT_FILE_MAX_DEPTH:
-+                            return True
-+                        stack.append((Path(child.path), depth + 1))
-+    except OSError:
-+        return True
-+    return False
-+
-+
-+def _active_scratch_paths(root: Path) -> set[str] | None:
-+    """Same-user process paths under root; None means ownership could not be observed.
-+
-+    Include this process and ancestors: age must not remove the caller's cwd.
-+    Unknown ownership defers deletion, rather than treating a failed probe as idle.
-+    """
-+    try:
-+        import psutil
-+    except ImportError:
-+        logger.debug("scratch prune deferred: process inspector is unavailable")
-+        return None
-+    try:
-+        root_path = os.path.realpath(root)
-+        uid = os.getuid() if hasattr(os, "getuid") else None
-+        username = psutil.Process().username() if uid is None else None
-+        active: set[str] = set()
-+        for proc in psutil.process_iter():
-+            try:
-+                if uid is not None:
-+                    if proc.uids().real != uid:
-+                        continue
-+                elif proc.username() != username:
-+                    continue
-+                if proc.status() == psutil.STATUS_ZOMBIE:
-+                    continue
-+                paths = [proc.cwd(), proc.exe(), *(f.path for f in proc.open_files())]
-+                for arg in proc.cmdline():
-+                    if root_path in arg:
-+                        # Embedded code/flags can reference the root without a plain
-+                        # path argument. Keep the whole root when attribution is unclear.
-+                        paths.append(arg if arg.startswith(root_path) else root_path)
-+                for path in paths:
-+                    if not path:
-+                        continue
-+                    normalized = os.path.realpath(path.removesuffix(" (deleted)"))
-+                    if _under(normalized, root_path):
-+                        active.add(normalized)
-+            except (psutil.NoSuchProcess, psutil.ZombieProcess):
-+                continue
-+        return active
-+    except (OSError, psutil.Error):
-+        logger.debug("scratch prune deferred: process ownership is unavailable")
-+        return None
-+
-+
- def _own_lineage() -> set[int]:
-     """This process and its ancestors: never reap the shell that is running the prune."""
-     import psutil
-@@ -243,10 +316,8 @@ def release_git_worktrees(repos: set[str]) -> None:
- def prune_idle_entries(
-     root: Path, max_idle_hours: float, skip_names: frozenset[str], log_file: Path | None = None,
- ) -> int:
--    """Delete top-level entries of *root* with no write anywhere in their subtree for
--    *max_idle_hours*, reaping processes and worktree registrations rooted in them first.
--    Each removal and each signalled process is recorded in *log_file*. Returns the count
--    actually removed."""
-+    """Remove old, unowned disposable entries; keep active, resumable or unknown entries.
-+    Automatic retention never signals processes. Removals are recorded in *log_file*."""
-     audit = _open_prune_log(log_file)
-     try:
-         return _prune_idle_entries(root, max_idle_hours, skip_names, audit)
-@@ -264,18 +335,30 @@ def _prune_idle_entries(
-         entries = [e for e in root.iterdir() if e.name not in skip_names]
-     except OSError:
-         return 0
--    doomed = [e for e in entries if not subtree_touched_since(e, cutoff)]
--    # Runs even with nothing to delete: orphans whose cwd was removed by an earlier pass
--    # (or by hand) are found by the deleted-cwd rule, not by membership in ``doomed``.
--    try:
--        reap_processes_rooted_in(root, doomed, audit)
--    except Exception as exc:  # psutil missing or restricted host: the deletion still proceeds
--        logger.debug("scratch prune: process reap skipped: %s", exc, exc_info=True)
-+    if any(e.name in _RESUME_MARKERS for e in entries):
-+        return 0
-+    doomed = []
-+    for entry in entries:
-+        try:
-+            if os.lstat(entry).st_mtime >= cutoff:
-+                continue
-+        except OSError:
-+            continue
-+        if not _resumable_entry(entry) and not subtree_touched_since(entry, cutoff):
-+            doomed.append(entry)
-     if not doomed:
-         return 0
-+    active = _active_scratch_paths(root)
-+    if active is None:
-+        return 0
-     repos: set[str] = set()
-     removed = 0
-     for entry in doomed:
-+        target = os.path.realpath(entry)
-+        if any(path == os.path.realpath(root) or _under(path, target) for path in active):
-+            continue
-+        if subtree_touched_since(entry, cutoff) or _resumable_entry(entry):
-+            continue
-         size = _tree_bytes(entry)
-         try:
-             if entry.is_dir() and not entry.is_symlink():
 diff --git a/hermes_constants.py b/hermes_constants.py
 index dc3dfd1599..5c924e9f32 100644
 --- a/hermes_constants.py
@@ -23404,11 +23247,233 @@ index 7850a7226a..e36daf6a19 100644
      real_lstat, real_scandir = os.lstat, os.scandir
      with monkeypatch.context() as probe:
          if failed_probe == "root-stat":
+diff --git a/tests/gateway/test_scratch_housekeeping.py b/tests/gateway/test_scratch_housekeeping.py
+new file mode 100644
+--- /dev/null
++++ b/tests/gateway/test_scratch_housekeeping.py
+@@ -0,0 +1,54 @@
++"""Scratch retention runs hourly under each served profile, without a startup sweep."""
++import os
++from pathlib import Path
++from types import SimpleNamespace
++import time
++
++import gateway.run as gateway_run
++import gateway.run_delivery_queue_watch as queue_watch
++import hermes_constants_scratch as scratch
++
++
++def test_hourly_tick_cleans_both_scoped_homes_after_the_first_hour(tmp_path, monkeypatch):
++    home = tmp_path / "home"
++    homes = [home, home / "profiles" / "worker"]
++    files = []
++    for directory in homes:
++        root = directory / "cache" / "scratch"
++        root.mkdir(parents=True)
++        (directory / "config.yaml").write_text("toolsets: []\n")
++        path = root / "unused.bin"
++        path.write_bytes(b"closed disposable data")
++        old = time.time() - 48 * 3600
++        os.utime(path, (old, old))
++        files.append(path)
++    monkeypatch.setenv("HERMES_HOME", str(home))
++    monkeypatch.setattr(scratch, "_active_scratch_paths", lambda _root: set())
++    monkeypatch.setattr(gateway_run, "_multiplex_profile_homes",
++                        lambda _config: [("default", homes[0]), ("worker", homes[1])])
++    monkeypatch.setattr(queue_watch, "DeliveryQueueWatch", lambda *args: None)
++    monkeypatch.setattr(queue_watch, "wait_for_next_tick",
++                        lambda stop, *_args: stop.wait(0))
++
++    def only_scratch_chore(label, callback, *args, **kwargs):
++        if label == "Scratch cache cleanup":
++            callback(*args, **kwargs)
++
++    monkeypatch.setattr(gateway_run, "_housekeeping_chore", only_scratch_chore)
++
++    class StopAfterHour:
++        ticks = 0
++
++        def is_set(self):
++            return self.ticks >= 60
++
++        def wait(self, _timeout):
++            self.ticks += 1
++            if self.ticks < 60:
++                assert all(path.exists() for path in files)
++            return self.is_set()
++
++    runner = SimpleNamespace(config=SimpleNamespace(multiplex_profiles=True))
++    gateway_run._start_gateway_housekeeping(StopAfterHour(), runner=runner, interval=0)
++    assert all(not path.exists() for path in files)
++    assert all((directory / "logs" / "scratch-prune.log").is_file() for directory in homes)
+diff --git a/hermes_constants_scratch.py b/hermes_constants_scratch.py
+index ec14a164ec..4c96b4251a 100644
+--- a/hermes_constants_scratch.py
++++ b/hermes_constants_scratch.py
+@@ -1,9 +1,7 @@
+-"""Scratch-dir retention: idle detection plus the reaping an idle tree needs before it goes.
++"""Scratch retention preserves active and resumable work, even when its mtime is old.
+ 
+-Deleting an idle ``cache/scratch/<entry>`` is not enough on its own: a lane's e2e run leaves
+-headless browsers whose cwd was inside the tree (they survived for days with a ``(deleted)``
+-cwd), and a repo whose linked worktree lived in the tree keeps a dangling registration until
+-someone runs ``git worktree prune``. Both are reaped here, right before ``rmtree``.
++Explicit process/worktree reaping helpers remain available for operator-directed
++cleanup; automatic age-based retention never signals a process.
+ """
+ from __future__ import annotations
+ 
+@@ -26,6 +24,9 @@ _GIT_FILE_MAX_DEPTH = 4
+ # fixed rotation as tool_calls.log.
+ _PRUNE_LOG_MAX_BYTES = 5 * 1024 * 1024
+ _PRUNE_LOG_BACKUPS = 3
++_RESUME_MARKERS = frozenset({".git", ".keep", "pyvenv.cfg", ".venv", "venv",
++                             "package.json", "pyproject.toml", "Cargo.toml"})
++_RESUME_SCAN_MAX_ENTRIES = 4096
+ # Paths and process names go in with %r: a control character (a newline in a legal POSIX name)
+ # is written escaped, so it cannot split a record or forge one.
+ 
+@@ -128,6 +129,84 @@ def _under(path: str, root: str) -> bool:
+     return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+ 
+ 
++def _resumable_entry(entry: Path) -> bool:
++    """Keep worktrees, environments and explicit keep markers. Incomplete scans keep data."""
++    try:
++        if entry.is_symlink() or entry.name in _RESUME_MARKERS:
++            return True
++        if not entry.is_dir():
++            return False
++        stack = [(entry, 0)]
++        seen = 0
++        while stack:
++            current, depth = stack.pop()
++            with os.scandir(current) as children:
++                for child in children:
++                    if child.name in _RESUME_MARKERS:
++                        return True
++                    seen += 1
++                    if seen > _RESUME_SCAN_MAX_ENTRIES:
++                        return True
++                    if child.is_dir(follow_symlinks=False):
++                        if depth >= _GIT_FILE_MAX_DEPTH:
++                            return True
++                        stack.append((Path(child.path), depth + 1))
++    except OSError:
++        return True
++    return False
++
++
++def _active_scratch_paths(root: Path) -> set[str] | None:
++    """Same-user process paths under root; None means ownership could not be observed.
++
++    Include this process and ancestors: age must not remove the caller's cwd.
++    Unknown ownership defers deletion, rather than treating a failed probe as idle.
++    """
++    try:
++        import psutil
++    except ImportError:
++        logger.debug("scratch prune deferred: process inspector is unavailable")
++        return None
++    try:
++        root_path = os.path.realpath(root)
++        uid = os.getuid() if hasattr(os, "getuid") else None
++        username = psutil.Process().username() if uid is None else None
++        active: set[str] = set()
++        for proc in psutil.process_iter():
++            try:
++                if uid is not None:
++                    if proc.uids().real != uid:
++                        continue
++                elif proc.username() != username:
++                    continue
++                if proc.status() == psutil.STATUS_ZOMBIE:
++                    continue
++                cwd = proc.cwd()
++                paths = [cwd, proc.exe(), *(f.path for f in proc.open_files())]
++                for arg in proc.cmdline():
++                    value = arg.split("=", 1)[-1] if arg.startswith("-") and "=" in arg else arg
++                    if os.path.isabs(value):
++                        paths.append(value)
++                    elif root_path in arg:
++                        # Embedded code/flags can reference the root without a plain
++                        # path argument. Keep the whole root when attribution is unclear.
++                        paths.append(root_path)
++                    elif cwd and (os.sep in value or (os.altsep and os.altsep in value)):
++                        paths.append(os.path.join(cwd, value))
++                for path in paths:
++                    if not path:
++                        continue
++                    normalized = os.path.realpath(path.removesuffix(" (deleted)"))
++                    if _under(normalized, root_path):
++                        active.add(normalized)
++            except (psutil.NoSuchProcess, psutil.ZombieProcess):
++                continue
++        return active
++    except (OSError, psutil.Error):
++        logger.debug("scratch prune deferred: process ownership is unavailable")
++        return None
++
++
+ def _own_lineage() -> set[int]:
+     """This process and its ancestors: never reap the shell that is running the prune."""
+     import psutil
+@@ -243,10 +322,8 @@ def release_git_worktrees(repos: set[str]) -> None:
+ def prune_idle_entries(
+     root: Path, max_idle_hours: float, skip_names: frozenset[str], log_file: Path | None = None,
+ ) -> int:
+-    """Delete top-level entries of *root* with no write anywhere in their subtree for
+-    *max_idle_hours*, reaping processes and worktree registrations rooted in them first.
+-    Each removal and each signalled process is recorded in *log_file*. Returns the count
+-    actually removed."""
++    """Remove old, unowned disposable entries; keep active, resumable or unknown entries.
++    Automatic retention never signals processes. Removals are recorded in *log_file*."""
+     audit = _open_prune_log(log_file)
+     try:
+         return _prune_idle_entries(root, max_idle_hours, skip_names, audit)
+@@ -264,18 +341,30 @@ def _prune_idle_entries(
+         entries = [e for e in root.iterdir() if e.name not in skip_names]
+     except OSError:
+         return 0
+-    doomed = [e for e in entries if not subtree_touched_since(e, cutoff)]
+-    # Runs even with nothing to delete: orphans whose cwd was removed by an earlier pass
+-    # (or by hand) are found by the deleted-cwd rule, not by membership in ``doomed``.
+-    try:
+-        reap_processes_rooted_in(root, doomed, audit)
+-    except Exception as exc:  # psutil missing or restricted host: the deletion still proceeds
+-        logger.debug("scratch prune: process reap skipped: %s", exc, exc_info=True)
++    if any(e.name in _RESUME_MARKERS for e in entries):
++        return 0
++    doomed = []
++    for entry in entries:
++        try:
++            if os.lstat(entry).st_mtime >= cutoff:
++                continue
++        except OSError:
++            continue
++        if not _resumable_entry(entry) and not subtree_touched_since(entry, cutoff):
++            doomed.append(entry)
+     if not doomed:
+         return 0
++    active = _active_scratch_paths(root)
++    if active is None:
++        return 0
+     repos: set[str] = set()
+     removed = 0
+     for entry in doomed:
++        target = os.path.realpath(entry)
++        if any(path == os.path.realpath(root) or _under(path, target) for path in active):
++            continue
++        if subtree_touched_since(entry, cutoff) or _resumable_entry(entry):
++            continue
+         size = _tree_bytes(entry)
+         try:
+             if entry.is_dir() and not entry.is_symlink():
 diff --git a/tests/test_scratch_active_retention.py b/tests/test_scratch_active_retention.py
 new file mode 100644
 --- /dev/null
 +++ b/tests/test_scratch_active_retention.py
-@@ -0,0 +1,190 @@
+@@ -0,0 +1,227 @@
 +"""Automatic scratch retention preserves live and resumable work without signalling it."""
 +import os
 +from pathlib import Path
@@ -23599,62 +23664,40 @@ new file mode 100644
 +    monkeypatch.setattr(scratch.os, "scandir", observed)
 +    assert scratch.prune_idle_entries(root, 24, frozenset()) == 0
 +    assert (entry / "data.bin").exists()
-diff --git a/tests/gateway/test_scratch_housekeeping.py b/tests/gateway/test_scratch_housekeeping.py
-new file mode 100644
---- /dev/null
-+++ b/tests/gateway/test_scratch_housekeeping.py
-@@ -0,0 +1,54 @@
-+"""Scratch retention runs hourly under each served profile, without a startup sweep."""
-+import os
-+from pathlib import Path
-+from types import SimpleNamespace
-+import time
-+
-+import gateway.run as gateway_run
-+import gateway.run_delivery_queue_watch as queue_watch
-+import hermes_constants_scratch as scratch
 +
 +
-+def test_hourly_tick_cleans_both_scoped_homes_after_the_first_hour(tmp_path, monkeypatch):
-+    home = tmp_path / "home"
-+    homes = [home, home / "profiles" / "worker"]
-+    files = []
-+    for directory in homes:
-+        root = directory / "cache" / "scratch"
-+        root.mkdir(parents=True)
-+        (directory / "config.yaml").write_text("toolsets: []\n")
-+        path = root / "unused.bin"
-+        path.write_bytes(b"closed disposable data")
-+        old = time.time() - 48 * 3600
-+        os.utime(path, (old, old))
-+        files.append(path)
-+    monkeypatch.setenv("HERMES_HOME", str(home))
-+    monkeypatch.setattr(scratch, "_active_scratch_paths", lambda _root: set())
-+    monkeypatch.setattr(gateway_run, "_multiplex_profile_homes",
-+                        lambda _config: [("default", homes[0]), ("worker", homes[1])])
-+    monkeypatch.setattr(queue_watch, "DeliveryQueueWatch", lambda *args: None)
-+    monkeypatch.setattr(queue_watch, "wait_for_next_tick",
-+                        lambda stop, *_args: stop.wait(0))
-+
-+    def only_scratch_chore(label, callback, *args, **kwargs):
-+        if label == "Scratch cache cleanup":
-+            callback(*args, **kwargs)
-+
-+    monkeypatch.setattr(gateway_run, "_housekeeping_chore", only_scratch_chore)
-+
-+    class StopAfterHour:
-+        ticks = 0
-+
-+        def is_set(self):
-+            return self.ticks >= 60
-+
-+        def wait(self, _timeout):
-+            self.ticks += 1
-+            if self.ticks < 60:
-+                assert all(path.exists() for path in files)
-+            return self.is_set()
-+
-+    runner = SimpleNamespace(config=SimpleNamespace(multiplex_profiles=True))
-+    gateway_run._start_gateway_housekeeping(StopAfterHour(), runner=runner, interval=0)
-+    assert all(not path.exists() for path in files)
-+    assert all((directory / "logs" / "scratch-prune.log").is_file() for directory in homes)
++@pytest.mark.platforms("posix")
++@pytest.mark.parametrize("kind", ["canonical", "symlink", "relative"])
++@pytest.mark.parametrize("option", [False, True])
++def test_command_path_can_be_resumed_through_aliases(tmp_path, monkeypatch, kind, option):
++    root = tmp_path / "scratch"
++    entry = root / "working"
++    entry.mkdir(parents=True)
++    source = entry / "input.bin"
++    source.write_text("resumable input")
++    _age_tree(entry)
++    if kind == "symlink":
++        alias = tmp_path / "alias"
++        alias.symlink_to(root, target_is_directory=True)
++        argument = str(alias / "working" / "input.bin")
++    elif kind == "relative":
++        argument = str(source.relative_to(tmp_path))
++    else:
++        argument = str(source)
++    if option:
++        argument = "--pending=" + argument
++    code = ('import sys; print("ready",flush=True); sys.stdin.readline(); '
++            'print(open(sys.argv[1].split("=",1)[-1]).read(),flush=True)')
++    proc = subprocess.Popen([sys.executable, "-c", code, argument], cwd=tmp_path,
++                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
++    try:
++        assert proc.stdout.readline().strip() == "ready"
++        _observe_only(monkeypatch, proc.pid)
++        assert scratch.prune_idle_entries(root, 24, frozenset()) == 0
++        assert source.exists() and proc.poll() is None
++        proc.stdin.write("\n")
++        proc.stdin.flush()
++        assert proc.stdout.readline().strip() == "resumable input"
++        assert proc.wait(timeout=10) == 0
++    finally:
++        _finish(proc)
