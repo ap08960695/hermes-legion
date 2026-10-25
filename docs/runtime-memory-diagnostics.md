@@ -34,6 +34,20 @@ agent, session-state and profile-config counts; tool/MCP container counts; and
 native SessionDB registry generations and reference counts. Counts never include
 profile names, session identifiers, schemas, prompt bodies or cached values.
 
+Since v0.3.7, `bundled_locales` also reports `hits`, `misses`, `entries` and
+`max_entries` from an already-loaded bundled-translation cache. If that cache has
+not loaded, the field is null; observation does not initialize it. These are
+static-file cache counters, not model prompt-cache hits or token savings. A miss
+is a cache computation attempt and can include a failed read.
+
+The cache keeps at most 32 verified source versions. File identity, size,
+nanosecond modification/change timestamps and ownership/mode participate in its
+key; changed or replaced bundles are re-read. Each caller receives an independent
+dictionary while immutable strings can be reused. Profile overlays, plugin
+modules and model context keep their existing isolation. Language/overlay resets
+rebuild merged views without re-parsing an unchanged bundle. Read or validation
+errors are not cached as successful parses.
+
 SQLite allocator measurements use symbols from Python's own loaded SQLite
 extension. If symbols or tracking are unavailable, `sqlite.available` is false
 and byte counts are null. The diagnostic never loads a different SQLite library

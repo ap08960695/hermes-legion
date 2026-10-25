@@ -426,3 +426,66 @@ and 125 Python test files**. Full patch compatibility is checked against the sam
 pinned upstream revision. Public release artifacts include generic source,
 examples and documentation only; private runtime measurements, configuration,
 backup files and operational receipts remain excluded.
+
+## Reuse immutable bundled locale parses (v0.3.7)
+
+An isolated native 36-home workload reproduced repeated parsing of the same
+bundled English source. Every home retained a separate set of flattened keys and
+translation strings even though the file was unchanged. Three new tests first
+failed on repeated profile reads, overlay resets and concurrent cold loads; five
+other controls already passed. Sharing whole merged catalogs would mix private
+overlays, and sharing plugin modules would change plugin state isolation, so
+neither is part of this repair.
+
+A small sibling now reuses the native parser's immutable result for a verified
+source file. A serialized standard-library LRU retains at most 32 source versions;
+file identity, size, modification/change stamps and ownership/mode invalidate its
+key. Each caller receives a new mutable dictionary. Existing overlay/plugin
+precedence, missing-file fallback, packaged locale roots and error reporting are
+preserved. No configuration switch, provider route or model tool was added.
+
+One offline reproduction before and after the change measured this specific
+cold locale-loading path:
+
+| Measurement, 36 homes | Before | After |
+|---|---:|---:|
+| Bundled file parses | 36 | 1 |
+| Distinct mutable catalog dictionaries | 36 | 36 |
+| Retained traced Python bytes | 29,041,096 | 6,687,904 |
+| Elapsed seconds with allocation tracing disabled | 5.308 | 0.161 |
+
+The retained-allocation difference is 22,353,192 bytes (about 21.3 MiB) in this
+synthetic workload. Timing and allocation measurements use separate processes;
+the timing row excludes profiler overhead. These single-run results describe
+this path, not overall Gateway startup, provider response time, token use or
+all production RAM. No inference or live task was created for measurement.
+
+Fresh combined native acceptance passed **163 cases across fourteen relevant
+files**, with zero failures, zero retries and one existing SQLite-symbol skip.
+This includes eight new locale cases and two new observation cases. Controls
+cover private overlays, caller mutation, same-size edits with restored mtime,
+atomic replacement, packaged roots, concurrent reads, failed/missing sources,
+bounded reuse, plugin precedence and CLI/TUI/Gateway consumers. Historical
+overlapping runs are not added to this count.
+
+Installed canonical-source acceptance compared all 3,433 entries across 36
+isolated native catalogs and verified overlay isolation, with network/process
+actions and live-state reads denied. The first acceptance harness refused a
+required managed Python library read before reaching behavior checks; permitting
+only the interpreter's declared library directories corrected that harness.
+No runtime workaround or dependency change was needed.
+
+After native idle-only activation, the actual Gateway's local observation showed
+one populated bundled cache, one computation miss and repeated hits. The new
+counter reads an already-loaded cache and exposes no paths, translation values or
+profile identities. Runtime source hashes, source permissions and unchanged
+configuration were checked separately. Process RSS snapshots across a restart
+are not a controlled production savings benchmark, so no causal whole-process
+reduction is claimed from them.
+
+Only affected source files were backed up; no database snapshot was made. The
+complete inventory is **315 source/test targets: 189 runtime files and 126 Python
+test files** against the same pinned upstream revision. Release files, reachable
+history, metadata and archives undergo the existing privacy review before
+publication. User goals/pauses, quotas, accounts, models, project gates and
+embedding services remain outside this change.
