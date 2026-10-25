@@ -21,7 +21,7 @@ Open **All features → Goal**, or **Catch up → Configure goal**. The form com
 3. References to enabled skills installed for the session's actual owner.
 4. Optional additional outcome, constraint, and stop/ask conditions.
 
-The form is pinned to the original session and state revision. Incoming state cannot overwrite an unsaved draft. Escape keeps that draft; Cancel discards it. Ctrl/Cmd+Enter is contained inside the form and cannot send an unrelated chat draft.
+The form is pinned to the original session and state revision. Incoming state cannot overwrite an unsaved draft. Escape keeps that draft when reopening the editor for the same chat; Cancel discards it. Opening the editor for a different chat starts from that chat's own goal state, without carrying over the first chat's draft. Ctrl/Cmd+Enter is contained inside the form and cannot send an unrelated chat draft.
 
 Saving uses a narrow native configuration intent. It does **not** submit a prompt, draft a contract with a model, start a worker, or retry a failed task. Work starts through the normal next-message flow. A busy session or stale revision refuses the save and leaves the draft intact.
 

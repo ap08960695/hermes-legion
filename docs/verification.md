@@ -644,3 +644,12 @@ Renderer typechecking and the production renderer build passed. The scoped befor
 Rendered review used the actual native presentation components with synthetic data and no live transport. It covered desktop Focus/Workspace, goal and feature dialogs, and 320/360-pixel child viewports. Review found and corrected a wrapped rail caption, crowded secondary form fields and narrow-screen navigation overflow. Browser tests used a test-only registered language pack to check the Thai strings; production language selection was not altered. The desktop package was built using existing admitted tools and verified staged assets; replacing or loading an already-open app remains a separate graceful idle-lifecycle step.
 
 English guides and the complete cumulative patch are distributed; private host reports, configuration, conversations and screenshot fixtures are not. Public files, all reachable Git history, and the exact release archive are reviewed before publication. Companion/archive acceptance is recorded separately from native regression evidence. Real workload billing, cross-bot cache sharing and live model behavior are not inferred from these tests.
+
+
+## Goal draft ownership (v0.4.1)
+
+An offline native-component regression reproduced a dismissed Goal draft appearing in a second chat when both chats already had cached, empty control snapshots. Empty native controls legitimately share an empty state revision, so a revision check alone cannot identify which chat owns an unsaved form.
+
+The editor now starts a separate component instance when its pinned runtime session changes. Reopening it in the same chat still retains the dismissed draft; opening it in another chat starts from that chat's native goal state. Background state updates continue to leave the open, pinned draft alone. No model prompt, automatic goal start, quota change or new persistence store was added.
+
+The regression failed before the change and passed afterward. The relevant UI suite passed **85 cases across ten files**, with zero failures; this run overlaps the v0.4.0 evidence and is not an additional 85 independent cases. The full renderer TypeScript check passed, and the two-file native health comparison reported zero blocking or advisory findings. Native Python behavior was unchanged and its earlier suites were not repeated. Desktop package loading remains a separate graceful lifecycle step.
