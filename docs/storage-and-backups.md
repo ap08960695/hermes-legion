@@ -118,3 +118,19 @@ Do not interpret a skipped sweep as successful reclamation.
 Do not run a broad scratch/cache deletion merely because a dashboard reports
 disk pressure. Reports, raw backup files and private cleanup plans do not belong
 in this public repository.
+
+
+## Derived-cache reserve on current main
+
+The post-v0.3.2 derived document/search cache writer leaves at least 1 GiB free on
+the cache filesystem after accounting for the full encoded incoming payload.
+Low or unreadable free-space measurements leave a successful conversion usable
+without publishing another disposable payload. Existing useful hits survive
+temporary-file or rename failures, and replacing a key does not count its old
+version twice against cache quotas. Quotas and expiry remain enforced under the
+existing cross-process index lock after successful publication.
+
+This is an admission check for optional derived cache files. Other writers may
+consume space concurrently; monitor the filesystem and preserve durable data
+instead of treating this reserve as a whole-disk guarantee. It does not install
+MemoryHigh or MemoryMax limits or stop running workers.

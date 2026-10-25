@@ -19268,59 +19268,6 @@ index 0000000000000000000000000000000000000000..b074a14c73d29dbd380da09b183d6cc5
 +        finally:
 +            fcntl.flock(stream,fcntl.LOCK_UN)
 +
-diff --git a/tools/derived_cache.py b/tools/derived_cache.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..ce376694999205380a396cfd4ae2df2f1a483ed1
---- /dev/null
-+++ b/tools/derived_cache.py
-@@ -0,0 +1,47 @@
-+"""Private bounded disk storage for disposable derived read results."""
-+import os
-+from pathlib import Path
-+import stat
-+import tempfile
-+import time
-+from tools.cache_file_lock import cache_file_lock
-+
-+_MAX_ENTRY = 8 * 1024 * 1024
-+_MAX_BYTES = 64 * 1024 * 1024
-+_MAX_ENTRIES = 128
-+_TTL = 86400
-+
-+def _read(path):
-+    fd=os.open(path,os.O_RDONLY|getattr(os,'O_NOFOLLOW',0))
-+    with os.fdopen(fd,'rb') as stream:
-+        info=os.fstat(stream.fileno())
-+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077
-+                or info.st_size > _MAX_ENTRY or not 0 <= time.time()-info.st_mtime < _TTL):
-+            return None
-+        return stream.read(_MAX_ENTRY+1).decode('utf-8')
-+
-+
-+def _store(root, path, text):
-+    data=text.encode('utf-8')
-+    if len(data)>_MAX_ENTRY:
-+        return
-+    # Serialize eviction/publication across hash buckets; never hold during extraction.
-+    with cache_file_lock(root, '0'*64, namespace='index'):
-+        entries=[]
-+        for entry in root.glob('*.txt'):
-+            info=entry.lstat()
-+            if stat.S_ISREG(info.st_mode):
-+                entries.append((info.st_mtime,info.st_size,entry))
-+        entries.sort()
-+        size=sum(e[1] for e in entries)
-+        while entries and (len(entries)>=_MAX_ENTRIES or size+len(data)>_MAX_BYTES or time.time()-entries[0][0]>=_TTL):
-+            _,n,old=entries.pop(0); old.unlink(missing_ok=True); size-=n
-+        fd, name = tempfile.mkstemp(dir=root, prefix='write-')
-+        tmp=Path(name)
-+        try:
-+            with os.fdopen(fd, 'wb') as stream:
-+                stream.write(data)
-+            os.replace(tmp,path)
-+        finally:
-+            tmp.unlink(missing_ok=True)
-+
 diff --git a/tools/file_operations.py b/tools/file_operations.py
 index 1a93283f8c99617803753183f8b64ba040cf4cf6..cc2cfdae2346ee964afbe34c69e170a9a827f473 100644
 --- a/tools/file_operations.py
@@ -23701,3 +23648,168 @@ new file mode 100644
 +        assert proc.wait(timeout=10) == 0
 +    finally:
 +        _finish(proc)
+diff --git a/tools/derived_cache.py b/tools/derived_cache.py
+new file mode 100644
+--- /dev/null
++++ b/tools/derived_cache.py
+@@ -0,0 +1,56 @@
++"""Private bounded disk storage for disposable derived read results."""
++import os
++from pathlib import Path
++import shutil
++import stat
++import tempfile
++import time
++from tools.cache_file_lock import cache_file_lock
++
++_MAX_ENTRY = 8 * 1024 * 1024
++_MAX_BYTES = 64 * 1024 * 1024
++_MAX_ENTRIES = 128
++_TTL = 86400
++_MIN_FREE_BYTES = 1024 * 1024 * 1024
++
++def _read(path):
++    fd=os.open(path,os.O_RDONLY|getattr(os,'O_NOFOLLOW',0))
++    with os.fdopen(fd,'rb') as stream:
++        info=os.fstat(stream.fileno())
++        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077
++                or info.st_size > _MAX_ENTRY or not 0 <= time.time()-info.st_mtime < _TTL):
++            return None
++        return stream.read(_MAX_ENTRY+1).decode('utf-8')
++
++
++def _store(root, path, text):
++    data=text.encode('utf-8')
++    if len(data)>_MAX_ENTRY:
++        return
++    # Serialize eviction/publication across hash buckets; never hold during extraction.
++    with cache_file_lock(root, '0'*64, namespace='index'):
++        # Disposable results must leave room for transcripts and other durable writes.
++        # Include the full incoming file: replacement is published before eviction.
++        if shutil.disk_usage(root).free - len(data) < _MIN_FREE_BYTES:
++            return
++        entries=[]
++        for entry in root.glob('*.txt'):
++            if entry == path:
++                continue
++            info=entry.lstat()
++            if stat.S_ISREG(info.st_mode):
++                entries.append((info.st_mtime,info.st_size,entry))
++        entries.sort()
++        size=sum(e[1] for e in entries)
++        fd, name = tempfile.mkstemp(dir=root, prefix='write-')
++        tmp=Path(name)
++        try:
++            with os.fdopen(fd, 'wb') as stream:
++                stream.write(data)
++            os.replace(tmp,path)
++            # A failed write/rename must not discard useful hits from other keys.
++            while entries and (len(entries)>=_MAX_ENTRIES or size+len(data)>_MAX_BYTES or time.time()-entries[0][0]>=_TTL):
++                _,n,old=entries.pop(0); old.unlink(missing_ok=True); size-=n
++        finally:
++            tmp.unlink(missing_ok=True)
++
+diff --git a/tests/tools/test_derived_cache_disk_pressure.py b/tests/tools/test_derived_cache_disk_pressure.py
+new file mode 100644
+--- /dev/null
++++ b/tests/tools/test_derived_cache_disk_pressure.py
+@@ -0,0 +1,99 @@
++"""Optional cache writes preserve useful results under storage pressure/failure."""
++
++import errno
++import os
++import shutil
++
++import pytest
++
++from tools import derived_cache, shared_document_cache
++
++
++@pytest.fixture
++def cache_root(tmp_path, monkeypatch):
++    root = tmp_path / 'derived'
++    root.mkdir(mode=0o700)
++    monkeypatch.setattr(shared_document_cache, '_root', lambda: root)
++    usage = shutil.disk_usage(root)
++    monkeypatch.setattr(shutil, 'disk_usage', lambda path: usage._replace(
++        total=16 * 1024**3, used=6 * 1024**3, free=10 * 1024**3,
++    ))
++    return root
++
++
++@pytest.mark.parametrize('measurement', ['full', 'unknown'])
++def test_pressure_keeps_previous_hit_and_returns_new_conversion(cache_root, monkeypatch, measurement):
++    extract = shared_document_cache.extract_shared
++    assert extract(b'previous', 'previous.docx', lambda data, path: data.decode()) == 'previous'
++    before = {path.name: path.read_bytes() for path in cache_root.glob('*.txt')}
++    monkeypatch.setattr(derived_cache, '_MAX_ENTRIES', 1)
++    usage = shutil.disk_usage(cache_root)
++
++    def pressure(path):
++        if measurement == 'unknown':
++            raise OSError('volume is not observable')
++        return usage._replace(used=usage.total, free=0)
++
++    monkeypatch.setattr(shutil, 'disk_usage', pressure)
++    assert extract(b'new result', 'new.docx', lambda data, path: data.decode()) == 'new result'
++    assert {path.name: path.read_bytes() for path in cache_root.glob('*.txt')} == before
++
++    def no_reconversion(data, path):
++        pytest.fail('A failed optional write must not discard the previous hit')
++
++    assert extract(b'previous', 'previous.docx', no_reconversion) == 'previous'
++    assert not list(cache_root.glob('write-*'))
++
++
++@pytest.mark.parametrize('failure', ['create', 'publish'])
++def test_failed_publication_does_not_evict_prior_results(cache_root, monkeypatch, failure):
++    extract = shared_document_cache.extract_shared
++    assert extract(b'previous', 'previous.docx', lambda data, path: data.decode()) == 'previous'
++    before = {path.name: path.read_bytes() for path in cache_root.glob('*.txt')}
++    monkeypatch.setattr(derived_cache, '_MAX_ENTRIES', 1)
++
++    def failed(*args, **kwargs):
++        raise OSError(errno.ENOSPC, 'fixture storage failure')
++
++    if failure == 'create':
++        monkeypatch.setattr(derived_cache.tempfile, 'mkstemp', failed)
++    else:
++        monkeypatch.setattr(derived_cache.os, 'replace', failed)
++    assert extract(b'new result', 'new.docx', lambda data, path: data.decode()) == 'new result'
++    assert {path.name: path.read_bytes() for path in cache_root.glob('*.txt')} == before
++    assert not list(cache_root.glob('write-*'))
++
++
++def test_replacing_entry_at_capacity_keeps_other_hits(cache_root, monkeypatch):
++    monkeypatch.setattr(derived_cache, '_MAX_ENTRIES', 2)
++    unrelated, target = cache_root / 'other.txt', cache_root / 'target.txt'
++    derived_cache._store(cache_root, unrelated, 'still reusable')
++    derived_cache._store(cache_root, target, 'old result')
++    os.utime(unrelated, (100, 100))
++    # Keep the old result eligible while making eviction order deterministic.
++    monkeypatch.setattr(derived_cache, '_TTL', float('inf'))
++    derived_cache._store(cache_root, target, 'replacement')
++    assert unrelated.read_text() == 'still reusable'
++    assert target.read_text() == 'replacement'
++
++
++def test_successful_new_entry_still_enforces_entry_quota(cache_root, monkeypatch):
++    monkeypatch.setattr(derived_cache, '_MAX_ENTRIES', 1)
++    old, new = cache_root / 'old.txt', cache_root / 'new.txt'
++    derived_cache._store(cache_root, old, 'old result')
++    derived_cache._store(cache_root, new, 'new result')
++    assert not old.exists()
++    assert new.read_text() == 'new result'
++    assert not list(cache_root.glob('write-*'))
++
++
++@pytest.mark.parametrize(('free_bytes', 'stored'), [(1026, False), (1027, True)])
++def test_reserve_admission_counts_encoded_bytes(cache_root, monkeypatch, free_bytes, stored):
++    usage = shutil.disk_usage(cache_root)
++    monkeypatch.setattr(derived_cache, '_MIN_FREE_BYTES', 1024, raising=False)
++    monkeypatch.setattr(shutil, 'disk_usage', lambda path: usage._replace(free=free_bytes))
++    target = cache_root / 'unicode.txt'
++    derived_cache._store(cache_root, target, '\u0e01')
++    assert target.exists() is stored
++    if stored:
++        assert target.read_bytes() == b'\xe0\xb8\x81'

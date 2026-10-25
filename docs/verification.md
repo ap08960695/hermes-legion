@@ -288,3 +288,36 @@ Release files, reachable Git history, private-identifier checks and known privat
 credential comparisons are reviewed before publication. Runtime data, backup
 archives, local configuration and operational receipts are excluded from the
 public archive. Earlier releases remain immutable.
+
+
+## Derived-cache disk-pressure preservation (after v0.3.2)
+
+Current main adds one regression file, bringing the cumulative inventory to 296
+source/test files, including 121 native Python test files. A fresh relevant native
+run passed 59 cases across eight files, with zero failures and zero retries. These
+cover document conversion, persistent search reuse, cross-process exclusion and
+existing expiry/profile boundaries. Eight new cases cover low/unknown free-space
+measurements, failed temporary-file creation/publication, replacement at capacity,
+normal quota enforcement and encoded-byte admission at the reserve boundary.
+
+Five cases first failed on the prior implementation; a separate encoded-byte
+boundary case also failed before the fix. Disposable derived-cache payloads now
+leave a one-GiB free-space reserve on their own filesystem. Replacement publication
+finishes before evicting other hits, and replacement accounting excludes the old
+version of that same key. Existing per-entry, total-byte, count and TTL policies
+remain in place under the existing index lock. An in-progress publication can
+temporarily require one additional bounded file; admission accounts for its full
+encoded size.
+
+Installed-source offline acceptance used real temporary cache files with network,
+process and signal actions denied. In the synthetic failed-publication workload,
+three conversion executions before the fix became two with the installed fix
+because the previous hit survived. A simulated full filesystem produced zero
+new cache payloads. These results do not establish production token, RAM or
+latency savings. The reserve gates derived-cache payloads; it does not govern all
+other application or filesystem writers. No new model requests, paid fallback,
+quota changes, hard RAM limits or embedding-service actions are introduced.
+
+The v0.3.2 release and its archive remain immutable. This post-release change is
+identified separately on main and passes fresh full-patch compatibility checks
+against the same pinned upstream revision before publication.

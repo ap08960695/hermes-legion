@@ -8,7 +8,7 @@ The design is simple: give each bot a clear responsibility, dispatch independent
 
 ## What is included
 
-- **295 patched or added source/test files** against one explicitly pinned upstream revision, including 120 Python test files. See [patch inventory](patches/manifest.json) for the exact files and hashes.
+- **296 patched or added source/test files** against one explicitly pinned upstream revision, including 121 Python test files. See [patch inventory](patches/manifest.json) for the exact files and hashes.
 - Native task/run ownership checks; exactly-once dispatch; input preflight; recoverable compact handoffs; worker completion that avoids a needless follow-up model turn.
 - Bounded file/status reads, cache diagnostics, task/run usage attribution, waiting without repeated model calls, and worker phase timing.
 - Fifteen renamed role templates and ten reusable English skills. They contain no account configuration, credentials, personal persona or production transcripts.
@@ -27,6 +27,8 @@ cd hermes-legion
 python3 scripts/verify_release.py
 python3 scripts/legion_plan.py --team examples/team.full.json --snapshot examples/snapshots/synthetic-ready.json --tasks examples/scenarios/parallel-production.json --now 1
 ```
+
+The walkthrough pins the immutable v0.3.2 release. Current `main` additionally contains the derived-cache disk-pressure fix described in the [verification record](docs/verification.md); use a reviewed commit from `main` for that post-release change.
 
 ## Prepare and diagnose a team offline
 
