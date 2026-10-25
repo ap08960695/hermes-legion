@@ -370,3 +370,23 @@ Final new-file acceptance: **26 native tests passed, zero failures**, with zero 
 Installed-source acceptance used native read-only session metadata and skill discovery/view with network denied. Existing retained paused goal metadata remained byte-identical; when its session record was absent, the helper correctly refused to reactivate it. A current existing open session was inspected without setting a test goal. The profile changed only its explicit self-management permission plus generic instruction/skill content; models, quotas and existing turn caps were preserved. Source-only rollback backed up approximately 529 KB of source and two small profile files, with no database snapshot.
 
 No model request or live synthetic worker was used for these checks. Skill discovery and metadata inspection do not prove that an existing cached Captain has already read new guidance or completed autonomous work. Use normal authorized work to establish that evidence, and retain the idle activation and prompt-prefix constraints described in the goal guide. The patch inventory now contains 305 source/test targets: 182 runtime files and 123 Python test files. Historical acceptance counts above remain historical.
+
+## Atomic continuation controls (v0.3.5)
+
+Native goal, heartbeat and loop migration previously used separate best-effort child-copy and parent-clear writes. The save functions suppressed write errors, so migration could report success and clear the parent after a refused child write. Refusing the parent archive could instead leave both rows active. An unreadable child value could also be mistaken for absence and overwritten. Real temporary SQLite triggers and simultaneous native writer calls reproduced these failures before implementation; no live incident or model request was created.
+
+The three existing migration entrypoints now use one native SessionDB transaction. Reads, exact child-value insertion and parent archival share the native writer's lock, commit/rollback and storage-identity guards. Any existing child metadata is preserved, including cleared or unreadable state. Pauses, counters, caps, waits, routing and unknown checkpoint fields remain intact. Concurrent continuation attempts commit at most one child. A failed or unconfirmed transaction returns false; it is not permission to replay compression or model calls. Compression itself retains its existing best-effort behavior. Recovery of continuation scheduling after persistent storage failure still requires normal-work evidence; this change protects durable state and does not establish automatic recovery for every storage fault.
+
+Fresh native acceptance: **228 passed, zero failures, six files, zero retries**. This includes **30 new cases** for child/parent write refusal, full rollback, existing child data, active/paused/done/cleared states, concurrent continuations and profile isolation. The other files exercise existing goal, heartbeat, loop, self-goal and real compression-rotation paths with model boundaries replaced offline. The new file initially produced 23 failures and seven passing controls on the unchanged implementation; those overlapping development runs are not summed.
+
+Installed canonical-source acceptance passed **12 cases** using an explicitly isolated native store, with network denied and no live goal changes. Existing source baseline bytes were reused for rollback: **132,249 bytes** covering three original files plus one original absence, without a database snapshot. All 97 observed config/SOUL hashes stayed unchanged during installation.
+
+A trace of the actual native SQLite writer measured these successful single-migration workloads:
+
+| Control | Before committed transactions | After committed transactions |
+|---|---:|---:|
+| Goal | 2 | 1 |
+| Heartbeat | 2 | 1 |
+| Loop | 2 | 1 |
+
+This is an offline transaction-count measurement, not production usage, disk-byte, latency or RAM savings. The observed retained live orphan-goal metadata has not been attributed to this failure class and was left unchanged. Current public inventory: **309 source/test targets**, including **185 runtime files and 124 Python test files**. Historical acceptance above remains historical.

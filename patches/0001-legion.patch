@@ -24311,99 +24311,6 @@ diff --git a/hermes_cli/subcommands/sessions.py b/hermes_cli/subcommands/session
  
      sessions_retitle = sessions_subparsers.add_parser(
          "retitle-skills", help="Re-title sessions whose auto-title came from a /skill's own text",
-diff --git a/hermes_cli/goals.py b/hermes_cli/goals.py
---- a/hermes_cli/goals.py
-+++ b/hermes_cli/goals.py
-@@ -153,6 +153,12 @@
-     "nothing else dispatchable — return ``wait_for_seconds`` between 600 and "
-     "1800. Their results wake the agent on their own; re-poking it now only "
-     "produces a status recap.\n"
-+    # local patch 25
-+    "- The agent coordinates Kanban cards that are still running or queued "
-+    "(stated below as active kanban cards) and the response shows it is only "
-+    "waiting on them with nothing else to dispatch now — return "
-+    "``wait_for_seconds`` between 900 and 1800. A finished, blocked or failed "
-+    "card wakes the agent by itself.\n"
-     "Picking WAIT parks the loop without burning a turn; it resumes "
-     "automatically when the pid exits or the time elapses. Do NOT pick WAIT "
-     "just because work remains — only when re-poking now would be pure "
-@@ -176,6 +182,29 @@
-     "Active delegations: the agent has {count} delegated subagent batch(es) still running; "
-     "their results are delivered to it automatically when they finish.\n\n"
- )
-+
-+# local patch 25: the judge knew delegations and processes but not board cards, so a Captain waiting on
-+# running cards was re-poked every turn (16 of 19 goal wakes were status recaps on 2026-10-09).
-+JUDGE_KANBAN_BLOCK_TEMPLATE = (
-+    "Active kanban cards: the agent's session is subscribed to {count} board card(s) that are "
-+    "running or queued; each one wakes the agent automatically when it finishes, blocks or fails.\n\n"
-+)
-+
-+
-+def count_active_kanban_cards(session_id: Optional[str]) -> int:
-+    """Running/ready/todo cards whose notifications go to this session (fail-safe 0)."""
-+    if not session_id:
-+        return 0
-+    try:
-+        from hermes_cli import kanban_db_connect as kbc
-+        with kbc.connect_closing() as conn:
-+            row = conn.execute(
-+                "SELECT COUNT(DISTINCT s.task_id) FROM kanban_notify_subs s JOIN tasks t ON t.id = s.task_id "
-+                "WHERE s.chat_id = ? AND t.status IN ('running', 'ready', 'todo')", (str(session_id),)).fetchone()
-+        return int(row[0] or 0) if row else 0
-+    except Exception:
-+        return 0
-+
- 
- # Judge prompt block listing running background processes (WAIT vs CONTINUE, which pid).
- JUDGE_BACKGROUND_BLOCK_TEMPLATE = (
-@@ -900,6 +929,7 @@
-     background_processes: Optional[list[dict[str, Any]]] = None,
-     contract: Optional[GoalContract] = None,
-     active_delegations: int = 0,
-+    active_kanban_cards: int = 0,
- ) -> tuple[str, str, bool, Optional[dict[str, Any]], bool]:
-     """Ask the auxiliary model whether the goal is satisfied.
- 
-@@ -928,7 +958,8 @@
-         goal=_truncate(goal, 2000),
-         response=_truncate(last_response, _JUDGE_RESPONSE_SNIPPET_CHARS),
-         background_block=_render_background_block(background_processes)
--        + (JUDGE_DELEGATIONS_BLOCK_TEMPLATE.format(count=active_delegations) if active_delegations > 0 else ""),
-+        + (JUDGE_DELEGATIONS_BLOCK_TEMPLATE.format(count=active_delegations) if active_delegations > 0 else "")
-+        + (JUDGE_KANBAN_BLOCK_TEMPLATE.format(count=active_kanban_cards) if active_kanban_cards > 0 else ""),
-         current_time=safe_strftime(datetime.now(tz=UTC).astimezone(), "%Y-%m-%d %H:%M:%S %Z"),
-     )
-     if contract is not None and not contract.is_empty():
-@@ -1104,6 +1135,20 @@
-     @property
-     def state(self) -> Optional[GoalState]:
-         return self._state
-+
-+    def refresh(self) -> bool:
-+        """Observe external goal controls at a turn boundary; unknown is not absent."""
-+        try:
-+            db = _get_session_db()
-+            if db is None:
-+                return False
-+            raw = db.get_meta(_meta_key(self.session_id))
-+            state = GoalState.from_json(raw) if raw is not None else None
-+        except Exception:
-+            logger.debug('GoalManager: state refresh unavailable', exc_info=True)
-+            return False
-+        self._state = state
-+        return True
- 
-     def is_active(self) -> bool:
-         return self._state is not None and self._state.status == "active"
-@@ -1507,6 +1552,7 @@
-         verdict, reason, parse_failed, wait_directive, transport_failed = judge_goal(
-             state.goal, last_response, subgoals=state.subgoals or None, background_processes=background_processes,
-             contract=state.contract if state.has_contract() else None, active_delegations=active_delegations,
-+            active_kanban_cards=count_active_kanban_cards(self.session_id),
-         )
-         state.last_verdict = verdict
-         state.last_reason = reason
 diff --git a/hermes_cli/cli_loops_mixin.py b/hermes_cli/cli_loops_mixin.py
 --- a/hermes_cli/cli_loops_mixin.py
 +++ b/hermes_cli/cli_loops_mixin.py
@@ -24760,3 +24667,360 @@ new file mode 100644
 +    cli._maybe_continue_goal_after_turn()
 +    assert cli._pending_input.empty()
 +    assert cached.state is not None
+diff --git a/hermes_cli/goals.py b/hermes_cli/goals.py
+--- a/hermes_cli/goals.py
++++ b/hermes_cli/goals.py
+@@ -153,6 +153,12 @@
+     "nothing else dispatchable — return ``wait_for_seconds`` between 600 and "
+     "1800. Their results wake the agent on their own; re-poking it now only "
+     "produces a status recap.\n"
++    # local patch 25
++    "- The agent coordinates Kanban cards that are still running or queued "
++    "(stated below as active kanban cards) and the response shows it is only "
++    "waiting on them with nothing else to dispatch now — return "
++    "``wait_for_seconds`` between 900 and 1800. A finished, blocked or failed "
++    "card wakes the agent by itself.\n"
+     "Picking WAIT parks the loop without burning a turn; it resumes "
+     "automatically when the pid exits or the time elapses. Do NOT pick WAIT "
+     "just because work remains — only when re-poking now would be pure "
+@@ -176,6 +182,29 @@
+     "Active delegations: the agent has {count} delegated subagent batch(es) still running; "
+     "their results are delivered to it automatically when they finish.\n\n"
+ )
++
++# local patch 25: the judge knew delegations and processes but not board cards, so a Captain waiting on
++# running cards was re-poked every turn (16 of 19 goal wakes were status recaps on 2026-10-09).
++JUDGE_KANBAN_BLOCK_TEMPLATE = (
++    "Active kanban cards: the agent's session is subscribed to {count} board card(s) that are "
++    "running or queued; each one wakes the agent automatically when it finishes, blocks or fails.\n\n"
++)
++
++
++def count_active_kanban_cards(session_id: Optional[str]) -> int:
++    """Running/ready/todo cards whose notifications go to this session (fail-safe 0)."""
++    if not session_id:
++        return 0
++    try:
++        from hermes_cli import kanban_db_connect as kbc
++        with kbc.connect_closing() as conn:
++            row = conn.execute(
++                "SELECT COUNT(DISTINCT s.task_id) FROM kanban_notify_subs s JOIN tasks t ON t.id = s.task_id "
++                "WHERE s.chat_id = ? AND t.status IN ('running', 'ready', 'todo')", (str(session_id),)).fetchone()
++        return int(row[0] or 0) if row else 0
++    except Exception:
++        return 0
++
+ 
+ # Judge prompt block listing running background processes (WAIT vs CONTINUE, which pid).
+ JUDGE_BACKGROUND_BLOCK_TEMPLATE = (
+@@ -687,23 +716,9 @@
+     so exactly one active goal row exists per logical conversation (avoids the "two active goals" hazard of
+     a pure copy).
+     """
+-    if not old_session_id or not new_session_id or old_session_id == new_session_id:
+-        return False
+-    try:
+-        state = load_goal(old_session_id)
+-        if state is None or state.status == "cleared":
+-            return False
+-        # Don't clobber a goal already set on the child (e.g. a resumed lineage).
+-        if load_goal(new_session_id) is not None:
+-            return False
+-        save_goal(new_session_id, state)
+-        # Archive the parent's row so it isn't double-counted as active.
+-        clear_goal(old_session_id)
+-        logger.debug("GoalManager: migrated goal %s -> %s (%s)", old_session_id, new_session_id, reason or "rotation")
+-        return True
+-    except Exception as exc:  # pragma: no cover - defensive
+-        logger.debug("GoalManager: goal migration failed: %s", exc)
+-        return False
++    from hermes_cli.continuation_state import migrate_control_state
++
++    return migrate_control_state('goal:', old_session_id, new_session_id, GoalState.from_json, _get_session_db)
+ 
+ 
+ # ── Judge ─────────────────────────────────────────────────────────────
+@@ -900,6 +915,7 @@
+     background_processes: Optional[list[dict[str, Any]]] = None,
+     contract: Optional[GoalContract] = None,
+     active_delegations: int = 0,
++    active_kanban_cards: int = 0,
+ ) -> tuple[str, str, bool, Optional[dict[str, Any]], bool]:
+     """Ask the auxiliary model whether the goal is satisfied.
+ 
+@@ -928,7 +944,8 @@
+         goal=_truncate(goal, 2000),
+         response=_truncate(last_response, _JUDGE_RESPONSE_SNIPPET_CHARS),
+         background_block=_render_background_block(background_processes)
+-        + (JUDGE_DELEGATIONS_BLOCK_TEMPLATE.format(count=active_delegations) if active_delegations > 0 else ""),
++        + (JUDGE_DELEGATIONS_BLOCK_TEMPLATE.format(count=active_delegations) if active_delegations > 0 else "")
++        + (JUDGE_KANBAN_BLOCK_TEMPLATE.format(count=active_kanban_cards) if active_kanban_cards > 0 else ""),
+         current_time=safe_strftime(datetime.now(tz=UTC).astimezone(), "%Y-%m-%d %H:%M:%S %Z"),
+     )
+     if contract is not None and not contract.is_empty():
+@@ -1104,6 +1121,20 @@
+     @property
+     def state(self) -> Optional[GoalState]:
+         return self._state
++
++    def refresh(self) -> bool:
++        """Observe external goal controls at a turn boundary; unknown is not absent."""
++        try:
++            db = _get_session_db()
++            if db is None:
++                return False
++            raw = db.get_meta(_meta_key(self.session_id))
++            state = GoalState.from_json(raw) if raw is not None else None
++        except Exception:
++            logger.debug('GoalManager: state refresh unavailable', exc_info=True)
++            return False
++        self._state = state
++        return True
+ 
+     def is_active(self) -> bool:
+         return self._state is not None and self._state.status == "active"
+@@ -1507,6 +1538,7 @@
+         verdict, reason, parse_failed, wait_directive, transport_failed = judge_goal(
+             state.goal, last_response, subgoals=state.subgoals or None, background_processes=background_processes,
+             contract=state.contract if state.has_contract() else None, active_delegations=active_delegations,
++            active_kanban_cards=count_active_kanban_cards(self.session_id),
+         )
+         state.last_verdict = verdict
+         state.last_reason = reason
+diff --git a/hermes_cli/heartbeat.py b/hermes_cli/heartbeat.py
+--- a/hermes_cli/heartbeat.py
++++ b/hermes_cli/heartbeat.py
+@@ -251,19 +251,9 @@
+ 
+     Same shape as ``goals.migrate_goal_to_session``.
+     """
+-    if not old_session_id or not new_session_id or old_session_id == new_session_id:
+-        return False
+-    try:
+-        state = load_heartbeat(old_session_id)
+-        if state is None or load_heartbeat(new_session_id) is not None:
+-            return False
+-        save_heartbeat(new_session_id, state)
+-        state.status = "cleared"
+-        save_heartbeat(old_session_id, state)
+-        return True
+-    except Exception as exc:  # pragma: no cover - defensive
+-        logger.debug("HeartbeatManager: migration failed: %s", exc)
+-        return False
++    from hermes_cli.continuation_state import migrate_control_state
++
++    return migrate_control_state('heartbeat:', old_session_id, new_session_id, HeartbeatState.from_json, _get_session_db)
+ 
+ 
+ __all__ = [
+diff --git a/hermes_cli/loops.py b/hermes_cli/loops.py
+--- a/hermes_cli/loops.py
++++ b/hermes_cli/loops.py
+@@ -341,22 +341,9 @@
+     Copies the loop onto the new session and archives the old row as ``cleared`` so exactly one active loop
+     row exists per logical conversation. See #33618.
+     """
+-    if not old_session_id or not new_session_id or old_session_id == new_session_id:
+-        return False
+-    try:
+-        state = load_loop(old_session_id)
+-        if state is None or state.status == "cleared" or load_loop(new_session_id) is not None:
+-            return False
+-        save_loop(new_session_id, state)
+-        clear_loop(old_session_id)
+-        logger.debug(
+-            "LoopManager: migrated loop %s -> %s (%s)",
+-            old_session_id, new_session_id, reason or "rotation",
+-        )
+-        return True
+-    except Exception as exc:  # pragma: no cover - defensive
+-        logger.debug("LoopManager: loop migration failed: %s", exc)
+-        return False
++    from hermes_cli.continuation_state import migrate_control_state
++
++    return migrate_control_state('loop:', old_session_id, new_session_id, LoopState.from_json, _get_session_db)
+ 
+ 
+ def _ticks_label(n: int) -> str:
+diff --git a/hermes_cli/continuation_state.py b/hermes_cli/continuation_state.py
+new file mode 100644
+--- /dev/null
++++ b/hermes_cli/continuation_state.py
+@@ -0,0 +1,37 @@
++"""Atomic transfer of existing per-session controls at a compression boundary."""
++
++import json
++import logging
++
++logger = logging.getLogger(__name__)
++
++
++def migrate_control_state(prefix, old_session_id, new_session_id, parse_state, get_db):
++    """Commit the child copy and parent archive together; unproven writes return False."""
++    if not old_session_id or not new_session_id or old_session_id == new_session_id:
++        return False
++    old_key, new_key = prefix + old_session_id, prefix + new_session_id
++
++    def transfer(conn):
++        row = conn.execute('SELECT value FROM state_meta WHERE key=?', (old_key,)).fetchone()
++        if row is None or conn.execute('SELECT 1 FROM state_meta WHERE key=?', (new_key,)).fetchone():
++            return False
++        raw = row[0]
++        state = parse_state(raw)
++        if state.status not in {'active', 'paused', 'done'}:
++            return False
++        archived = json.loads(raw)
++        archived['status'] = 'cleared'
++        # BEGIN IMMEDIATE, rollback, identity fences and bounded retries belong to SessionDB.
++        # Preserve unknown fields and the exact child value rather than normalizing a checkpoint.
++        conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?)', (new_key, raw))
++        conn.execute('UPDATE state_meta SET value=? WHERE key=?',
++                     (json.dumps(archived, ensure_ascii=False), old_key))
++        return True
++
++    try:
++        db = get_db()
++        return db._execute_write(transfer) if db is not None else False
++    except Exception as exc:
++        logger.debug('Continuation %s migration not confirmed: %s', prefix, exc)
++        return False
+diff --git a/tests/hermes_cli/test_continuation_state_atomic.py b/tests/hermes_cli/test_continuation_state_atomic.py
+new file mode 100644
+--- /dev/null
++++ b/tests/hermes_cli/test_continuation_state_atomic.py
+@@ -0,0 +1,135 @@
++"""Compression carries native goal/heartbeat/loop state without loss or duplication."""
++
++from concurrent.futures import ThreadPoolExecutor
++import json
++from pathlib import Path
++import threading
++
++import pytest
++
++from hermes_cli import goals, heartbeat, loops
++
++
++@pytest.fixture(params=['goal', 'heartbeat', 'loop'])
++def control(request, tmp_path, monkeypatch):
++    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
++    home = tmp_path / 'owner'
++    home.mkdir()
++    monkeypatch.setenv('HERMES_HOME', str(home))
++    goals._DB_CACHE.clear()
++    db = goals._get_session_db()
++    assert db is not None
++    kind = request.param
++    if kind == 'goal':
++        state = goals.GoalState(goal='Finish the approved artifact', max_turns=7, turns_used=3)
++        migrate = goals.migrate_goal_to_session
++    elif kind == 'heartbeat':
++        state = heartbeat.HeartbeatState(prompt='Track approved work', interval_seconds=600, fire_count=3)
++        migrate = heartbeat.migrate_heartbeat_to_session
++    else:
++        state = loops.LoopState(prompt='Track approved work', max_ticks=7, ticks_fired=3,
++                                next_due_at=12345, awaiting_response=True)
++        migrate = loops.migrate_loop_to_session
++    old, new = kind + ':parent', kind + ':child'
++    raw = state.to_json()
++    db.set_meta(old, raw)
++    yield db, old, new, raw, migrate
++    goals._DB_CACHE.clear()
++
++
++def _reject(db, key):
++    for verb in ['INSERT', 'UPDATE']:
++        db._write_sql(
++            f'CREATE TRIGGER refuse_{verb.lower()} BEFORE {verb} ON state_meta WHEN NEW.key = '
++            + "'" + key + "' BEGIN SELECT RAISE(ABORT, 'fixture refused metadata write'); END"
++        )
++
++
++def test_failed_child_write_keeps_the_parent_and_reports_failure(control):
++    db, old, new, raw, migrate = control
++    _reject(db, new)
++    result = migrate('parent', 'child')
++    assert db.get_meta(old) == raw
++    assert db.get_meta(new) is None
++    assert result is False
++
++
++def test_failed_parent_archive_rolls_back_the_child_copy(control):
++    db, old, new, raw, migrate = control
++    _reject(db, old)
++    assert migrate('parent', 'child') is False
++    assert db.get_meta(old) == raw
++    assert db.get_meta(new) is None
++
++
++@pytest.mark.parametrize('destination', ['{invalid', '{"status":"cleared"}'])
++def test_any_existing_child_metadata_is_preserved(control, destination):
++    db, old, new, raw, migrate = control
++    db.set_meta(new, destination)
++    assert migrate('parent', 'child') is False
++    assert db.get_meta(old) == raw
++    assert db.get_meta(new) == destination
++
++
++@pytest.mark.parametrize('status', ['active', 'paused', 'done'])
++def test_committed_transfer_preserves_the_exact_child_state_and_only_clears_parent(control, status):
++    db, old, new, raw, migrate = control
++    data = json.loads(raw)
++    data.update(status=status, future_extension={'checkpoint': 'keep'})
++    raw = json.dumps(data)
++    db.set_meta(old, raw)
++    assert migrate('parent', 'child') is True
++    assert db.get_meta(new) == raw
++    data['status'] = 'cleared'
++    assert json.loads(db.get_meta(old)) == data
++    assert migrate('parent', 'child') is False
++    assert db.get_meta(new) == raw
++
++
++def test_cleared_source_is_not_revived(control):
++    db, old, new, raw, migrate = control
++    data = json.loads(raw)
++    data['status'] = 'cleared'
++    raw = json.dumps(data)
++    db.set_meta(old, raw)
++    assert migrate('parent', 'child') is False
++    assert db.get_meta(old) == raw and db.get_meta(new) is None
++
++
++def test_competing_continuations_do_not_duplicate_the_control(control, monkeypatch):
++    db, old, _new, raw, migrate = control
++    write = db._execute_write
++    barrier = threading.Barrier(2)
++    entered = threading.local()
++
++    def simultaneous(fn, *args, **kwargs):
++        if not getattr(entered, 'once', False):
++            entered.once = True
++            barrier.wait(timeout=10)
++        return write(fn, *args, **kwargs)
++
++    monkeypatch.setattr(db, '_execute_write', simultaneous)
++    with ThreadPoolExecutor(max_workers=2) as pool:
++        results = list(pool.map(lambda child: migrate('parent', child), ['child', 'other-child']))
++    assert sorted(results) == [False, True]
++    prefix = old.split(':')[0] + ':'
++    children = [db.get_meta(prefix + sid) for sid in ['child', 'other-child']]
++    assert sum(value is not None for value in children) == 1
++    assert raw in children
++    assert json.loads(db.get_meta(old))['status'] == 'cleared'
++
++
++def test_profile_binding_does_not_move_another_profiles_state(control, tmp_path, monkeypatch):
++    original_db, old, new, raw, migrate = control
++    other_home = tmp_path / 'other-profile'
++    other_home.mkdir()
++    monkeypatch.setenv('HERMES_HOME', str(other_home))
++    other_db = goals._get_session_db()
++    assert other_db is not original_db
++    data = json.loads(raw)
++    data['status'] = 'paused'
++    other_raw = json.dumps(data)
++    other_db.set_meta(old, other_raw)
++    assert migrate('parent', 'child') is True
++    assert other_db.get_meta(new) == other_raw
++    assert original_db.get_meta(old) == raw and original_db.get_meta(new) is None
