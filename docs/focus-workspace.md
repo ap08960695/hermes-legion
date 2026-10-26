@@ -14,13 +14,19 @@ On a narrow viewport, the primary destinations move to a bottom bar. Motion uses
 
 ## Current work and task history
 
-Work uses the actual native Kanban board, card controls and detail dialog. Focus closes the old permanent Sessions/Bots side pane so the canvas has its own space. **All features → Sessions** opens the existing session picker. The old top-left sidebar trigger is absent in Focus, and its positional/keyboard actions cannot restore the legacy Sessions/Bots column; Wide retains the original advanced layout. Click and touch selection work immediately, including when the pointer has not moved. The Sessions pane keeps its New session entry and real project/session tree instead of repeating the global navigation. The rail follows the focused destination: leaving the Bots pane for Work, Hub or Chat clears its highlight even if the roster remains mounted.
+Work uses the actual native Kanban board, card controls and detail dialog. Both main-window modes close the old permanent Sessions/Bots side pane so the canvas has its own space. **History** opens saved conversations directly; **All features → Sessions** opens the same history dialog. The old top-left sidebar trigger is absent in both Focus and Wide, and keyboard actions cannot restore the legacy Sessions/Bots column. Secondary-window layout controls retain their existing behavior. Click and touch selection work immediately, including when the pointer has not moved. The Sessions pane keeps its New session entry and real project/session tree instead of repeating the global navigation. The rail follows the focused destination: leaving the Bots pane for Work, Hub or Chat clears its highlight even if the roster remains mounted.
 
 **Current work** excludes completed and archived columns. **History** shows terminal columns and initially mounts at most 50 cards per column; **Show more** adds another 50. Search still filters the complete board data already fetched from the native API, including older history beyond the visible batch. This bounds rendering, not backend fetching. It is not server pagination or an archive/delete operation. Unknown statuses remain in Current work rather than disappearing.
 
 Status summaries show native Running, Ready and Blocked counts separately. Review and owner decisions are not relabeled as running work. Changing views clears selections, and empty history has its own explanation and a return-to-current-work button. Native ownership, status-transition, drag/drop and active-worker gates remain authoritative.
 
 **Models** opens main model configuration; **Accounts** opens provider accounts; **Usage** opens the native Usage section. The empty Chat screen has a compact localized heading inside Focus; the standalone intro remains unchanged outside that integration. No account, model or language is changed by these presentation choices.
+
+## Find an older conversation
+
+Choose **History** in the rail. The dialog loads 50 saved chats at a time; **Load older chats** requests the next bounded page. Enter part of a title or a saved session ID, then choose **Search** or press Enter. The native server searches across profiles on the selected connection, including conversations older than the initial recent list. This is title/ID search, not transcript-content search. **Include archived** is explicit. A failed read has a Retry control; a partial profile read is labeled incomplete instead of looking like an empty history.
+
+Selecting a result resumes its existing saved ID through the native session opener and carries its captured connection/profile owner. Switching connections discards late results from the previous owner. Browsing does not create another chat, start inference, or automatically retry/poll. The current connection remains the boundary; this is not a global search across unrelated gateways.
 
 ## Follow real work in Workflow
 

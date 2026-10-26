@@ -51,4 +51,10 @@ The [Focus guide](focus-workspace.md) describes the Workflow dependency graph, t
 
 ### Unified Hub navigation (v0.5.1)
 
-The former Library and Spaces share a single Hub destination, header and search. Chat output provenance and private-by-default collection membership stay distinct. Old links resolve to Hub. The legacy sidebar titlebar/shortcut route is disabled in Focus while Wide retains its normal sidebar controls.
+The former Library and Spaces share a single Hub destination, header and search. Chat output provenance and private-by-default collection membership stay distinct. Old links resolve to Hub. As of v0.5.2, both main-window modes hide the legacy sidebar trigger and column; secondary windows retain their native layout controls.
+
+## Saved-chat access and quiet Slack status (v0.5.2)
+
+**History** is a direct native door to existing chats, with bounded older pages and explicit server-side title/ID search across profiles on the selected connection. Resuming a result preserves its saved ID and captured owner. The main Focus and Wide modes no longer expose the old sidebar button or column.
+
+Slack can silence automatic paused refusals with an adapter-local preference while preserving the pause, authorized control commands, approvals and normal task replies. The opt-out is described in [the Slack status guide](slack-status-notices.md). It does not disable Slack or silently authorize paused work.
