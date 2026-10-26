@@ -1002,3 +1002,17 @@ The two source changes were installed locally under native custody with scoped
 rollback. Runtime activation for already-running processes is separate from fresh
 CLI import acceptance. The cumulative patch contains **496 paths: 349 outside
 the Python test tree and 147 Python test paths**.
+
+## Per-task reasoning effort (v0.6.12)
+
+Five offline native test files passed **118 tests**, with one existing skip and
+no failures. A later focused run passed **3 tests**; the runs overlap and must
+not be summed. The focused tests use an isolated Kanban database and actual
+tool registration and worker argument construction: they cover Sol and Terra,
+normalization of `HIGH`, rejection before card creation for invalid effort, and
+inheritance when omitted. They do not dispatch a production task or call a model.
+
+The change was installed locally with a scoped rollback before publication. A
+fresh process can load the installed code; a previously mounted agent may retain
+cached tool definitions until its normal lifecycle refresh. Offline validation
+does not prove a live Captain has selected a model or that a bot completed a task.

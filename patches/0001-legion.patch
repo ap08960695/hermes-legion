@@ -19087,18 +19087,25 @@ index 0000000000000000000000000000000000000000..d2988273314317267910a4e11aaebeed
 +            if key[0] == home and key[2] == session_id:
 +                del _SEEN[key]
 diff --git a/tools/kanban_tools.py b/tools/kanban_tools.py
-index c8b64c095c30a5d8f599869cace132d47d05654e..3dc478e2f1481379b4d39aa016a028e872b35e9f 100644
 --- a/tools/kanban_tools.py
 +++ b/tools/kanban_tools.py
-@@ -26,3 +26,5 @@ from tools.kanban_tools_schemas import (
+@@ -24,7 +24,9 @@
+     KANBAN_ATTACH_URL_SCHEMA, KANBAN_ATTACHMENTS_SCHEMA, KANBAN_BLOCK_SCHEMA, KANBAN_COMMENT_SCHEMA,
+     KANBAN_COMPLETE_SCHEMA, KANBAN_CREATE_SCHEMA, KANBAN_HEARTBEAT_SCHEMA, KANBAN_LINK_SCHEMA,
      KANBAN_LIST_SCHEMA, KANBAN_REQUEST_CHANGES_SCHEMA, KANBAN_REQUEST_REVIEW_SCHEMA,
 -    KANBAN_SCHEDULE_SCHEMA, KANBAN_SHOW_SCHEMA, KANBAN_UNBLOCK_SCHEMA)
 +    KANBAN_SCHEDULE_SCHEMA, KANBAN_SHOW_SCHEMA, KANBAN_UNBLOCK_SCHEMA,
 +    KANBAN_REASSIGN_SCHEMA, KANBAN_UNLINK_SCHEMA, KANBAN_EXTEND_RUNTIME_SCHEMA, KANBAN_CONTINUE_SCHEMA,
 +    KANBAN_ARCHIVE_SCHEMA)
  
-@@ -152,2 +154,15 @@ def _persisted_identity() -> str:
+ logger = logging.getLogger(__name__)
  
+@@ -148,6 +150,19 @@
+     from hermes_cli.profiles import current_profile_name
+ 
+     return current_profile_name("worker") or "worker"
++
++
 +def _unescape_json(out):
 +    """Local patch 18: re-emit handler JSON with ensure_ascii=False. Thai card text escaped as \\uXXXX costs
 +    six characters per letter and was a third of the Captain's tool-result context (kanban_show/list)."""
@@ -19110,18 +19117,26 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..3dc478e2f1481379b4d39aa016a028e8
 +    except (ValueError, UnicodeEncodeError):
 +        return out
 +    return text
-+
-+
+ 
+ 
  def _kanban_handler(tool_name: str) -> Callable:
-@@ -167,3 +182,5 @@ def _kanban_handler(tool_name: str) -> Callable:
+@@ -165,7 +180,9 @@
+                 _check(not unknown,
+                        f"{tool_name}: unknown parameter(s): {', '.join(unknown)}. "
                         f"Valid parameters: {', '.join(sorted(properties))}. Nothing changed.")
 -                return fn(args, **kw)
 +                from hermes_cli.kanban_event_origin import event_origin
 +                with event_origin(args.get("task_id"), _self_notification_target(tool_name)):
 +                    return _unescape_json(fn(args, **kw))
              except _Reject as e:
-@@ -178,2 +195,23 @@ def _kanban_handler(tool_name: str) -> Callable:
- 
+                 return e.args[0]
+             except Exception as e:
+@@ -174,6 +191,27 @@
+                 return tool_error(f"{tool_name}: {e}")
+         return wrapper
+     return deco
++
++
 +def _self_notification_target(tool_name: str) -> Optional[dict]:
 +    """Attribute explicit interactive lifecycle commands, never worker outcomes."""
 +    if tool_name not in {
@@ -19141,10 +19156,31 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..3dc478e2f1481379b4d39aa016a028e8
 +        return None
 +    return {key: target.get(key) for key in
 +            ("platform", "chat_id", "thread_id", "notifier_profile")}
-+
-+
+ 
+ 
  def _reject_delegated_child_mutation(tool_name: str) -> None:
-@@ -555,3 +593,7 @@ def register_current_worker_from_env() -> bool:
+@@ -421,7 +459,7 @@
+ _TASK_FIELDS = tuple(
+     "id title body assignee status tenant priority workspace_kind workspace_path created_by "
+     "created_at started_at completed_at result current_run_id model_override "
+-    "provider_override completion_contract last_failure_error".split())
++    "provider_override reasoning_effort completion_contract last_failure_error".split())
+ _TASK_SUMMARY_FIELDS = tuple(
+     "id title assignee status priority tenant workspace_kind workspace_path project_id created_by "
+     "created_at started_at completed_at current_run_id model_override provider_override".split())
+@@ -430,7 +468,8 @@
+ _EVENT_FIELDS = ("kind", "payload", "created_at", "run_id")
+ _ATTACHMENT_FIELDS = tuple(
+     "id filename content_type size uploaded_by stored_path created_at".split())
+-_CREATED_FIELDS = ("status", "workspace_kind", "workspace_path", "project_id")
++_CREATED_FIELDS = ("status", "workspace_kind", "workspace_path", "project_id",
++                   "model_override", "provider_override", "reasoning_effort")
+ 
+ 
+ def _fields(obj: Any, names: tuple[str, ...]) -> dict[str, Any]:
+@@ -553,7 +592,11 @@
+     try:
+         from hermes_cli import kanban_db_dispatch as kbd
          with _board(None, quiet_close=True) as (_kb, conn):
 -            return kbd.adopt_worker_pid(conn, tid, run_id, os.getpid())
 +            adopted = kbd.adopt_worker_pid(conn, tid, run_id, os.getpid())
@@ -19153,7 +19189,11 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..3dc478e2f1481379b4d39aa016a028e8
 +                register(conn, tid, run_id)
 +            return adopted
      except Exception:
-@@ -659,4 +701,159 @@ def inject_new_comments_from_env(agent: Any) -> bool:
+         logger.debug("kanban worker registration for %s failed", tid, exc_info=True)
+         return True
+@@ -657,7 +700,162 @@
+         return False
+ 
  
 +# local patch 05: an orchestrator calling kanban_show on a long-lived card used to receive 25-140k chars
 +# (all comments, all runs, worker_context). Orchestrators now get a compact view unless full=true.
@@ -19278,7 +19318,7 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..3dc478e2f1481379b4d39aa016a028e8
 +
 +
  # --- Handlers ---
- 
++
 +def _show_once(tid: str, args: dict, text: str, now: Optional[float] = None) -> str:
 +    from tools.kanban_show_cache import show_once
 +    return show_once(tid, args, text, now=now)
@@ -19311,14 +19351,21 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..3dc478e2f1481379b4d39aa016a028e8
 +    kept = [s for s in skills if str(s).rstrip("/").split("/")[-1] in have]
 +    return kept, [s for s in skills if s not in kept]
 +
-+
+ 
  @_kanban_handler("kanban_show")
-@@ -678,3 +875,3 @@ def _handle_show(args: dict, **kw) -> str:
+ def _handle_show(args: dict, **kw) -> str:
+@@ -676,7 +874,7 @@
+         })
+     with _board(args.get("board")) as (kb, conn):
          task = _existing_task(kb, conn, tid)
 -        return json.dumps({
 +        payload = {
              "task": _fields(task, _TASK_FIELDS),
-@@ -690,4 +887,11 @@ def _handle_show(args: dict, **kw) -> str:
+             "parents": kb.parent_ids(conn, tid),
+             # Non-terminal parents; on a running card this means the dependency
+@@ -688,14 +886,21 @@
+             # Capped; full log via CLI.
+             "events": [_fields(e, _EVENT_FIELDS) for e in kb.list_events(conn, tid)[-50:]],
              "runs": [_fields(r, _RUN_FIELDS) for r in kb.list_runs(conn, tid)],
 -            # Same string build_worker_context hands the dispatcher at spawn time.
 -            "worker_context": kb.build_worker_context(conn, tid)})
@@ -19332,12 +19379,18 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..3dc478e2f1481379b4d39aa016a028e8
 +                       else _compact_show_payload(payload))
 +        return _show_once(tid, args, json.dumps(payload))
  
-@@ -697,3 +901,3 @@ def _handle_list(args: dict, **kw) -> str:
+ 
+ @_kanban_handler("kanban_list")
+ def _handle_list(args: dict, **kw) -> str:
      """Task summaries with the same core filters as the CLI."""
 -    _require_orchestrator_tool("kanban_list")
 +    # local patch 05: kanban_list is read-only, workers may call it (duplicate checks); unblock stays orchestrator-only.
      include_archived = _parse_bool_arg(args, "include_archived")
-@@ -899,3 +1103,9 @@ def _handle_request_review(args: dict, **kw) -> str:
+     limit = args.get("limit")
+     try:
+@@ -897,7 +1102,13 @@
+                f"reviewer profile {reviewer!r} is not installed. "
+                f"Installed profiles: {', '.join(list_profile_names())}")
      with _board(args.get("board")) as (kb, conn):
 -        _goal_gate("kanban_request_review", kb.get_task(conn, tid), tid, summary)
 +        task = kb.get_task(conn, tid)
@@ -19348,11 +19401,15 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..3dc478e2f1481379b4d39aa016a028e8
 +        if reviewer and reviewer in ("orchestra-captain", getattr(task, "assignee", None)):
 +            reviewer = "reviewer-gpt"
          try:
-@@ -1112,2 +1322,3 @@ def _handle_create(args: dict, **kw) -> str:
+             ok, fail_reason = kb.request_review(
+                 conn, tid, summary=summary, metadata=metadata, reviewer=reviewer,
+@@ -1110,9 +1321,15 @@
+     triage, skills, goal_mode = (
+         _parse_bool_arg(args, "triage"), _coerce_str_list(args.get("skills"), "skills", "skill names"),
          _parse_bool_arg(args, "goal_mode"))
 +    skills, _dropped_skills = _skills_available_for(str(assignee or ""), skills)
      model_override, provider_override = args.get("model"), args.get("provider")
-@@ -1115,2 +1326,7 @@ def _handle_create(args: dict, **kw) -> str:
+     _check(model_override or not provider_override, "'provider' requires 'model' to be set as well")
      parents = _coerce_str_list(args.get("parents") or [], "parents", "task ids")
 +    _fit = _tool_fit_error(str(assignee), str(title), str(args.get("body") or ""))
 +    _check(_fit is None, _fit or "")
@@ -19360,7 +19417,11 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..3dc478e2f1481379b4d39aa016a028e8
 +                          or _default_runtime_seconds(str(assignee), str(title), str(args.get("body") or "")))
 +    _runtime = max(_requested_runtime, _runtime_floor(str(assignee)))
      with _board(args.get("board")) as (kb, conn):
-@@ -1129,2 +1345,14 @@ def _handle_create(args: dict, **kw) -> str:
+         from gateway.session_context import get_session_env
+         from tools.async_delegation import _current_origin_session_id
+@@ -1127,6 +1344,18 @@
+                       or (self_task.session_id if self_task else None)
+                       or _persisted_session_id(_current_origin_session_id())
                        or _persisted_session_id(get_session_env("HERMES_SESSION_ID", "")))
 +        # local patch 23: the Captain is not dispatchable, so a worker card assigned to it sits in todo
 +        # indefinitely. Keep the note as a comment on the worker's own card instead.
@@ -19375,12 +19436,22 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..3dc478e2f1481379b4d39aa016a028e8
 +                f"saved as a comment on your task {self_tid}. Mention it under 'ต่อไป:' in your completion "
 +                "summary; the Captain decides follow-up cards."))
          if project_id is None and workspace_kind is None and workspace_path is None:
-@@ -1143,3 +1371,3 @@ def _handle_create(args: dict, **kw) -> str:
+             if self_task is not None and self_task.project_id:
+                 project_id, project_source_task_id = self_task.project_id, self_task.id
+@@ -1141,8 +1370,9 @@
+             project_source_task_id=project_source_task_id, triage=triage,
+             creator_task_id=self_tid,
              idempotency_key=args.get("idempotency_key"),
 -            max_runtime_seconds=_opt_int(args.get("max_runtime_seconds")), skills=skills,
 +            max_runtime_seconds=_runtime, skills=skills,
              model_override=model_override, provider_override=provider_override,
-@@ -1152,3 +1380,10 @@ def _handle_create(args: dict, **kw) -> str:
++            reasoning_effort=args.get("reasoning_effort"),
+             goal_mode=goal_mode, goal_max_turns=_opt_int(args.get("goal_max_turns")),
+             completion_contract=args.get("completion_contract"),
+             initial_status=str(args.get("initial_status") or "running"),
+@@ -1150,7 +1380,14 @@
+         landed = _fields(kb.get_task(conn, new_tid), _CREATED_FIELDS)
+         wait = [e for e in kb.list_events(conn, new_tid) if e.kind == "dependency_wait"]
          gate = {"gated": True, "gated_by": wait[-1].payload["parent"]} if wait else {"gated": False}
 +        _warns = _oversize_warnings(str(args.get("body") or ""))
 +        if _dropped_skills:
@@ -19391,7 +19462,11 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..3dc478e2f1481379b4d39aa016a028e8
 +                   **({"warnings": _warns} if _warns else {}),
 +                   **({"runtime_raised_from": _requested_runtime} if _runtime != _requested_runtime else {}),
                     subscribed=_maybe_auto_subscribe(conn, new_tid))
-@@ -1273,2 +1508,20 @@ def _handle_unblock(args: dict, **kw) -> str:
+ 
+ 
+@@ -1271,6 +1508,24 @@
+         return _ok(task_id=tid, **_fields(kb.get_task(conn, tid), ("status",)))
+ 
  
 +@_kanban_handler("kanban_archive")
 +def _handle_archive(args: dict, **kw) -> str:
@@ -19412,7 +19487,11 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..3dc478e2f1481379b4d39aa016a028e8
 +
 +
  @_kanban_handler("kanban_link")
-@@ -1290,2 +1543,155 @@ def _handle_link(args: dict, **kw) -> str:
+ def _handle_link(args: dict, **kw) -> str:
+     """Add a parent→child dependency edge after the fact (cycles/self-links/running
+@@ -1288,10 +1543,164 @@
+                    **({"gated_by": parent_id} if gated else {}))
+ 
  
 +# --- local patch 06: orchestrator board management (reassign / unlink / extend / continue) ---
 +
@@ -19568,13 +19647,17 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..3dc478e2f1481379b4d39aa016a028e8
 +
 +
  # --- Registration (order preserved: it is the order tools appear in the schema) ---
-@@ -1293,3 +1699,4 @@ def _handle_link(args: dict, **kw) -> str:
+ 
  # kanban_list / kanban_unblock route the board and are hidden from task workers.
 -_ORCHESTRATOR_TOOLS = frozenset({"kanban_list", "kanban_unblock"})
 +_ORCHESTRATOR_TOOLS = frozenset({"kanban_unblock", "kanban_reassign", "kanban_unlink", "kanban_extend_runtime", "kanban_continue",
 +                                 "kanban_archive"})
  _TOOLS = (
-@@ -1309,3 +1716,8 @@ _TOOLS = (
+     ("kanban_show", KANBAN_SHOW_SCHEMA, _handle_show, "📋"),
+     ("kanban_list", KANBAN_LIST_SCHEMA, _handle_list, "📋"),
+@@ -1307,7 +1716,12 @@
+     ("kanban_attachments", KANBAN_ATTACHMENTS_SCHEMA, _handle_attachments, "📎"),
+     ("kanban_create", KANBAN_CREATE_SCHEMA, _handle_create, "➕"),
      ("kanban_unblock", KANBAN_UNBLOCK_SCHEMA, _handle_unblock, "▶"),
 -    ("kanban_link", KANBAN_LINK_SCHEMA, _handle_link, "🔗"))
 +    ("kanban_link", KANBAN_LINK_SCHEMA, _handle_link, "🔗"),
@@ -19584,11 +19667,14 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..3dc478e2f1481379b4d39aa016a028e8
 +    ("kanban_continue", KANBAN_CONTINUE_SCHEMA, _handle_continue, "➡"),
 +    ("kanban_archive", KANBAN_ARCHIVE_SCHEMA, _handle_archive, "🗄"))
  
+ for _name, _sch, _handler, _emoji in _TOOLS:
+     _gate = _check_kanban_orchestrator_mode if _name in _ORCHESTRATOR_TOOLS else _check_kanban_mode
 diff --git a/tools/kanban_tools_schemas.py b/tools/kanban_tools_schemas.py
-index ec5a72610e075f300d5493c9e1f71d18f21d83de..28b275060178d42de4c50c8b39f13021d1fe7aa9 100644
 --- a/tools/kanban_tools_schemas.py
 +++ b/tools/kanban_tools_schemas.py
-@@ -49,8 +49,7 @@ KANBAN_SHOW_SCHEMA = _schema(
+@@ -47,17 +47,18 @@
+ KANBAN_SHOW_SCHEMA = _schema(
+     "kanban_show",
      (
 -        "Read a task's full state — title, body, assignee, parent task "
 -        "handoffs, your prior attempts on this task if any, comments, "
@@ -19602,13 +19688,33 @@ index ec5a72610e075f300d5493c9e1f71d18f21d83de..28b275060178d42de4c50c8b39f13021
 +        "this for updates or another card, and pass full=true only when "
 +        "you need the whole history. Outside a dispatcher-spawned worker "
          "there is no default task: a bare call returns a pointer to "
-@@ -60,2 +59,4 @@ KANBAN_SHOW_SCHEMA = _schema(
+         "``kanban_list`` instead of task state."
+     ),
+     {
          "task_id": _prop("string", _DESC_TASK_ID_DEFAULT),
 +        "full": _prop("boolean", "Return the full history (all comments, runs, worker_context) instead of the compact view. Large; default false."),
 +        "summary": _prop("boolean", "One-screen status (task fields, last 3 comments, last failure, last completion). Prefer this for status checks."),
      },
-@@ -546,2 +547,17 @@ KANBAN_UNBLOCK_SCHEMA = _schema(
- 
+     [],
+ )
+@@ -526,6 +527,11 @@
+                 "the profile's provider and will fail if it belongs "
+                 "to a different one. Requires 'model'."
+         )),
++        "reasoning_effort": _prop("string", (
++                "Optional reasoning depth for this task only: none, minimal, low, "
++                "medium, high, xhigh, max, or ultra. Omit to inherit the profile's "
++                "setting. The worker's provider still clamps unsupported levels."
++        )),
+     },
+     ["title", "assignee"],
+ )
+@@ -542,6 +548,21 @@
+         "task_id": _prop("string", "Blocked task id to move to ready or parent-gated todo."),
+     },
+     ["task_id"],
++)
++
 +# local patch 24: the Captain had no way to archive a card and asked the owner or ran cron + CLI.
 +KANBAN_ARCHIVE_SCHEMA = _schema(
 +    "kanban_archive",
@@ -19622,10 +19728,12 @@ index ec5a72610e075f300d5493c9e1f71d18f21d83de..28b275060178d42de4c50c8b39f13021
 +        "reason": _prop("string", "Why it is archived, e.g. 'superseded by t_xxx'. Required."),
 +    },
 +    ["task_id", "reason"],
-+)
-+
+ )
+ 
  KANBAN_LINK_SCHEMA = _schema(
-@@ -561 +577,66 @@ KANBAN_LINK_SCHEMA = _schema(
+@@ -559,3 +580,68 @@
+     },
+     ["parent_id", "child_id"],
  )
 +
 +
@@ -41139,3 +41247,67 @@ new file mode 100644
 +        reasoning_config={"enabled": effort != "none", "effort": effort},
 +    )
 +    assert request["reasoning"]["effort"] == expected
+diff --git a/tests/tools/test_kanban_create_reasoning.py b/tests/tools/test_kanban_create_reasoning.py
+new file mode 100644
+--- /dev/null
++++ b/tests/tools/test_kanban_create_reasoning.py
+@@ -0,0 +1,59 @@
++"""Per-task model planning depth must reach the real worker invocation."""
++import json
++from pathlib import Path
++
++import pytest
++
++
++@pytest.fixture
++def board(tmp_path, monkeypatch):
++    home = tmp_path / 'home'
++    home.mkdir()
++    monkeypatch.setenv('HERMES_HOME', str(home))
++    monkeypatch.setenv('HERMES_KANBAN_HOME', str(home))
++    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
++    for key in ('HERMES_KANBAN_TASK', 'HERMES_KANBAN_DB', 'HERMES_KANBAN_BOARD', 'HERMES_KANBAN_RUN_ID'):
++        monkeypatch.delenv(key, raising=False)
++    from hermes_cli import kanban_db as kb
++    kb._INITIALIZED_PATHS.clear()
++    kb.init_db()
++    return kb
++
++
++@pytest.mark.parametrize('model', ['gpt-6.1-sol', 'gpt-6.1-terra'])
++def test_explicit_reasoning_reaches_native_worker_argv(board, monkeypatch, model):
++    from tools import kanban_tools
++    from tools.registry import registry
++    from hermes_cli import kanban_db_connect as kbc, kanban_db_dispatch as dispatcher
++
++    result = json.loads(registry.dispatch('kanban_create', {
++        'title': 'Synthetic planning', 'assignee': 'default', 'workspace_kind': 'scratch',
++        'model': model, 'provider': 'openai-codex', 'reasoning_effort': 'HIGH'}))
++    assert result.get('ok'), result
++    assert result['model_override'] == model
++    assert result['provider_override'] == 'openai-codex'
++    assert result['reasoning_effort'] == 'high'
++    with kbc.connect_closing() as conn:
++        task = board.get_task(conn, result['task_id'])
++    monkeypatch.setattr(dispatcher, '_resolve_hermes_argv', lambda: ['hermes'])
++    monkeypatch.setattr(dispatcher, '_resolve_worker_cli_toolsets', lambda home: [])
++    argv = dispatcher._worker_argv(task, 'default', None)
++    assert argv[argv.index('-m') + 1] == model
++    assert argv[argv.index('--provider') + 1] == 'openai-codex'
++    assert argv[argv.index('--reasoning') + 1] == 'high'
++
++
++def test_invalid_effort_fails_without_creating_a_card_and_omission_inherits(board):
++    from tools import kanban_tools
++    from tools.registry import registry
++    from hermes_cli import kanban_db_connect as kbc
++
++    bad = json.loads(registry.dispatch('kanban_create', {
++        'title': 'Invalid synthetic depth', 'assignee': 'default', 'reasoning_effort': 'strongest'}))
++    assert bad.get('error') and 'reasoning_effort' in bad['error']
++    with kbc.connect_closing() as conn:
++        assert not board.list_tasks(conn)
++    ok = json.loads(registry.dispatch('kanban_create', {'title': 'Inherit', 'assignee': 'default'}))
++    assert ok.get('ok') and ok['reasoning_effort'] is None
++    with kbc.connect_closing() as conn:
++        assert board.get_task(conn, ok['task_id']).reasoning_effort is None

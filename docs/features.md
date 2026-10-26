@@ -106,3 +106,16 @@ still materialized. See [measured scope and limitations](session-metadata-reads.
 The Codex reasoning-effort mapping recognizes GPT-6.1 Terra so a configured `max`
 reaches the request rather than being reduced to `xhigh`. This is compatibility
 for the native provider, not a model assignment or a new account/fallback.
+
+## Per-task reasoning effort (v0.6.12)
+
+The native `kanban_create` tool accepts an optional `reasoning_effort` for one
+task, and returns the persisted model, provider and effort so the caller can
+verify the selection. Supported values are `none`, `minimal`, `low`, `medium`,
+`high`, `xhigh`, `max` and `ultra`; omitting the field retains the profile's
+setting. The existing provider-specific compatibility rules still apply. Task
+details include the effort; compact task lists do not gain another field.
+
+This feature does not add a bot, change a profile, bypass dispatch eligibility,
+change quotas or authorize a provider fallback. A worker that is already running
+retains its existing invocation.
