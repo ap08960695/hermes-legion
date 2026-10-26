@@ -21897,7 +21897,7 @@ diff --git a/hermes_cli/usage_attribution.py b/hermes_cli/usage_attribution.py
 new file mode 100644
 --- /dev/null
 +++ b/hermes_cli/usage_attribution.py
-@@ -0,0 +1,152 @@
+@@ -0,0 +1,154 @@
 +"""Read-only observed usage attribution: python -m hermes_cli.usage_attribution --home PATH.
 +
 +Matching logged fields and failed calls are investigation signals, never proof of waste.
@@ -22041,11 +22041,13 @@ new file mode 100644
 +    parser=argparse.ArgumentParser(description=__doc__)
 +    parser.add_argument('--home',type=Path,required=True);parser.add_argument('--hours',type=float,default=24)
 +    parser.add_argument("--max-log-files",type=int,default=32,help="Maximum recent uncompressed logs to read (1-512; default 32, up to 2 MiB per file)")
++    parser.add_argument('--board',type=Path,action='append',default=[],help='Additional existing Kanban database to read (repeatable; maximum 64)')
 +    args=parser.parse_args()
 +    if not 1<=args.max_log_files<=512:parser.error("--max-log-files must be within [1,512]")
++    if len(args.board)>64:parser.error('--board may be specified at most 64 times')
 +    if not 0<args.hours<=168:parser.error('--hours must be within (0,168]')
 +    end=time.time();start=end-args.hours*3600
-+    records,runs,coverage=collect(args.home,start,end,max_log_files=args.max_log_files)
++    records,runs,coverage=collect(args.home,start,end,max_log_files=args.max_log_files,extra_boards=args.board)
 +    print(json.dumps({**analyze(records,runs,start,end),'coverage':coverage,'model_calls':0,'runtime_mutations':0},indent=2))
 +
 +
@@ -22054,7 +22056,7 @@ diff --git a/hermes_cli/usage_attribution_sources.py b/hermes_cli/usage_attribut
 new file mode 100644
 --- /dev/null
 +++ b/hermes_cli/usage_attribution_sources.py
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,104 @@
 +"""Bounded existing-log and SQLite reader; never initializes a board or imports an agent."""
 +from contextlib import closing
 +import json
@@ -22064,6 +22066,12 @@ new file mode 100644
 +_MAX_FILES=32
 +_TAIL_BYTES=2*1024*1024
 +_MAX_RUNS=10000
++
++
++def _board_identity(value):
++    path=Path(value)
++    try:return path.expanduser().resolve()
++    except (OSError,RuntimeError):return path.absolute()
 +
 +
 +def read_logs(paths):
@@ -22112,9 +22120,11 @@ new file mode 100644
 +                     'started_run_outcomes':{str(k):v for k,v in outcomes.items()},'completed_cards':done}
 +
 +
-+def collect(home,start,end,*,max_log_files=_MAX_FILES):
++def collect(home,start,end,*,max_log_files=_MAX_FILES,extra_boards=()):
 +    if type(max_log_files) is not int or not 1<=max_log_files<=512:
 +        raise ValueError("max_log_files must be an integer within [1,512]")
++    extra_boards=tuple(extra_boards)
++    if len(extra_boards)>64:raise ValueError('at most 64 extra boards may be specified')
 +    home=Path(home).resolve(strict=True)
 +    profiles=sorted(p for p in (home/'profiles').glob('*') if p.is_dir())
 +    paths=[p for h in [home,*profiles[:128]] for p in (h/'logs').glob('*.log*') if p.is_file() and p.suffix!='.gz']
@@ -22124,7 +22134,10 @@ new file mode 100644
 +        except OSError:unavailable+=1
 +    ranked.sort(key=lambda item:item[0],reverse=True)
 +    records,coverage=read_logs([path for _,path in ranked[:max_log_files]]);coverage.update({'max_log_files':max_log_files,'log_files_found':len(paths),'log_files_omitted':max(0,len(ranked)-max_log_files),'log_enumeration_unavailable':unavailable,'profile_dirs_omitted':max(0,len(profiles)-128),'compressed_logs_read':False,'missing_time_spans':'unknown; tails/rotation prevent full-window accounting'})
-+    boards=[p for p in [home/'kanban.db',*sorted((home/'kanban/boards').glob('*/kanban.db'))] if p.is_file()]
++    native=[p for p in [home/'kanban.db',*sorted((home/'kanban/boards').glob('*/kanban.db'))] if p.is_file()]
++    # Explicit inputs take precedence within the existing 64-board budget.
++    # Canonicalize before deduplication so aliases cannot double-count runs.
++    boards=list(dict.fromkeys(_board_identity(p) for p in (*extra_boards,*native)))
 +    keys,key_coverage=_existing_keys([home,*profiles[:128]])
 +    needed={r.get('fingerprint',{}).get('key_id') for r in records if isinstance(r.get('fingerprint'),dict) and isinstance(r['fingerprint'].get('key_id'),str)}
 +    keys={kid:key for kid,key in keys.items() if kid in needed}
@@ -22132,7 +22145,9 @@ new file mode 100644
 +    runs=[];coverage['boards']={};coverage['boards_omitted']=max(0,len(boards)-64)
 +    coverage['binding_keys']=key_coverage
 +    for path in boards[:64]:
-+        try:rows,status=read_board(path,start,end,keys);runs.extend(rows)
++        try:
++            if not path.is_file():status={'status':'unavailable','error_type':'NotRegularFile'}
++            else:rows,status=read_board(path,start,end,keys);runs.extend(rows)
 +        except sqlite3.Error as exc:status={'status':'unavailable','error_type':type(exc).__name__}
 +        coverage['boards'][str(path)]=status
 +    return records,runs,coverage
@@ -42122,3 +42137,128 @@ diff --git a/apps/desktop/src/hermes.ts b/apps/desktop/src/hermes.ts
    getApiRequestConnection,
    getApiRequestProfile,
    hermesApi,
+diff --git a/tests/hermes_cli/test_usage_attribution_extra_boards.py b/tests/hermes_cli/test_usage_attribution_extra_boards.py
+new file mode 100644
+--- /dev/null
++++ b/tests/hermes_cli/test_usage_attribution_extra_boards.py
+@@ -0,0 +1,120 @@
++"""Explicit extra boards extend read-only attribution without changing discovery."""
++import json
++import sqlite3
++
++import pytest
++
++from agent.usage_run_binding import key_id, run_digest
++from hermes_cli.usage_attribution import analyze
++from hermes_cli.usage_attribution_sources import collect
++
++
++def _fixture(tmp_path):
++    home = tmp_path / 'home'
++    key_dir = home / 'telemetry/cache-diagnostics'
++    key_dir.mkdir(parents=True)
++    key = b'k' * 32
++    (key_dir / 'fingerprint.key').write_bytes(key)
++    (key_dir / 'fingerprint.key').chmod(0o600)
++    logs = home / 'logs'
++    logs.mkdir()
++    board = tmp_path / 'separate' / 'kanban.db'
++    board.parent.mkdir()
++    with sqlite3.connect(board) as db:
++        db.execute('CREATE TABLE task_runs(id,task_id,worker_pid,worker_started_at,started_at,ended_at,outcome)')
++        db.execute("INSERT INTO task_runs VALUES(7,'t_test',NULL,NULL,94,105,'completed')")
++        db.execute('CREATE TABLE task_events(id,task_id,run_id,kind,payload)')
++        db.execute("INSERT INTO task_events VALUES(1,'t_test',7,'claimed',?)", (json.dumps({'attempt': {'reason': 'initial'}}),))
++    field = lambda n: {'complete': True, 'hash': f'{n:064x}'}
++    record = {'process_id': 42, 'status': 'returned', 'usage': {'input_tokens': 100, 'cached_tokens': 80},
++              'fingerprint': {'key_id': key_id(key), 'task_run': {'complete': True, 'hash': run_digest(key, board, 't_test', 7)},
++                              'cross_bot': {'namespace': 'a' * 16, 'started_at_ns': 100_000_000_000,
++                                            'fields': {'profile': field(1), 'request': field(2)}}}}
++    (logs / 'agent.log').write_text('CACHE_DIAGNOSTIC ' + json.dumps(record) + '\n')
++    return home, board
++
++
++def test_explicit_external_board_is_read_only_and_duplicate_paths_do_not_duplicate_runs(tmp_path):
++    home, board = _fixture(tmp_path)
++    alias = tmp_path / 'alias.db'
++    alias.symlink_to(board)
++    before = board.read_bytes()
++    raw, default_runs, _ = collect(home, 90, 110)
++    assert analyze(raw, default_runs, 90, 110)['run_correlation']['bound_attempts'] == 0
++
++    raw, runs, coverage = collect(home, 90, 110, extra_boards=[board, alias])
++    assert analyze(raw, runs, 90, 110)['run_correlation']['bound_attempts'] == 1
++    assert len(runs) == 1
++    assert len(coverage['boards']) == 1
++    assert board.read_bytes() == before
++
++
++def test_explicit_missing_board_is_reported_without_creating_a_database(tmp_path):
++    home, _ = _fixture(tmp_path)
++    missing = tmp_path / 'missing.db'
++    _, _, coverage = collect(home, 90, 110, extra_boards=[missing])
++    assert coverage['boards'][str(missing.resolve())]['status'] == 'unavailable'
++    assert not missing.exists()
++
++
++def test_extra_board_count_is_bounded(tmp_path):
++    home, _ = _fixture(tmp_path)
++    with pytest.raises(ValueError, match='64'):
++        collect(home, 90, 110, extra_boards=[tmp_path / f'{i}.db' for i in range(65)])
++
++
++def test_explicit_boards_keep_priority_within_global_board_budget(tmp_path):
++    home, board = _fixture(tmp_path)
++    native = home / 'kanban.db'
++    native.write_bytes(board.read_bytes())
++    requested = [board, *(tmp_path / f'missing-{i}.db' for i in range(63))]
++
++    raw, runs, coverage = collect(home, 90, 110, extra_boards=requested)
++    assert analyze(raw, runs, 90, 110)['run_correlation']['bound_attempts'] == 1
++    assert len(coverage['boards']) == 64
++    assert coverage['boards_omitted'] == 1
++    assert str(native) not in coverage['boards']
++
++
++def test_directory_board_is_unavailable_and_remains_untouched(tmp_path):
++    home, _ = _fixture(tmp_path)
++    directory = tmp_path / 'directory'
++    directory.mkdir()
++
++    _, _, coverage = collect(home, 90, 110, extra_boards=[directory])
++    assert coverage['boards'][str(directory.resolve())]['status'] == 'unavailable'
++    assert list(directory.iterdir()) == []
++
++
++def test_broken_symlink_loop_is_reported_as_unavailable(tmp_path):
++    home, _ = _fixture(tmp_path)
++    loop = tmp_path / 'loop.db'
++    loop.symlink_to(loop)
++
++    _, _, coverage = collect(home, 90, 110, extra_boards=[loop])
++    assert coverage['boards'][str(loop.absolute())]['status'] == 'unavailable'
++    assert loop.is_symlink()
++
++
++def test_cli_accepts_extra_board_option(tmp_path, monkeypatch, capsys):
++    from hermes_cli.usage_attribution import main
++
++    home, board = _fixture(tmp_path)
++    monkeypatch.setattr('sys.argv', ['usage_attribution', '--home', str(home), '--board', str(board)])
++    main()
++    result = json.loads(capsys.readouterr().out)
++    assert result['coverage']['boards'][str(board.resolve())]['status'] == 'read_only'
++    assert result['model_calls'] == 0 and result['runtime_mutations'] == 0
++
++
++def test_cli_rejects_too_many_extra_boards_before_reading(tmp_path, monkeypatch, capsys):
++    from hermes_cli.usage_attribution import main
++
++    home, board = _fixture(tmp_path)
++    arguments = ['usage_attribution', '--home', str(home)] + [item for _ in range(65) for item in ('--board', str(board))]
++    monkeypatch.setattr('sys.argv', arguments)
++
++    with pytest.raises(SystemExit) as exc:
++        main()
++    assert exc.value.code == 2
++    assert 'at most 64' in capsys.readouterr().err

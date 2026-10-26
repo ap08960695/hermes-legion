@@ -1028,3 +1028,7 @@ A deterministic regression reproduced a file disappearing between enumeration an
 ## Older session restoration (v0.6.15)
 
 The related offline suite passed 82 tests across three files, including owner changes, list readiness, lookup failure and stale navigation. A packaged Electron build was closed and relaunched against an isolated backend seeded with 55 synthetic sessions; the oldest session, omitted from the first page of 50, was restored. The mock provider received no prompts. This is not evidence that a particular existing session was restored or a live workload benefited. The source and package were installed locally before publication with a scoped rollback; actual UI behavior remains a separate check.
+
+## Explicit usage attribution boards (v0.6.16)
+
+Four related files passed 26 offline cases, including a synthetic external board, aliases, missing and non-regular paths, a symlink loop, and the 64-board limit. A separate Python 3.12 check covered symlink-loop resolution. The exact installed files passed the same suite in a read-only, network-isolated environment; these overlapping runs are not summed. In one identical existing seven-day sample, an explicitly selected isolated test board increased exact matched attempts from 7 to 91. One other board was unavailable in the sandbox, 52 log tails were cut, and compressed logs were not read. This is provenance coverage for a selected test board, not a model-usage saving or full production coverage. No model call was made for the measurement.

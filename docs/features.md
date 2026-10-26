@@ -131,3 +131,7 @@ If a log disappears or cannot be inspected while selecting the newest logs, cont
 ## Older session restoration (v0.6.15)
 
 Cold startup can resolve a remembered session outside the loaded sidebar page when its connection and profile are validated. It preserves remembered navigation when ownership is uncertain or lookup fails, and ignores stale results after the user moves away. An unambiguous ID prefix may resolve to its canonical session.
+
+## Explicit usage attribution boards (v0.6.16)
+
+For an intentionally selected additional database, pass `--board /path/to/kanban.db` to the read-only usage attribution CLI; the option is repeatable. Paths are resolved and deduplicated before reading, and explicit paths take priority within the existing 64-board cap. Missing or non-regular files are reported unavailable and never created. Existing default discovery does not expand.
