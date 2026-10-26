@@ -819,3 +819,20 @@ The final canonical offline run covered **10 files / 142 passed / 0 failed**, ze
 The synthetic shared leading text grew from 1,895 to 2,746 characters without changing either full prompt's length. This is not a provider cache-hit percentage or a production token/latency reduction. A bounded read-only historical-record inspection supplied no v4 adoption/savings proof and its private data was not exported. No new model/provider request was used to measure adoption.
 
 Five exact source/test files were installed locally under native update custody before public export, with target-only rollback files and restored mode/ownership. Configuration/instruction hashes and running process identities were preserved. Fresh imports can build v4; already cached prompts remain as they were. Existing pending Desktop renderer adoption is independent and was not forced. The cumulative patch now has **485 source/test paths: 344 outside the Python test tree and 141 Python tests**, on the same pinned upstream base.
+
+
+## Bounded native title recall (v0.6.7)
+
+A native fixture reproduced full-transcript hydration before a small title-match response and before rejecting excluded history. The repair uses the existing message-bookend API, preserves the anchored view and continuation counts, and filters time/exclusion metadata before payload reads. Failure in a present bounded API reports unavailable history without retrying the full transcript.
+
+The final native run passed **4 files / 76 tests / zero failures**, with zero file retries. Native live-import acceptance used five alternating before/after runs against one synthetic 256-message SQLite fixture: median 6.74→2.00 ms, 4.52→0.37 MiB peak Python traced allocations and 265→17 hydrated rows, with byte-equivalent returned responses. Both metadata-filter controls loaded zero message rows. The measurements are synthetic query/allocation results, not total-process RAM, billing, cache-hit or model-latency savings. A separate read-only existing-conversation check also preserved the result; no private title, transcript, ID, response hash or workload measurement was exported.
+
+The exact runtime and regression file were installed locally under native update custody before export, preserving target permissions/ownership and target-only rollback evidence. Scope health reported zero new findings. Relocated maintenance artifacts retained their original-path aliases and source hashes; the native title-recall regression file passed its eight tests again after relocation. No provider request, quota change, paid fallback or embedding-service action was used.
+
+The cumulative patch now has **486 source/test paths: 344 outside the Python test tree and 142 Python tests**, on the same pinned upstream base. Public checkout/apply acceptance, companion tests, complete Git history, archives and anonymous release readbacks are verified separately; overlapping runs are not added together. A fresh authenticated runtime status check found idle mounted chats, while the running Desktop package still differed from the prepared UI package. This release does not claim that the pending renderer was activated.
+
+## Portable review of external memory and storage
+
+The optional memory guide was checked against ai-memory v3.2.5's published configuration source. Its TOML example is parsed offline and names reviewed top-level, authentication and maintenance fields. This is not an end-to-end Hermes adapter or service deployment test. Native memory/search remain available without the optional service. The review does not enable providers, hooks, history backfill, MCP or protected embedding services, and no existing private configuration or memory store is copied into the release. A longer matched-work comparison is still required before claiming a recall/usage benefit or expanding a pilot.
+
+The storage guide describes explicit inactive-artifact relocation and post-acceptance disposal boundaries. It publishes neither machine paths nor local migration inventories, firmware data, database snapshots, private logs or rollback contents.

@@ -60,3 +60,10 @@ The former Library and Spaces share a single Hub destination, header and search.
 Slack can silence automatic paused refusals with an adapter-local preference while preserving the pause, authorized control commands, approvals and normal task replies. The opt-out is described in [the Slack status guide](slack-status-notices.md). It does not disable Slack or silently authorize paused work.
 
 See [Desktop feature parity](desktop-feature-parity.md) for the restored native workflows and verification limits.
+
+
+## Bounded recall and optional memory review (v0.6.7)
+
+[Conversation title recall](session-recall.md) uses the existing bounded native bookend API, checks metadata exclusions before payload reads, preserves normal orientation evidence and reports unavailable history without an unbounded retry. No external service or new tool is required.
+
+The [external-memory pilot guide](external-memory-pilot.md) documents a separate, opt-in evaluation boundary: explicit project/profile scope, backfill and auto-wiring disabled, private token files, unchanged native gates, failure isolation, and matched-work measurements before expansion. It includes a pinned upstream TOML example and local embedding-authentication cautions; no service, hook, MCP tool or model is automatically enabled.

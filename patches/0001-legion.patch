@@ -20146,59 +20146,6 @@ index c6f442809329b97ad43019e5451a3fe807c56187..e3c6777a565fc3113367ceb52e600880
 -    omitted = len(joined) - _MAX_OUTPUT_CHARS
 +    omitted = total - _MAX_OUTPUT_CHARS
      return joined[:_MAX_OUTPUT_CHARS] + f"\n… [{omitted:,} output chars truncated{hint}]"
-diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
-index 8e0db86829ac8e5d0a5c929d22f6118fdf8fdfda..6bd5d780a9e920311ab8cf3842225fc61b35f19e 100644
---- a/tools/session_search_tool.py
-+++ b/tools/session_search_tool.py
-@@ -393,2 +393,3 @@ def _discover(db, query: str, role_filter: Optional[list[str]], limit: int, sort
-     # SAME session); a live delegation child (end_reason=None) stays excluded.
-+    lineage_cache, left_context_cache = {}, {}
-     for r in raw_results:
-@@ -396,3 +397,8 @@ def _discover(db, query: str, role_filter: Optional[list[str]], limit: int, sort
-             break
--        raw_sid, resolved_sid = r["session_id"], _resolve_lineage(db, r["session_id"])
-+        raw_sid = r["session_id"]
-+        if raw_sid not in lineage_cache:
-+            lineage_cache[raw_sid] = _resolve_lineage(db, raw_sid)
-+        resolved_sid = lineage_cache[raw_sid]
-+        if resolved_sid in seen_sessions:
-+            continue
-         if raw_sid in excluded_roots or resolved_sid in excluded_roots:
-@@ -409,5 +415,8 @@ def _discover(db, query: str, role_filter: Optional[list[str]], limit: int, sort
-         # that content is no longer in context — let it through.
--        is_compacted_hit = _is_compacted_message(db, r.get("id"))
-+        same_live_lineage = bool(current_lineage_root and resolved_sid == current_lineage_root)
-+        is_compacted_hit = _is_compacted_message(db, r.get("id")) if same_live_lineage or raw_sid == current_session_id else False
-+        if same_live_lineage and raw_sid not in left_context_cache:
-+            left_context_cache[raw_sid] = _session_left_live_context(db, raw_sid)
-         if current_lineage_root and resolved_sid == current_lineage_root and not (
--                _session_left_live_context(db, raw_sid) or is_compacted_hit):
-+                left_context_cache[raw_sid] or is_compacted_hit):
-             continue
-@@ -451,11 +460,18 @@ def _read_session(db, session_id: str, head: int = 20, tail: int = 10, link_prof
-         return tool_error(f"session_id not found: {session_id}", success=False)
--    rows, err = _loud(lambda: db.get_messages(session_id), "get_messages failed for %s: %s", "failed to load session",
--                      session_id)
-+    def load():
-+        bookends = getattr(db, "get_message_bookends", None)
-+        if callable(bookends) and head > 0 and tail > 0:
-+            return bookends(session_id, head, tail)
-+        rows = db.get_messages(session_id)
-+        return rows, len(rows)
-+    loaded, err = _loud(load, "get_messages failed for %s: %s", "failed to load session", session_id)
-     if err:
-         return err
--    shaped = [_shape_message(m, max_content_len=_READ_MAX_CONTENT) for m in rows]
--    total, truncated = len(shaped), len(shaped) > head + tail
-+    rows, total = loaded
-+    truncated = total > head + tail
-+    selected = rows[:head] + rows[-tail:] if truncated else rows
-+    shaped = [_shape_message(m, max_content_len=_READ_MAX_CONTENT) for m in selected]
-     return _ok(mode="read", session_id=session_id, link=_session_link(session_id, link_profile),
-                session_meta=_session_meta_block(meta), message_count=total, truncated=truncated,
--               messages=shaped[:head] + shaped[-tail:] if truncated else shaped,
-+               messages=shaped,
-                **({"message": (f"Session has {total} messages; showing first {head} + last {tail}. "
 diff --git a/tools/shared_document_cache.py b/tools/shared_document_cache.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..1401abe9bfe48d1d71832393e366836f67931ea8
@@ -40084,3 +40031,265 @@ diff --git a/tests/agent/test_system_prompt.py b/tests/agent/test_system_prompt.
          assert "Standard Markdown auto-converts" in stable
          assert "lean into it" not in stable
  
+diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
+--- a/tools/session_search_tool.py
++++ b/tools/session_search_tool.py
+@@ -273,7 +273,19 @@
+     return entry
+ 
+ 
+-def _title_match_result(db, query: str, current_lineage_root: Optional[str]) -> Optional[dict[str, Any]]:
++def _title_message_sample(db, session_id: str) -> tuple[list[dict[str, Any]], int]:
++    """Native title fallback needs only five head and three tail messages, plus total count."""
++    bookends = getattr(db, "get_message_bookends", None)
++    if callable(bookends):
++        return bookends(session_id, 5, 3)
++    # Compatibility for older DB adapters; a failed present bounded API never retries here.
++    messages = db.get_messages(session_id)
++    return messages, len(messages)
++
++
++def _title_match_result(db, query: str, current_lineage_root: Optional[str], *,
++                        after_ts: Optional[int] = None, before_ts: Optional[int] = None,
++                        excluded_roots: Optional[set[str]] = None) -> Optional[dict[str, Any]]:
+     """Discovery-shaped result when the query matches a session title, else None."""
+     title_query = query.strip().strip("`'\"")  # models often quote a remembered title
+     session_id = title_query and _quiet(lambda: db.resolve_session_by_title(title_query), None,
+@@ -289,7 +301,13 @@
+                           "get_session failed for title match %s", session_id) or {}
+     if session_meta.get("source") in _HIDDEN_SESSION_SOURCES:
+         return None
+-    messages = _quiet(lambda: db.get_messages(session_id), [], "get_messages failed for title match %s", session_id)
++    # Title lookup bypasses FTS's SQL predicates: reject metadata-only exclusions before payload I/O.
++    if {session_id, lineage_root} & (excluded_roots or set()) or not _in_time_window(
++            _coerce_started_ts(session_meta.get("started_at")), after_ts, before_ts):
++        return None
++    sample = _quiet(lambda: _title_message_sample(db, session_id), None,
++                    "title message sample failed for %s", session_id)
++    messages, total = sample if sample is not None else ([], 0)
+     anchor_id = messages[0].get("id") if messages else None
+     view = {} if anchor_id is None else _quiet(
+         lambda: db.get_anchored_view(session_id, anchor_id, window=5, bookend=3), {},
+@@ -299,7 +317,7 @@
+     def shape(key, fallback, anchor=None, max_content_len=1200):
+         return [_shape_message(m, anchor_id=anchor, max_content_len=max_content_len)
+                 for m in (view.get(key) or fallback)]
+-    return {**_discovery_entry(
++    entry = {**_discovery_entry(
+         lineage_root, session_id=session_id, when=_format_timestamp(session_meta.get("started_at")),
+         source=session_meta.get("source", "unknown"), model=session_meta.get("model") or "unknown",
+         title=title, matched_role="session_title", match_message_id=anchor_id,
+@@ -307,8 +325,12 @@
+         bookend_start=shape("bookend_start", messages[:3]),
+         messages=shape("window", messages[:5], anchor_id, max_content_len=4000),
+         bookend_end=shape("bookend_end", messages[-3:]), messages_before=view.get("messages_before", 0),
+-        messages_after=view.get("messages_after", max(len(messages) - 5, 0)), detail="full"),
++        messages_after=view.get("messages_after", max(total - 5, 0)), detail="full"),
+         "_lineage_root": lineage_root}
++    if sample is None:
++        entry.update(detail="unavailable", messages_before=None, messages_after=None,
++                     warning="Session title matched, but loading its messages failed. History is unavailable, not empty.")
++    return entry
+ 
+ 
+ def _discover_payload(db, query: str, detail: str, results: list, **extra) -> str:
+@@ -358,14 +380,8 @@
+     """Discovery shape: FTS5 plus adaptive or full result hydration."""
+     current_lineage_root = _resolve_lineage(db, current_session_id) if current_session_id else None
+     excluded_roots = _excluded_lineage_roots(db, exclude_session_ids or [])
+-    title_result = _title_match_result(db, query, current_lineage_root)
+-    # FTS rows are time-bounded in SQL (_search_filter_clauses); the title match bypasses that
+-    # query, so it is the one place the window is re-checked in Python.
+-    if title_result:
+-        title_sid, title_root = title_result["session_id"], title_result.get("_lineage_root") or title_result["session_id"]
+-        title_started = _coerce_started_ts((_get_session_meta(db, title_root) or _get_session_meta(db, title_sid)).get("started_at"))
+-        if {title_sid, title_root} & excluded_roots or not _in_time_window(title_started, after_ts, before_ts):
+-            title_result = None
++    title_result = _title_match_result(db, query, current_lineage_root, after_ts=after_ts,
++                                       before_ts=before_ts, excluded_roots=excluded_roots)
+     raw_results, err = _loud(lambda: db.search_messages(
+         query=query, role_filter=role_filter or ["user", "assistant"],
+         exclude_sources=list(_HIDDEN_SESSION_SOURCES), limit=_DISCOVER_SCAN_LIMIT, offset=0, sort=sort,
+@@ -391,10 +407,16 @@
+     # Current-lineage hits are skipped UNLESS the transcript left live context
+     # (compression-ended, /new-reset predecessor, or an in-place compacted row on the
+     # SAME session); a live delegation child (end_reason=None) stays excluded.
++    lineage_cache, left_context_cache = {}, {}
+     for r in raw_results:
+         if len(seen_sessions) >= limit:
+             break
+-        raw_sid, resolved_sid = r["session_id"], _resolve_lineage(db, r["session_id"])
++        raw_sid = r["session_id"]
++        if raw_sid not in lineage_cache:
++            lineage_cache[raw_sid] = _resolve_lineage(db, raw_sid)
++        resolved_sid = lineage_cache[raw_sid]
++        if resolved_sid in seen_sessions:
++            continue
+         if raw_sid in excluded_roots or resolved_sid in excluded_roots:
+             continue
+         # Skip the current session lineage — UNLESS the hit's transcript has left live context. Three
+@@ -407,9 +429,12 @@
+         # compaction: the FTS hit lives on the SAME session_id as the current session, but the matched
+         # message row is an archived (active=0, compacted=1) row. The live-context load filters active=1, so
+         # that content is no longer in context — let it through.
+-        is_compacted_hit = _is_compacted_message(db, r.get("id"))
++        same_live_lineage = bool(current_lineage_root and resolved_sid == current_lineage_root)
++        is_compacted_hit = _is_compacted_message(db, r.get("id")) if same_live_lineage or raw_sid == current_session_id else False
++        if same_live_lineage and raw_sid not in left_context_cache:
++            left_context_cache[raw_sid] = _session_left_live_context(db, raw_sid)
+         if current_lineage_root and resolved_sid == current_lineage_root and not (
+-                _session_left_live_context(db, raw_sid) or is_compacted_hit):
++                left_context_cache[raw_sid] or is_compacted_hit):
+             continue
+         if current_session_id and raw_sid == current_session_id and not is_compacted_hit:
+             continue
+@@ -449,15 +474,22 @@
+     meta = _get_session_meta(db, session_id)
+     if not meta:
+         return tool_error(f"session_id not found: {session_id}", success=False)
+-    rows, err = _loud(lambda: db.get_messages(session_id), "get_messages failed for %s: %s", "failed to load session",
+-                      session_id)
++    def load():
++        bookends = getattr(db, "get_message_bookends", None)
++        if callable(bookends) and head > 0 and tail > 0:
++            return bookends(session_id, head, tail)
++        rows = db.get_messages(session_id)
++        return rows, len(rows)
++    loaded, err = _loud(load, "get_messages failed for %s: %s", "failed to load session", session_id)
+     if err:
+         return err
+-    shaped = [_shape_message(m, max_content_len=_READ_MAX_CONTENT) for m in rows]
+-    total, truncated = len(shaped), len(shaped) > head + tail
++    rows, total = loaded
++    truncated = total > head + tail
++    selected = rows[:head] + rows[-tail:] if truncated else rows
++    shaped = [_shape_message(m, max_content_len=_READ_MAX_CONTENT) for m in selected]
+     return _ok(mode="read", session_id=session_id, link=_session_link(session_id, link_profile),
+                session_meta=_session_meta_block(meta), message_count=total, truncated=truncated,
+-               messages=shaped[:head] + shaped[-tail:] if truncated else shaped,
++               messages=shaped,
+                **({"message": (f"Session has {total} messages; showing first {head} + last {tail}. "
+                                "Pass around_message_id (any id above) to scroll the middle.")} if truncated else {}))
+ 
+diff --git a/tests/tools/test_session_search_title_bounds.py b/tests/tools/test_session_search_title_bounds.py
+new file mode 100644
+--- /dev/null
++++ b/tests/tools/test_session_search_title_bounds.py
+@@ -0,0 +1,117 @@
++"""Title recall must not hydrate a long transcript or an explicitly filtered-out match."""
++import json
++import pytest
++from hermes_state import SessionDB
++from tools.session_search_tool import session_search
++
++@pytest.fixture
++def archive(tmp_path):
++    db = SessionDB(tmp_path / "state.db")
++    db.create_session("archive", source="cli")
++    db.set_session_title("archive", "Quarterly archive review")
++    ids = [db.append_message("archive", role="user" if i % 2 == 0 else "assistant",
++                             content=f"entry {i} " + "x" * 4096) for i in range(80)]
++    db._conn.execute("UPDATE sessions SET started_at=1700000000 WHERE id='archive'")
++    db.end_session("archive", "cli_exit")
++    db._conn.commit()
++    yield db, ids
++    db.close()
++
++
++def watch_reads(monkeypatch, db):
++    counts = {"full_transcripts": 0, "hydrated": 0}
++    messages, hydrate = db.get_messages, db._row_to_message_dict
++    def get_messages(*args, **kwargs):
++        if kwargs.get("limit") is None: counts["full_transcripts"] += 1
++        return messages(*args, **kwargs)
++    def row(*args, **kwargs):
++        counts["hydrated"] += 1
++        return hydrate(*args, **kwargs)
++    monkeypatch.setattr(db, "get_messages", get_messages)
++    monkeypatch.setattr(db, "_row_to_message_dict", row)
++    return counts
++
++
++def title_result(db, **kwargs):
++    result = json.loads(session_search(query="Quarterly archive review", db=db, **kwargs))
++    assert result["success"]
++    return next((r for r in result["results"] if r.get("matched_role") == "session_title"), None)
++
++
++def test_title_recall_hydrates_only_its_bounded_windows(archive, monkeypatch):
++    db, ids = archive
++    counts = watch_reads(monkeypatch, db)
++    entry = title_result(db)
++    assert entry is not None and entry["match_message_id"] == ids[0]
++    assert entry["bookend_start"][0]["id"] == ids[0]
++    assert entry["bookend_end"][-1]["id"] == ids[-1]
++    assert counts["full_transcripts"] == 0
++    assert counts["hydrated"] < 25
++
++
++@pytest.mark.parametrize("filters", [{"exclude_session_ids": ["archive"]}, {"after": "2025-01-01"}])
++def test_filtered_title_match_is_rejected_before_payload_reads(archive, monkeypatch, filters):
++    db, _ = archive
++    counts = watch_reads(monkeypatch, db)
++    assert title_result(db, **filters) is None
++    assert counts == {"full_transcripts": 0, "hydrated": 0}
++
++
++def test_title_window_fallback_preserves_first_last_and_total_counts(archive, monkeypatch):
++    db, ids = archive
++    monkeypatch.setattr(db, "get_anchored_view", lambda *args, **kwargs: {})
++    entry = title_result(db)
++    assert [m["id"] for m in entry["bookend_start"]] == ids[:3]
++    assert [m["id"] for m in entry["messages"]] == ids[:5]
++    assert [m["id"] for m in entry["bookend_end"]] == ids[-3:]
++    assert entry["messages_after"] == len(ids) - 5
++    assert entry["messages_before"] == 0
++
++
++def test_rewind_rows_are_not_returned_by_title_fallback(archive, monkeypatch):
++    db, ids = archive
++    db._conn.execute("UPDATE messages SET active=0 WHERE id=?", (ids[0],))
++    db._conn.commit()
++    monkeypatch.setattr(db, "get_anchored_view", lambda *args, **kwargs: {})
++    entry = title_result(db)
++    assert entry["match_message_id"] == ids[1]
++    assert entry["bookend_start"][0]["id"] == ids[1]
++    assert entry["messages_after"] == len(ids) - 6
++
++
++def test_failed_bounded_title_read_never_retries_as_full_transcript(archive, monkeypatch):
++    db, _ = archive
++    counts = watch_reads(monkeypatch, db)
++    def refused(*args, **kwargs):
++        raise OSError("Synthetic bounded read refusal")
++    monkeypatch.setattr(db, "get_message_bookends", refused)
++    entry = title_result(db)
++    assert entry is not None and not entry["messages"]
++    assert entry["detail"] == "unavailable"
++    assert entry["messages_before"] is None and entry["messages_after"] is None
++    assert "failed" in entry["warning"]
++    assert counts == {"full_transcripts": 0, "hydrated": 0}
++
++
++def test_legacy_adapter_keeps_title_evidence_without_bounded_extension(archive):
++    db, ids = archive
++    class LegacyAdapter:
++        def __getattr__(self, name):
++            if name == "get_message_bookends":
++                raise AttributeError(name)
++            return getattr(db, name)
++    entry = title_result(LegacyAdapter())
++    assert entry is not None and entry["match_message_id"] == ids[0]
++    assert entry["bookend_start"][0]["id"] == ids[0]
++    assert entry["bookend_end"][-1]["id"] == ids[-1]
++
++
++def test_genuinely_empty_title_match_is_not_reported_as_failed(archive):
++    db, _ = archive
++    db.create_session("empty", source="cli")
++    db.set_session_title("empty", "Empty archive")
++    result = json.loads(session_search(query="Empty archive", db=db))
++    entry = next(r for r in result["results"] if r["matched_role"] == "session_title")
++    assert entry["session_id"] == "empty" and entry["detail"] == "full"
++    assert not entry["messages"] and entry["messages_before"] == entry["messages_after"] == 0
++    assert "warning" not in entry

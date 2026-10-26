@@ -143,3 +143,36 @@ A packaged Desktop contains large runtime binaries. Do not retain a complete pac
 Count unique file inodes and remaining hard links before reporting reclaimed storage. A hardlinked copy's apparent size is not independently reclaimable space. Confirm that no process executes, maps or holds files in the deletion set, and verify the kept package hashes afterward. Filesystem free-space deltas can include unrelated concurrent writes.
 
 This is an operational retention boundary, not a new automatic deletion daemon. It does not authorize deleting conversation databases, project data, source-file rollback evidence, held incident/recovery snapshots, models, active test environments or unknown old cache directories. Retain small source backups, manifests and acceptance receipts separately. An unactivated staged package is not evidence that a running Desktop has loaded a patch.
+
+## Relocate inactive maintenance artifacts instead of losing evidence
+
+Put new build, test, audit and release staging directories on a filesystem with
+adequate free space. A different directory on the same filesystem does not free
+the original volume. Check the actual mount/device identity and leave enough room
+for the copy and verification, including concurrent writes.
+
+For an explicitly selected inactive directory, preserve file bytes, sparse files,
+hard links, symlinks, permissions, ownership and relevant extended metadata. Refuse
+unsupported special files and review relative links that escape the selected
+root: moving their parent can change their meaning. Check current cwd, executable,
+open descriptors, mappings and process arguments against the exact paths; an old
+modification time alone does not prove inactivity.
+
+Copy into a new private destination, compare all regular-file SHA-256 values and
+metadata, and flush destination data before retiring the originals. At a fresh
+idle boundary, replace the original location with a link using an appropriate
+atomic cutover where supported. Verify reads and the actual environment/tool
+entrypoints through the old path, including a meaningful offline native check.
+Preserve the original copy until cutover and ownership checks pass; if anything
+changed or still uses it, retain it and resolve that condition first.
+
+Keep relocation receipts and machine paths private. Record selected bytes and
+filesystem free space separately: concurrent cleanup/writers can affect the
+observed free-space delta. Do not migrate a live database, active environment,
+credential store or model merely because it is large.
+
+After release acceptance, explicitly inventoried fixture databases, extracted
+archives, temporary public clones and superseded generated logs can often be
+recreated. Confirm no process uses them, retain compact final results and required
+rollback evidence, then retire only those selected disposable paths. Neither this
+guide nor a successful release authorizes a blanket age sweep of user data.
