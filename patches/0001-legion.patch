@@ -41448,3 +41448,677 @@ new file mode 100644
 +    assert ok.get('ok') and ok['reasoning_effort'] is None
 +    with kbc.connect_closing() as conn:
 +        assert board.get_task(conn, ok['task_id']).reasoning_effort is None
+diff --git a/apps/desktop/e2e/unlisted-session-restore.spec.ts b/apps/desktop/e2e/unlisted-session-restore.spec.ts
+new file mode 100644
+--- /dev/null
++++ b/apps/desktop/e2e/unlisted-session-restore.spec.ts
+@@ -0,0 +1,107 @@
++import { spawnSync } from 'node:child_process'
++import * as fs from 'node:fs'
++import * as path from 'node:path'
++
++import { _electron } from '@playwright/test'
++
++import { waitForChatReady } from '../../../tests-js/scripts/desktop-chat-smoke'
++import { writeEnvFile, writeMockProviderConfig } from '../../../tests-js/scripts/mock-provider-config'
++import { startMockServer } from '../../../tests-js/scripts/mock-server'
++
++import { buildAppEnv, createSandbox, launchDesktop, PACKAGED_BINARY_PATH } from './fixtures'
++import { expect, installErrorBannerGuard, test } from './test'
++
++const root = path.resolve(import.meta.dirname, '..', '..', '..')
++const oldId = '20261027_010000_000000'
++const oldText = 'Synthetic older session restore evidence'
++
++test('cold start restores an older session omitted from the first page', async () => {
++  test.setTimeout(120_000)
++  const sandbox = createSandbox('unlisted-restore')
++  const mock = await startMockServer()
++  writeMockProviderConfig(sandbox.hermesHome, mock.url)
++  writeEnvFile(sandbox.hermesHome)
++  const python = process.env.HERMES_E2E_PYTHON || 'python3'
++
++  const seed = `
++from pathlib import Path
++import sys,time
++from hermes_state import SessionDB
++root=Path(sys.argv[1]); db=SessionDB(db_path=root/'state.db'); now=time.time()
++for i in range(55):
++ sid=f'20261027_0100{i:02d}_{i:06x}'
++ db.create_session(sid,source='desktop',model='mock-model')
++ db.append_message(sid,'user','Synthetic older session restore evidence' if i==0 else f'Synthetic newer session {i}',timestamp=now-1200+i)
++ db.set_session_title(sid, 'Synthetic older' if i==0 else f'Synthetic newer {i}')
++db.close()
++`
++
++  const seeded = spawnSync(python, ['-c', seed, sandbox.hermesHome], {
++    cwd: root,
++    env: {
++      PATH: process.env.PATH,
++      HOME: sandbox.root,
++      HERMES_HOME: sandbox.hermesHome,
++      HERMES_DISABLE_LAZY_INSTALLS: '1',
++      PYTHONPATH: root
++    },
++    encoding: 'utf8'
++  })
++
++  expect(seeded.status, seeded.stderr).toBe(0)
++
++  const env = buildAppEnv(sandbox, {
++    HERMES_DESKTOP_PYTHON: python,
++    HERMES_DISABLE_LAZY_INSTALLS: '1'
++  })
++
++  // The packaged option exercises the built release renderer with the same
++  // isolated backend and synthetic data as the unpackaged source fixture.
++  const launch = async () =>
++    process.env.HERMES_E2E_PACKAGED === '1'
++      ? await (async () => {
++          const app = await _electron.launch({
++            executablePath:
++              process.platform === 'linux' && !fs.existsSync(PACKAGED_BINARY_PATH)
++                ? path.join(path.dirname(PACKAGED_BINARY_PATH), 'Hermes')
++                : PACKAGED_BINARY_PATH,
++            args: ['--disable-gpu', '--no-sandbox'],
++            env
++          })
++
++          const page = await app.firstWindow()
++          installErrorBannerGuard(page)
++
++          return { app, page }
++        })()
++      : await launchDesktop(env)
++
++  let { app, page } = await launch()
++
++  try {
++    await waitForChatReady(page, 60_000)
++
++    const initialPage = await page.evaluate(async () =>
++      window.hermesDesktop!.api<{ sessions: Array<{ id: string }> }>({
++        path: '/api/profiles/sessions?limit=50&offset=0&min_messages=1&archived=exclude&order=recent&profile=default'
++      })
++    )
++
++    expect(initialPage.sessions).toHaveLength(50)
++    expect(initialPage.sessions.some(row => row.id === oldId)).toBe(false)
++    await page.evaluate(id => {
++      localStorage.setItem('hermes.desktop.lastRoute.profile.default', `/${id}`)
++      localStorage.setItem('hermes.desktop.lastSessionId.profile.default', id)
++    }, oldId)
++    await app.close()
++    const relaunched = await launch()
++    app = relaunched.app
++    page = relaunched.page
++    await expect(page.locator('[data-slot="aui_thread-viewport"]')).toContainText(oldText, { timeout: 60_000 })
++    await expect.poll(() => mock.receivedPrompts.length).toBe(0)
++  } finally {
++    await app.close().catch(() => undefined)
++    await mock.close()
++    sandbox.cleanup()
++  }
++})
+diff --git a/apps/desktop/src/api/sessions.ts b/apps/desktop/src/api/sessions.ts
+--- a/apps/desktop/src/api/sessions.ts
++++ b/apps/desktop/src/api/sessions.ts
+@@ -444,6 +444,13 @@
+ // the given `profile`). The backend resolves exact ids and unique prefixes and
+ // 404s when the id isn't on that profile — so a cheap by-id lookup replaces the
+ // cross-profile list scan when locating an unknown id's owner.
++/** Whether the native session-read resolver would stay on the expected owner. */
++export function sessionReadMatchesOwner(id: string, profile: ProfileScope, connectionId: string): boolean {
++  const pinned = sessionReadOwnerPin(id, profile).connectionId
++
++  return !pinned || pinned === connectionId
++}
++
+ export function getSession(id: string, profile?: ProfileScope): Promise<SessionInfo> {
+   // Pin the read to the session's OWNER connection (#125372): the ambient dial
+   // 404s on the wrong backend whenever two connections expose a same-named
+diff --git a/apps/desktop/src/app/contrib/hooks/use-desktop-integrations.test.tsx b/apps/desktop/src/app/contrib/hooks/use-desktop-integrations.test.tsx
+--- a/apps/desktop/src/app/contrib/hooks/use-desktop-integrations.test.tsx
++++ b/apps/desktop/src/app/contrib/hooks/use-desktop-integrations.test.tsx
+@@ -1,6 +1,7 @@
+ import { act, renderHook, waitFor } from '@testing-library/react'
+ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+ 
++import { setApiRequestLocalMode, setSessionOwnerResolver } from '@/api/client'
+ import { registerTerminalContextMenu } from '@/app/right-sidebar/terminal/terminal-context-menu'
+ import { setApiRequestConnection, setApiRequestProfile } from '@/hermes'
+ import { createClientSessionState } from '@/lib/chat-runtime'
+@@ -14,7 +15,9 @@
+   _resetLegacyDiscardForTests,
+   _resetSessionOwnerHintsForTests,
+   getSessionOwnerHint,
+-  setSessionOwnerHint
++  setSessionOwnerHint,
++  setSessionsLoadError,
++  setSessionsLoading
+ } from '@/store/session'
+ import { dropSessionState, publishSessionState } from '@/store/session-states'
+ import type * as WindowsStore from '@/store/windows'
+@@ -110,6 +113,12 @@
+   })
+ 
+   afterEach(() => {
++    setApiRequestConnection(null)
++    setApiRequestLocalMode(false)
++    setSessionOwnerResolver(null)
++    setSessionsLoading(true)
++    setSessionsLoadError(false)
++
+     if (initialHermesDesktop) {
+       desktopWindow.hermesDesktop = initialHermesDesktop
+     }
+@@ -321,6 +330,254 @@
+       )
+     }
+ 
++    it('restores an existing same-profile session outside the loaded list', async () => {
++      setApiRequestConnection('local')
++      window.localStorage.setItem('hermes.desktop.lastSessionId.profile.default', 'older-session')
++      stubGetSession({ id: 'older-session', profile: 'default', source: 'tui' })
++
++      render({ profileReady: true, sessions: [session({ id: 'newer-session', profile: 'default' })] })
++
++      await waitFor(() => expect(navigate).toHaveBeenCalledWith('/older-session', { replace: true }))
++      expect(window.localStorage.getItem('hermes.desktop.lastSessionId.profile.default')).toBe('older-session')
++    })
++
++    it('restores an unlisted session on the untagged local connection', async () => {
++      setApiRequestConnection(null)
++      setApiRequestLocalMode(true)
++      window.localStorage.setItem('hermes.desktop.lastSessionId.profile.default', 'older-local')
++      stubGetSession({ id: 'older-local', profile: 'default', source: 'tui' })
++
++      render({ profileReady: true, sessions: [session({ id: 'newer-session', profile: 'default' })] })
++
++      await waitFor(() => expect(navigate).toHaveBeenCalledWith('/older-local', { replace: true }))
++    })
++
++    it('resolves an unlisted remembered session route when no last-session id was saved', async () => {
++      setApiRequestLocalMode(true)
++      window.localStorage.setItem('hermes.desktop.lastRoute.profile.default', '/route-only')
++      stubGetSession({ id: 'route-only', profile: 'default', source: 'tui' })
++
++      render({ profileReady: true, sessions: [session({ id: 'newer-session', profile: 'default' })] })
++
++      await waitFor(() => expect(navigate).toHaveBeenCalledWith('/route-only', { replace: true }))
++    })
++
++    it('resolves a remembered session when the completed session list is empty', async () => {
++      setApiRequestLocalMode(true)
++      setSessionsLoading(true)
++      window.localStorage.setItem('hermes.desktop.lastSessionId.profile.default', 'older-session')
++      stubGetSession({ id: 'older-session', profile: 'default', source: 'tui' })
++
++      render({ profileReady: true, sessions: [] })
++      expect(desktopWindow.hermesDesktop!.api).not.toHaveBeenCalled()
++
++      act(() => setSessionsLoading(false))
++      await waitFor(() => expect(navigate).toHaveBeenCalledWith('/older-session', { replace: true }))
++    })
++
++    it('waits when the empty session list failed to load', () => {
++      setApiRequestLocalMode(true)
++      setSessionsLoading(false)
++      setSessionsLoadError(true)
++      window.localStorage.setItem('hermes.desktop.lastSessionId.profile.default', 'older-session')
++      stubGetSession({ id: 'older-session', profile: 'default', source: 'tui' })
++
++      render({ profileReady: true, sessions: [] })
++      expect(desktopWindow.hermesDesktop!.api).not.toHaveBeenCalled()
++      expect(window.localStorage.getItem('hermes.desktop.lastSessionId.profile.default')).toBe('older-session')
++    })
++
++    it('keeps a route-only session after a temporary lookup failure', async () => {
++      setApiRequestLocalMode(true)
++      window.localStorage.setItem('hermes.desktop.lastRoute.profile.default', '/route-only')
++      const api = vi.mocked(desktopWindow.hermesDesktop!.api as ReturnType<typeof vi.fn>)
++      api.mockRejectedValue(new Error('temporary failure'))
++
++      const sessions = [session({ id: 'newer-session', profile: 'default' })]
++      const result = render({ profileReady: true, sessions })
++
++      await waitFor(() => expect(api).toHaveBeenCalled())
++      result.rerender({
++        activeProfile: 'default',
++        locationPathname: '/',
++        profileReady: true,
++        resumeExhaustedSessionId: null,
++        resumeLastSession: true,
++        routedSessionId: null,
++        sessions: [...sessions]
++      })
++      expect(window.localStorage.getItem('hermes.desktop.lastRoute.profile.default')).toBe('/route-only')
++      expect(navigate).not.toHaveBeenCalled()
++    })
++
++    it('keeps the route when its stored owner is a different host', () => {
++      setApiRequestConnection('local')
++      window.localStorage.setItem('hermes.desktop.lastRoute.profile.default', '/shared-id')
++      setSessionOwnerHint('shared-id', { connectionId: 'other-host', profile: 'default' })
++
++      render({ profileReady: true, sessions: [session({ id: 'newer-session', profile: 'default' })] })
++
++      expect(window.localStorage.getItem('hermes.desktop.lastRoute.profile.default')).toBe('/shared-id')
++      expect(navigate).not.toHaveBeenCalled()
++    })
++
++    it('resolves an unlisted delegate parent on the same remote connection', async () => {
++      setApiRequestConnection('remote-a')
++      window.localStorage.setItem('hermes.desktop.lastSessionId.profile.default', 'delegate-child')
++      vi.mocked(desktopWindow.hermesDesktop!.api as ReturnType<typeof vi.fn>).mockImplementation(
++        async (request: { connectionId?: string; path?: string; profile?: string }) => {
++          expect(request.connectionId).toBe('remote-a')
++          expect(request.profile).toBe('default')
++
++          if (request.path?.startsWith('/api/sessions/delegate-child')) {
++            return session({
++              id: 'delegate-child',
++              parent_session_id: 'older-parent',
++              profile: 'default',
++              source: 'subagent'
++            })
++          }
++
++          if (request.path?.startsWith('/api/sessions/older-parent')) {
++            return session({ id: 'older-parent', profile: 'default', source: 'tui' })
++          }
++
++          throw new Error('unexpected session request')
++        }
++      )
++
++      render({ profileReady: true, sessions: [session({ id: 'newer-session', profile: 'default' })] })
++
++      await waitFor(() => expect(navigate).toHaveBeenCalledWith('/older-parent', { replace: true }))
++      expect(getSessionOwnerHint('older-parent')?.connectionId).toBe('remote-a')
++    })
++
++    it('does not restore an unlisted row from a different profile', async () => {
++      setApiRequestConnection('local')
++      window.localStorage.setItem('hermes.desktop.lastSessionId.profile.default', 'foreign-session')
++      stubGetSession({ id: 'foreign-session', profile: 'other', source: 'tui' })
++
++      render({ profileReady: true, sessions: [session({ id: 'newer-session', profile: 'default' })] })
++
++      await waitFor(() => expect(desktopWindow.hermesDesktop!.api).toHaveBeenCalled())
++      expect(window.localStorage.getItem('hermes.desktop.lastSessionId.profile.default')).toBe('foreign-session')
++      expect(navigate).not.toHaveBeenCalledWith('/foreign-session', { replace: true })
++    })
++
++    it('retains the remembered id if a by-id lookup returns a different session', async () => {
++      setApiRequestConnection('local')
++      window.localStorage.setItem('hermes.desktop.lastSessionId.profile.default', 'requested-session')
++      stubGetSession({ id: 'different-session', profile: 'default', source: 'tui' })
++
++      render({ profileReady: true, sessions: [session({ id: 'newer-session', profile: 'default' })] })
++
++      await waitFor(() => expect(desktopWindow.hermesDesktop!.api).toHaveBeenCalled())
++      await act(async () => Promise.resolve())
++      expect(navigate).not.toHaveBeenCalled()
++      expect(window.localStorage.getItem('hermes.desktop.lastSessionId.profile.default')).toBe('requested-session')
++    })
++
++    it('restores a canonical id returned for an unambiguous remembered prefix', async () => {
++      setApiRequestConnection('local')
++      window.localStorage.setItem('hermes.desktop.lastSessionId.profile.default', 'older-')
++      stubGetSession({ id: 'older-canonical', profile: 'default', source: 'tui' })
++
++      render({ profileReady: true, sessions: [session({ id: 'newer-session', profile: 'default' })] })
++
++      await waitFor(() => expect(navigate).toHaveBeenCalledWith('/older-canonical', { replace: true }))
++    })
++
++    it('does not restore an unlisted same-id session from the wrong connection', async () => {
++      setApiRequestConnection('local')
++      window.localStorage.setItem('hermes.desktop.lastSessionId.profile.default', 'shared-id')
++      setSessionOwnerHint('shared-id', { connectionId: 'other-host', profile: 'default' })
++      stubGetSession({ id: 'shared-id', profile: 'default', source: 'tui' })
++
++      render({ profileReady: true, sessions: [session({ id: 'newer-session', profile: 'default' })] })
++
++      expect(window.localStorage.getItem('hermes.desktop.lastSessionId.profile.default')).toBe('shared-id')
++      expect(navigate).not.toHaveBeenCalledWith('/shared-id', { replace: true })
++    })
++
++    it('does not use a resolver pin pointing to another host for an untagged local request', async () => {
++      setApiRequestLocalMode(true)
++      setSessionOwnerResolver(() => ({ connectionId: 'other-host', profile: 'default' }))
++      window.localStorage.setItem('hermes.desktop.lastSessionId.profile.default', 'shared-id')
++      stubGetSession({ id: 'shared-id', profile: 'default', source: 'tui' })
++
++      render({ profileReady: true, sessions: [session({ id: 'newer-session', profile: 'default' })] })
++
++      await act(async () => Promise.resolve())
++      expect(desktopWindow.hermesDesktop!.api).not.toHaveBeenCalled()
++      expect(navigate).not.toHaveBeenCalled()
++      expect(window.localStorage.getItem('hermes.desktop.lastSessionId.profile.default')).toBe('shared-id')
++    })
++
++    it('does not navigate after the user has moved away during the by-id lookup', async () => {
++      setApiRequestConnection('local')
++      window.localStorage.setItem('hermes.desktop.lastSessionId.profile.default', 'older-session')
++      let finish!: (row: SessionInfo) => void
++      vi.mocked(desktopWindow.hermesDesktop!.api as ReturnType<typeof vi.fn>).mockImplementation(
++        () =>
++          new Promise<SessionInfo>(resolve => {
++            finish = resolve
++          })
++      )
++      const sessions = [session({ id: 'newer-session', profile: 'default' })]
++      const result = render({ profileReady: true, sessions })
++      await waitFor(() => expect(finish).toBeDefined())
++      result.rerender({
++        activeProfile: 'default',
++        locationPathname: '/newer-session',
++        profileReady: true,
++        resumeExhaustedSessionId: null,
++        resumeLastSession: true,
++        routedSessionId: 'newer-session',
++        sessions
++      })
++      await act(async () => {
++        finish(session({ id: 'older-session', profile: 'default', source: 'tui' }))
++      })
++      expect(navigate).not.toHaveBeenCalledWith('/older-session', { replace: true })
++    })
++
++    it('does not restore an obsolete route when another window updates it during lookup', async () => {
++      setApiRequestConnection('local')
++      window.localStorage.setItem('hermes.desktop.lastRoute.profile.default', '/older-session')
++      let finish!: (row: SessionInfo) => void
++      vi.mocked(desktopWindow.hermesDesktop!.api as ReturnType<typeof vi.fn>).mockImplementation(
++        () => new Promise<SessionInfo>(resolve => (finish = resolve))
++      )
++
++      render({ profileReady: true, sessions: [session({ id: 'newer-session', profile: 'default' })] })
++      await waitFor(() => expect(finish).toBeDefined())
++      window.localStorage.setItem('hermes.desktop.lastRoute.profile.default', '/different-session')
++      await act(async () => finish(session({ id: 'older-session', profile: 'default', source: 'tui' })))
++
++      expect(navigate).not.toHaveBeenCalled()
++      expect(window.localStorage.getItem('hermes.desktop.lastRoute.profile.default')).toBe('/different-session')
++    })
++
++    it('does not restore when the parent owner changes during the by-id lookup', async () => {
++      setApiRequestConnection('local')
++      window.localStorage.setItem('hermes.desktop.lastSessionId.profile.default', 'delegate-child')
++      let finish!: (row: SessionInfo) => void
++      vi.mocked(desktopWindow.hermesDesktop!.api as ReturnType<typeof vi.fn>).mockImplementation(
++        (request: { path?: string }) =>
++          request.path?.startsWith('/api/sessions/delegate-child')
++            ? Promise.resolve(session({ id: 'delegate-child', parent_session_id: 'older-parent', source: 'subagent' }))
++            : new Promise<SessionInfo>(resolve => (finish = resolve))
++      )
++
++      render({ profileReady: true, sessions: [session({ id: 'newer-session', profile: 'default' })] })
++      await waitFor(() => expect(finish).toBeDefined())
++      setSessionOwnerHint('older-parent', { connectionId: 'other-host', profile: 'default' })
++      await act(async () => finish(session({ id: 'older-parent', profile: 'default', source: 'tui' })))
++
++      expect(navigate).not.toHaveBeenCalled()
++      expect(getSessionOwnerHint('older-parent')?.connectionId).toBe('other-host')
++    })
++
+     it('repairs a remembered delegate child to its parent on restore', async () => {
+       // Written by an older build (or a list slice that served the child).
+       window.localStorage.setItem('hermes.desktop.lastSessionId.profile.default', 'delegate-child')
+@@ -334,23 +591,15 @@
+       expect(window.localStorage.getItem('hermes.desktop.lastSessionId.profile.default')).toBe('parent-session')
+     })
+ 
+-    // Pins the reachability contract of the by-id resolve branch: the
+-    // `sessionBelongsToProfile(sessions, remembered, activeProfile)` gate
+-    // above the repair uses the SAME `sessions` array and the SAME
+-    // `sessionMatchesStoredId` predicate as `rowFor`, so whenever
+-    // `repairOwnerHintsForRestore(remembered)` runs, `rowFor(remembered)`
+-    // finds the row — an id absent from the list is cleared before the
+-    // repair, it never reaches it (evidence for the #97809 review reply).
+-    it('clears an unlisted remembered id instead of restoring it', async () => {
++    it('preserves an unlisted remembered id when the active owner is unknown', async () => {
+       window.localStorage.setItem('hermes.desktop.lastSessionId.profile.default', 'unlisted-session')
+       stubGetSession({ connection_id: 'ssh-proxmox', id: 'unlisted-session', profile: 'default' })
+       setSessionOwnerHint('unlisted-session', { connectionId: 'ssh-proxmox', profile: 'default' })
+ 
+       render({ profileReady: true, sessions: [session({ id: 'other-session', profile: 'default' })] })
+ 
+-      await waitFor(() =>
+-        expect(window.localStorage.getItem('hermes.desktop.lastSessionId.profile.default')).toBeNull()
+-      )
++      await waitFor(() => expect(desktopWindow.hermesDesktop!.api).toHaveBeenCalled())
++      expect(window.localStorage.getItem('hermes.desktop.lastSessionId.profile.default')).toBe('unlisted-session')
+       expect(navigate).not.toHaveBeenCalledWith('/unlisted-session', { replace: true })
+     })
+ 
+diff --git a/apps/desktop/src/app/contrib/hooks/use-desktop-integrations.ts b/apps/desktop/src/app/contrib/hooks/use-desktop-integrations.ts
+--- a/apps/desktop/src/app/contrib/hooks/use-desktop-integrations.ts
++++ b/apps/desktop/src/app/contrib/hooks/use-desktop-integrations.ts
+@@ -8,7 +8,7 @@
+ import { commandFocusedTerminal, wordEraseFocusedTerminal } from '@/app/right-sidebar/terminal/terminal-context-menu'
+ import { openConnectionDoneLink } from '@/components/assistant-ui/connector-tool'
+ import { $diskPluginsScanPending } from '@/contrib/runtime-loader'
+-import { getSession } from '@/hermes'
++import { ambientOwnerConnectionId, getApiRequestConnection, getSession, sessionReadMatchesOwner } from '@/hermes'
+ import { resolveDeepLinkAction } from '@/lib/deeplink-routes'
+ import { pathFromHermesDeepLink, resolveHermesOpenPath } from '@/lib/hermes-open-target'
+ import { storedSessionIdForNotification } from '@/lib/session-ids'
+@@ -27,9 +27,12 @@
+ import { openFolderAsProject } from '@/store/projects'
+ import {
+   $selectedStoredSessionId,
++  $sessionsLoadError,
++  $sessionsLoading,
+   forgetSessionOwnerHintsForSession,
+   getRememberedRoute,
+   getRememberedSessionId,
++  getSessionOwnerHints,
+   resolveComposerSessionKey,
+   sessionBelongsToProfile,
+   sessionMatchesStoredId,
+@@ -117,7 +120,12 @@
+   }, [])
+ 
+   const restoredRef = useRef(false)
++  const unresolvedRestoreProfileRef = useRef<string | null>(null)
++  const restoreContextRef = useRef({ activeProfile, locationPathname })
++  restoreContextRef.current = { activeProfile, locationPathname }
+   const diskPluginsScanPending = useStore($diskPluginsScanPending)
++  const sessionsLoading = useStore($sessionsLoading)
++  const sessionsLoadError = useStore($sessionsLoadError)
+ 
+   // Wait until boot has adopted the primary profile, then restore that profile's
+   // navigation exactly once. The same effect owns subsequent writes so the
+@@ -154,7 +162,8 @@
+ 
+         const route = getRememberedRoute(activeProfile)
+         const routeSession = route ? routeSessionId(route) : null
+-        const last = getRememberedSessionId(activeProfile)
++        const storedLast = getRememberedSessionId(activeProfile)
++        const last = storedLast ?? routeSession
+ 
+         const restorableNonSessionRoute =
+           !!route && route !== NEW_CHAT_ROUTE && !routeSession && !isOverlayView(appViewForPath(route))
+@@ -163,7 +172,12 @@
+         // refresh completes. Keep the restore latch open until ownership can be
+         // decided; treating an unloaded list as authoritative would erase valid
+         // remembered navigation permanently.
+-        if (sessions.length === 0 && !restorableNonSessionRoute && (routeSession || last)) {
++        if (
++          sessions.length === 0 &&
++          (sessionsLoading || sessionsLoadError) &&
++          !restorableNonSessionRoute &&
++          (routeSession || last)
++        ) {
+           return
+         }
+ 
+@@ -230,12 +244,6 @@
+           return
+         }
+ 
+-        // A remembered route carried a session id we can no longer validate —
+-        // clear the stale entry so the next cold start won't re-try it.
+-        if (routeSession) {
+-          setRememberedRoute(null, activeProfile)
+-        }
+-
+         if (last) {
+           // Fast path: a listed, non-delegate row restores directly, exactly
+           // as before — no by-id fetch on the common cold start.
+@@ -249,14 +257,100 @@
+ 
+           // Unlisted (or a delegate row that reached a list slice): resolve
+           // the id directly — the by-id endpoint serves delegate children the
+-          // list omits. A delegate child repairs to its parent, an orphan or
+-          // foreign-profile id clears, and a fetch failure keeps the
+-          // remembered value for the next launch instead of discarding it.
+-          void resolveRememberedSessionId(last, getSession)
+-            .then(remembered => {
+-              if (!remembered || !sessionBelongsToProfile(sessions, remembered, activeProfile)) {
++          // list omits. A delegate child repairs to its parent. Unknown
++          // ownership and fetch failures retain remembered navigation.
++          unresolvedRestoreProfileRef.current = activeProfile
++          const connectionId = getApiRequestConnection()
++          const ownerConnection = ambientOwnerConnectionId()
++
++          const wrongOwner = (id: string) =>
++            getSessionOwnerHints(id).some(
++              hint => hint.connectionId !== ownerConnection || (hint.targetProfile || hint.profile) !== activeProfile
++            ) ||
++            (!!ownerConnection &&
++              !sessionReadMatchesOwner(
++                id,
++                connectionId ? { connectionId, profile: activeProfile } : activeProfile,
++                ownerConnection
++              ))
++
++          // A remembered id is only keyed by profile; a same-id row on a
++          // different host is not evidence that the remembered row is here.
++          if (ownerConnection && wrongOwner(last)) {
++            return
++          }
++
++          let fetched: SessionInfo | undefined
++
++          const getScopedSession = async (id: string) => {
++            // Leave an untagged local request untagged so the existing legacy
++            // per-profile routing remains authoritative.
++            const row = await getSession(id, connectionId ? { connectionId, profile: activeProfile } : activeProfile)
++
++            // The API may expand an unambiguous prefix, but an unrelated row
++            // cannot be evidence for this remembered session.
++            if (!row.id?.startsWith(id)) {
++              throw new Error('Session lookup returned a different id')
++            }
++
++            fetched = row
++
++            return row
++          }
++
++          const stillRestoring = () =>
++            restoreContextRef.current.activeProfile === activeProfile &&
++            restoreContextRef.current.locationPathname === NEW_CHAT_ROUTE &&
++            getApiRequestConnection() === connectionId &&
++            ambientOwnerConnectionId() === ownerConnection &&
++            getRememberedSessionId(activeProfile) === storedLast &&
++            getRememberedRoute(activeProfile) === route
++
++          void resolveRememberedSessionId(last, getScopedSession)
++            .then(async remembered => {
++              if (!stillRestoring()) {
++                return
++              }
++
++              let listedOwner = !!remembered && sessionBelongsToProfile(sessions, remembered, activeProfile)
++
++              // A by-id result can establish ownership outside the loaded list
++              // only when the active connection's identity is known.
++              if (remembered && !listedOwner && ownerConnection) {
++                // A same-id session on another host is not the remembered one.
++                // Keep the remembered value for the owner connection instead.
++                if (wrongOwner(remembered)) {
++                  return
++                }
++
++                if (fetched?.id !== remembered) {
++                  fetched = await getScopedSession(remembered)
++                }
++
++                if (!stillRestoring() || wrongOwner(remembered)) {
++                  return
++                }
++
++                const sourceConnection = fetched?.connection_id?.trim()
++
++                listedOwner =
++                  !!fetched &&
++                  fetched.source !== 'subagent' &&
++                  (!sourceConnection || sourceConnection === ownerConnection) &&
++                  sessionBelongsToProfile([fetched], remembered, activeProfile)
++
++                if (listedOwner && connectionId) {
++                  setSessionOwnerHint(remembered, { connectionId, profile: activeProfile })
++                }
++              }
++
++              if (!remembered) {
+                 setRememberedSessionId(null, activeProfile)
+ 
++                return
++              }
++
++              if (!listedOwner) {
+                 return
+               }
+ 
+@@ -285,6 +379,10 @@
+     // restart and the window boots into the resume-error screen each time.
+     const exhausted = routedSessionId !== null && routedSessionId === resumeExhaustedSessionId
+ 
++    if (locationPathname !== NEW_CHAT_ROUTE || unresolvedRestoreProfileRef.current !== activeProfile) {
++      unresolvedRestoreProfileRef.current = null
++    }
++
+     if (routedSessionId && !exhausted && sessionBelongsToProfile(sessions, routedSessionId, activeProfile)) {
+       // A delegate child (source='subagent') is never itself a rememberable
+       // destination: it is invisible in the sidebar, so a restart would resume
+@@ -303,7 +401,11 @@
+           activeProfile
+         )
+       }
+-    } else if (!routedSessionId && !isOverlayView(appViewForPath(locationPathname))) {
++    } else if (
++      !routedSessionId &&
++      unresolvedRestoreProfileRef.current !== activeProfile &&
++      !isOverlayView(appViewForPath(locationPathname))
++    ) {
+       setRememberedRoute(locationPathname, activeProfile)
+     }
+   }, [
+@@ -315,7 +417,9 @@
+     resumeExhaustedSessionId,
+     resumeLastSession,
+     routedSessionId,
+-    sessions
++    sessions,
++    sessionsLoadError,
++    sessionsLoading
+   ])
+ 
+   useEffect(() => {
+diff --git a/apps/desktop/src/hermes.ts b/apps/desktop/src/hermes.ts
+--- a/apps/desktop/src/hermes.ts
++++ b/apps/desktop/src/hermes.ts
+@@ -5,6 +5,7 @@
+ // capabilityScoped are shared across api/ but must not reach call sites, or
+ // request scoping stops having a single owner.
+ export {
++  ambientOwnerConnectionId,
+   getApiRequestConnection,
+   getApiRequestProfile,
+   hermesApi,

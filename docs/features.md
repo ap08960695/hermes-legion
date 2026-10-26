@@ -127,3 +127,7 @@ Preserve a verified worker completion result when an iteration or time budget ch
 ## Usage reporting during log rotation (v0.6.14)
 
 If a log disappears or cannot be inspected while selecting the newest logs, continue with available files and report the number that could not be inspected. Sampling, the file budget and the explicit unknown-coverage caveat remain in place.
+
+## Older session restoration (v0.6.15)
+
+Cold startup can resolve a remembered session outside the loaded sidebar page when its connection and profile are validated. It preserves remembered navigation when ownership is uncertain or lookup fails, and ignores stale results after the user moves away. An unambiguous ID prefix may resolve to its canonical session.
