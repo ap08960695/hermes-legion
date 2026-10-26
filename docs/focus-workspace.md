@@ -12,6 +12,16 @@ Use **Wide** to switch from Focus to Workspace, and **Focus** to return. The exi
 
 On a narrow viewport, the primary destinations move to a bottom bar. Motion uses short, finite transitions and a selection accent, with reduced-motion support. There is no added frame loop or background animation scheduler.
 
+## Current work and task history
+
+Work uses the actual native Kanban board, card controls and detail dialog. It closes the Sessions side pane so the work canvas has its own space; returning to Chat or Bots reveals the existing pane through its normal owner. The Sessions pane keeps its New session entry and real project/session tree instead of repeating the global navigation. Selecting the visible Bots pane updates the rail selection.
+
+**Current work** excludes completed and archived columns. **History** shows terminal columns and initially mounts at most 50 cards per column; **Show more** adds another 50. Search still filters the complete board data already fetched from the native API, including older history beyond the visible batch. This bounds rendering, not backend fetching. It is not server pagination or an archive/delete operation. Unknown statuses remain in Current work rather than disappearing.
+
+Status summaries show native Running, Ready and Blocked counts separately. Review and owner decisions are not relabeled as running work. Changing views clears selections, and empty history has its own explanation and a return-to-current-work button. Native ownership, status-transition, drag/drop and active-worker gates remain authoritative.
+
+**Models** opens main model configuration; **Accounts** opens provider accounts; **Usage** opens the native Usage section. The empty Chat screen has a compact localized heading inside Focus; the standalone intro remains unchanged outside that integration. No account, model or language is changed by these presentation choices.
+
 ## Configure an existing session's goal
 
 Open **All features → Goal**, or **Catch up → Configure goal**. The form combines:
@@ -43,4 +53,4 @@ Apply the complete pinned patch using [installation and rollback](installation-a
 
 The implementation uses existing native components, icons, locale infrastructure, layout stores and owned-session transport. English copy is complete. Thai strings can be used with a registered Thai language pack; this patch does not force a global language change.
 
-See [verification](verification.md#native-focus-and-workspace-v040) for the offline evidence and limits. No live model call, allowance probe or paid fallback was used for this change. Offline render tests do not establish production token savings or certify every operating system.
+See [verification](verification.md#native-work-surface-correction-v044) for the offline evidence and limits. No live model call, allowance probe or paid fallback was used for this change. Offline render tests do not establish production token savings or certify every operating system.

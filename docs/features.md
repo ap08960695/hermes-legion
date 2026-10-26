@@ -34,3 +34,7 @@ Existing local tests helped develop these changes. Public release acceptance is 
 ## Reuse a ready startup checker
 
 Different launcher runtime scopes can share one PM checker cache. A ready checker matching the requested PM lock and interpreter is now reused even when another launcher's generation is selected. The current selected checker keeps priority; matching published alternatives must pass native import validation and receive the normal child lease. This prevents a false stale-dependency result from starting unnecessary preparation. It does not weaken application dependency validation, retain unused generations indefinitely or change environment selections.
+
+## Native work-surface correction
+
+The actual Kanban canvas now separates current work from bounded completed history, and native Sessions/Bots navigation shares one global owner. Models and Usage open their named native sections. Empty-state and compact Chat presentation changes are described in the [Desktop guide](focus-workspace.md#current-work-and-task-history). No task lifecycle, provider selection, quota or inference behavior changes.
