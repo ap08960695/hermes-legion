@@ -1040,3 +1040,7 @@ The Captain role template exposes the optional planner/executor split in its own
 ## Per-task CLI reasoning (v0.6.18)
 
 Five related test files passed 22 offline cases against the candidate and the same 22 cases against installed source in a network-isolated environment; these are overlapping runs. The new cases cover normalized effort, `none`, invalid input without card creation, omitted effort and propagation from CLI to task and worker arguments. No live dispatch, model call or quota measurement was performed.
+
+## Cross-profile cache cohorts (v0.6.19)
+
+Five related test files passed 32 offline cases on the candidate and the same 32 cases on installed source in a network-isolated environment; these overlapping runs are not summed. Cases cover distinct profiles, duplicate and conflicting records, missing fields, invalid values, unknown accounts, failed calls, CLI opt-in and output privacy. The feature reads existing logs only and performs no provider request. Cohort equality is observational evidence, not a claim of shared cache origin or savings.

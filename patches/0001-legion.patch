@@ -21929,7 +21929,7 @@ diff --git a/hermes_cli/usage_attribution.py b/hermes_cli/usage_attribution.py
 new file mode 100644
 --- /dev/null
 +++ b/hermes_cli/usage_attribution.py
-@@ -0,0 +1,154 @@
+@@ -0,0 +1,159 @@
 +"""Read-only observed usage attribution: python -m hermes_cli.usage_attribution --home PATH.
 +
 +Matching logged fields and failed calls are investigation signals, never proof of waste.
@@ -22074,13 +22074,18 @@ new file mode 100644
 +    parser.add_argument('--home',type=Path,required=True);parser.add_argument('--hours',type=float,default=24)
 +    parser.add_argument("--max-log-files",type=int,default=32,help="Maximum recent uncompressed logs to read (1-512; default 32, up to 2 MiB per file)")
 +    parser.add_argument('--board',type=Path,action='append',default=[],help='Additional existing Kanban database to read (repeatable; maximum 64)')
++    parser.add_argument('--cross-profile',action='store_true',help='Include aggregate cross-profile cache cohort evidence')
 +    args=parser.parse_args()
 +    if not 1<=args.max_log_files<=512:parser.error("--max-log-files must be within [1,512]")
 +    if len(args.board)>64:parser.error('--board may be specified at most 64 times')
 +    if not 0<args.hours<=168:parser.error('--hours must be within (0,168]')
 +    end=time.time();start=end-args.hours*3600
 +    records,runs,coverage=collect(args.home,start,end,max_log_files=args.max_log_files,extra_boards=args.board)
-+    print(json.dumps({**analyze(records,runs,start,end),'coverage':coverage,'model_calls':0,'runtime_mutations':0},indent=2))
++    result={**analyze(records,runs,start,end),'coverage':coverage,'model_calls':0,'runtime_mutations':0}
++    if args.cross_profile:
++        from hermes_cli.usage_cross_profile import summarize
++        result['cross_profile']=summarize(records,start,end)
++    print(json.dumps(result,indent=2))
 +
 +
 +if __name__=='__main__':main()
@@ -42354,3 +42359,216 @@ new file mode 100644
 +    task_id = json.loads(capsys.readouterr().out)['id']
 +    with kbc.connect_closing() as conn:
 +        assert kb.get_task(conn, task_id).reasoning_effort is None
+diff --git a/hermes_cli/usage_cross_profile.py b/hermes_cli/usage_cross_profile.py
+new file mode 100644
+--- /dev/null
++++ b/hermes_cli/usage_cross_profile.py
+@@ -0,0 +1,106 @@
++"""Aggregate existing cross-profile diagnostics without exporting fingerprints.
++
++A comparable prepared-request cohort is not proof of provider cache origin,
++shared credentials, full wire identity, or usage savings.
++"""
++from collections import defaultdict
++import math
++import re
++
++_FIELDS = ('route', 'declared_account', 'cache_key', 'common_prefix', 'tools', 'options')
++
++
++def _mapping(value):
++    return value if isinstance(value, dict) else {}
++
++
++def _hash(value):
++    value = _mapping(value)
++    result = value.get('hash')
++    return result if value.get('complete') is True and isinstance(result, str) and re.fullmatch(r'[0-9a-f]{64}', result) else None
++
++
++def _normalize(raw, start, end):
++    raw = _mapping(raw)
++    cross = _mapping(_mapping(raw.get('fingerprint')).get('cross_bot'))
++    namespace = cross.get('namespace')
++    stamp = cross.get('started_at_ns')
++    if (type(cross.get('version')) is not int or cross.get('version') != 1
++            or cross.get('scope') != 'same_installation'
++            or not isinstance(namespace, str) or not re.fullmatch(r'[0-9a-f]{16}', namespace)
++            or type(stamp) is not int or stamp < 0 or not start * 1e9 <= stamp < end * 1e9):
++        return None
++    fields = _mapping(cross.get('fields'))
++    profile, request = _hash(fields.get('profile')), _hash(fields.get('request'))
++    if not profile or not request:
++        return None
++    usage = _mapping(raw.get('usage'))
++    total, cached = usage.get('input_tokens'), usage.get('cached_tokens')
++    if type(total) is not int or type(cached) is not int or not 0 <= cached <= total:
++        total = cached = None
++    values = tuple(_hash(fields.get(name)) for name in _FIELDS)
++    status = raw.get('status') if raw.get('status') in ('returned', 'failed_or_interrupted') else 'unknown'
++    evidence = 'declared_headers' if cross.get('account_evidence') == 'declared_headers' else 'unknown'
++    return (namespace, profile, request), (stamp, status, evidence, values, total, cached)
++
++
++def summarize(records, start, end):
++    """Summarize eligible cohorts, excluding incomplete or conflicting identities."""
++    if (isinstance(start, bool) or isinstance(end, bool) or not isinstance(start, (int, float))
++            or not isinstance(end, (int, float)) or not math.isfinite(start) or not math.isfinite(end)
++            or start < 0 or end <= start):
++        raise ValueError('invalid observation window')
++    unique = {}
++    conflicts = set()
++    duplicates = 0
++    for raw in records:
++        normalized = _normalize(raw, start, end)
++        if normalized is None:
++            continue
++        identity, value = normalized
++        if identity in conflicts:
++            continue
++        if identity in unique:
++            if unique[identity] == value:
++                duplicates += 1
++            else:
++                del unique[identity]
++                conflicts.add(identity)
++        else:
++            unique[identity] = value
++    cohorts = defaultdict(lambda: defaultdict(list))
++    returned_with_known_usage = 0
++    eligible_requests = 0
++    for (namespace, profile, _), (_, status, evidence, values, total, cached) in unique.items():
++        returned_with_known_usage += status == 'returned' and total is not None
++        if status != 'returned' or evidence != 'declared_headers' or not all(values) or total is None:
++            continue
++        eligible_requests += 1
++        cohorts[(namespace, *values)][profile].append((total, cached))
++    groups = []
++    for profiles in cohorts.values():
++        eligible = [calls for calls in profiles.values() if len(calls) >= 2]
++        if len(eligible) >= 2:
++            groups.append(eligible)
++    calls = [call for group in groups for profile in group for call in profile]
++    return {
++        'identity_qualified_requests': len(unique),
++        'identical_log_copies': duplicates,
++        'conflicting_request_identities': len(conflicts),
++        'returned_requests_with_known_usage': returned_with_known_usage,
++        'eligible_requests_with_complete_declared_fields': eligible_requests,
++        'comparable_groups': len(groups),
++        'groups_with_positive_cached_calls_in_multiple_profiles': sum(
++            sum(any(cached > 0 for _, cached in profile) for profile in group) >= 2 for group in groups),
++        'known_calls_in_comparable_groups': len(calls),
++        'input_tokens_in_comparable_groups': sum(total for total, _ in calls),
++        'cached_tokens_in_comparable_groups': sum(cached for _, cached in calls),
++        'minimum_known_calls_per_profile': 2,
++        'account_evidence': 'declared_headers_not_authenticated_identity',
++        'provider_cache_origin_proven': False,
++        'limitations': [
++            'Prepared metadata does not prove full provider wire identity or which profile populated a cache.',
++            'Declared headers do not prove the authenticated provider account.',
++            'The sampled logs can include tests and omit data; cached tokens do not prove cost savings.',
++        ],
++    }
+diff --git a/tests/hermes_cli/test_usage_cross_profile.py b/tests/hermes_cli/test_usage_cross_profile.py
+new file mode 100644
+--- /dev/null
++++ b/tests/hermes_cli/test_usage_cross_profile.py
+@@ -0,0 +1,97 @@
++"""Cross-profile cache summaries are private, conservative and opt-in."""
++from copy import deepcopy
++import json
++
++
++def event(profile, request, at=100, *, account='2', status='returned', cached=80):
++    def field(c):
++        return {'complete': True, 'hash': c * 64}
++    fields = {name: field(c) for name, c in {
++        'profile': profile, 'request': request, 'route': '1', 'declared_account': account,
++        'cache_key': '3', 'common_prefix': '4', 'tools': '5', 'options': '6'}.items()}
++    return {'version': 1, 'status': status, 'usage': {'input_tokens': 100, 'cached_tokens': cached},
++            'prompt': 'PRIVATE_SENTINEL', 'fingerprint': {'cross_bot': {'version': 1,
++              'scope': 'same_installation', 'namespace': 'a' * 16, 'account_evidence': 'declared_headers',
++              'started_at_ns': int(at * 1e9), 'fields': fields}}}
++
++
++def test_groups_multiple_profiles_without_exposing_fingerprints():
++    from hermes_cli.usage_cross_profile import summarize
++    rows = [event('a', '1'), event('a', '2'), event('b', '3'), event('b', '4')]
++    result = summarize(rows + [deepcopy(rows[0])], 90, 110)
++    assert result['comparable_groups'] == 1
++    assert result['known_calls_in_comparable_groups'] == 4
++    assert result['groups_with_positive_cached_calls_in_multiple_profiles'] == 1
++    assert result['input_tokens_in_comparable_groups'] == 400
++    assert result['cached_tokens_in_comparable_groups'] == 320
++    assert result['identical_log_copies'] == 1
++    assert result['returned_requests_with_known_usage'] == 4
++    assert result['eligible_requests_with_complete_declared_fields'] == 4
++    assert result['provider_cache_origin_proven'] is False
++    encoded = json.dumps(result)
++    assert 'PRIVATE_SENTINEL' not in encoded and 'a' * 64 not in encoded
++
++
++def test_mismatched_accounts_incomplete_fields_and_failed_calls_cannot_form_group():
++    from hermes_cli.usage_cross_profile import summarize
++    rows = [event('a', '1'), event('a', '2'), event('b', '3', account='9'), event('b', '4', account='9')]
++    assert summarize(rows, 90, 110)['comparable_groups'] == 0
++    rows[2] = event('b', '3'); rows[3] = event('b', '4')
++    rows[2]['fingerprint']['cross_bot']['fields']['tools']['complete'] = False
++    rows[3]['status'] = 'failed_or_interrupted'
++    assert summarize(rows, 90, 110)['comparable_groups'] == 0
++    rows[2] = event('b', '3'); rows[3] = event('b', '4')
++    rows[2]['fingerprint']['cross_bot']['account_evidence'] = 'unknown'
++    rows[3]['usage']['cached_tokens'] = None
++    assert summarize(rows, 90, 110)['comparable_groups'] == 0
++
++
++def test_conflicting_copies_and_outside_window_are_excluded():
++    from hermes_cli.usage_cross_profile import summarize
++    a, b, c, d = event('a', '1'), event('a', '2'), event('b', '3'), event('b', '4')
++    conflict = deepcopy(a); conflict['usage']['cached_tokens'] = 20
++    result = summarize([a, b, c, d, conflict, event('a', '7', at=999)], 90, 110)
++    assert result['conflicting_request_identities'] == 1
++    assert result['comparable_groups'] == 0
++
++
++def test_cli_option_adds_summary_only_when_requested(tmp_path, monkeypatch, capsys):
++    import sys
++    from hermes_cli import usage_attribution
++    home = tmp_path / 'home'; (home / 'logs').mkdir(parents=True)
++    rows = [event('a', '1'), event('a', '2'), event('b', '3'), event('b', '4')]
++    log = home / 'logs' / 'agent.log'
++    log.write_text(''.join('CACHE_DIAGNOSTIC ' + json.dumps(row) + '\n' for row in rows))
++    before = log.read_bytes()
++    monkeypatch.setattr(usage_attribution.time, 'time', lambda: 110)
++    monkeypatch.setattr(sys, 'argv', ['usage_attribution', '--home', str(home), '--hours', '0.01', '--cross-profile'])
++    usage_attribution.main(); result = json.loads(capsys.readouterr().out)
++    assert result['cross_profile']['comparable_groups'] == 1
++    assert result['model_calls'] == 0 and log.read_bytes() == before
++    assert 'PRIVATE_SENTINEL' not in json.dumps(result)
++    monkeypatch.setattr(sys, 'argv', ['usage_attribution', '--home', str(home), '--hours', '0.01'])
++    usage_attribution.main(); assert 'cross_profile' not in json.loads(capsys.readouterr().out)
++
++
++def test_mismatched_prepared_fields_and_namespaces_do_not_mix():
++    from hermes_cli.usage_cross_profile import summarize
++    for name in ('route', 'cache_key', 'common_prefix', 'tools', 'options'):
++        rows = [event('a', '1'), event('a', '2'), event('b', '3'), event('b', '4')]
++        for row in rows[2:]:
++            row['fingerprint']['cross_bot']['fields'][name]['hash'] = 'e' * 64
++        assert summarize(rows, 90, 110)['comparable_groups'] == 0, name
++    rows = [event('a', '1'), event('a', '2'), event('b', '3'), event('b', '4')]
++    for row in rows[2:]:
++        row['fingerprint']['cross_bot']['namespace'] = 'f' * 16
++    assert summarize(rows, 90, 110)['comparable_groups'] == 0
++
++
++def test_invalid_schema_and_ambiguous_usage_are_not_promoted():
++    from hermes_cli.usage_cross_profile import summarize
++    rows = [event('a', '1'), event('a', '2'), event('b', '3'), event('b', '4')]
++    rows[2]['fingerprint']['cross_bot']['version'] = True
++    assert summarize(rows, 90, 110)['comparable_groups'] == 0
++    rows[2] = event('b', '3'); rows[3]['usage']['cached_tokens'] = 101
++    assert summarize(rows, 90, 110)['comparable_groups'] == 0
++    with_bool = deepcopy(rows[3]); with_bool['usage']['cached_tokens'] = True
++    assert summarize([rows[0], rows[1], event('b', '3'), with_bool], 90, 110)['comparable_groups'] == 0

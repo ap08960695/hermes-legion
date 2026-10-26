@@ -139,3 +139,7 @@ For an intentionally selected additional database, pass `--board /path/to/kanban
 ## Per-task CLI reasoning (v0.6.18)
 
 `hermes kanban create "Task" --assignee PROFILE --reasoning-effort high` sets reasoning for that card without changing the profile default. Omit the option to inherit the profile; `none` explicitly requests no reasoning where supported. Invalid levels are rejected before a card is created. Existing model, provider, quota and ownership gates remain in force.
+
+## Cross-profile cache cohorts (v0.6.19)
+
+Add `--cross-profile` to the read-only usage attribution command to summarize existing diagnostic cohorts. A cohort requires matching installation namespace, route, declared-account fingerprint, cache key, common prefix, tools and options, with at least two returned requests with known usage from each of at least two profiles. The new section emits aggregate counts and token totals, not fingerprints or prompts. Conflicting copies, incomplete fields and unknown usage are excluded. Existing bounded log coverage applies. Declared headers do not prove authenticated account identity; matching prepared metadata and positive cached tokens do not prove which bot populated the provider cache or establish cost savings.
