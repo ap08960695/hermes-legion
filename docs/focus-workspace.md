@@ -84,3 +84,7 @@ Apply the complete pinned patch using [installation and rollback](installation-a
 The implementation uses existing native components, icons, locale infrastructure, layout stores and owned-session transport. English copy is complete. Thai strings can be used with a registered Thai language pack; this patch does not force a global language change.
 
 See [verification](verification.md#native-work-surface-correction-v044) for the offline evidence and limits. No live model call, allowance probe or paid fallback was used for this change. Offline render tests do not establish production token savings or certify every operating system.
+
+## Complete native management
+
+Use [Desktop feature parity](desktop-feature-parity.md) for the full History/Projects destination, bot/group/section actions, device/profile context, loaded pane/status plugins, combined native controls and cache display. The central managers reuse original Hermes actions while the permanent legacy side column stays closed.

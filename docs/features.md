@@ -4,9 +4,9 @@ The cumulative patch is one coherent compatibility unit. Do not cherry-pick arbi
 
 | Area | Included behavior | Boundary |
 |---|---|---|
-| Desktop interface | Focus/Workspace, four primary destinations and a searchable native/plugin feature catalog | Existing chat, canonical bot sessions, layout scopes and advanced tools remain native; no implicit plugin enable or worker dispatch |
+| Desktop interface | Focus/Workspace, full native history/project managers, bot/group/section/Screen controls, visible context and loaded pane/status discovery | Existing chat, canonical bot sessions, layout scopes and advanced tools remain native; no implicit plugin enable or worker dispatch |
 | Goal form | Owner-scoped skills, explicit completion criteria and revision-checked idle saves | Preserves existing turn counters, limits, gates and waits; no model kickoff or budget override |
-| Catch up | Existing event-backed goal/wait state and links to original conversations, runs and outputs | Unknown stays unknown; a finished reply is not a completed goal or publication approval; no added polling |
+| Catch up | Native goal/loop/heartbeat controls, event-backed wait state and links to original conversations, runs and outputs | Unknown stays unknown; a finished reply is not a completed goal or publication approval; no added polling |
 | Completion | Exact native task/run/claim/PID/fingerprint checks stop verified completed workers before another inference turn | Rejected, ambiguous, interactive and review paths retain correction behavior; submitted tool batches finish normally |
 | Dispatch | Exactly-once callback invocation, ready-work wakeups, fair unlock ordering and declared input preflight | Existing profile/host capacity, cooldown, claim and approval gates remain authoritative |
 | Work isolation | Declared write scopes and stale brief/input checks | A declaration is not a filesystem sandbox or global lock |
@@ -18,7 +18,7 @@ The cumulative patch is one coherent compatibility unit. Do not cherry-pick arbi
 | Search and web | Bounded result caches, extraction validation, contention protection and eviction | Cached output is not new source verification |
 | Model context | Stable shared prompt/tool prefixes and atomic compaction-related publication | Do not mutate past context to manufacture cache hits |
 | Session metadata | Small runtime bindings select only model configuration, avoiding full prompt/tool-context hydration | Full session reads, per-session identities and freshly committed values retain their native behavior; no shared content cache |
-| Usage | Read-only account views, bounded task/run diagnostics and HMAC correlation | No prompt bodies or runtime HMAC keys are shipped; missing evidence stays unknown |
+| Usage | Read-only account views, reported cache totals/share, bounded task/run diagnostics and HMAC correlation | No prompt bodies or runtime HMAC keys are shipped; missing evidence stays unknown |
 | Bot activity | An icon with bounded recent-worker detail, separate from the canonical conversation preview; compression-tip activity follows the displayed session | A recent stamp is not live process proof; finished and unreachable workers are excluded; no new poll or model request |
 | Worker phases | Persisted phase/timing readbacks and bounded visual-request reuse | Claim-to-first-tool is not provider TTFT or whole-task speed |
 | Desktop | Manual suggestions, native usage presentation and clipboard/focus improvements | No automatic paid route or typing/idle inference policy |
@@ -58,3 +58,5 @@ The former Library and Spaces share a single Hub destination, header and search.
 **History** is a direct native door to existing chats, with bounded older pages and explicit server-side title/ID search across profiles on the selected connection. Resuming a result preserves its saved ID and captured owner. The main Focus and Wide modes no longer expose the old sidebar button or column.
 
 Slack can silence automatic paused refusals with an adapter-local preference while preserving the pause, authorized control commands, approvals and normal task replies. The opt-out is described in [the Slack status guide](slack-status-notices.md). It does not disable Slack or silently authorize paused work.
+
+See [Desktop feature parity](desktop-feature-parity.md) for the restored native workflows and verification limits.
