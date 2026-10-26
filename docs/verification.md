@@ -926,3 +926,50 @@ lost the backend listener during normal shutdown; its exact original app/backend
 were then observed terminal before launching. No repeated Quit, signal, model or
 manual resume call was used. This is source/readiness/continuity acceptance, not a
 full production visual journey or a manufactured notification-delivery receipt.
+
+
+## MRU selection and export preflight IDs (v0.6.10)
+
+Native latest-session lookup and the two unfiltered export preflight paths read
+full session context merely to obtain IDs. The regular `search_sessions` API now
+also supports an explicit ID/recency-only projection; source/workspace predicates,
+ordering and pagination remain shared. Actual resume, backup, import and full
+session readers keep their original payloads. Filtered export already uses a
+narrow candidate query and remains intact. Console also resolves its configured
+per-session bound before enumeration, so a disabled guard issues no ID scan.
+
+The final native run passed **10 files / 349 tests / zero failures**, zero file
+retries. Eight new cases include actual SQLite prompt/tool/model-config read
+denial, native ID ordering/page equivalence and MRU/oneshot/workspace fallback,
+actual parsed CLI and Console budget refusals without touching existing output,
+full successful backup equality and disabled-guard behavior. Existing batching,
+compacted backup/import round-trip, retention/export selection and SessionDB
+controls passed. Preliminary fixture signature/parser-wiring mistakes are retained
+privately, not counted as product bugs. Scoped health reported zero new findings.
+
+Five alternating installed-module pairs against a 32-session synthetic SQLite
+fixture preserved the exact ID order and native count-guard result. Median local
+query time was 51.292→0.979 ms; peak Python allocations 42,107,726→17,001 bytes;
+session rows remained 32 while hydrated context characters fell 41,943,520→0.
+The measured path is ID enumeration plus preflight, not the full backup payload,
+RSS, model input, tokens or cache-hit rate. A separate existing-history read-only
+comparison preserved the order/guard without writing an export/restore or calling
+a model. Private workload data and identifiers are excluded.
+
+Five exact source/test files were installed locally under native update custody
+before export, preserving target mode/ownership, target-only rollback and
+configuration/process guards. The two newly exported runtime modules' original
+bytes matched the locally available pinned upstream blobs. The cumulative patch
+contains **492 source/test paths: 347 outside the Python test tree and 145 Python
+test paths**. Companion, pinned base/apply/installed, Git history, archive and
+anonymous-public checks remain separate. No quota/provider/paid-fallback,
+embedding-service, schema or model-context change was made.
+
+
+Fresh CLI imports use the installed source directly. At an idle boundary Desktop
+also exited through one normal native Quit event and reopened once with the same
+tested UI package. Fresh process/source identity, authenticated native backend
+and main-renderer readiness, the original saved session/model and 99 protected
+configuration/instruction hashes were verified. Gateway retained its process
+identity; no database snapshot, forced stop, model or manual resume call was used.
+This source/readiness acceptance is separate from a full production visual journey.

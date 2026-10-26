@@ -85,3 +85,11 @@ quota, providers or paid fallback.
 reuse native identity metadata before the existing compression-tip check. Current
 session ownership, profile/branch/hold fences and receipt identity remain intact;
 no delivery replay, polling-frequency change or new model call is introduced.
+
+
+## Lightweight resume and export selection (v0.6.10)
+
+[ID-only discovery](session-metadata-reads.md#id-only-resume-and-export-preflight-v0610)
+keeps native MRU/workspace/oneshot selection and export-budget preflight from
+loading context they do not consume. A disabled Console guard skips its ID scan;
+positive per-session budgets and full backup/export fidelity remain.

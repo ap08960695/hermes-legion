@@ -146,3 +146,52 @@ billed usage, model latency or provider cache hits. A smaller prompt-free lookup
 does not reduce the context supplied to a model. Production notification delivery
 and cache/usage improvements still require genuine eligible work; no receipt is
 replayed to manufacture that evidence.
+
+
+## ID-only resume and export preflight (v0.6.10)
+
+Native `search_sessions` now has a keyword-only `ids_only=True` projection. It
+selects session ID and the existing computed `last_active`, using exactly the same
+source/workspace filters, ordering, offset and limit. The regular full-context
+projection remains the default. This is a selected read shape, not a content cache
+or a change to model context.
+
+The native latest-session resolver uses it for workspace-scoped selection and
+its global fallback. CLI-family/oneshot and TUI behavior remain. Both the primary
+CLI and Console export guards use it to find the IDs whose stored-message counts
+must be checked before loading an export. Filtered export already uses a small
+native candidate projection and retains its existing behavior.
+
+Console resolves the configured per-session export bound once. If the bound is
+zero, its disabled guard does not enumerate IDs at all. Successful export still
+uses the full native payload: prompt/tool storage, model configuration, archived
+messages, per-row flags, timing data and backup/import fidelity are preserved.
+This change does not shrink backups or bypass a positive export budget. Failure
+or budget refusal still leaves an existing output untouched.
+
+Eight new native cases cover ID/recency-only reads with context columns denied in
+normal/read-only modes, source/workspace/page equivalence, real MRU workspace and
+oneshot/global fallback, actual parsed CLI and Console refusals before context or
+output reads, complete successful backup equivalence, and no ID scan when the
+Console guard is disabled. The final native run passed **349 tests across ten
+files**, with zero failures/file retries, including existing MRU, export batching,
+compaction round-trip, retention and full SessionDB controls.
+
+Five alternating installed-source pairs used 32 synthetic sessions, each with a
+1,245,184-character prompt and a separate 65,536-character model-configuration
+value. The measured operation enumerated the IDs, then applied the same native
+per-session count guard; it did not write the full backup.
+
+| Median per enumeration and guard | Before | After |
+|---|---:|---:|
+| Local query time | 51.292 ms | 0.979 ms |
+| Peak Python traced allocations | 42,107,726 bytes | 17,001 bytes |
+| Session rows hydrated | 32 | 32 |
+| Context characters hydrated | 41,943,520 | 0 |
+
+Every pair retained the exact ID order. A separate read-only comparison against
+existing saved history also retained the order and guard outcome; no private ID,
+title, prompt or workload values are published, and no history export or restore
+was written. These measurements cover ID enumeration/preflight only. They are
+not full-export memory, whole-process RSS, model latency, cache hits or billed
+usage. Full backup payloads still require their normal memory and storage.
