@@ -41,3 +41,11 @@ python3 "$LEGION_ROOT/scripts/verify_checkout.py" "$HERMES_CHECKOUT" --phase bas
 ```
 
 Stop if source changed after installation. Never restore an old live database, rewind notification cursors or delete receipts as a rollback shortcut.
+
+## Startup checker cache
+
+A source launch first checks whether its application dependencies are current. If a shared PM cache selects a checker for a different launcher runtime scope, the checker can appear unavailable even while a compatible, published generation remains in the cache. That false negative can send a current installation through dependency/source completion again.
+
+The cumulative patch preserves a healthy selected checker as the first choice. Otherwise it reads immediate published generations, matches the PM project/lock and interpreter identity, validates the existing interpreter's PM imports, and takes the normal child lease under the preparation lock. It reuses that generation without rewriting `selected.json`, selecting a different application environment or staging dependencies. Symlinked, unpublished, malformed, mismatched or unusable alternatives are refused. If none works, the existing no-bootstrap refusal or explicit preparation behavior still applies.
+
+The installed native read-only check changed from false to true on one current installation, using the preexisting matching checker. Dependency facts, lockfiles and both selections stayed unchanged. No new PM generation, dependency preparation, model request or additional Desktop launch was used for acceptance. Native lock/temporary lease metadata is still expected. This demonstrates the repaired check, not an end-to-end startup speedup; measure the next normal launch separately.

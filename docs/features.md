@@ -30,3 +30,7 @@ The cumulative patch is one coherent compatibility unit. Do not cherry-pick arbi
 Role and skills content lives at the edges. The patch does not install an additional orchestration service or replace Hermes' native Kanban source of truth.
 
 Existing local tests helped develop these changes. Public release acceptance is separately regenerated from the exported artifact and is recorded in `verification.md`; private operational logs are not redistributed.
+
+## Reuse a ready startup checker
+
+Different launcher runtime scopes can share one PM checker cache. A ready checker matching the requested PM lock and interpreter is now reused even when another launcher's generation is selected. The current selected checker keeps priority; matching published alternatives must pass native import validation and receive the normal child lease. This prevents a false stale-dependency result from starting unnecessary preparation. It does not weaken application dependency validation, retain unused generations indefinitely or change environment selections.

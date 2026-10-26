@@ -29784,3 +29784,158 @@ new file mode 100644
 +    expect(screen.getByText('Second chat').getAttribute('title')).toBe('runtime-second')
 +  })
 +})
+diff --git a/pm/runtime.py b/pm/runtime.py
+--- a/pm/runtime.py
++++ b/pm/runtime.py
+@@ -126,6 +126,24 @@
+         _HELD[environment] = lease_directory(environment)
+ 
+ 
++def _cached_runtime(root: Path, identities: tuple[str, ...], env: dict[str, str]) -> Path | None:
++    # Different launchers can share this cache but need different interpreters.
++    # Reuse a published match without changing the other launcher's selection.
++    for environment in sorted((root / "generations").glob("*")):
++        if not environment.is_dir() or environment.is_symlink():
++            continue
++        marker = environment / "pm-runtime.json"
++        if marker.is_symlink():
++            continue
++        try:
++            fact = json.loads(marker.read_text(encoding="utf-8"))
++        except (OSError, ValueError):
++            continue
++        if isinstance(fact, dict) and fact.get("inputs") in identities and not _validate(_python(environment), env):
++            return environment
++    return None
++
++
+ def prepare_runtime(uv: Path, python: Path, root: Path, *, offline: bool = False,
+                     project: Path | None = None, bootstrap: bool = True,
+                     cache: Path | None = None) -> Path:
+@@ -151,11 +169,16 @@
+             fact = {}
+         # Records from before canonicalization spell the path as launched; for a
+         # home under a symlink (/home -> /var/home) that is still this interpreter.
+-        if fact.get("inputs") in (identity, _inputs(project, python, as_spelled=True)):
++        identities = (identity, _inputs(project, python, as_spelled=True))
++        if fact.get("inputs") in identities:
+             environment = root / fact["generation"]
+             if (environment / "pm-runtime.json").is_file() and not _validate(_python(environment), env):
+                 _hold_for_children(environment)
+                 return _python(environment)
++        cached = _cached_runtime(root, identities, env)
++        if cached is not None:
++            _hold_for_children(cached)
++            return _python(cached)
+         if not bootstrap:
+             raise InstallError("pm-runtime", "not installed or outdated and lazy installs are disabled",
+                                "run `hermes pm install` to prepare the independent PM runtime")
+diff --git a/tests/pm/test_runtime_reuse.py b/tests/pm/test_runtime_reuse.py
+new file mode 100644
+--- /dev/null
++++ b/tests/pm/test_runtime_reuse.py
+@@ -0,0 +1,104 @@
++"""A compatible published PM checker survives a different launcher's selection."""
++import json
++from pathlib import Path
++
++import pytest
++
++
++@pytest.fixture
++def runtime_cache(tmp_path, monkeypatch):
++    from pm import runtime
++
++    project = tmp_path / "project"
++    project.mkdir()
++    (project / "pyproject.toml").write_text("[project]\nname = 'fixture'\n")
++    (project / "uv.lock").write_text("version = 1\n")
++    root = tmp_path / "pm-runtime"
++    identity = runtime._inputs(project, Path("fixture-python"))
++    held = {}
++    monkeypatch.setattr(runtime, "_HELD", held)
++    monkeypatch.setattr(runtime, "runtime_environment", dict)
++
++    def forbid_stage(*args, **kwargs):
++        pytest.fail("a reusable checker must not stage dependencies")
++
++    monkeypatch.setattr("pm.runtime_stage.stage_runtime", forbid_stage)
++
++    def publish(name, inputs=identity):
++        generation = root / "generations" / name
++        generation.mkdir(parents=True)
++        (generation / "pm-runtime.json").write_text(json.dumps({"inputs": inputs}))
++        (generation / ".lease-managed").touch()
++        return generation
++
++    selected = publish("selected", "another-launcher")
++    selection = root / "selected.json"
++    selection.write_text(json.dumps({"inputs": "another-launcher", "generation": "generations/selected"}))
++
++    def prepare(bootstrap=False):
++        return runtime.prepare_runtime(Path("fixture-uv"), Path("fixture-python"), root,
++                                       project=project, bootstrap=bootstrap)
++
++    yield runtime, root, identity, selected, selection, publish, prepare
++    for release in held.values():
++        release()
++
++
++@pytest.mark.parametrize("bootstrap", [False, True])
++def test_compatible_cached_checker_is_leased_without_reselecting(runtime_cache, monkeypatch, bootstrap):
++    from hermes_cli.runtime_state import leases_held
++
++    runtime, root, _, _, selection, publish, prepare = runtime_cache
++    cached = publish("cached")
++    before = selection.read_bytes()
++    monkeypatch.setattr(runtime, "_validate", lambda python, env: "" if python == runtime._python(cached) else "broken")
++
++    assert prepare(bootstrap) == runtime._python(cached)
++    assert selection.read_bytes() == before
++    assert leases_held(cached)
++    assert runtime.collect_runtime_generations(root) == []
++    assert cached.is_dir()
++
++
++@pytest.mark.parametrize("condition", ["missing-marker", "corrupt", "non-object", "mismatch", "symlink", "marker-symlink", "invalid-python"])
++def test_unusable_generation_preserves_no_bootstrap_refusal(runtime_cache, monkeypatch, condition):
++    from pm.package import InstallError
++
++    runtime, root, _, _, selection, publish, prepare = runtime_cache
++    cached = publish("cached")
++    marker = cached / "pm-runtime.json"
++    def replace_with_symlink(path, outside):
++        path.rename(outside)
++        try:
++            path.symlink_to(outside, target_is_directory=outside.is_dir())
++        except OSError as exc:
++            pytest.skip(f"symlinks unavailable: {exc}")
++
++    alterations = {
++        "missing-marker": marker.unlink,
++        "corrupt": lambda: marker.write_text("{"),
++        "non-object": lambda: marker.write_text("[]"),
++        "mismatch": lambda: marker.write_text('{"inputs": "different-inputs"}'),
++        "symlink": lambda: replace_with_symlink(cached, root / "outside"),
++        "marker-symlink": lambda: replace_with_symlink(marker, root / "outside.json"),
++        "invalid-python": lambda: None,
++    }
++    alterations[condition]()
++    before = selection.read_bytes()
++    monkeypatch.setattr(runtime, "_validate", lambda python, env: "broken" if condition == "invalid-python" else "")
++
++    with pytest.raises(InstallError, match="lazy installs are disabled"):
++        prepare()
++    assert selection.read_bytes() == before
++    assert not runtime._HELD
++
++
++def test_healthy_selected_checker_keeps_priority(runtime_cache, monkeypatch):
++    runtime, _, identity, selected, selection, publish, prepare = runtime_cache
++    publish("cached")
++    selection.write_text(json.dumps({"inputs": identity, "generation": "generations/selected"}))
++    monkeypatch.setattr(runtime, "_validate", lambda python, env: "")
++    before = selection.read_bytes()
++
++    assert prepare() == runtime._python(selected)
++    assert selection.read_bytes() == before
