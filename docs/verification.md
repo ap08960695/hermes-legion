@@ -880,3 +880,49 @@ saved-session/model binding were observed. Configuration/instruction hashes
 remained intact, and no model or manual session-resume call was used. This is
 source/readiness/continuity acceptance; it does not claim every production screen
 was visually exercised or every bot has already used the optimized query path.
+
+
+## Notification destination metadata (v0.6.9)
+
+Native destination resolution still read full prompt/tool context merely to
+check that the current/candidate session existed. A SQLite-authorizer regression
+failed in both normal and named-profile read-only paths. The resolver now reuses
+the native small metadata API; missing extensions keep legacy compatibility,
+while failure in a present reader holds work without a heavy retry.
+
+The final native run passed **10 files / 75 tests / zero failures**, zero file
+retries. Four new controls join the existing compression delivery, stale-parent,
+branch/delegate, foreign-profile, claimed-receipt/no-replay, owner-hold, stopped-turn,
+retry and terminal-release contracts. These offline fixtures do not establish a
+live intended-session ACK. Scoped source health reported zero new findings.
+
+Installed-source paired acceptance used the existing production interpreter and
+native dependency activation, with launch preparation frozen only in the private
+measurement process to prevent PM rebuild/relaunch. Earlier guarded preparation
+and unactivated-interpreter failures are retained privately and are not product
+failures or accepted benchmark runs. The final five alternating synthetic pairs
+included native read-only store open/read/close: median 3.951→1.713 ms, peak Python
+allocations 1,900,776→21,140 bytes, full session reads 3→0, hydrated context
+characters 3,735,552→0, with the same destination set. A separate real saved-chat
+owning-store comparison also retained the set, with no notification, receipt,
+model or inference action. No private evidence/workload values are published.
+These measurements are not RSS, token, cache-hit or production latency savings.
+
+The exact runtime and regression files were installed locally before export,
+with target-only rollback and restored mode/ownership; configuration/instruction
+hashes and active process identities were preserved. The cumulative patch now
+contains **489 source/test paths: 345 outside the Python test tree and 144 Python
+test paths**. Companion, base/apply/installed, complete history, archive and
+anonymous readback checks are performed separately. Native source adoption and
+visual/behavior acceptance remain distinct.
+
+
+At the next verified idle boundary Desktop exited through one normal native tray
+Quit event and reopened once with the same tested package. Fresh source/process
+identity, native backend/main-renderer readiness, the original durable session and
+model binding, and 99 protected configuration/instruction hashes were verified.
+Gateway retained its existing process identity. A transient read-only observation
+lost the backend listener during normal shutdown; its exact original app/backend
+were then observed terminal before launching. No repeated Quit, signal, model or
+manual resume call was used. This is source/readiness/continuity acceptance, not a
+full production visual journey or a manufactured notification-delivery receipt.

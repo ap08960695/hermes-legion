@@ -97,3 +97,52 @@ scripts/run_tests.sh -j 2 \
   tests/hermes_state/test_hermes_state.py \
   tests/hermes_state/test_session_import_keep_flags.py
 ```
+
+
+## Notification destination checks (v0.6.9)
+
+The native notification resolver now reuses the same small identity reader to
+check the current session and candidate destinations. Those checks previously
+hydrated prompt/tool context before applying the native compression-tip rule.
+The resolver is used by subscription discovery, pending notification validation
+and receipt-bound delivery admission; no new tool or polling mechanism is added.
+
+The selected compression tip remains the only continuation allowed to inherit
+ancestor work. Stale parents, explicit branches/delegates/resets, foreign profiles,
+claimed receipts and owner holds keep their existing fences. Missing legacy
+stores retain exact-key fallback, and older adapters without the small API retain
+their original reader. A failure in a present metadata reader holds work without
+retrying the full-context reader. Receipt identities and delivery states are not
+rewritten. Poll intervals, model input and notification contents are unchanged.
+
+Four new native regression cases exercise the real resolver with prompt/tool
+column reads denied by SQLite, through both normal and named-profile read-only
+store access, plus legacy compatibility and failed-reader behavior. The final
+related native run passed **75 tests across ten files**, zero failures/retries,
+including actual native compression/receipt/hold and retry-boundary contracts.
+Those disposable offline delivery fixtures are not live Captain ACK proof.
+
+Five alternating installed-source measurements used a synthetic owning store
+with 1,867,776 context characters on both a root and its compression continuation.
+Each measured call included a fresh native read-only store open/read/close.
+
+| Median per destination resolution | Before | After |
+|---|---:|---:|
+| Native local query/open time | 3.951 ms | 1.713 ms |
+| Peak Python traced allocations | 1,900,776 bytes | 21,140 bytes |
+| Full-session reader calls | 3 | 0 |
+| Context characters hydrated | 3,735,552 | 0 |
+
+The returned destination sets were equal in every pair. A separate comparison
+using an existing saved conversation and its owning store also retained the set,
+without sending notifications, modifying receipts or calling a model. Private IDs,
+titles, prompts and workload measurements are not published. The measurement
+uses the existing native interpreter/dependency activation, while launch-time
+PM preparation is disabled only in that private harness to prevent rebuilds or
+relaunches. This is query acceptance, not a bootstrap/recovery test.
+
+The measurements describe synthetic query/Python allocation work, not total RSS,
+billed usage, model latency or provider cache hits. A smaller prompt-free lookup
+does not reduce the context supplied to a model. Production notification delivery
+and cache/usage improvements still require genuine eligible work; no receipt is
+replayed to manufacture that evidence.

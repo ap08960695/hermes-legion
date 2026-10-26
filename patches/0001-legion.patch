@@ -21099,85 +21099,6 @@ index 0000000000000000000000000000000000000000..ed8e77cb68be42045819bb285d00808f
 +            return
 +        s._notif_release_turn(session)
 +        raise
-diff --git a/tui_gateway/session_kanban_lineage.py b/tui_gateway/session_kanban_lineage.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..f572ca1fdf5db6972a94de32c17b7d21190f781c
---- /dev/null
-+++ b/tui_gateway/session_kanban_lineage.py
-@@ -0,0 +1,73 @@
-+"""Resolve notification destinations in the owning store, without retargeting receipts."""
-+from __future__ import annotations
-+
-+import contextlib
-+from pathlib import Path
-+import sqlite3
-+
-+
-+@contextlib.contextmanager
-+def _reader(session: dict):
-+    from tui_gateway import server as s
-+    if not session.get('profile_home'):
-+        yield s._get_db()
-+        return
-+    from hermes_state import SessionDB
-+    path = Path(session['profile_home']) / 'state.db'
-+    if not path.is_file():
-+        yield None
-+        return
-+    # Routing is a read, not a resume. Opening a full profile writer runs schema /
-+    # housekeeping work on every poll and needlessly contends with the active agent.
-+    with contextlib.closing(SessionDB(path, read_only=True)) as db:
-+        yield db
-+
-+
-+def destination_keys(session: dict, candidates) -> set[str]:
-+    """Only the selected compression tip may consume an ancestor's work.
-+
-+    The canonical store resolver excludes branches/delegates/resets. Missing legacy
-+    stores retain exact-key delivery only; lookup errors never broaden authority.
-+    """
-+    from tui_gateway import server as s
-+    current = str(session.get('session_key') or '')
-+    wanted = {str(key) for key in candidates if key}
-+    exact = wanted & {current}
-+    if not current or not wanted:
-+        return set()
-+    try:
-+        with _reader(session) as db:
-+            if db is None or not callable(getattr(db, 'get_compression_tip', None)):
-+                return exact
-+            if not db.get_session(current):
-+                return exact
-+            if db.get_compression_tip(current) != current:
-+                return set()  # A stale parent runtime must leave work for the continuation.
-+            return {key for key in wanted if key == current
-+                    or db.get_session(key) and db.get_compression_tip(key) == current}
-+    except (OSError, sqlite3.Error, RuntimeError, ValueError):
-+        s.logger.exception('Kanban destination lineage could not be verified')
-+        return set()
-+
-+
-+def subscriptions(session: dict, rows: list[dict]) -> list[dict]:
-+    """Legacy exact keys keep their contract; ancestor routes need a stamped owner."""
-+    from hermes_cli.profiles import current_profile_name
-+    current = str(session.get('session_key') or '')
-+    profile = current_profile_name('default')
-+    candidates = [row for row in rows if (row.get('platform') or '').lower() == 'tui'
-+                  and (row.get('chat_id') == current or row.get('notifier_profile') == profile)]
-+    accepted = destination_keys(session, (row.get('chat_id') for row in candidates))
-+    return [row for row in candidates if row.get('chat_id') in accepted]
-+
-+
-+def has_destination(path: Path, session: dict) -> bool:
-+    """A foreign session must never open a board writable just to discover no route."""
-+    if not path.is_file():
-+        return False
-+    with contextlib.closing(sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True)) as conn:
-+        conn.row_factory = sqlite3.Row
-+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='kanban_notify_subs'").fetchone():
-+            return False
-+        rows = [dict(row) for row in conn.execute("SELECT * FROM kanban_notify_subs WHERE LOWER(platform)='tui'")]
-+    return bool(subscriptions(session, rows))
 diff --git a/tui_gateway/session_notifications.py b/tui_gateway/session_notifications.py
 index 6fea2d4bcb8f4a5b6339264e02b5e72ca1a377ea..51e48791612542ebcf7f9592478ce97af343d21f 100644
 --- a/tui_gateway/session_notifications.py
@@ -40458,3 +40379,170 @@ diff --git a/hermes_state_titles.py b/hermes_state_titles.py
          # Exception to the "#N continuation" preference: the canonical Bot Chat's identity
          # IS its exact title (Bot Mode re-resolves it by name on every open, no id pointer).
          # A "<title> #N" sibling — a Desktop branch or a client-minted numbered row — is NOT
+diff --git a/tui_gateway/session_kanban_lineage.py b/tui_gateway/session_kanban_lineage.py
+new file mode 100644
+--- /dev/null
++++ b/tui_gateway/session_kanban_lineage.py
+@@ -0,0 +1,76 @@
++"""Resolve notification destinations in the owning store, without retargeting receipts."""
++from __future__ import annotations
++
++import contextlib
++from pathlib import Path
++import sqlite3
++
++
++@contextlib.contextmanager
++def _reader(session: dict):
++    from tui_gateway import server as s
++    if not session.get('profile_home'):
++        yield s._get_db()
++        return
++    from hermes_state import SessionDB
++    path = Path(session['profile_home']) / 'state.db'
++    if not path.is_file():
++        yield None
++        return
++    # Routing is a read, not a resume. Opening a full profile writer runs schema /
++    # housekeeping work on every poll and needlessly contends with the active agent.
++    with contextlib.closing(SessionDB(path, read_only=True)) as db:
++        yield db
++
++
++def destination_keys(session: dict, candidates) -> set[str]:
++    """Only the selected compression tip may consume an ancestor's work.
++
++    The canonical store resolver excludes branches/delegates/resets. Missing legacy
++    stores retain exact-key delivery only; lookup errors never broaden authority.
++    """
++    from tui_gateway import server as s
++    current = str(session.get('session_key') or '')
++    wanted = {str(key) for key in candidates if key}
++    exact = wanted & {current}
++    if not current or not wanted:
++        return set()
++    try:
++        with _reader(session) as db:
++            if db is None or not callable(getattr(db, 'get_compression_tip', None)):
++                return exact
++            reader = getattr(db, 'get_session_metadata', None)
++            if not callable(reader):
++                reader = db.get_session
++            if not reader(current):
++                return exact
++            if db.get_compression_tip(current) != current:
++                return set()  # A stale parent runtime must leave work for the continuation.
++            return {key for key in wanted if key == current
++                    or reader(key) and db.get_compression_tip(key) == current}
++    except (OSError, sqlite3.Error, RuntimeError, ValueError):
++        s.logger.exception('Kanban destination lineage could not be verified')
++        return set()
++
++
++def subscriptions(session: dict, rows: list[dict]) -> list[dict]:
++    """Legacy exact keys keep their contract; ancestor routes need a stamped owner."""
++    from hermes_cli.profiles import current_profile_name
++    current = str(session.get('session_key') or '')
++    profile = current_profile_name('default')
++    candidates = [row for row in rows if (row.get('platform') or '').lower() == 'tui'
++                  and (row.get('chat_id') == current or row.get('notifier_profile') == profile)]
++    accepted = destination_keys(session, (row.get('chat_id') for row in candidates))
++    return [row for row in candidates if row.get('chat_id') in accepted]
++
++
++def has_destination(path: Path, session: dict) -> bool:
++    """A foreign session must never open a board writable just to discover no route."""
++    if not path.is_file():
++        return False
++    with contextlib.closing(sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True)) as conn:
++        conn.row_factory = sqlite3.Row
++        if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='kanban_notify_subs'").fetchone():
++            return False
++        rows = [dict(row) for row in conn.execute("SELECT * FROM kanban_notify_subs WHERE LOWER(platform)='tui'")]
++    return bool(subscriptions(session, rows))
+diff --git a/tests/tui_gateway/test_kanban_lineage_metadata.py b/tests/tui_gateway/test_kanban_lineage_metadata.py
+new file mode 100644
+--- /dev/null
++++ b/tests/tui_gateway/test_kanban_lineage_metadata.py
+@@ -0,0 +1,81 @@
++"""Destination routing must not load prompt/tool context just to verify session existence."""
++import sqlite3
++
++import pytest
++
++from hermes_constants import get_hermes_home
++from hermes_state import SessionDB
++from tui_gateway import server
++from tui_gateway.session_kanban_lineage import destination_keys
++
++
++@pytest.fixture
++def state(monkeypatch):
++    db = SessionDB(get_hermes_home() / 'state.db')
++    db.create_session('ancestor', source='desktop', system_prompt='Synthetic context. ' * 32768)
++    db.append_message('ancestor', role='user', content='Keep the existing ownership gate.')
++    assert db.try_acquire_compression_lock('ancestor', 'fixture-rotation')
++    db.publish_compression_child(
++        parent_session_id='ancestor', child_session_id='continuation', source='desktop',
++        messages=[{'role': 'user', 'content': 'Continue within the existing gates.'}],
++        compression_lock_holder='fixture-rotation', require_compression_lease=True,
++    )
++    monkeypatch.setattr(server, '_get_db', lambda: db)
++    yield db
++    db.close()
++
++
++def deny_context_reads(action, table, column, *_):
++    if action == sqlite3.SQLITE_READ and (
++        table == 'system_prompts' and column == 'prompt'
++        or table == 'sessions' and column in {'system_prompt', 'tool_names'}
++    ):
++        return sqlite3.SQLITE_DENY
++    return sqlite3.SQLITE_OK
++
++
++@pytest.mark.parametrize('named_profile', [False, True])
++def test_native_destination_routing_needs_no_context_columns(state, monkeypatch, named_profile):
++    def guarded_reader(*args, **kwargs):
++        assert kwargs.get('read_only') is True
++        db = SessionDB(*args, **kwargs)
++        with db._read_ctx() as conn:
++            conn.set_authorizer(deny_context_reads)
++        return db
++
++    monkeypatch.setattr('hermes_state.SessionDB', guarded_reader)
++    record = {'session_key': 'continuation'}
++    if named_profile:
++        record['profile_home'] = str(get_hermes_home())
++    else:
++        with state._read_ctx() as conn:
++            conn.set_authorizer(deny_context_reads)
++    try:
++        assert destination_keys(record, ['ancestor', 'continuation', 'missing']) == {'ancestor', 'continuation'}
++        assert destination_keys({**record, 'session_key': 'ancestor'}, ['ancestor']) == set()
++    finally:
++        with state._read_ctx() as conn:
++            conn.set_authorizer(None)
++
++
++def test_missing_metadata_extension_keeps_legacy_adapter(state, monkeypatch):
++    class LegacyAdapter:
++        def __getattr__(self, name):
++            if name == 'get_session_metadata':
++                raise AttributeError(name)
++            return getattr(state, name)
++
++    monkeypatch.setattr(server, '_get_db', lambda: LegacyAdapter())
++    assert destination_keys({'session_key': 'continuation'}, ['ancestor']) == {'ancestor'}
++
++
++def test_present_metadata_failure_holds_work_without_full_context_retry(state, monkeypatch):
++    def refused(*args):
++        raise RuntimeError('Synthetic metadata failure')
++
++    def forbid_full_context(*args):
++        pytest.fail('A present failed metadata reader must not retry full context')
++
++    monkeypatch.setattr(state, 'get_session_metadata', refused)
++    monkeypatch.setattr(state, 'get_session', forbid_full_context)
++    assert destination_keys({'session_key': 'continuation'}, ['ancestor', 'continuation']) == set()

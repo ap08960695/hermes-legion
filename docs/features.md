@@ -77,3 +77,11 @@ Canonical Bot Chat selection, numbered continuations, bounded evidence and legac
 adapter compatibility remain. A failed present small reader never retries the
 full-context path. This reduces local hydration without changing model input,
 quota, providers or paid fallback.
+
+
+## Prompt-free notification routing (v0.6.9)
+
+[Destination existence checks](session-metadata-reads.md#notification-destination-checks-v069)
+reuse native identity metadata before the existing compression-tip check. Current
+session ownership, profile/branch/hold fences and receipt identity remain intact;
+no delivery replay, polling-frequency change or new model call is introduced.
