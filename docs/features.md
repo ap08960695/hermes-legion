@@ -119,3 +119,7 @@ details include the effort; compact task lists do not gain another field.
 This feature does not add a bot, change a profile, bypass dispatch eligibility,
 change quotas or authorize a provider fallback. A worker that is already running
 retains its existing invocation.
+
+## Verified completion at budget checkpoints (v0.6.13)
+
+Preserve a verified worker completion result when an iteration or time budget checkpoint is reached. The existing ownership and completion checks continue to decide whether the worker can stop. Unverified results retain the normal warnings.

@@ -1016,3 +1016,7 @@ The change was installed locally with a scoped rollback before publication. A
 fresh process can load the installed code; a previously mounted agent may retain
 cached tool definitions until its normal lifecycle refresh. Offline validation
 does not prove a live Captain has selected a model or that a bot completed a task.
+
+## Verified completion at budget checkpoints (v0.6.13)
+
+An offline native regression suite passed 113 tests across five files; a later 21-test run of one of those files overlaps and is not an additional total. Tests cover iteration and wall-clock checkpoints and rejected or unverified ownership. One representative real worker completed a synthetic task at the iteration checkpoint with no subsequent tool or model call. This is not a measurement of every profile or a long-term usage reduction.

@@ -1769,15 +1769,46 @@ index 0000000000000000000000000000000000000000..208e4ce395a842ff04a89721fe2f9c94
 +
 +
 diff --git a/agent/tool_executor.py b/agent/tool_executor.py
-index 79d22e2b81282b37f14027ae7e885fbf38e8936a..8015519334601a50b9b4c7bf2384b4850e28c4ba 100644
 --- a/agent/tool_executor.py
 +++ b/agent/tool_executor.py
-@@ -625,3 +625,3 @@ def _run_tool_activity_heartbeat(
+@@ -201,10 +201,23 @@
+     from agent.conversation_loop import _maybe_inject_run_budget_wrapup
+     from agent.turn_iteration_prep import _maybe_inject_iteration_budget_warning
+ 
++    # A successful owned completion is already terminal. Appending either notice
++    # corrupts its JSON and prevents the stop guard from verifying it, causing
++    # an unnecessary model turn. Suppress notices only after the same durable
++    # task/run/claim/process proof used by the stop guard; refusals and uncertain
++    # ownership still receive the ordinary checkpoint.
++    terminal = False
++    if messages and messages[-1].get("role") == "tool" and messages[-1].get("name") == "kanban_complete":
++        try:
++            from agent.kanban_terminal_stop import completed_worker_summary
++            terminal = completed_worker_summary(messages[-1:]) is not None
++        except Exception:
++            logging.debug("kanban completion checkpoint verification failed", exc_info=True)
+     # Persist exactly the checkpoint text the next model call will see, before stamping
+     # this tool result as durable. Already-written rows must never be rewritten later.
+-    _maybe_inject_run_budget_wrapup(agent, messages)
+-    _maybe_inject_iteration_budget_warning(agent, messages)
++    if not terminal:
++        _maybe_inject_run_budget_wrapup(agent, messages)
++        _maybe_inject_iteration_budget_warning(agent, messages)
+     try:
+         persisted = agent._flush_messages_to_session_db(messages) is not False
+         if not persisted:
+@@ -623,7 +636,7 @@
+         pass  # a heartbeat must never break the agent loop
+ 
  
 -def _run_with_activity_heartbeat(agent, function_name: str, fn):
 +def _run_with_activity_heartbeat(agent, function_name: str, fn, tool_args=None):
      """Run ``fn()`` under the activity heartbeat; covers both executor paths."""
-@@ -641,3 +641,6 @@ def _run_with_activity_heartbeat(agent, function_name: str, fn):
+     stop = threading.Event()
+     thread = threading.Thread(
+@@ -639,7 +652,10 @@
+     )
+     thread.start()
      try:
 -        return fn()
 +        from hermes_cli.kanban_run_activity import phase, tool_phase
@@ -1785,11 +1816,17 @@ index 79d22e2b81282b37f14027ae7e885fbf38e8936a..8015519334601a50b9b4c7bf2384b485
 +                   getattr(agent, "is_subagent", False)):
 +            return fn()
      finally:
-@@ -753,3 +756,3 @@ def _dispatch_authorized_once(
+         stop.set()
+         thread.join(timeout=2.0)
+@@ -751,7 +767,7 @@
+     from agent.terminal_approval_batch import prepare_current_terminal
+     prepare_current_terminal(ref)
      _advance_start_order(lambda: _begin_tool_execution(agent, ref, display_index))
 -    return _run_with_activity_heartbeat(agent, ref.name, lambda: execute(ref.args))
 +    return _run_with_activity_heartbeat(agent, ref.name, lambda: execute(ref.args), ref.args)
  
+ 
+ def _run_agent_tool_execution_middleware(
 diff --git a/agent/tool_guardrails.py b/agent/tool_guardrails.py
 index 258ca3ab9293e81595fee82945bcfe22e65ae7aa..fc314c6718c09b7ad2a05c034fbefab19d0212c7 100644
 --- a/agent/tool_guardrails.py
@@ -9640,10 +9677,9 @@ index 0000000000000000000000000000000000000000..6d921375b32b4a244b105ab0337bf61c
 +    assert effective_request_overrides(agent) == {"temperature": 0.3}
 diff --git a/tests/agent/test_kanban_terminal_stop.py b/tests/agent/test_kanban_terminal_stop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..53acdc5c08b568a968ac82e0da3e84cf519277c7
 --- /dev/null
 +++ b/tests/agent/test_kanban_terminal_stop.py
-@@ -0,0 +1,113 @@
+@@ -0,0 +1,182 @@
 +"""A successful native completion must not re-enter inference for status or a final summary."""
 +import json
 +import os
@@ -9757,6 +9793,75 @@ index 0000000000000000000000000000000000000000..53acdc5c08b568a968ac82e0da3e84cf
 +    assert agent.client.chat.completions.create.call_count==2 and len(calls)==2
 +    assert result['completed'] is True and result['final_response']=='Corrected verified result.'
 +    assert kb.get_task(conn,tid).status=='done'
++
++
++def test_completion_at_iteration_checkpoint_does_not_request_another_model_turn(agent,owned_run):
++    """A budget notice must not corrupt the successful native completion result."""
++    from tools.kanban_tools import _handle_complete
++    conn,tid,_run=owned_run;agent.max_iterations=4;executed=[]
++    agent.client.chat.completions.create.side_effect=[
++        call('kanban_show',{'task_id':tid},'show-1'),
++        call('kanban_show',{'task_id':tid},'show-2'),
++        call('kanban_complete',{'task_id':tid,'summary':'Verified checkpoint result.'},'done'),
++        call('kanban_show',{'task_id':tid},'unexpected'),
++        _mock_response(content='unexpected model call',finish_reason='stop'),
++    ]
++    def tool(name,args,*unused,**kwargs):
++        executed.append(name)
++        if name=='kanban_complete':
++            # Place the real completion exactly on the checkpoint boundary.
++            agent.iteration_budget._used=3
++            agent._iteration_budget_warning_injected=False
++        return _handle_complete(args if isinstance(args,dict) else json.loads(args)) if name=='kanban_complete' else json.dumps({'status':'running'})
++    with patch.object(agent,'_persist_session'),patch.object(agent,'_save_trajectory'),patch.object(agent,'_cleanup_task_resources'),patch('model_tools.handle_function_call',side_effect=tool):
++        result=agent.run_conversation('Finish the owned task.')
++    assert kb.get_task(conn,tid).status=='done'
++    assert executed==['kanban_show','kanban_show','kanban_complete']
++    assert agent.client.chat.completions.create.call_count==3
++    assert result['completed'] is True and result['final_response']=='Verified checkpoint result.'
++
++
++@pytest.mark.parametrize('notice',['iteration','wallclock'])
++def test_verified_completion_result_is_not_modified_by_budget_notices(agent,owned_run,notice):
++    import time
++    from agent.iteration_budget import IterationBudget
++    from agent.tool_executor import _flush_session_db_after_tool_progress
++    _,tid,run=complete_fixture(owned_run);message=success_message(tid,run);original=message['content']
++    agent.iteration_budget=IterationBudget(4)
++    for _ in range(3):agent.iteration_budget.consume()
++    if notice=='wallclock':
++        agent.run_budget_seconds=10;agent._run_budget_started_at=time.time()-9
++    with patch.object(agent,'_flush_messages_to_session_db',return_value=True):
++        assert _flush_session_db_after_tool_progress(agent,[message],stage='test')
++    assert message['content']==original
++
++
++def test_rejected_completion_still_receives_iteration_checkpoint(agent,owned_run):
++    from agent.iteration_budget import IterationBudget
++    from agent.tool_executor import _flush_session_db_after_tool_progress
++    _,tid,run=owned_run;message=success_message(tid,run);message['content']=json.dumps({'ok':False,'task_id':tid,'run_id':run})
++    agent.iteration_budget=IterationBudget(4)
++    for _ in range(3):agent.iteration_budget.consume()
++    with patch.object(agent,'_flush_messages_to_session_db',return_value=True):
++        assert _flush_session_db_after_tool_progress(agent,[message],stage='test')
++    assert 'iteration budget checkpoint' in message['content']
++
++
++@pytest.mark.parametrize('case',['running','wrong_pid','wrong_lock'])
++def test_unverified_success_still_receives_iteration_checkpoint(agent,owned_run,monkeypatch,case):
++    from agent.iteration_budget import IterationBudget
++    from agent.tool_executor import _flush_session_db_after_tool_progress
++    conn,tid,run=owned_run
++    if case!='running':
++        complete_fixture(owned_run)
++    if case=='wrong_pid':
++        with kb.write_txn(conn):conn.execute('UPDATE task_runs SET worker_pid=? WHERE id=?',(os.getpid()+1,run))
++    if case=='wrong_lock':monkeypatch.setenv('HERMES_KANBAN_CLAIM_LOCK','foreign')
++    message=success_message(tid,run);agent.iteration_budget=IterationBudget(4)
++    for _ in range(3):agent.iteration_budget.consume()
++    with patch.object(agent,'_flush_messages_to_session_db',return_value=True):
++        assert _flush_session_db_after_tool_progress(agent,[message],stage='test')
++    assert 'iteration budget checkpoint' in message['content']
 diff --git a/tests/agent/test_memory_background_snapshot.py b/tests/agent/test_memory_background_snapshot.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..d98c6e391bb856404632a93a373bcf5f0ef1a0f2
