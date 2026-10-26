@@ -1708,38 +1708,6 @@ index 21d36c281522ea5b22520b4f9deb5c099c4945c4..f483ad1de4adbf35ac2e658bc05ed143
 +    from agent.skill_index_render import render_skills_index
 +    result = render_skills_index(skills_by_category, category_descriptions, compact_categories, available_tools, unloadable)
      with _SKILLS_PROMPT_CACHE_LOCK:
-diff --git a/agent/reasoning_effort.py b/agent/reasoning_effort.py
-index 550f77659ee633495a4432c13cdd136542928fde..c3c5a4e5b23a05744874f1e64433d92fad02641a 100644
---- a/agent/reasoning_effort.py
-+++ b/agent/reasoning_effort.py
-@@ -46,2 +46,13 @@ DAYBREAK_MODEL_IDS: frozenset[str] = frozenset(
- 
-+# The Web bridge publishes picker efforts, not the API family's ladder. Keep
-+# these namespaced so an identically named API/relay model is unaffected.
-+CHATGPT_WEB_EFFORTS: dict[str, tuple[str, ...]] = {
-+    "gpt-6-pro": ("max",),
-+    "gpt-5.6-pro": ("max",),
-+    "gpt-6-sol-instant": ("low",),
-+    "gpt-5.6-sol-instant": ("low",),
-+    "gpt-6-sol": ("medium", "high", "xhigh"),
-+    "gpt-5.6-sol": ("medium", "high", "xhigh"),
-+}
-+
- #: xAI Responses — Grok 4.6+ accepts xhigh; older Grok tops out at high.
-@@ -105,3 +116,6 @@ def codex_supported_efforts(model: Optional[str]) -> tuple[str, ...]:
-     """Supported effort set for an OpenAI/Codex Responses model."""
--    bare = (model or "").strip().lower().rsplit("/", 1)[-1]
-+    normalized = (model or "").strip().lower()
-+    bare = normalized.rsplit("/", 1)[-1]
-+    if normalized.startswith("chatgpt-web/") and bare in CHATGPT_WEB_EFFORTS:
-+        return CHATGPT_WEB_EFFORTS[bare]
-     if is_astra_model(model) or bare.startswith(NO_DISABLE_TIER_PREFIXES):
-@@ -169,3 +183,4 @@ def route_supported_efforts(
-         supported = codex_supported_efforts(model)
--        return (*supported, "ultra") if api_mode == "codex_app_server" and "max" in supported else supported
-+        is_web = (model or "").strip().lower().startswith("chatgpt-web/")
-+        return (*supported, "ultra") if api_mode == "codex_app_server" and "max" in supported and not is_web else supported
-     return OPENAI_COMPAT_WIRE_EFFORTS
 diff --git a/agent/skill_index_render.py b/agent/skill_index_render.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..208e4ce395a842ff04a89721fe2f9c94c7e14892
@@ -40589,51 +40557,6 @@ diff --git a/hermes_cli/main.py b/hermes_cli/main.py
          "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate", "moa",
          "journey", "memory-graph", "learning",
          "model", "monitoring", "pairing", "pause", "peer", "pets", "plugins", "portal", "profile",
-diff --git a/hermes_cli/console_engine.py b/hermes_cli/console_engine.py
---- a/hermes_cli/console_engine.py
-+++ b/hermes_cli/console_engine.py
-@@ -648,11 +648,16 @@
-         print(f"Warning: {warning}")
- 
- 
--def _guard_exports(db, session_ids: list[str]) -> None:
-+def _guard_exports(db, session_ids: list[str] | None, *, source: str | None = None) -> None:
-     """Per-session export budget: only an individual runaway transcript trips it; 0 disables."""
--    from hermes_state import SessionExportTooLargeError
-+    from hermes_state import SessionExportTooLargeError, resolved_max_export_messages
-+    limit = resolved_max_export_messages()
-+    if limit == 0:
-+        return
-+    if session_ids is None:
-+        session_ids = [row["id"] for row in db.search_sessions(source=source, limit=100000, ids_only=True)]
-     try:
--        db.assert_exports_safe(session_ids)
-+        db.assert_exports_safe(session_ids, max_messages=limit)
-     except SessionExportTooLargeError as exc:
-         raise ConsoleCommandError(str(exc)) from exc
- 
-@@ -672,8 +677,7 @@
-             if not rows[0]:
-                 raise ConsoleCommandError(f"Session '{ns.session_id}' not found.")
-         else:
--            found = db.search_sessions(source=ns.source, limit=100000)
--            _guard_exports(db, [session["id"] for session in found])
-+            _guard_exports(db, None, source=ns.source)
-             rows = db.export_all(source=ns.source, **export_projection(False))
-         text = "\n".join(json.dumps(row, ensure_ascii=False) for row in rows)
-         if text:
-diff --git a/hermes_cli/sessions_cmd.py b/hermes_cli/sessions_cmd.py
---- a/hermes_cli/sessions_cmd.py
-+++ b/hermes_cli/sessions_cmd.py
-@@ -356,7 +356,7 @@
-         if limit == 0:
-             return False  # resolved before the bare-path scan: a disabled guard costs nothing
-         if session_ids is None:
--            session_ids = [s["id"] for s in db.search_sessions(source=None, limit=100000)]
-+            session_ids = [s["id"] for s in db.search_sessions(source=None, limit=100000, ids_only=True)]
-         try:
-             db.assert_exports_safe(session_ids, max_messages=limit)
-         except SessionExportTooLargeError as exc:
 diff --git a/tests/hermes_cli/test_session_id_discovery.py b/tests/hermes_cli/test_session_id_discovery.py
 new file mode 100644
 --- /dev/null
@@ -40772,3 +40695,447 @@ new file mode 100644
 +    assert {json.loads(line)['id'] for line in output.read_text().splitlines()} == {
 +        'local-cli', 'local-oneshot', 'other-cli', 'other-tui',
 +    }
+diff --git a/hermes_cli/session_export.py b/hermes_cli/session_export.py
+--- a/hermes_cli/session_export.py
++++ b/hermes_cli/session_export.py
+@@ -10,6 +10,10 @@
+ from datetime import datetime, timezone, UTC
+ from html import escape as html_escape
+ import json
++import os
++from pathlib import Path
++import stat
++import sys
+ from typing import Any, Dict, Iterable, Iterator, List, Literal, Optional, Tuple
+ 
+ from hermes_cli.timefmt import coerce_epoch
+@@ -37,6 +41,41 @@
+     if only.strip().lower() in _ONLY_ALIASES:
+         return "user-prompts"
+     raise ValueError(f"Unsupported session export filter: {only}")
++
++
++def iter_jsonl_chunks(records: Iterable[dict[str, Any]]) -> Iterator[str]:
++    """Preserve legacy JSONL bytes with allocation bounded by one serialized record."""
++    for record in records:
++        yield json.dumps(record, ensure_ascii=False)
++        yield "\n"
++
++
++def write_export_payload(output: str | Path | None, payload: str | Iterable[str]) -> None:
++    """Stream stdout/special files; stage regular-file bytes through the native atomic writer."""
++    chunks = (payload,) if isinstance(payload, str) else payload
++    if not output or output == "-":
++        sys.stdout.writelines(chunks)
++        return
++    path = Path(output)
++    try:
++        metadata = path.stat()
++    except FileNotFoundError:
++        metadata = None
++    # A hard-linked file must retain inode identity: replacing one name would
++    # leave its other names with stale content, unlike the original writer.
++    if metadata is not None and (not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink > 1):
++        with path.open("w", encoding="utf-8") as stream:
++            stream.writelines(chunks)
++        return
++    # Export must not gain the generic atomic writer's parent-creation or readonly-replacement authority.
++    actual = Path(os.path.realpath(path)) if path.is_symlink() else path
++    if not stat.S_ISDIR(actual.parent.stat().st_mode):
++        raise NotADirectoryError(str(actual.parent))
++    if metadata is not None:
++        fd = os.open(path, os.O_WRONLY | getattr(os, "O_NONBLOCK", 0))
++        os.close(fd)  # Kernel ACL/mode check without truncating the current output.
++    from utils import atomic_write_chunks
++    atomic_write_chunks(path, chunks, fsync_dir=True)
+ 
+ 
+ def render_sessions_export(sessions: Iterable[dict[str, Any]], *, fmt: str = "jsonl", only: Optional[str] = None) -> str:
+@@ -51,8 +90,7 @@
+     prompts_only = normalize_export_only(only) == "user-prompts"
+     if export_format == "jsonl":
+         rows = iter_user_prompt_records(session_list) if prompts_only else session_list
+-        lines = [json.dumps(row, ensure_ascii=False) for row in rows]
+-        return ("\n".join(lines) + "\n") if lines else ""
++        return "".join(iter_jsonl_chunks(rows))
+     # One session → its own H1 with body at H2; several → a shared H1, each session H2/H3.
+     if prompts_only:
+         multi_title, append_body = "User prompts export", _append_prompt_records
+diff --git a/hermes_cli/sessions_cmd.py b/hermes_cli/sessions_cmd.py
+--- a/hermes_cli/sessions_cmd.py
++++ b/hermes_cli/sessions_cmd.py
+@@ -89,12 +89,10 @@
+ 
+ def _write_output(output, text, summary) -> None:
+     """Write to stdout when *output* is empty or ``-``; else to the file + print *summary*."""
+-    if not output or output == "-":
+-        sys.stdout.write(text)
+-        return
+-    with open(output, "w", encoding="utf-8") as f:
+-        f.write(text)
+-    print(summary)
++    from hermes_cli.session_export import write_export_payload
++    write_export_payload(output, text)
++    if output and output != "-":
++        print(summary)
+ 
+ 
+ # -- handlers that must run BEFORE SessionDB() is opened ----------------------
+@@ -356,7 +354,7 @@
+         if limit == 0:
+             return False  # resolved before the bare-path scan: a disabled guard costs nothing
+         if session_ids is None:
+-            session_ids = [s["id"] for s in db.search_sessions(source=None, limit=100000)]
++            session_ids = [s["id"] for s in db.search_sessions(source=None, limit=100000, ids_only=True)]
+         try:
+             db.assert_exports_safe(session_ids, max_messages=limit)
+         except SessionExportTooLargeError as exc:
+@@ -400,8 +398,11 @@
+ 
+ def _render_only(args, sessions):
+     """--only user-prompts: one prompt record per line (jsonl) or headed sections (md)."""
+-    from hermes_cli.session_export import export_record_count, render_sessions_export
+-    rendered = render_sessions_export(sessions, fmt="markdown" if args.format == "md" else "jsonl", only=args.only)
++    from hermes_cli.session_export import (
++        export_record_count, iter_jsonl_chunks, iter_user_prompt_records, render_sessions_export,
++    )
++    rendered = (iter_jsonl_chunks(iter_user_prompt_records(sessions)) if args.format == "jsonl" else
++                render_sessions_export(sessions, fmt="markdown", only=args.only))
+     count, noun = export_record_count(sessions, only=args.only)
+     return rendered, f"Exported {count} {noun}{'' if count == 1 else 's'} to {args.output}"
+ 
+@@ -415,8 +416,8 @@
+ 
+ 
+ def _render_jsonl(args, sessions):
+-    lines = "".join(json.dumps(s, ensure_ascii=False) + "\n" for s in sessions)
+-    return lines, f"Exported {len(sessions)} {'session' if args.session_id else 'sessions'} to {args.output}"
++    from hermes_cli.session_export import iter_jsonl_chunks
++    return iter_jsonl_chunks(sessions), f"Exported {len(sessions)} {'session' if args.session_id else 'sessions'} to {args.output}"
+ 
+ 
+ #: kind -> (usage error when the --output/--format combination is unusable, renderer)
+diff --git a/hermes_cli/console_engine.py b/hermes_cli/console_engine.py
+--- a/hermes_cli/console_engine.py
++++ b/hermes_cli/console_engine.py
+@@ -648,18 +648,23 @@
+         print(f"Warning: {warning}")
+ 
+ 
+-def _guard_exports(db, session_ids: list[str]) -> None:
++def _guard_exports(db, session_ids: list[str] | None, *, source: str | None = None) -> None:
+     """Per-session export budget: only an individual runaway transcript trips it; 0 disables."""
+-    from hermes_state import SessionExportTooLargeError
++    from hermes_state import SessionExportTooLargeError, resolved_max_export_messages
++    limit = resolved_max_export_messages()
++    if limit == 0:
++        return
++    if session_ids is None:
++        session_ids = [row["id"] for row in db.search_sessions(source=source, limit=100000, ids_only=True)]
+     try:
+-        db.assert_exports_safe(session_ids)
++        db.assert_exports_safe(session_ids, max_messages=limit)
+     except SessionExportTooLargeError as exc:
+         raise ConsoleCommandError(str(exc)) from exc
+ 
+ 
+ @_captured
+ def _sessions_export(_engine: HermesConsoleEngine, args: list[str]) -> None:
+-    from hermes_cli.session_export import export_projection
++    from hermes_cli.session_export import export_projection, iter_jsonl_chunks, write_export_payload
+ 
+     ns = _parse("sessions export", args, "output", "--source", "--session-id")
+     with _session_db() as db:
+@@ -672,16 +677,11 @@
+             if not rows[0]:
+                 raise ConsoleCommandError(f"Session '{ns.session_id}' not found.")
+         else:
+-            found = db.search_sessions(source=ns.source, limit=100000)
+-            _guard_exports(db, [session["id"] for session in found])
++            _guard_exports(db, None, source=ns.source)
+             rows = db.export_all(source=ns.source, **export_projection(False))
+-        text = "\n".join(json.dumps(row, ensure_ascii=False) for row in rows)
+-        if text:
+-            text += "\n"
+-        if ns.output == "-":
+-            sys.stdout.write(text)
+-        else:
+-            Path(ns.output).expanduser().write_text(text, encoding="utf-8")
++        output = "-" if ns.output == "-" else Path(ns.output).expanduser()
++        write_export_payload(output, iter_jsonl_chunks(rows))
++        if ns.output != "-":
+             print(f"Exported {len(rows)} session(s) to {ns.output}")
+ 
+ 
+diff --git a/utils.py b/utils.py
+--- a/utils.py
++++ b/utils.py
+@@ -10,6 +10,7 @@
+ import tempfile
+ import threading
+ import time
++from collections.abc import Iterable
+ from contextlib import suppress
+ from pathlib import Path
+ from typing import Any, Union
+@@ -352,6 +353,14 @@
+                   preserve_owner=preserve_mode, fsync_dir=fsync_dir)
+ 
+ 
++def atomic_write_chunks(path: str | Path, chunks: Iterable[str], *, encoding: str = "utf-8",
++                        fsync_dir: bool = False) -> None:
++    """Consume text chunks through the native staged writer, preserving target metadata/symlinks."""
++    path = Path(path)
++    _atomic_write(path, lambda f: f.writelines(chunks), prefix=f".{path.stem}_", encoding=encoding,
++                  mode=_preserve_file_mode(path), fsync_dir=fsync_dir)
++
++
+ def atomic_write_bytes(path: str | Path, content: bytes, *, tmp_prefix: str = ".tmp_",
+                        mode: int | None = None, fsync_dir: bool = False) -> None:
+     """Bytes variant of :func:`atomic_write_text` (encrypted blobs, key material)."""
+diff --git a/tests/hermes_cli/test_session_export_stream.py b/tests/hermes_cli/test_session_export_stream.py
+new file mode 100644
+--- /dev/null
++++ b/tests/hermes_cli/test_session_export_stream.py
+@@ -0,0 +1,149 @@
++"""File JSONL exports avoid whole-output copies and preserve existing targets on staging failure."""
++import errno
++import gc
++import hashlib
++import json
++import os
++import stat
++import tracemalloc
++
++import pytest
++
++from hermes_cli import session_export as export
++from hermes_state import SessionDB
++
++
++def run_cli(args):
++    from hermes_cli._parser import build_top_level_parser
++    from hermes_cli.sessions_cmd import cmd_sessions
++    from hermes_cli.subcommands.sessions import build_sessions_parser
++    parser, subparsers, _ = build_top_level_parser()
++    build_sessions_parser(subparsers, cmd_sessions=cmd_sessions)
++    parsed = parser.parse_args(['sessions', 'export', *args])
++    return parsed.func(parsed)
++
++
++@pytest.mark.parametrize('surface', ['cli', 'console'])
++def test_file_export_serialization_peak_does_not_scale_with_all_rows(tmp_path, monkeypatch, surface):
++    from hermes_cli.console_engine import HermesConsoleEngine
++    import hermes_state
++    with SessionDB() as db:
++        db.create_session('fixture', source='cli')
++    rows = [{'id': f'row-{i}', 'messages': [
++        {'role': 'user', 'content': 'ภาษาไทย🙂 ' * 1024} for _ in range(16)
++    ]} for i in range(24)]
++    monkeypatch.setattr(SessionDB, 'export_all', lambda *a, **kw: rows)
++    monkeypatch.setattr(hermes_state, 'resolved_max_export_messages', lambda: 0)
++    expected = hashlib.sha256(''.join(json.dumps(row, ensure_ascii=False) + '\n' for row in rows).encode()).hexdigest()
++    target = tmp_path / f'{surface}.jsonl'
++    engine = HermesConsoleEngine()
++    assert engine.execute('sessions stats').status == 'ok'  # Warm native imports before the allocation measurement.
++    gc.collect()
++    tracemalloc.start()
++    try:
++        if surface == 'console':
++            result = engine.execute(f'sessions export {target}', confirmed=True)
++            assert result.status == 'ok', result.output
++        else:
++            run_cli([str(target)])
++        _, peak = tracemalloc.get_traced_memory()
++    finally:
++        tracemalloc.stop()
++    assert hashlib.sha256(target.read_bytes()).hexdigest() == expected
++    assert peak < 4 * 1024**2, f'serialization copied the whole export: {peak} Python bytes'
++
++
++def test_jsonl_chunks_match_legacy_unicode_order_empty_and_newline():
++    rows = [{'ชื่อ': 'ไทย🙂\nquoted "value"', 'float': 1.25, 'nested': [None, True, {'x': 3}]}, {'id': 'last'}]
++    assert ''.join(export.iter_jsonl_chunks(rows)) == ''.join(json.dumps(r, ensure_ascii=False) + '\n' for r in rows)
++    assert ''.join(export.iter_jsonl_chunks([])) == ''
++
++
++@pytest.mark.parametrize('failure', ['serializer', 'fsync', 'interrupt'])
++def test_staging_failure_keeps_old_file_and_cleans_temp(tmp_path, monkeypatch, failure):
++    target = tmp_path / 'backup.jsonl'
++    target.write_text('keep original\n')
++    entries = set(tmp_path.iterdir())
++
++    def chunks():
++        yield 'first staged chunk\n'
++        if failure == 'serializer':
++            raise TypeError('Synthetic serializer failure')
++        if failure == 'interrupt':
++            raise KeyboardInterrupt()
++
++    if failure == 'fsync':
++        def fail_sync(fd):
++            raise OSError(errno.ENOSPC, 'Synthetic disk-full sync failure')
++        monkeypatch.setattr(os, 'fsync', fail_sync)
++    with pytest.raises({'serializer': TypeError, 'fsync': OSError, 'interrupt': KeyboardInterrupt}[failure]):
++        export.write_export_payload(str(target), chunks())
++    assert target.read_text() == 'keep original\n'
++    assert set(tmp_path.iterdir()) == entries
++
++
++@pytest.mark.platforms('posix')
++def test_export_follows_symlink_and_preserves_mode(tmp_path):
++    real = tmp_path / 'target.jsonl'
++    real.write_text('old')
++    real.chmod(0o640)
++    link = tmp_path / 'alias.jsonl'
++    link.symlink_to(real)
++    export.write_export_payload(str(link), export.iter_jsonl_chunks([{'text': 'ไทย'}]))
++    assert link.is_symlink() and real.read_text() == '{"text": "ไทย"}\n'
++    assert stat.S_IMODE(real.stat().st_mode) == 0o640
++
++
++@pytest.mark.platforms('posix')
++def test_export_preserves_existing_hardlink_identity(tmp_path):
++    first = tmp_path / 'first.jsonl'
++    second = tmp_path / 'second.jsonl'
++    first.write_text('old')
++    os.link(first, second)
++    export.write_export_payload(str(first), export.iter_jsonl_chunks([{'text': 'new'}]))
++    assert first.stat().st_ino == second.stat().st_ino
++    assert second.read_text() == '{"text": "new"}\n'
++
++
++@pytest.mark.platforms('posix')
++@pytest.mark.skipif(getattr(os, 'geteuid', lambda: 1)() == 0, reason='Root may write readonly files by kernel policy')
++def test_readonly_output_is_not_bypassed_by_atomic_replacement(tmp_path):
++    target = tmp_path / 'readonly.jsonl'
++    target.write_text('keep')
++    target.chmod(0o444)
++    try:
++        with pytest.raises(PermissionError):
++            export.write_export_payload(str(target), ['replacement'])
++        assert target.read_text() == 'keep'
++    finally:
++        target.chmod(0o644)
++
++
++def test_missing_parent_is_not_created_and_stdout_bytes_stay_equal(tmp_path, capsys):
++    target = tmp_path / 'missing' / 'backup.jsonl'
++    with pytest.raises(FileNotFoundError):
++        export.write_export_payload(str(target), ['data'])
++    assert not target.parent.exists()
++    rows = [{'id': 'first'}, {'text': 'ไทย🙂'}]
++    export.write_export_payload('-', export.iter_jsonl_chunks(rows))
++    assert capsys.readouterr().out == ''.join(json.dumps(r, ensure_ascii=False) + '\n' for r in rows)
++
++
++@pytest.mark.platforms('posix')
++def test_special_device_keeps_direct_stream_behavior():
++    export.write_export_payload(os.devnull, export.iter_jsonl_chunks([{'text': 'ไทย'}]))
++
++
++def test_atomic_chunk_writer_does_not_recreate_a_deleted_profile(tmp_path):
++    from hermes_constants import mark_named_profile_deleted
++    from utils import atomic_write_chunks
++    import shutil
++
++    (tmp_path / 'config.yaml').write_text('{}\n')
++    profile = tmp_path / 'profiles' / 'deleted'
++    profile.mkdir(parents=True)
++    mark_named_profile_deleted(profile)
++    shutil.rmtree(profile)
++    with pytest.raises(FileNotFoundError, match='Named profile home does not exist'):
++        atomic_write_chunks(profile / 'exports' / 'saved.jsonl', ['one\n'])
++    assert not profile.exists()
+diff --git a/agent/reasoning_effort.py b/agent/reasoning_effort.py
+--- a/agent/reasoning_effort.py
++++ b/agent/reasoning_effort.py
+@@ -36,13 +36,24 @@
+ CODEX_ASTRA_EFFORTS: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
+ ASTRA_MODEL_IDS: frozenset[str] = frozenset({"gpt-6-astra", "gpt-6-astra-900k"})
+ #: GPT-6 Sol/Terra/Luna (the 5.6 successors; ``-pro``/``-900k``/dated snapshots share the prefix).
+-GPT6_TIER_PREFIXES: tuple[str, ...] = ("gpt-6-sol", "gpt-6-luna")
++GPT6_TIER_PREFIXES: tuple[str, ...] = ("gpt-6-sol", "gpt-6-luna", "gpt-6.1-terra")
+ #: GPT-6.1 Sol takes Astra's ``low..max`` ladder (``none`` 400s, live 2026-09-29) without Astra's
+ #: account gating, so it stays in the static catalogs.
+ NO_DISABLE_TIER_PREFIXES: tuple[str, ...] = ("gpt-6.1-sol",)
+ DAYBREAK_MODEL_IDS: frozenset[str] = frozenset(
+     {"gpt-daybreak-blue-latest", "gpt-daybreak-blue-latest-900k"}
+ )
++
++# The Web bridge publishes picker efforts, not the API family's ladder. Keep
++# these namespaced so an identically named API/relay model is unaffected.
++CHATGPT_WEB_EFFORTS: dict[str, tuple[str, ...]] = {
++    "gpt-6-pro": ("max",),
++    "gpt-5.6-pro": ("max",),
++    "gpt-6-sol-instant": ("low",),
++    "gpt-5.6-sol-instant": ("low",),
++    "gpt-6-sol": ("medium", "high", "xhigh"),
++    "gpt-5.6-sol": ("medium", "high", "xhigh"),
++}
+ 
+ #: xAI Responses — Grok 4.6+ accepts xhigh; older Grok tops out at high.
+ XAI_GROK46_EFFORTS: tuple[str, ...] = ("low", "medium", "high", "xhigh")
+@@ -103,7 +114,10 @@
+ 
+ def codex_supported_efforts(model: Optional[str]) -> tuple[str, ...]:
+     """Supported effort set for an OpenAI/Codex Responses model."""
+-    bare = (model or "").strip().lower().rsplit("/", 1)[-1]
++    normalized = (model or "").strip().lower()
++    bare = normalized.rsplit("/", 1)[-1]
++    if normalized.startswith("chatgpt-web/") and bare in CHATGPT_WEB_EFFORTS:
++        return CHATGPT_WEB_EFFORTS[bare]
+     if is_astra_model(model) or bare.startswith(NO_DISABLE_TIER_PREFIXES):
+         return CODEX_ASTRA_EFFORTS
+     return (
+@@ -167,7 +181,8 @@
+     ``max`` rejects it), so it is sent verbatim there."""
+     if (provider or "").strip().lower() == "openai-codex":
+         supported = codex_supported_efforts(model)
+-        return (*supported, "ultra") if api_mode == "codex_app_server" and "max" in supported else supported
++        is_web = (model or "").strip().lower().startswith("chatgpt-web/")
++        return (*supported, "ultra") if api_mode == "codex_app_server" and "max" in supported and not is_web else supported
+     return OPENAI_COMPAT_WIRE_EFFORTS
+ 
+ 
+diff --git a/tests/agent/test_terra_reasoning_effort.py b/tests/agent/test_terra_reasoning_effort.py
+new file mode 100644
+--- /dev/null
++++ b/tests/agent/test_terra_reasoning_effort.py
+@@ -0,0 +1,36 @@
++"""Terra's configured reasoning depth must survive the Codex request boundary."""
++
++import pytest
++
++from agent.transports.codex import ResponsesApiTransport
++
++
++@pytest.mark.parametrize("model", ["gpt-6.1-terra", "openai/gpt-6.1-terra", "gpt-6.1-terra-2026-10-26"])
++def test_terra_preserves_max_on_codex_wire(model):
++    request = ResponsesApiTransport().build_kwargs(
++        model=model,
++        messages=[{"role": "user", "content": "Check a synthetic result."}],
++        tools=[],
++        provider="openai-codex",
++        base_url="https://chatgpt.com/backend-api/codex",
++        reasoning_config={"enabled": True, "effort": "max"},
++    )
++    assert request["reasoning"]["effort"] == "max"
++
++
++@pytest.mark.parametrize("model,effort,expected", [
++    ("gpt-6.1-terra", "high", "high"),
++    ("gpt-6.1-terra", "none", "none"),
++    ("gpt-5.5", "max", "xhigh"),
++    ("gpt-6.1-sol", "max", "max"),
++])
++def test_sibling_depth_contracts(model, effort, expected):
++    request = ResponsesApiTransport().build_kwargs(
++        model=model,
++        messages=[{"role": "user", "content": "Check a synthetic result."}],
++        tools=[],
++        provider="openai-codex",
++        base_url="https://chatgpt.com/backend-api/codex",
++        reasoning_config={"enabled": effort != "none", "effort": effort},
++    )
++    assert request["reasoning"]["effort"] == expected

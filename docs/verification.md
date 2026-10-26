@@ -973,3 +973,32 @@ and main-renderer readiness, the original saved session/model and 99 protected
 configuration/instruction hashes were verified. Gateway retained its process
 identity; no database snapshot, forced stop, model or manual resume call was used.
 This source/readiness acceptance is separate from a full production visual journey.
+
+
+## Chunked JSONL export and Terra reasoning (v0.6.11)
+
+The native export suite passed **57 tests in 11 files**, with zero failures and
+file retries. A subsequent hard-link regression exposed an inode-semantics
+change; after repair, a focused four-file run passed **21 tests**, zero failures.
+The runs overlap and must not be summed. Tests cover native CLI/Console export,
+Unicode bytes, empty output, prompt-only/stdout behavior, staged serializer and
+fsync failures, symlinks, hard links, read-only targets, missing parents, special
+files and deleted-profile guards. Existing backup/import, retention and formats
+remain covered. Scoped health reported zero new blocking findings or advisories.
+
+Three full synthetic SQLite-to-JSONL exports per version produced identical bytes.
+Median traced Python peak decreased from 107,491,242 to 24,736,700 bytes for this
+fixture. A fresh installed-source run also matched the same synthetic output,
+and a bounded read-only existing-history comparison matched full and prompt-only
+serialization without persisting private history. These measurements include
+payload load and serialization, but are not whole-process RSS, production usage,
+model latency, cache-hit, or billing evidence.
+
+An independent native transport regression caught Terra's `max` being clamped to
+`xhigh`. Its compatibility change and controls passed **79 tests in seven files**,
+zero failures. Fresh installed request construction preserves the configured
+effort; this offline check is not an inference or quota-consumption benchmark.
+The two source changes were installed locally under native custody with scoped
+rollback. Runtime activation for already-running processes is separate from fresh
+CLI import acceptance. The cumulative patch contains **496 paths: 349 outside
+the Python test tree and 147 Python test paths**.

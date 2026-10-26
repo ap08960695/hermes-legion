@@ -93,3 +93,16 @@ no delivery replay, polling-frequency change or new model call is introduced.
 keeps native MRU/workspace/oneshot selection and export-budget preflight from
 loading context they do not consume. A disabled Console guard skips its ID scan;
 positive per-session budgets and full backup/export fidelity remain.
+
+
+## Chunked JSONL output and Terra effort (v0.6.11)
+
+JSONL file exports serialize one record at a time through the native staged writer.
+Backup payloads, record order, formatting and per-session guards stay intact.
+Existing hard-linked outputs and special files use direct writing to preserve their
+original semantics; stdout is inherently non-atomic. The full database payload is
+still materialized. See [measured scope and limitations](session-metadata-reads.md#chunked-jsonl-export-v0611).
+
+The Codex reasoning-effort mapping recognizes GPT-6.1 Terra so a configured `max`
+reaches the request rather than being reduced to `xhigh`. This is compatibility
+for the native provider, not a model assignment or a new account/fallback.

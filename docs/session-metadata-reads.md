@@ -195,3 +195,29 @@ title, prompt or workload values are published, and no history export or restore
 was written. These measurements cover ID enumeration/preflight only. They are
 not full-export memory, whole-process RSS, model latency, cache hits or billed
 usage. Full backup payloads still require their normal memory and storage.
+
+
+## Chunked JSONL export (v0.6.11)
+
+CLI and Console file exports previously built the complete serialized JSONL string
+in memory after collecting the native backup payload. They now serialize one
+record at a time into the existing atomic publication path for ordinary files.
+Full backup fields, session order, archived-row flags, JSON formatting and export
+budget checks remain intact. Prompt-only JSONL uses the same streaming writer.
+Existing target metadata and symlink handling use the native writer; missing parent
+directories are not created. Existing hard-linked files and special files retain
+their original direct-write behavior so linked names remain coherent. A late
+serialization or write failure can leave partial data on stdout, a special file
+or a hard-linked target. Staging failures preserve an ordinary existing target.
+
+This reduces the additional serialized-output allocation; it does **not** stream
+the database payload itself. Peak allocation still depends on the full collected
+payload and the largest individual serialized record. It does not claim reduced
+backup size, total RSS, token usage or provider cache gains.
+
+In three synthetic runs per version using the same 32-session native SQLite fixture,
+the full read-and-file-export path produced identical 15,528,045-byte output.
+Median peak traced Python allocation was 107,491,242 bytes before and 24,736,700
+bytes after. These are local synthetic measurements, not production RAM or latency
+predictions. Existing-history serialization was compared read-only without
+exporting private content or invoking a model.
