@@ -109,3 +109,7 @@ Run the [offline dry-run](offline-planner.md) with synthetic data first. Then pr
 ## 5. Adopt only at a safe boundary
 
 When an operator chooses to use the prepared team, preserve running workers and saved session/model/goal bindings. Follow the normal idle-only lifecycle and current native ownership checks. The Captain uses existing Kanban tasks, role descriptions and permitted Web/native profiles; the offline planner does not dispatch them. Before any live execution, native eligibility and actual credential selection must be checked again. New real-model acceptance is separate authorization; it is not part of this offline-only update.
+
+## Optional cache TTL policy
+
+After selecting an intended native home/profile, see [the prompt-cache policy recipe](prompt-cache-policy.md) for an opt-in `prompt_caching.cache_ttl: auto` fragment. Root settings do not automatically configure every profile. This preference adds no account, quota or fallback route and supplies no proof of provider cache sharing.

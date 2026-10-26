@@ -9,3 +9,7 @@ These are **Legion planning documents**, not native Hermes config files. All acc
 - `session-pins.synthetic.json`: an existing profile/account recommendation retained across a simulated session.
 
 For a deterministic demonstration, use `--now 1` with the synthetic snapshots. Without a current snapshot, ready work is held. Never extend a stale real snapshot to make work eligible. Use aliases without names, emails, account IDs or tokens. Native config fragments are separately identified under `profiles/native/`.
+
+## Explicit native fragments
+
+`native/prompt-cache-auto.fragment.json` is an optional native config **merge fragment**, unlike the planning documents above. It contains one setting and must not replace an existing config. Follow [the scoped native recipe](../docs/prompt-cache-policy.md); defaults, routes, accounts, quotas and fallback settings are not modified by opening or exporting this file.
