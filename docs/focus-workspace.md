@@ -88,3 +88,7 @@ See [verification](verification.md#native-work-surface-correction-v044) for the 
 ## Complete native management
 
 Use [Desktop feature parity](desktop-feature-parity.md) for the full History/Projects destination, bot/group/section actions, device/profile context, loaded pane/status plugins, combined native controls and cache display. The central managers reuse original Hermes actions while the permanent legacy side column stays closed.
+
+## Device, profile and connectivity at a glance
+
+The permanent row at the top of the workspace shows **Device**, **Profile for new chats** and the current connection state. It is visible without opening a popover or dialog. Use the named controls only to change context; saved conversations retain their original owner. The new row reuses current stores and native selection actions without adding polling or inference.
