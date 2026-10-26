@@ -4460,16 +4460,21 @@ index b464c807e8b7bf249fa53cc17d37f8adc0e13042..6fd6ecff8cb2d085bf1a4a066033bb5c
 +
  def _pool_entry_host(slug: str, entry) -> str:
 diff --git a/hermes_cli/kanban.py b/hermes_cli/kanban.py
-index e1c36a8111989198caa488fddb68bff30684e428..7b0d86b37118454d85154e6c4dd418f16d4e3232 100644
 --- a/hermes_cli/kanban.py
 +++ b/hermes_cli/kanban.py
-@@ -25,2 +25,5 @@ from hermes_cli import kanban_swarm as ks
+@@ -23,6 +23,9 @@
+ from hermes_cli import kanban_db_notify as kbn
+ from hermes_cli import kanban_swarm as ks
  from hermes_cli import kanban_workflow
 +from hermes_cli.kanban_notify_receipts import command as _cmd_notify_receipts
 +from hermes_cli.kanban_attention import command as _cmd_attention_request
 +from hermes_cli.kanban_attention_run import command as _cmd_attention_run
  from hermes_cli.kanban_output import (
-@@ -181,4 +184,6 @@ def kanban_command(args: argparse.Namespace) -> int:
+     _ATTACHMENT_FIELDS, _RUNS_RUN_FIELDS, _SHOW_RUN_FIELDS, _bulk_apply, _err,
+     _fmt_counts, _fmt_task_line, _fmt_ts, _json_out, _obj_dict, _print_json,
+@@ -179,8 +182,10 @@
+     with board_scope:
+         # `repair` dispatches BEFORE auto-init: on a corrupt DB init_db() itself raises
          # KanbanDbCorruptError, which would turn every repair into "could not initialize database".
 -        if action == "repair":
 -            return _cmd_repair(args)
@@ -4478,11 +4483,25 @@ index e1c36a8111989198caa488fddb68bff30684e428..7b0d86b37118454d85154e6c4dd418f1
 +        if pre_init_handler:
 +            return pre_init_handler(args)
          # init_db is idempotent (one sqlite_master SELECT when tables exist) and prevents
-@@ -213,3 +218,3 @@ _DELEGATED_CHILD_DENIED_ACTIONS: frozenset[str] = frozenset({
+         # "no such table: tasks" on first use from a fresh HERMES_HOME.
+         try:
+@@ -211,7 +216,7 @@
+     "schedule", "unblock", "promote", "archive", "dispatch", "daemon", "repair",
+     "heartbeat", "notify-subscribe", "notify-unsubscribe", "specify", "decompose",
      "request-review", "request-changes", "reopen-review",
 -    "gc",
 +    "gc", "attention-request", "attention-run",
  })
+ 
+ _DELEGATED_CHILD_DENIED_BOARD_ACTIONS: frozenset[str] = frozenset({
+@@ -371,6 +376,7 @@
+             max_runtime_seconds=max_runtime, skills=getattr(args, "skills", None) or None,
+             max_retries=max_retries, model_override=getattr(args, "model_override", None),
+             provider_override=getattr(args, "provider_override", None),
++            reasoning_effort=getattr(args, "reasoning_effort", None),
+             goal_mode=bool(getattr(args, "goal_mode", False)),
+             goal_max_turns=getattr(args, "goal_max_turns", None),
+             completion_contract=getattr(args, "completion_contract", None),
 diff --git a/hermes_cli/kanban_attempt_evidence.py b/hermes_cli/kanban_attempt_evidence.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..f7c6e60b283b19c9ecb2f7b912b071b6f800a4b9
@@ -6440,10 +6459,21 @@ index 0000000000000000000000000000000000000000..85d1c89f9fe0ecf0e2059e5ec069d5af
 +        lines.append(f'Recovery: kanban_show(task_id="{task.id}", full=true); run_id={run.id if run else "legacy"}. Canonical summary/metadata and artifact references remain there.')
 +        lines.append('')
 diff --git a/hermes_cli/kanban_parser.py b/hermes_cli/kanban_parser.py
-index 8a65d413467169d2e352c96e3284637c61180295..95ff144cec99f8a0acb93de013d43e5d6fbc191e 100644
 --- a/hermes_cli/kanban_parser.py
 +++ b/hermes_cli/kanban_parser.py
-@@ -414,2 +414,10 @@ _SPECS = [
+@@ -203,6 +203,9 @@
+         _arg("--provider", dest="provider_override",
+              help="Provider the --model belongs to (passed as --provider <name> to "
+                   "the worker). Requires --model."),
++        _arg("--reasoning-effort", type=kb.normalize_reasoning_effort, metavar="LEVEL",
++             help="Override the worker's reasoning effort for this task. Omit to "
++                  "inherit the profile; 'none' disables reasoning where supported."),
+         _arg("--completion-contract", metavar="CONTRACT",
+              help="local-only (default), OWNER/REPO for publication, or exact GitHub PR URL; required CI gates done."),
+         _arg("--goal", action="store_true", dest="goal_mode",
+@@ -412,6 +415,14 @@
+     ], help="Subscribe a gateway source to a task's terminal events (used by /kanban subscribe in the gateway adapter)"),
+     _cmd("notify-list", [_arg("task_id", nargs="?"), _json_flag()],
           help="List notification subscriptions (optionally for a single task)"),
 +    _cmd("notify-receipts", [_arg("--session", required=True), _json_flag()],
 +         help="Read TUI delivery receipts for one stored session in the current profile; never retries work"),
@@ -6454,6 +6484,8 @@ index 8a65d413467169d2e352c96e3284637c61180295..95ff144cec99f8a0acb93de013d43e5d
 +    _cmd("attention-run", [_arg("delivery_id", type=int), _arg("--session", required=True), _json_flag()],
 +         help="Explicitly run one existing daily attention receipt in its closed stored local chat; never drains other work"),
      _cmd("notify-unsubscribe", [_TASK_ID, *_NOTIFY_TARGET], help="Remove a gateway subscription from a task"),
+     _cmd("log", [_TASK_ID, _arg("--tail", type=int, help="Only print the last N bytes")],
+          help="Print the worker log for a task (from <kanban-root>/kanban/logs/)"),
 diff --git a/hermes_cli/kanban_ready_order.py b/hermes_cli/kanban_ready_order.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..95b76e150233f1a76f394b0bc4bbe8d639e578dd
@@ -42262,3 +42294,63 @@ new file mode 100644
 +        main()
 +    assert exc.value.code == 2
 +    assert 'at most 64' in capsys.readouterr().err
+diff --git a/tests/hermes_cli/test_kanban_create_effort_cli.py b/tests/hermes_cli/test_kanban_create_effort_cli.py
+new file mode 100644
+--- /dev/null
++++ b/tests/hermes_cli/test_kanban_create_effort_cli.py
+@@ -0,0 +1,55 @@
++"""Create a task with CLI reasoning depth without changing a profile."""
++import argparse
++import json
++from pathlib import Path
++
++import pytest
++
++from hermes_cli import kanban as kc
++from hermes_cli import kanban_db as kb
++from hermes_cli import kanban_db_connect as kbc
++from hermes_cli import kanban_db_dispatch as dispatcher
++
++
++@pytest.fixture
++def board(tmp_path, monkeypatch):
++    home = tmp_path / 'hermes'
++    home.mkdir()
++    monkeypatch.setenv('HERMES_HOME', str(home))
++    monkeypatch.setenv('HERMES_KANBAN_HOME', str(home))
++    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
++    for key in ('HERMES_KANBAN_TASK', 'HERMES_KANBAN_DB', 'HERMES_KANBAN_BOARD', 'HERMES_KANBAN_RUN_ID'):
++        monkeypatch.delenv(key, raising=False)
++    monkeypatch.setattr(kb, '_fire_task_hook', lambda *args, **kwargs: None)
++    kb._INITIALIZED_PATHS.clear()
++    kb.init_db()
++    root = argparse.ArgumentParser(prog='hermes')
++    kc.build_parser(root.add_subparsers())
++    return root
++
++
++@pytest.mark.parametrize('effort,expected', [('HIGH', 'high'), ('none', 'none')])
++def test_cli_create_passes_effort_from_card_to_worker(board, monkeypatch, capsys, effort, expected):
++    args = board.parse_args(['kanban', 'create', 'Synthetic task', '--assignee', 'default',
++                             '--reasoning-effort', effort, '--json'])
++    assert kc._cmd_create(args) == 0
++    task_id = json.loads(capsys.readouterr().out)['id']
++    with kbc.connect_closing() as conn:
++        task = kb.get_task(conn, task_id)
++    assert task.reasoning_effort == expected
++    monkeypatch.setattr(dispatcher, '_resolve_hermes_argv', lambda: ['hermes'])
++    monkeypatch.setattr(dispatcher, '_resolve_worker_cli_toolsets', lambda home: [])
++    argv = dispatcher._worker_argv(task, 'default', None)
++    assert argv[argv.index('--reasoning') + 1] == expected
++
++
++def test_cli_invalid_effort_does_not_create_task_and_omission_inherits(board, capsys):
++    with pytest.raises(SystemExit):
++        board.parse_args(['kanban', 'create', 'Invalid', '--reasoning-effort', 'strongest'])
++    with kbc.connect_closing() as conn:
++        assert not kb.list_tasks(conn)
++    args = board.parse_args(['kanban', 'create', 'Inherit', '--assignee', 'default', '--json'])
++    assert kc._cmd_create(args) == 0
++    task_id = json.loads(capsys.readouterr().out)['id']
++    with kbc.connect_closing() as conn:
++        assert kb.get_task(conn, task_id).reasoning_effort is None

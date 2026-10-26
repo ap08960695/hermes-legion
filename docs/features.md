@@ -135,3 +135,7 @@ Cold startup can resolve a remembered session outside the loaded sidebar page wh
 ## Explicit usage attribution boards (v0.6.16)
 
 For an intentionally selected additional database, pass `--board /path/to/kanban.db` to the read-only usage attribution CLI; the option is repeatable. Paths are resolved and deduplicated before reading, and explicit paths take priority within the existing 64-board cap. Missing or non-regular files are reported unavailable and never created. Existing default discovery does not expand.
+
+## Per-task CLI reasoning (v0.6.18)
+
+`hermes kanban create "Task" --assignee PROFILE --reasoning-effort high` sets reasoning for that card without changing the profile default. Omit the option to inherit the profile; `none` explicitly requests no reasoning where supported. Invalid levels are rejected before a card is created. Existing model, provider, quota and ownership gates remain in force.

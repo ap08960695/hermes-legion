@@ -1036,3 +1036,7 @@ Four related files passed 26 offline cases, including a synthetic external board
 ## Captain routing guidance (v0.6.17)
 
 The Captain role template exposes the optional planner/executor split in its own loaded identity rather than relying solely on an external reference. This is static template guidance; offline template and package checks do not demonstrate live Captain compliance, real-bot orchestration or usage savings. Profile identities, model selection and dispatch remain operator-controlled.
+
+## Per-task CLI reasoning (v0.6.18)
+
+Five related test files passed 22 offline cases against the candidate and the same 22 cases against installed source in a network-isolated environment; these are overlapping runs. The new cases cover normalized effort, `none`, invalid input without card creation, omitted effort and propagation from CLI to task and worker arguments. No live dispatch, model call or quota measurement was performed.
