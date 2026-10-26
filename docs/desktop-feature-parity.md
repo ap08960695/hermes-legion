@@ -43,3 +43,8 @@ The row reads existing stores and adds no network refresh, timer, model call or 
 **New chat** calls the existing native new-tab handler, including when an unsent draft is already open. Previous drafts remain in their own tabs; plugin action permissions are unchanged. History/Projects and Settings have their own current-page indication even when a bot pane was previously focused. The rail scrolls at short window heights so lower actions stay reachable.
 
 Hub protects dirty page edits from accidental Escape, close or cancel; discarding is explicit. Fields cannot change while their single save is pending. Membership search uses reported bot titles and canonical names, preserves choices outside the filter, and retains existing members absent from a partial profile list. Native revision and access checks still govern saving.
+
+
+## Search and loading resilience (v0.6.4)
+
+Native History full-text search exposes request failure and explicit retry while preserving profile routing. Hub filters reuse loaded data without collapsing the distinction between normal items and Trash. Member permissions remain unchanged until an explicit successful save; a profile-list read failure cannot silently submit incomplete choices. Bot and Hub queries accept surrounding whitespace.

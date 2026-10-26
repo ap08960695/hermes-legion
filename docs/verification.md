@@ -786,3 +786,16 @@ Final offline coverage: **9 UI files, 45 tests passed**; renderer type checking 
 The actual isolated Electron main/preload/renderer/backend passed **7 checks**, including the initial shell and six interaction journeys, at 1280×900 and 1024×600. The real disposable membership write, page save, edit discard, trash/restore and draft-preserving new tab all passed. Inference POSTs, renderer errors and external-application opens were zero. Source installation, package readiness and native activation remain separate evidence; these isolated interactions do not establish provider allowance or production token savings.
 
 The cumulative patch contains **481 source/test paths**, comprising **341 outside the Python test tree and 140 Python test paths**, against the same pinned upstream base.
+
+
+## Search and loading resilience (v0.6.4)
+
+A fresh review reproduced whitespace-sensitive bot/Hub searches, redundant Hub filter reads, missing loading feedback and stale saved-chat search state on failed requests. New offline controls failed against the preceding behavior before repair. The first hook harness needed a partial module mock; that setup failure is not counted as a product failure.
+
+Final scoped offline coverage: **6 UI test files, 30 tests passed**. Renderer type checking and source-health comparison passed with zero new blocking findings. Coverage includes query/profile isolation, late responses, explicit retry without timer retry, pasted searches, local filter reads, Trash routing, pending member catalogs and retained selections on read failure. Historical overlapping suites are not added to this count.
+
+The exact renderer and native Electron main/preload/backend passed **six isolated real-app checks** with synthetic chats and collections. A test-only wrapper exposed the native Node HTTP client to inject bounded delay and HTTP 503 responses; an earlier Electron net.fetch hook did not intercept this transport and supplies no fault evidence. The accepted run observed actual transport interception, no stale prior search hit, manual recovery, zero new item-list reads across four local type-filter changes, zero renderer errors, zero external-app opens and zero inference POSTs. A separate regression measured three redundant type-filter reads before repair and zero afterward. These are request-count controls, not production latency or LLM-token savings measurements.
+
+Nine exact source/test files were installed locally with permissions restored and configuration inputs preserved, and the native package was built from the installed source. The existing owner Desktop remained on its earlier package because enabled native controls could not unambiguously address its Wayland window for normal Quit; it was not signalled or force-killed. Source installation, staged package readiness and active-window adoption remain separate. This release does not certify that a production window has loaded the new renderer.
+
+The cumulative patch contains **484 source/test paths**, comprising **344 outside the Python test tree and 140 Python test paths**, against the same pinned upstream base. Public inventory, Git history and release archives are checked independently before/after publication. No private UI evidence or operational paths are included in the public artifact.

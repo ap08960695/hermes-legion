@@ -134,3 +134,12 @@ This is an admission check for optional derived cache files. Other writers may
 consume space concurrently; monitor the filesystem and preserve durable data
 instead of treating this reserve as a whole-disk guarantee. It does not install
 MemoryHigh or MemoryMax limits or stop running workers.
+
+
+## Generated Desktop package rollbacks
+
+A packaged Desktop contains large runtime binaries. Do not retain a complete package for every small UI revision indefinitely. After checking package hashes and current process ownership, keep the currently running package, its verified recovery snapshot and the immediately previous verified recovery package. Retire older generated package directories only from an explicitly inventoried build-products scope while holding the native Desktop build lock.
+
+Count unique file inodes and remaining hard links before reporting reclaimed storage. A hardlinked copy's apparent size is not independently reclaimable space. Confirm that no process executes, maps or holds files in the deletion set, and verify the kept package hashes afterward. Filesystem free-space deltas can include unrelated concurrent writes.
+
+This is an operational retention boundary, not a new automatic deletion daemon. It does not authorize deleting conversation databases, project data, source-file rollback evidence, held incident/recovery snapshots, models, active test environments or unknown old cache directories. Retain small source backups, manifests and acceptance receipts separately. An unactivated staged package is not evidence that a running Desktop has loaded a patch.

@@ -38,3 +38,12 @@ Closing a changed Hub document asks whether to **Keep editing** or **Discard cha
 **Manage bot access** searches locally by a bot's reported name or canonical identity, shows the selected count and keeps selected members outside the search result. An existing member missing from the reported profile list remains visible with an explicit label. Filtering does not save membership or grant access.
 
 History/Projects and Settings indicate the current destination. The navigation rail scrolls on short windows rather than leaving its lower controls inaccessible.
+
+
+## Resilient searches and lighter browsing (v0.6.4)
+
+Pasted bot-role and Hub-title queries ignore surrounding whitespace. Changing Hub's All/Pages/Images filters uses the already loaded collection list; entering or leaving Trash still reads the correct server scope. A pending list shows **Loading collection items…** instead of claiming that a collection is empty.
+
+Saved-chat search retires results from another query or profile immediately. A failed full-text request shows a small error with **Retry**, keeps any applicable local matches, and does not reuse the previous full-text hits. There is no new retry timer or polling loop. Retry makes one new debounced search request through the existing native transport.
+
+**Manage bot access** distinguishes a pending profile catalog, a failed read and a successfully loaded empty catalog. Existing selections remain visible and are never relabeled as missing before the catalog is available. Saving stays disabled while that read is pending or failed. Use **Retry** to recover explicitly; no membership write occurs during loading, filtering or retrying.
