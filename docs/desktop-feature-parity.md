@@ -36,3 +36,10 @@ Opening/cancelling creation forms does not certify provider authorization or an 
 The context row replaces the rail button and information dialog. It remains visible while reading chat, opening History/Projects, using Bots/Hub or switching presentation modes. Device, selected profile and Connected/Connecting/Not connected are separate labeled values. Profile display names are presentation only; selection still uses the canonical native profile identity and existing action. The active choice is checked in the menu.
 
 The row reads existing stores and adds no network refresh, timer, model call or provider route. Opening the menu and choosing the already-selected profile leave the current chat alone. A pending device/profile switch disables conflicting profile choices. Explicit changes continue through native routing, confirmation and draft handling. Unknown device identity is labeled as unreported.
+
+
+## Follow-up interaction repairs (v0.6.3)
+
+**New chat** calls the existing native new-tab handler, including when an unsent draft is already open. Previous drafts remain in their own tabs; plugin action permissions are unchanged. History/Projects and Settings have their own current-page indication even when a bot pane was previously focused. The rail scrolls at short window heights so lower actions stay reachable.
+
+Hub protects dirty page edits from accidental Escape, close or cancel; discarding is explicit. Fields cannot change while their single save is pending. Membership search uses reported bot titles and canonical names, preserves choices outside the filter, and retains existing members absent from a partial profile list. Native revision and access checks still govern saving.

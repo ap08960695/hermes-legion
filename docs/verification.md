@@ -775,3 +775,14 @@ The review repaired nine usability areas: preview Back/history, full-history sea
 Offline regression coverage includes real native component behavior, profile/revision boundaries, exact-query search handoff and deliberate create-only versus introduction choices. Native isolated Electron acceptance uses more than 200 saved conversations, 17 task cards and installed skills, with inference denied. See the [usability guide](desktop-usability.md) for the actual controls and limits. UI checks do not certify remote Screen access, live provider authorization or production savings.
 
 Final acceptance for this release: **15 UI files, 58 tests passed**, scoped source-health review reports no new findings, and renderer type checking passed. The actual isolated Electron main/preload/renderer/backend passed **10 journey checks** at 1280×900, 1280×720 and a 640-pixel narrow fixture viewport, with zero inference POSTs, renderer errors or external-application opens. A real disposable bot was created with introduction off, retaining the current profile and returning to the bot cards. The context row measured 45 pixels at laptop height, down from the reviewed 74 pixels. These results establish behavior in the isolated test; they do not establish production performance savings. The cumulative patch contains **479 source/test paths**, comprising **339 outside the Python test tree and 140 Python tests**.
+
+
+## Follow-up interaction review (v0.6.3)
+
+The baseline isolated UI reproduced three new behavior defects: Zoom out increased a fitted graph from about 27% to 35%, a repeated New chat retained the same unsent draft/tab, and Escape discarded an unsaved Hub document. The native create/preview/trash/restore lifecycle already worked and is preserved. Membership discovery and current-navigation/short-window access were also improved.
+
+Final offline coverage: **9 UI files, 45 tests passed**; renderer type checking and scoped source-health review passed. Tests cover monotonic zoom, material discard confirmation, pending-save input locks and refusal retention, local member search with hidden/absent selections, route indication, exact native action forwarding and unchanged plugin restrictions.
+
+The actual isolated Electron main/preload/renderer/backend passed **7 checks**, including the initial shell and six interaction journeys, at 1280×900 and 1024×600. The real disposable membership write, page save, edit discard, trash/restore and draft-preserving new tab all passed. Inference POSTs, renderer errors and external-application opens were zero. Source installation, package readiness and native activation remain separate evidence; these isolated interactions do not establish provider allowance or production token savings.
+
+The cumulative patch contains **481 source/test paths**, comprising **341 outside the Python test tree and 140 Python test paths**, against the same pinned upstream base.

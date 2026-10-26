@@ -2,7 +2,7 @@
 
 ## Finding work and conversations
 
-The rail offers **New chat**, **History** and **Search**. Search first lists recent conversations and commands; choose **Search all saved chats** to carry the exact query into the native History full-text search. This is not limited to the newest conversation page. Native profile, archive, pin and project rules still apply.
+The rail offers **New chat**, **History** and **Search**. New chat opens a native blank tab, retaining any earlier unsent draft. Search first lists recent conversations and commands; choose **Search all saved chats** to carry the exact query into the native History full-text search. This is not limited to the newest conversation page. Native profile, archive, pin and project rules still apply.
 
 In Hub, **Back** returns through the actual file/folder navigation history. At the starting file it returns to Hub and retains the previous search. Folder browsing and supported previews remain inside Hermes. Missing, inaccessible and unsupported files keep their existing preview gates.
 
@@ -27,3 +27,14 @@ Device, profile for new chats and connection state remain visible above the work
 ## Verification boundaries
 
 Regression tests and real isolated Electron interactions use disposable conversations, files, bot profiles and paused controls. Provider inference is denied and counted. Production source adoption, package preparation, graceful activation and isolated visual acceptance are separate evidence. No remote Screen transport, provider authorization, allowance or production worker execution is certified by these checks.
+
+
+## Interaction safeguards (v0.6.3)
+
+After a fitted overview, **Zoom out** always makes the graph smaller; controls disable at their manual limits. Fit can still show a larger graph at a smaller overview scale.
+
+Closing a changed Hub document asks whether to **Keep editing** or **Discard changes**. Unchanged forms close directly, and successful saves close without a discard question. Inputs stay disabled during a pending save; a refused save keeps the draft and reports the error without retrying.
+
+**Manage bot access** searches locally by a bot's reported name or canonical identity, shows the selected count and keeps selected members outside the search result. An existing member missing from the reported profile list remains visible with an explicit label. Filtering does not save membership or grant access.
+
+History/Projects and Settings indicate the current destination. The navigation rail scrolls on short windows rather than leaving its lower controls inaccessible.
