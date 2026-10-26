@@ -836,3 +836,47 @@ The cumulative patch now has **486 source/test paths: 344 outside the Python tes
 The optional memory guide was checked against ai-memory v3.2.5's published configuration source. Its TOML example is parsed offline and names reviewed top-level, authentication and maintenance fields. This is not an end-to-end Hermes adapter or service deployment test. Native memory/search remain available without the optional service. The review does not enable providers, hooks, history backfill, MCP or protected embedding services, and no existing private configuration or memory store is copied into the release. A longer matched-work comparison is still required before claiming a recall/usage benefit or expanding a pilot.
 
 The storage guide describes explicit inactive-artifact relocation and post-acceptance disposal boundaries. It publishes neither machine paths nor local migration inventories, firmware data, database snapshots, private logs or rollback contents.
+
+
+## Context-free search metadata (v0.6.8)
+
+The native SQLite authorizer reproduced prompt/tool hydration while search only
+needed session identity. Fixing the search helper alone left title discovery
+failing, exposing a second full-context reader in title-to-ID resolution. Both
+call paths now use narrow native queries. Existing full-session/title APIs remain
+unchanged; canonical Bot Chat priority, numbered continuation ordering, wildcard
+escaping, freshness and legacy adapters are preserved. A failed present metadata
+reader does not retry the heavyweight path.
+
+The final native run passed **9 files / 395 tests / zero failures**, with zero
+file retries. Six new controls exercise normal/read-only public discovery under
+SQLite column denial, exact small/fresh/missing metadata, legacy compatibility,
+failure without heavy retry and canonical/numbered titles. Scoped health reported
+zero new findings. The newly exported title module's original bytes matched the
+pinned upstream blob available locally; no history fetch was needed.
+
+Five alternating installed-module runs against one synthetic read-only fixture
+preserved the exact response. Median query time was 4.955→1.683 ms and peak Python
+traced allocations 2,016,703→79,003 bytes. Two full-session reads plus one full
+title read became zero, with context materialization 5,799,987→0 characters. These
+measure local synthetic query/allocation work, not RSS, billed tokens, cache hits,
+model input context or production latency. A separate real saved-conversation
+read-only comparison retained the result; no private evidence or workload numbers
+are published. No manual model request was made.
+
+Four exact source/test files were installed under native update custody before
+export, with target-only rollback and restored permissions/ownership. The
+cumulative patch contains **488 source/test paths: 345 outside the Python test
+tree and 143 Python tests**, against the same pinned upstream base. Companion
+acceptance, base/apply/installed manifests, public history and release archives
+are checked separately; overlapping test runs are not added together.
+
+
+Local adoption was then checked at an idle boundary with no worker turn active.
+Gateway used its existing native idle-only update control; Desktop exited through
+its normal native Quit menu and reopened once with the already tested package.
+Fresh source/process identity, authenticated read-only readiness and the same
+saved-session/model binding were observed. Configuration/instruction hashes
+remained intact, and no model or manual session-resume call was used. This is
+source/readiness/continuity acceptance; it does not claim every production screen
+was visually exercised or every bot has already used the optimized query path.

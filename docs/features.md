@@ -17,7 +17,7 @@ The cumulative patch is one coherent compatibility unit. Do not cherry-pick arbi
 | File tools | Native/raw/byte reads, repeated/concurrent read suppression and document extraction bounds | Preserve path/credential scope and invalidation; no cross-user content cache |
 | Search and web | Bounded result caches, extraction validation, contention protection and eviction | Cached output is not new source verification |
 | Model context | Versioned shared prompt/tool prefixes, role-aware v4 guidance placement and atomic compaction-related publication | Do not mutate past context to manufacture cache hits |
-| Session metadata | Small runtime bindings select only model configuration, avoiding full prompt/tool-context hydration | Full session reads, per-session identities and freshly committed values retain their native behavior; no shared content cache |
+| Session metadata | Small runtime bindings and search identity reads select only needed columns, avoiding full prompt/tool-context hydration | Full session reads, per-session identities and freshly committed values retain their native behavior; no shared content cache |
 | Usage | Read-only account views, reported cache totals/share, bounded task/run diagnostics and HMAC correlation | No prompt bodies or runtime HMAC keys are shipped; missing evidence stays unknown |
 | Bot activity | An icon with bounded recent-worker detail, separate from the canonical conversation preview; compression-tip activity follows the displayed session | A recent stamp is not live process proof; finished and unreachable workers are excluded; no new poll or model request |
 | Worker phases | Persisted phase/timing readbacks and bounded visual-request reuse | Claim-to-first-tool is not provider TTFT or whole-task speed |
@@ -67,3 +67,13 @@ See [Desktop feature parity](desktop-feature-parity.md) for the restored native 
 [Conversation title recall](session-recall.md) uses the existing bounded native bookend API, checks metadata exclusions before payload reads, preserves normal orientation evidence and reports unavailable history without an unbounded retry. No external service or new tool is required.
 
 The [external-memory pilot guide](external-memory-pilot.md) documents a separate, opt-in evaluation boundary: explicit project/profile scope, backfill and auto-wiring disabled, private token files, unchanged native gates, failure isolation, and matched-work measurements before expansion. It includes a pinned upstream TOML example and local embedding-authentication cautions; no service, hook, MCP tool or model is automatically enabled.
+
+
+## Context-free search identity (v0.6.8)
+
+[Native session search metadata](session-metadata-reads.md#search-identity-reads-v068)
+selects eight identity fields and resolves exact titles with ID-only queries.
+Canonical Bot Chat selection, numbered continuations, bounded evidence and legacy
+adapter compatibility remain. A failed present small reader never retries the
+full-context path. This reduces local hydration without changing model input,
+quota, providers or paid fallback.

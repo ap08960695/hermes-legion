@@ -37,3 +37,63 @@ Existing processes must load the source through their normal idle lifecycle.
 Source installation and offline acceptance alone do not prove that an already
 running Desktop or Gateway has adopted the change. Preserve active work and
 verify fresh source identity and read-only readiness separately.
+
+
+## Search identity reads (v0.6.8)
+
+Native search also needs session identity rather than full context. The
+`get_session_metadata` sibling selects exactly `id`, `source`, `model`, `title`,
+`parent_session_id`, `started_at`, `ended_at` and `end_reason`. It retains the
+native accounting flush before reading, so committed values stay fresh. The
+existing full `get_session` reader is unchanged.
+
+Title resolution now selects the exact session ID directly. It preserves native
+canonical Bot Chat preference, numbered continuation ordering and escaped
+wildcards. The full `get_session_by_title` API still returns full context for
+callers that request it. Search uses the small API for root/lineage identity and
+orientation metadata; evidence windows, privacy/profile boundaries and returned
+responses stay intact.
+
+Older adapters without the small reader keep their legacy compatibility path.
+If a present small reader fails, search does not silently retry the heavy reader.
+This is a storage-query change, with no content cache, schema migration, prompt
+prefix change or alteration of the model's input context.
+
+Five alternating before/after runs used the installed native modules with one
+read-only synthetic SQLite fixture: 80 messages, 1,867,776 ASCII context
+characters and a separate synthetic model configuration. Returned responses were
+byte-equivalent.
+
+| Median per discovery | Before | After |
+|---|---:|---:|
+| Native query time | 4.955 ms | 1.683 ms |
+| Peak Python traced allocations | 2,016,703 bytes | 79,003 bytes |
+| Full-session reader calls | 2 | 0 |
+| Full-context title reader calls | 1 | 0 |
+| Context characters materialized across those reads | 5,799,987 | 0 |
+
+These are synthetic query and Python allocation measurements. They do not measure
+whole-process RSS, cache-hit rate, billed tokens or production response time. A
+separate existing-conversation read-only comparison also retained exactly the
+same result; private titles, transcripts, IDs and workload measurements are not
+published. Neither check called a model.
+
+The final native run passed **395 tests across nine files**, zero failures and
+zero file retries. Six new controls deny prompt/tool-column reads through the
+SQLite authorizer in normal/read-only discovery, check small/fresh/missing
+metadata, preserve legacy adapters, refuse heavyweight failure retries and cover
+canonical/numbered title lookup. The wider run retains native session, title,
+import, search, profile and anchored-context behavior.
+
+```sh
+scripts/run_tests.sh -j 2 \
+  tests/hermes_state/test_session_search_metadata.py \
+  tests/hermes_state/test_session_config_read.py \
+  tests/tools/test_session_search.py \
+  tests/tools/test_session_search_title_bounds.py \
+  tests/agent/test_inline_session_search_profile.py \
+  tests/hermes_cli/test_session_search_context_batch.py \
+  tests/hermes_state/test_canonical_title_guard.py \
+  tests/hermes_state/test_hermes_state.py \
+  tests/hermes_state/test_session_import_keep_flags.py
+```

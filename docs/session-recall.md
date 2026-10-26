@@ -62,3 +62,10 @@ import uses the installed code. A long-lived process can still have the previous
 module cached: preserve active turns and use the existing idle-update procedure
 when adoption is needed. Source installation and a read-only recall check do not
 prove that every already running bot has re-imported the module.
+
+
+From v0.6.8, title and lineage identity also use
+[context-free metadata reads](session-metadata-reads.md#search-identity-reads-v068).
+The bounded message window above remains unchanged. Exact title-to-ID resolution
+preserves canonical Bot Chat and numbered-continuation behavior without resolving
+the full prompt or tool context merely to select the session.
