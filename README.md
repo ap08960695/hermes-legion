@@ -8,10 +8,11 @@ The design is simple: give each bot a clear responsibility, dispatch independent
 
 ## What is included
 
-- **388 patched or added source/test files** against one explicitly pinned upstream revision, including 137 Python test files. See [patch inventory](patches/manifest.json) for the exact files and hashes.
+- **479 patched or added source/test files** against one explicitly pinned upstream revision, including 140 Python test files. See [patch inventory](patches/manifest.json) for the exact files and hashes.
 - Reuse a compatible, already published PM checker across launcher scopes without dependency preparation or changing the selected environment. See [startup cache behavior](docs/installation-and-rollback.md#startup-checker-cache).
 - Native current-work Kanban with separate bounded history, integrated sidebar ownership and corrected Models/Usage destinations.
 - Full native saved-chat/project managers, bot/group/section actions, an always-visible device/profile/status bar, and pane/status plugin discovery. See [feature parity](docs/desktop-feature-parity.md).
+- [Usability repairs](docs/desktop-usability.md): full-history search handoff, file-preview Back/history, fit/focus Workflow, searchable goal skills, honest Hub search and explicit bot introductions.
 - Native **Focus / Workspace** navigation, a revision-bound Goal form and evidence-based Catch up. See the [Desktop interface guide](docs/focus-workspace.md).
 - Native task/run ownership checks; exactly-once dispatch; input preflight; recoverable compact handoffs; worker completion that avoids a needless follow-up model turn.
 - Bounded file/status reads, cache diagnostics, task/run usage attribution, waiting without repeated model calls, and worker phase timing.
