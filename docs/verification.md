@@ -1020,3 +1020,7 @@ does not prove a live Captain has selected a model or that a bot completed a tas
 ## Verified completion at budget checkpoints (v0.6.13)
 
 An offline native regression suite passed 113 tests across five files; a later 21-test run of one of those files overlaps and is not an additional total. Tests cover iteration and wall-clock checkpoints and rejected or unverified ownership. One representative real worker completed a synthetic task at the iteration checkpoint with no subsequent tool or model call. This is not a measurement of every profile or a long-term usage reduction.
+
+## Usage reporting during log rotation (v0.6.14)
+
+A deterministic regression reproduced a file disappearing between enumeration and sorting. The native offline suite passed 31 tests across four related files after the fix. A read-only before-and-after check over the same real 24-hour window returned the same sample counts; no log rotated during that check, and the existing file budget left some files unsampled. This does not establish complete usage or a reduction in model calls.

@@ -123,3 +123,7 @@ retains its existing invocation.
 ## Verified completion at budget checkpoints (v0.6.13)
 
 Preserve a verified worker completion result when an iteration or time budget checkpoint is reached. The existing ownership and completion checks continue to decide whether the worker can stop. Unverified results retain the normal warnings.
+
+## Usage reporting during log rotation (v0.6.14)
+
+If a log disappears or cannot be inspected while selecting the newest logs, continue with available files and report the number that could not be inspected. Sampling, the file budget and the explicit unknown-coverage caveat remain in place.

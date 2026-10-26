@@ -13739,10 +13739,9 @@ index 0000000000000000000000000000000000000000..97e00a25377ed2018a4c4d4b52a141e7
 +    assert row["windows"] == [] and row["state"] == "unknown"
 diff --git a/tests/hermes_cli/test_usage_attribution.py b/tests/hermes_cli/test_usage_attribution.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..5c13e7c1bed5a5fb4b59d176200f9c98ccd9ae2e
 --- /dev/null
 +++ b/tests/hermes_cli/test_usage_attribution.py
-@@ -0,0 +1,120 @@
+@@ -0,0 +1,149 @@
 +"""Attribution must not turn incomplete observations into proven waste."""
 +from copy import deepcopy
 +import json
@@ -13819,6 +13818,35 @@ index 0000000000000000000000000000000000000000..5c13e7c1bed5a5fb4b59d176200f9c98
 +    result=analyze(records,[],90,110)
 +    assert result['observed_attempts']==1 and result['duplicate_log_copies']==1
 +    assert coverage['invalid_json_rows']==2
++
++
++def test_collector_reports_log_disappearing_during_enumeration(tmp_path, monkeypatch):
++    from pathlib import Path
++    from hermes_cli.usage_attribution_sources import collect
++    home = tmp_path / 'home'
++    logs = home / 'logs'
++    logs.mkdir(parents=True)
++    vanished = logs / 'vanished.log'
++    vanished.write_text('old log')
++    (logs / 'present.log').write_text('CACHE_DIAGNOSTIC ' + json.dumps(event()) + '\n')
++    original_stat = Path.stat
++    original_is_file = Path.is_file
++
++    def rotating_stat(path, *args, **kwargs):
++        if path == vanished:
++            raise FileNotFoundError('rotated while selecting logs')
++        return original_stat(path, *args, **kwargs)
++
++    def enumerated_file(path):
++        return True if path == vanished else original_is_file(path)
++
++    monkeypatch.setattr(Path, 'is_file', enumerated_file)
++    monkeypatch.setattr(Path, 'stat', rotating_stat)
++    records, _, coverage = collect(home, 90, 110)
++    assert len(records) == 1
++    assert coverage['log_files_found'] == 2
++    assert coverage['log_enumeration_unavailable'] == 1
++    assert coverage['missing_time_spans'].startswith('unknown')
 +
 +
 +def test_bound_run_matches_without_pid_and_cannot_fall_back_to_wrong_run(tmp_path):
@@ -22026,7 +22054,7 @@ diff --git a/hermes_cli/usage_attribution_sources.py b/hermes_cli/usage_attribut
 new file mode 100644
 --- /dev/null
 +++ b/hermes_cli/usage_attribution_sources.py
-@@ -0,0 +1,87 @@
+@@ -0,0 +1,91 @@
 +"""Bounded existing-log and SQLite reader; never initializes a board or imports an agent."""
 +from contextlib import closing
 +import json
@@ -22090,8 +22118,12 @@ new file mode 100644
 +    home=Path(home).resolve(strict=True)
 +    profiles=sorted(p for p in (home/'profiles').glob('*') if p.is_dir())
 +    paths=[p for h in [home,*profiles[:128]] for p in (h/'logs').glob('*.log*') if p.is_file() and p.suffix!='.gz']
-+    paths.sort(key=lambda p:p.stat().st_mtime,reverse=True)
-+    records,coverage=read_logs(paths[:max_log_files]);coverage.update({'max_log_files':max_log_files,'log_files_found':len(paths),'log_files_omitted':max(0,len(paths)-max_log_files),'profile_dirs_omitted':max(0,len(profiles)-128),'compressed_logs_read':False,'missing_time_spans':'unknown; tails/rotation prevent full-window accounting'})
++    ranked=[];unavailable=0
++    for path in paths:
++        try:ranked.append((path.stat().st_mtime,path))
++        except OSError:unavailable+=1
++    ranked.sort(key=lambda item:item[0],reverse=True)
++    records,coverage=read_logs([path for _,path in ranked[:max_log_files]]);coverage.update({'max_log_files':max_log_files,'log_files_found':len(paths),'log_files_omitted':max(0,len(ranked)-max_log_files),'log_enumeration_unavailable':unavailable,'profile_dirs_omitted':max(0,len(profiles)-128),'compressed_logs_read':False,'missing_time_spans':'unknown; tails/rotation prevent full-window accounting'})
 +    boards=[p for p in [home/'kanban.db',*sorted((home/'kanban/boards').glob('*/kanban.db'))] if p.is_file()]
 +    keys,key_coverage=_existing_keys([home,*profiles[:128]])
 +    needed={r.get('fingerprint',{}).get('key_id') for r in records if isinstance(r.get('fingerprint'),dict) and isinstance(r['fingerprint'].get('key_id'),str)}
