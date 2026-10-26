@@ -38,3 +38,13 @@ Different launcher runtime scopes can share one PM checker cache. A ready checke
 ## Native work-surface correction
 
 The actual Kanban canvas now separates current work from bounded completed history, and native Sessions/Bots navigation shares one global owner. Models and Usage open their named native sections. Empty-state and compact Chat presentation changes are described in the [Desktop guide](focus-workspace.md#current-work-and-task-history). No task lifecycle, provider selection, quota or inference behavior changes.
+
+### Native Workflow and internal file library
+
+The [Focus guide](focus-workspace.md) describes the Workflow dependency graph, the selected card's recorded bot-run history, focus-aware navigation and Library's internal read-only file/folder browser. They reuse existing native stores and APIs; no additional model, quota, paid fallback or dispatcher is introduced. Unsupported file formats remain explicit and no Office conversion is bundled.
+
+## Shared content and native navigation
+
+- [Shared Spaces](shared-spaces.md): explicit bot readers, pages, imported copies, bounded read-only CLI, revision conflicts, trash and restore.
+- [Rich answers](rich-answers.md): existing native tables/diagrams plus opt-in literal-data cards with sources.
+- Full Bots workspace, single Focus rail, working first-click session selection, Workflow ancestry and truthful running-only motion, and availability-gated internal file previews.

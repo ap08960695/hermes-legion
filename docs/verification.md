@@ -693,3 +693,25 @@ The fixture task was explicitly blocked and unassigned in the disposable databas
 This is real isolated-app acceptance, **not** hands-on control of an existing production window. It does not test authenticated provider calls, paid fallback, sending messages, execution/scheduling, downloads, audio, GPU work or destructive actions. Hosted catalogs and update checks can report unavailable under offline guards. Opening those screens is not proof of their external services. Deployment still requires a normal idle lifecycle; source or staged-package readiness does not prove that an already-open Desktop loaded the correction.
 
 No prompt, production screenshot, session/task/run identity, machine-specific test launcher, private log or account data is distributed with this record. The public patch contains portable native component regressions. No model call, quota probe, new dependency or paid fallback was used to produce this acceptance.
+
+## Native Spaces, Workflow and richer chat (v0.5.0)
+
+The cumulative patch contains **413 source/test targets**, including **138 Python test files**, against the same pinned upstream base. Workflow exposes actual dependency edges and recorded attempt history. The full Bots workspace and one Focus rail use native navigation. Library disables unready previews; chat retains native Markdown/Mermaid with optional literal-data cards. Spaces adds explicitly shared local pages/file copies and read-only member access.
+
+| Acceptance | Result | Boundary |
+| --- | --- | --- |
+| Relevant native UI tests | 201 passed across 34 files | Workflow ancestry/history, navigation, preview transport, answer cards, session-picker clicks and Spaces |
+| Current native Python tests | 38 passed, 6 platform skips across 3 files | Board API, filesystem and Spaces; canonical runner, zero retries |
+| TypeScript | Passed | Complete Desktop typecheck |
+| Scoped code health | No new blocking or advisory findings across 47 paths | Compared with exact prior installed bytes/absence |
+| Isolated real Electron UI | 55 flows and 71 settings pages passed | Actual main/preload/renderer and native backend with disposable homes |
+| Model calls / external-app opens | 0 / 0 | Inference POSTs counted; external application opening refused and counted |
+| Renderer exceptions | 0 | Final candidate journey |
+
+Native UI checks covered fork/join dependency paths, recorded bot attempts, selection of a destination's upstream path, native-card opening, missing/archive files disabled before preview, text/nested folders, sanitized HTML, PDF, audio, images, Bots groups/search, session selection with a stationary pointer, a real native chat displaying a table/cards/Mermaid, and desktop/narrow layouts. The recorded task attempts are canonical native test fixtures; no bot or worker was spawned and no production execution receipt was manufactured.
+
+Spaces acceptance created a Space with two explicitly selected profiles, wrote a page, imported a chosen fixture file, opened it internally, removed it after confirmation, restored it and verified the original file bytes stayed unchanged. The owned test app's file-chooser selection was supplied by the harness; actual native file reads, import API, storage, preview, trash and restore were exercised. Separate backend regressions use two genuine named-profile environments to read the same canonical store/content hash, deny a nonmember and a revoked member, reject stale writes, bound text reads and refuse export overwrite. This proves API/CLI policy on test profiles, not operating-system isolation or a live model's behavior.
+
+A delayed preview arriving after switching Spaces is discarded. An actual stationary-pointer session selection failure was reproduced in the isolated app and fixed at the native command-menu pointer policy, rather than forcing the test to click through it. Earlier harness launch/profile-seed and double-serialized preview-body failures were retained privately; the final real journey passed after correcting them. Existing wider upstream-suite limitations from v0.4.4 remain in force. Earlier overlapping counts are not added to this acceptance.
+
+No production conversation, screenshot, task/run identity, credential, machine-specific launcher or private log is shipped. Source adoption, packaged build, fresh-process activation and isolated interactions remain distinct evidence. No direct production-window visual control is claimed where enabled native controls are unavailable. No model request, allowance probe, dependency installation, quota/fallback change or embedding-service action was used for this acceptance.

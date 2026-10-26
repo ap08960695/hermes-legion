@@ -8,7 +8,7 @@ The design is simple: give each bot a clear responsibility, dispatch independent
 
 ## What is included
 
-- **369 patched or added source/test files** against one explicitly pinned upstream revision, including 135 Python test files. See [patch inventory](patches/manifest.json) for the exact files and hashes.
+- **388 patched or added source/test files** against one explicitly pinned upstream revision, including 137 Python test files. See [patch inventory](patches/manifest.json) for the exact files and hashes.
 - Reuse a compatible, already published PM checker across launcher scopes without dependency preparation or changing the selected environment. See [startup cache behavior](docs/installation-and-rollback.md#startup-checker-cache).
 - Native current-work Kanban with separate bounded history, integrated sidebar ownership and corrected Models/Usage destinations.
 - Native **Focus / Workspace** navigation, a revision-bound Goal form and evidence-based Catch up. See the [Desktop interface guide](docs/focus-workspace.md).
@@ -31,13 +31,13 @@ Use the [storage and backup guide](docs/storage-and-backups.md) to avoid redunda
 Clone the release and run from its repository root; the same commands work after extracting the release archive and entering its top-level directory. Only Python and Git are needed for this companion-only walkthrough. Native profile setup has the additional upstream prerequisites documented separately.
 
 ```sh
-git clone --branch v0.4.4 --single-branch https://github.com/ap08960695/hermes-legion.git
+git clone --branch v0.5.0 --single-branch https://github.com/ap08960695/hermes-legion.git
 cd hermes-legion
 python3 scripts/verify_release.py
 python3 scripts/legion_plan.py --team examples/team.full.json --snapshot examples/snapshots/synthetic-ready.json --tasks examples/scenarios/parallel-production.json --now 1
 ```
 
-The walkthrough pins the immutable v0.4.4 release. Its native Desktop interface, session metadata reads, bot activity display, bundled locale/code reuse, local memory diagnostics and verification limits are described in the [verification record](docs/verification.md).
+The walkthrough pins the immutable v0.5.0 release. Its native Desktop interface, session metadata reads, bot activity display, bundled locale/code reuse, local memory diagnostics and verification limits are described in the [verification record](docs/verification.md).
 
 Use [on-demand memory diagnostics](docs/runtime-memory-diagnostics.md) to distinguish process memory from native cache counts without reading conversations or starting inference. Optional allocation tracing is disabled by default and belongs in an idle maintenance window.
 
@@ -84,3 +84,5 @@ The dry-run makes no model request or live change. Synthetic examples do not cer
 This repository contains generic source changes and synthetic examples. Live databases, conversations, logs, account inventories, secret stores and private Git history are excluded. See [security policy](SECURITY.md), [privacy review process](docs/privacy-review.md), and [third-party notices](THIRD_PARTY_NOTICES.md).
 
 MIT licensed. Preserve the upstream copyright notice when redistributing included Hermes code. This project does not grant permission to bypass a provider's terms or limits.
+
+Native UI guides: [Shared Spaces](docs/shared-spaces.md), [Rich answers](docs/rich-answers.md), and [Focus and Workflow](docs/focus-workspace.md).
