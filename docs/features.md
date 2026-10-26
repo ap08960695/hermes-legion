@@ -151,3 +151,7 @@ A PID or process-session wait remains parked while its original target is verifi
 ## Snapshot integrity and traversal (v0.6.21)
 
 Quick snapshots record critical file, directory and database capture failures and oversized skips. An incomplete snapshot cannot prune older snapshots, and restore reports an incomplete outcome when a listed file was not restored or the snapshot was incomplete at capture. Other files may still be restored; the result does not imply transactional rollback. Intentionally excluded board workspace and attachment trees are pruned from traversal, avoiding needless metadata scans.
+
+## Safe autonomous reassignment (v0.6.22)
+
+Captain reassignment refuses running tasks rather than interrupting an active claim based on a bot-status snapshot. Reassignment checks the observed status and owner inside the write transaction. Automatic recovery from a provider failure checks that the same failure and target remain, preserves explicit holds and sticky operator gates, and distinguishes a released historical hold from an active one. Explicit operator reclaim is unchanged.

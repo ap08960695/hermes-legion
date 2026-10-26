@@ -5006,10 +5006,33 @@ index 0000000000000000000000000000000000000000..cf0448b8d87a504bdb883bcda58dc488
 +            'mode': 'advisory', 'verified': False,
 +            'note': 'Review declared evidence; this check neither verifies execution nor changes existing gates.'}}
 diff --git a/hermes_cli/kanban_db.py b/hermes_cli/kanban_db.py
-index 36d5736f73ea708450e2e8306b6b0264c75d95cd..bf280b516d05cfb5034149f8187d5bcc467b78d7 100644
 --- a/hermes_cli/kanban_db.py
 +++ b/hermes_cli/kanban_db.py
-@@ -1877,6 +1877,5 @@ def _append_event(
+@@ -1479,14 +1479,19 @@
+     return [Task.from_row(r) for r in rows]
+ 
+ 
+-def assign_task(conn: sqlite3.Connection, task_id: str, profile: Optional[str]) -> bool:
+-    """Assign/reassign; raises RuntimeError while the task is running under a claim."""
++def assign_task(
++    conn: sqlite3.Connection, task_id: str, profile: Optional[str], *,
++    expected_assignment: Optional[tuple[str, Optional[str]]] = None,
++) -> bool:
++    """Assign/reassign; optionally require the observed status and assignee inside the transaction."""
+     profile = _canonical_assignee(profile)
+     with write_txn(conn):
+         row = conn.execute(
+             "SELECT status, claim_lock, assignee FROM tasks WHERE id = ?", (task_id,)
+         ).fetchone()
+         if not row:
++            return False
++        if expected_assignment is not None and (row["status"], row["assignee"]) != expected_assignment:
+             return False
+         if row["claim_lock"] is not None and row["status"] == "running":
+             raise RuntimeError(
+@@ -1875,10 +1880,9 @@
+     run_id: Optional[int] = None,
+ ) -> None:
      """Insert an event row inside the caller's txn; ``run_id`` groups it by attempt (NULL = task-scoped)."""
 -    conn.execute(
 -        "INSERT INTO task_events (task_id, run_id, kind, payload, created_at) "
@@ -5019,7 +5042,11 @@ index 36d5736f73ea708450e2e8306b6b0264c75d95cd..bf280b516d05cfb5034149f8187d5bcc
 +    append_event(conn, task_id, kind, payload, run_id=run_id)
 +
  
-@@ -2150,49 +2149,2 @@ def unsatisfied_parents(conn: sqlite3.Connection, task_id: str) -> list[tuple[st
+ 
+ def _end_run(
+@@ -2148,53 +2152,6 @@
+     return [(row["id"], row["status"]) for row in rows]
+ 
  
 -def _claim_and_open_run(
 -    conn: sqlite3.Connection, task_id: str, source_status: str, lock: str, expires: int, now: int,
@@ -5069,29 +5096,67 @@ index 36d5736f73ea708450e2e8306b6b0264c75d95cd..bf280b516d05cfb5034149f8187d5bcc
 -
 -
  def claim_task(
-@@ -2224,3 +2176,4 @@ def claim_task(
+     conn: sqlite3.Connection, task_id: str, *, ttl_seconds: Optional[int] = None,
+     claimer: Optional[str] = None,
+@@ -2222,7 +2179,8 @@
+         _reclaim_dangling_run(
+             conn, task_id, statuses=("ready",), now=now, note="invariant recovery on re-claim",
          )
 -        run_id = _claim_and_open_run(conn, task_id, "ready", lock, expires, now)
 +        from hermes_cli.kanban_attempt_evidence import claim_and_open_run
 +        run_id = claim_and_open_run(conn, task_id, "ready", lock, expires, now)
          if run_id is None:
-@@ -2254,3 +2207,4 @@ def claim_review_task(
+             return None
+         claimed = get_task(conn, task_id)
+@@ -2252,7 +2210,8 @@
+                     {"reason": "parent_reopened", "source_status": "review"},
+                 )
              return None
 -        run_id = _claim_and_open_run(
 +        from hermes_cli.kanban_attempt_evidence import claim_and_open_run
 +        run_id = claim_and_open_run(
              conn, task_id, "review", lock, expires, now, event_extra={"source_status": "review"},
-@@ -2692,2 +2646,4 @@ def complete_task(
+         )
+         if run_id is None:
+@@ -2530,16 +2489,18 @@
+ 
+ def reassign_task(
+     conn: sqlite3.Connection, task_id: str, profile: Optional[str], *, reclaim_first: bool = False,
+-    reason: Optional[str] = None,
++    reason: Optional[str] = None, expected_assignment: Optional[tuple[str, Optional[str]]] = None,
+ ) -> bool:
+     """Reassign (None unassigns); a running task is refused unless
+     ``reclaim_first`` releases its claim — the "this profile's model is broken" path."""
++    if reclaim_first and expected_assignment is not None:
++        raise ValueError("expected assignment cannot be combined with operator reclaim")
+     if reclaim_first:
+         # Safe to call even if nothing to reclaim.
+         reclaim_task(conn, task_id, reason=reason or "reassign")
+     # assign_task handles its own txn + the still-running guard.
+     try:
+-        return assign_task(conn, task_id, profile)
++        return assign_task(conn, task_id, profile, expected_assignment=expected_assignment)
+     except RuntimeError:
+         # Task is still running and reclaim_first was False; caller
+         # needs to decide whether to retry with reclaim.
+@@ -2690,11 +2651,13 @@
+     metadata = _merge_completion_prose_artifacts(
+         conn, task_id, metadata, summary=summary, result=result,
      )
 +    from hermes_cli.kanban_task_contract import validate_handoff, handoff_txn
 +    metadata = validate_handoff(conn, task_id, metadata, summary=summary)
      handoff_summary = summary if summary is not None else result
-@@ -2696,3 +2652,3 @@ def complete_task(
+     acceptance = prepare_acceptance(conn, task_id, expected_run_id, metadata)
+     if acceptance is False:
          return False
 -    with write_txn(conn):
 +    with handoff_txn(conn, task_id):
          # Hard invariant even for human review approval: a parent may have
-@@ -2864,7 +2820,2 @@ def _completed_event_payload(
+         # reopened while this task waited.
+         if not _parents_satisfied(conn, task_id):
+@@ -2862,11 +2825,6 @@
+     notifiers / dashboard WS render without a second round-trip; verified
+     cards; and ``metadata["artifacts"]`` promoted so the notifier can upload
      them as native attachments without fetching the run row."""
 -    # Mirror CLI's _show_voice_status: include STT/TTS provider availability so the user can tell at a
 -    # glance *why* voice mode isn't working ("STT provider: MISSING ..." is the common case). ``record_key``
@@ -5099,38 +5164,98 @@ index 36d5736f73ea708450e2e8306b6b0264c75d95cd..bf280b516d05cfb5034149f8187d5bcc
 -    # ``isVoiceToggleKey``) and display it in /voice status — previously the TUI hardcoded Ctrl+B and
 -    # ignored the config (#18994).
      payload: dict = {
-@@ -2876,2 +2827,4 @@ def _completed_event_payload(
+         "result_len": len(result) if result else 0,
+         "summary": _first_line(event_summary, 400) or None,
+@@ -2874,6 +2832,8 @@
+     if verified_cards:
+         payload["verified_cards"] = verified_cards
      if isinstance(metadata, dict):
 +        if metadata.get('completion_advisory'):
 +            payload['completion_advisory'] = metadata['completion_advisory']
          cleaned = _cleaned_artifact_paths(metadata)
-@@ -3147,2 +3100,3 @@ def block_task(
+         if cleaned:
+             payload["artifacts"] = cleaned
+@@ -3145,6 +3105,7 @@
+ def block_task(
+     conn: sqlite3.Connection, task_id: str, *, reason: Optional[str] = None,
      kind: Optional[str] = None, expected_run_id: Optional[int] = None,
 +    expected_status: Optional[str] = None, expected_assignee: Optional[str] = None,
  ) -> bool:
-@@ -3166,3 +3120,3 @@ def block_task(
+     """``running``/``ready`` -> ``blocked`` (or ``todo`` / ``triage``, see
+     :func:`_route_block`). ``kind='dependency'`` with no incomplete parent is
+@@ -3164,9 +3125,13 @@
+         raise ValueError(f"block kind must be one of {sorted(VALID_BLOCK_KINDS)} or None")
+     with write_txn(conn):
          cur_row = conn.execute(
 -            "SELECT status, block_kind, block_recurrences FROM tasks WHERE id = ?", (task_id,),
 +            "SELECT status, assignee, block_kind, block_recurrences FROM tasks WHERE id = ?", (task_id,),
          ).fetchone()
-@@ -3170,2 +3124,6 @@ def block_task(
-             return False
+         if cur_row is None:
++            return False
 +        if expected_status is not None and cur_row["status"] != expected_status:
 +            return False
 +        if expected_assignee is not None and cur_row["assignee"] != expected_assignee:
-+            return False
+             return False
          # The breaker (``_record_task_failure``) parks cards ``blocked`` with no
-@@ -3314,2 +3272,4 @@ def request_review(
+         # ``block_kind`` and no ``blocked`` event -- the policy is the
+@@ -3312,12 +3277,14 @@
+     # must be durable BEFORE anything can clean the scratch workspace up: for a
+     # review-bound card the reviewer's completion is the cleanup trigger.
      metadata = _merge_completion_prose_artifacts(conn, task_id, metadata, summary=summary, result=None)
 +    from hermes_cli.kanban_task_contract import validate_handoff, handoff_txn
 +    metadata = validate_handoff(conn, task_id, metadata, summary=summary)
      now = int(time.time())
-@@ -3319,3 +3279,3 @@ def request_review(
+     # Staged copies live outside the txn: a rollback after staging must not
+     # leave orphans that make the retry stage ``name_1.ext`` beside them.
+     staged_copies: list[Path] = []
      try:
 -        with write_txn(conn):
 +        with handoff_txn(conn, task_id):
              if not _parents_satisfied(conn, task_id):
-@@ -3920,19 +3880,5 @@ def schedule_task(
+                 return _ret(False, "parent dependencies are not satisfied")
+             trow = conn.execute(
+@@ -3578,11 +3545,37 @@
+     return "ready" if _parents_satisfied(conn, task_id) else "todo"
+ 
+ 
+-def unblock_task(conn: sqlite3.Connection, task_id: str) -> bool:
++def unblock_task(
++    conn: sqlite3.Connection, task_id: str, *, expected_last_event: Optional[int] = None,
++    expected_assignee: Optional[str] = None, protect_explicit_holds: bool = False,
++) -> bool:
+     """``blocked``/``scheduled`` -> its resumable phase (parent re-gated; ``review``
+     when that is where it left off), closing any leaked run first."""
+     now = int(time.time())
+     with write_txn(conn):
++        if expected_last_event is not None or expected_assignee is not None or protect_explicit_holds:
++            row = conn.execute("SELECT status, assignee, block_kind FROM tasks WHERE id = ?", (task_id,)).fetchone()
++            if not row or row["status"] != "blocked" or (
++                expected_assignee is not None and row["assignee"] != expected_assignee
++            ):
++                return False
++            if expected_last_event is not None:
++                event = conn.execute(
++                    "SELECT id FROM task_events WHERE task_id = ? "
++                    "AND kind NOT IN ('heartbeat','commented','assigned') ORDER BY id DESC LIMIT 1", (task_id,),
++                ).fetchone()
++                if event is None or event[0] != expected_last_event:
++                    return False
++            if protect_explicit_holds and row["block_kind"] in {"needs_input", "dependency", "capability"}:
++                # block_kind survives a deliberate unblock; distinguish a released
++                # historical hold from one that is still in force, inside the txn.
++                hold = conn.execute(
++                    "SELECT kind FROM task_events WHERE task_id = ? "
++                    "AND kind IN ('blocked','unblocked','dependency_wait','block_loop_detected') "
++                    "ORDER BY id DESC LIMIT 1", (task_id,),
++                ).fetchone()
++                if hold is None or hold[0] != "unblocked":
++                    return False
+         resume_status = (
+             _resume_status_from_events(conn, task_id)
+             if _task_status(conn, task_id) == "blocked"
+@@ -3918,23 +3911,9 @@
+ # --- Worker context builder (what a spawned worker sees) ---
+ 
  def build_worker_context(conn: sqlite3.Connection, task_id: str) -> str:
 -    """Everything a worker should read about its task: header, body,
 -    attachments, prior attempts, done-parent handoffs, the assignee's recent
@@ -5153,8 +5278,17 @@ index 36d5736f73ea708450e2e8306b6b0264c75d95cd..bf280b516d05cfb5034149f8187d5bcc
 +    from hermes_cli.kanban_evidence_context import build_context
 +    return build_context(conn, task_id)
  
-@@ -4046,42 +3992,2 @@ def _ctx_prior_attempts(lines: list[str], conn: sqlite3.Connection, task_id: str
  
+ def _ctx_cap(s: Optional[str], limit: int = _CTX_MAX_FIELD_BYTES) -> str:
+@@ -4039,46 +4018,6 @@
+         if run.error and run.error.strip():
+             lines.append(f"_error_: {_ctx_cap(run.error)}")
+         meta_line = _ctx_metadata_line(run.metadata)
+-        if meta_line:
+-            lines.append(meta_line)
+-        lines.append("")
+-
+-
 -def _ctx_parent_results(lines: list[str], conn: sqlite3.Connection, task_id: str, now: int) -> None:
 -    """Done-parent handoffs: newest ``completed`` run's summary+metadata,
 -    falling back to ``task.result`` for pre-runs-table data. Stamped with a
@@ -5190,12 +5324,9 @@ index 36d5736f73ea708450e2e8306b6b0264c75d95cd..bf280b516d05cfb5034149f8187d5bcc
 -        else:
 -            lines.append("(no result recorded)")
 -        meta_line = _ctx_metadata_line(run.metadata) if run is not None else None
--        if meta_line:
--            lines.append(meta_line)
--        lines.append("")
--
--
- def _ctx_role_history(lines: list[str], conn: sqlite3.Connection, task: Task, now: int) -> None:
+         if meta_line:
+             lines.append(meta_line)
+         lines.append("")
 diff --git a/hermes_cli/kanban_db_attention.py b/hermes_cli/kanban_db_attention.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..e5549c1d40f23bced4337c03f230505c69dc2f79
@@ -19654,7 +19785,7 @@ diff --git a/tools/kanban_tools.py b/tools/kanban_tools.py
  @_kanban_handler("kanban_link")
  def _handle_link(args: dict, **kw) -> str:
      """Add a parent→child dependency edge after the fact (cycles/self-links/running
-@@ -1288,10 +1543,164 @@
+@@ -1288,10 +1543,168 @@
                     **({"gated_by": parent_id} if gated else {}))
  
  
@@ -19702,6 +19833,7 @@ diff --git a/tools/kanban_tools.py b/tools/kanban_tools.py
 +        task = _existing_task(kb, conn, tid)
 +        cur, st = task.assignee, task.status
 +        _check(st not in ("done", "archived"), f"{tid} is {st}; use kanban_continue for follow-up work")
++        _check(st != "running", f"{tid} is running on {cur}; not interrupting the current owner")
 +        _check(target != cur, f"{tid} is already assigned to {target}")
 +        target_known = any(target in family for family in _ROLE_FAMILIES) or profile_exists(target)
 +        _check(target_known, f"unknown target role profile: {target}")
@@ -19713,26 +19845,29 @@ diff --git a/tools/kanban_tools.py b/tools/kanban_tools.py
 +            info = bots.get(target) or {}
 +            _check(info.get("status") == "active",
 +                   f"{target} is {info.get('status', 'unknown')} ({info.get('reason', '')}); pick an active bot")
-+        cur_info = bots.get(cur) or {}
-+        reclaim = False
-+        if st == "running":
-+            _check(bots and cur_info.get("status") not in (None, "active"),
-+                   f"{tid} is running on healthy {cur}; not interrupting")
-+            reclaim = True
-+        _check(kb.reassign_task(conn, tid, target, reclaim_first=reclaim, reason=reason or "captain reassign"),
-+               f"could not reassign {tid}")
++        _check(kb.reassign_task(conn, tid, target, reason=reason or "captain reassign",
++                                expected_assignment=(st, cur)),
++               f"could not reassign {tid}; task status or assignee may have changed")
 +        unblocked = False
 +        if st == "blocked":
 +            last = conn.execute(
-+                "SELECT kind, payload FROM task_events WHERE task_id = ? AND kind NOT IN ('heartbeat','commented','assigned') "
++                "SELECT id, kind, payload FROM task_events WHERE task_id = ? AND kind NOT IN ('heartbeat','commented','assigned') "
 +                "ORDER BY id DESC LIMIT 1", (tid,)).fetchone()
 +            import re as _re
-+            if last and last[0] in ("gave_up", "crashed", "timed_out") and _re.search(_PROVIDER_FAIL_RE, last[1] or "", _re.I):
-+                unblocked = bool(kb.unblock_task(conn, tid))
++            try:
++                failure = json.loads(last[2] or "{}") if last else None
++            except (ValueError, TypeError):
++                failure = None
++            if (last and last[1] in ("gave_up", "crashed", "timed_out")
++                    and isinstance(failure, dict) and not failure.get("sticky")
++                    and _re.search(_PROVIDER_FAIL_RE, last[2] or "", _re.I)):
++                unblocked = bool(kb.unblock_task(conn, tid, expected_last_event=last[0],
++                                               expected_assignee=target, protect_explicit_holds=True))
 +        _board_note(kb, conn, tid, f"[reassign-done] {cur} -> {target}" + (f" ({reason})" if reason else "")
 +                    + (" (unblocked)" if unblocked else ""))
-+        return _ok(task_id=tid, previous=cur, assignee=target, unblocked=unblocked,
-+                   **_fields(kb.get_task(conn, tid), ("status",)))
++        current = kb.get_task(conn, tid)
++        return _ok(task_id=tid, previous=cur, assignee=current.assignee, unblocked=unblocked,
++                   **({"superseded": True} if current.assignee != target else {}), **_fields(current, ("status",)))
 +
 +
 +@_kanban_handler("kanban_unlink")
@@ -19820,7 +19955,7 @@ diff --git a/tools/kanban_tools.py b/tools/kanban_tools.py
  _TOOLS = (
      ("kanban_show", KANBAN_SHOW_SCHEMA, _handle_show, "📋"),
      ("kanban_list", KANBAN_LIST_SCHEMA, _handle_list, "📋"),
-@@ -1307,7 +1716,12 @@
+@@ -1307,7 +1720,12 @@
      ("kanban_attachments", KANBAN_ATTACHMENTS_SCHEMA, _handle_attachments, "📎"),
      ("kanban_create", KANBAN_CREATE_SCHEMA, _handle_create, "➕"),
      ("kanban_unblock", KANBAN_UNBLOCK_SCHEMA, _handle_unblock, "▶"),
@@ -19908,7 +20043,7 @@ diff --git a/tools/kanban_tools_schemas.py b/tools/kanban_tools_schemas.py
 +    (
 +        "Reassign a task to a known bot profile. Same-family moves need no reason; cross-role moves require a non-empty reason explaining why the target role fits. "
 +        "The target must be active in bot-status.json. Independent-review neutrality is "
-+        "NOT required. A running task on a healthy bot is refused; a blocked task is unblocked only if it stopped on a provider failure. "
++        "NOT required. Running tasks are not interrupted; a blocked task is unblocked only for the same non-sticky provider failure and assignee, without bypassing an explicit hold. "
 +        "Orchestrator-only."
 +    ),
 +    {
@@ -43568,3 +43703,219 @@ new file mode 100644
 +    assert (root / first / relative).is_file()
 +    meta = json.loads((root / second / 'manifest.json').read_text())
 +    assert relative in meta['failed_files']
+diff --git a/tests/tools/test_kanban_reassign_running_safety.py b/tests/tools/test_kanban_reassign_running_safety.py
+new file mode 100644
+--- /dev/null
++++ b/tests/tools/test_kanban_reassign_running_safety.py
+@@ -0,0 +1,211 @@
++"""Captain reassignment must not reclaim or overwrite a concurrent owner."""
++import json
++import socket
++import subprocess
++import sys
++import time
++from pathlib import Path
++
++import pytest
++
++
++@pytest.fixture
++def board(tmp_path, monkeypatch):
++    home = tmp_path / '.hermes'; home.mkdir()
++    monkeypatch.setenv('HOME', str(tmp_path)); monkeypatch.setattr(Path, 'home', lambda: tmp_path)
++    monkeypatch.setenv('HERMES_HOME', str(home)); monkeypatch.setenv('HERMES_KANBAN_HOME', str(home))
++    monkeypatch.setenv('HERMES_PROFILE', 'orchestra-captain')
++    for key in ('HERMES_KANBAN_DB', 'HERMES_KANBAN_BOARD', 'HERMES_KANBAN_TASK', 'HERMES_KANBAN_RUN_ID'):
++        monkeypatch.delenv(key, raising=False)
++    def no_network(*args, **kwargs): pytest.fail('reassignment must stay offline')
++    monkeypatch.setattr(socket.socket, 'connect', no_network)
++    monkeypatch.setattr(socket, 'create_connection', no_network)
++    profiles = ('reviewer-gpt', 'developer-gpt', 'tester-gpt')
++    for name in profiles:
++        d=home/'profiles'/name; d.mkdir(parents=True); (d/'config.yaml').write_text('toolsets: [file, kanban]\n')
++    status={name:{'status':'active'} for name in profiles}
++    from hermes_cli import kanban_db as kb
++    from hermes_cli.kanban_db_connect import connect_closing
++    from tools import kanban_tools
++    from tools.registry import registry
++    with connect_closing() as conn:
++        tid=kb.create_task(conn,title='scoped reassignment',assignee='reviewer-gpt',initial_status='blocked')
++    return home,status,tid,kb,connect_closing,registry
++
++
++@pytest.mark.parametrize('has_child', [False, True])
++def test_limited_status_never_reclaims_live_or_manually_owned_running_card(board, monkeypatch, has_child):
++    home,status,tid,kb,connect,registry=board
++    from hermes_cli import kanban_db_dispatch as dispatch
++    status['reviewer-gpt']={'status':'limited','reason':'old quota status'}
++    (home/'bot-status.json').write_text(json.dumps({'updated':time.time()-4*86400,'bots':status}))
++    child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']) if has_child else None
++    signals=[]
++    monkeypatch.setattr(kb,'_terminate_reclaimed_worker',lambda *a,**kw: signals.append(a) or {'terminated':True})
++    try:
++        with connect() as conn:
++            assert kb.unblock_task(conn,tid)
++            claimed=kb.claim_task(conn,tid,claimer='fixture-original-owner')
++            assert claimed
++            if child: dispatch._set_worker_pid(conn,tid,child.pid)
++            before=kb.get_task(conn,tid)
++        result=json.loads(registry.dispatch('kanban_reassign',{'task_id':tid,'profile':'developer-gpt','reason':'independent scoped work'}))
++        assert not result.get('ok'), result
++        assert 'not interrupting' in result.get('error','')
++        assert signals==[]
++        if child: assert child.poll() is None
++        with connect() as conn:
++            after=kb.get_task(conn,tid)
++            assert (after.status,after.assignee,after.claim_lock,after.current_run_id,after.worker_pid)==(
++                before.status,before.assignee,before.claim_lock,before.current_run_id,before.worker_pid)
++    finally:
++        if child and child.poll() is None: child.terminate();child.wait(timeout=10)
++
++
++def test_concurrent_assignee_change_is_not_overwritten(board, monkeypatch):
++    home,status,tid,kb,connect,registry=board
++    (home/'bot-status.json').write_text(json.dumps({'updated':time.time(),'bots':status}))
++    original=kb.reassign_task
++    def concurrent(conn,task_id,target,**kwargs):
++        assert kb.assign_task(conn,task_id,'tester-gpt')
++        return original(conn,task_id,target,**kwargs)
++    monkeypatch.setattr(kb,'reassign_task',concurrent)
++    result=json.loads(registry.dispatch('kanban_reassign',{'task_id':tid,'profile':'developer-gpt','reason':'scoped'}))
++    assert not result.get('ok'), result
++    with connect() as conn:
++        assert kb.get_task(conn,tid).assignee=='tester-gpt'
++
++
++def test_concurrent_completion_cannot_be_reassigned(board, monkeypatch):
++    home,status,tid,kb,connect,registry=board
++    (home/'bot-status.json').write_text(json.dumps({'updated':time.time(),'bots':status}))
++    original=kb.reassign_task
++    def concurrent(conn,task_id,target,**kwargs):
++        assert kb.complete_task(conn,task_id,result='finished by original owner',fire_lifecycle_hook=False)
++        return original(conn,task_id,target,**kwargs)
++    monkeypatch.setattr(kb,'reassign_task',concurrent)
++    result=json.loads(registry.dispatch('kanban_reassign',{'task_id':tid,'profile':'developer-gpt','reason':'scoped'}))
++    assert not result.get('ok'), result
++    with connect() as conn:
++        task=kb.get_task(conn,tid)
++        assert task.status=='done' and task.assignee=='reviewer-gpt'
++
++
++def test_concurrent_claim_cannot_be_reassigned(board, monkeypatch):
++    home,status,tid,kb,connect,registry=board
++    (home/'bot-status.json').write_text(json.dumps({'updated':time.time(),'bots':status}))
++    original=kb.reassign_task
++    def concurrent(conn,task_id,target,**kwargs):
++        assert kb.unblock_task(conn,task_id)
++        assert kb.claim_task(conn,task_id,claimer='new-owner')
++        return original(conn,task_id,target,**kwargs)
++    monkeypatch.setattr(kb,'reassign_task',concurrent)
++    result=json.loads(registry.dispatch('kanban_reassign',{'task_id':tid,'profile':'developer-gpt','reason':'scoped'}))
++    assert not result.get('ok'), result
++    with connect() as conn:
++        task=kb.get_task(conn,tid)
++        assert task.status=='running' and task.assignee=='reviewer-gpt'
++        assert task.claim_lock=='new-owner'
++
++
++def _provider_failure(kb, conn, tid):
++    with kb.write_txn(conn):
++        kb._append_event(conn,tid,'gave_up',{'error':'provider quota exhausted'})
++
++
++def test_fresh_provider_failure_can_still_be_unblocked_after_reassign(board):
++    home,status,tid,kb,connect,registry=board
++    (home/'bot-status.json').write_text(json.dumps({'updated':time.time(),'bots':status}))
++    with connect() as conn: _provider_failure(kb,conn,tid)
++    result=json.loads(registry.dispatch('kanban_reassign',{'task_id':tid,'profile':'developer-gpt','reason':'scoped'}))
++    assert result.get('ok') and result.get('unblocked') is True, result
++    with connect() as conn:
++        task=kb.get_task(conn,tid)
++        assert task.status=='ready' and task.assignee=='developer-gpt'
++
++
++@pytest.mark.parametrize('kind', ['needs_input', 'dependency', 'capability'])
++def test_existing_explicit_hold_survives_late_provider_failure(board, kind):
++    home,status,tid,kb,connect,registry=board
++    (home/'bot-status.json').write_text(json.dumps({'updated':time.time(),'bots':status}))
++    with connect() as conn:
++        assert kb.block_task(conn,tid,kind=kind,reason='explicit hold')
++        _provider_failure(kb,conn,tid)
++    result=json.loads(registry.dispatch('kanban_reassign',{'task_id':tid,'profile':'developer-gpt','reason':'scoped'}))
++    assert result.get('ok') and result.get('unblocked') is False, result
++    with connect() as conn:
++        task=kb.get_task(conn,tid)
++        assert task.status=='blocked' and task.block_kind==kind
++
++
++def test_released_prior_hold_does_not_prevent_fresh_provider_recovery(board):
++    home,status,tid,kb,connect,registry=board
++    from hermes_cli import kanban_db_dispatch as dispatch
++    (home/'bot-status.json').write_text(json.dumps({'updated':time.time(),'bots':status}))
++    with connect() as conn:
++        assert kb.block_task(conn,tid,kind='needs_input',reason='old hold')
++        assert kb.unblock_task(conn,tid)
++        assert dispatch._record_task_failure(conn,tid,'provider quota exhausted',outcome='crashed',failure_limit=1)
++        assert kb.get_task(conn,tid).block_kind=='needs_input'  # intentionally retained by unblock
++    result=json.loads(registry.dispatch('kanban_reassign',{'task_id':tid,'profile':'developer-gpt','reason':'scoped'}))
++    assert result.get('ok') and result.get('unblocked') is True, result
++    with connect() as conn:
++        task=kb.get_task(conn,tid)
++        assert task.status=='ready' and task.assignee=='developer-gpt'
++
++
++def test_operator_sticky_breaker_is_not_auto_unblocked(board):
++    home,status,tid,kb,connect,registry=board
++    from hermes_cli import kanban_db_dispatch as dispatch
++    (home/'bot-status.json').write_text(json.dumps({'updated':time.time(),'bots':status}))
++    with connect() as conn:
++        assert kb.unblock_task(conn,tid)
++        assert dispatch._record_task_failure(conn,tid,'provider quota exhausted',outcome='crashed',force_trip=True)
++    result=json.loads(registry.dispatch('kanban_reassign',{'task_id':tid,'profile':'developer-gpt','reason':'scoped'}))
++    assert result.get('ok') and result.get('unblocked') is False, result
++    with connect() as conn: assert kb.get_task(conn,tid).status=='blocked'
++
++
++def test_unknown_typed_hold_without_ledger_is_not_unblocked(board):
++    home,status,tid,kb,connect,registry=board
++    (home/'bot-status.json').write_text(json.dumps({'updated':time.time(),'bots':status}))
++    with connect() as conn:
++        with kb.write_txn(conn):
++            conn.execute('UPDATE tasks SET block_kind = ? WHERE id = ?',('needs_input',tid))
++        _provider_failure(kb,conn,tid)
++    result=json.loads(registry.dispatch('kanban_reassign',{'task_id':tid,'profile':'developer-gpt','reason':'scoped'}))
++    assert result.get('ok') and result.get('unblocked') is False, result
++    with connect() as conn: assert kb.get_task(conn,tid).status=='blocked'
++
++
++def test_concurrent_new_owner_hold_is_not_unblocked(board, monkeypatch):
++    home,status,tid,kb,connect,registry=board
++    (home/'bot-status.json').write_text(json.dumps({'updated':time.time(),'bots':status}))
++    with connect() as conn: _provider_failure(kb,conn,tid)
++    original=kb.unblock_task
++    def concurrent(conn,task_id,**kwargs):
++        assert kb.block_task(conn,task_id,kind='needs_input',reason='owner approval required')
++        return original(conn,task_id,**kwargs)
++    monkeypatch.setattr(kb,'unblock_task',concurrent)
++    result=json.loads(registry.dispatch('kanban_reassign',{'task_id':tid,'profile':'developer-gpt','reason':'scoped'}))
++    assert result.get('ok') and result.get('unblocked') is False, result
++    with connect() as conn:
++        task=kb.get_task(conn,tid)
++        assert task.status=='blocked' and task.block_kind=='needs_input'
++
++
++def test_concurrent_second_assignee_does_not_trigger_unblock(board, monkeypatch):
++    home,status,tid,kb,connect,registry=board
++    (home/'bot-status.json').write_text(json.dumps({'updated':time.time(),'bots':status}))
++    with connect() as conn: _provider_failure(kb,conn,tid)
++    original=kb.unblock_task
++    def concurrent(conn,task_id,**kwargs):
++        assert kb.assign_task(conn,task_id,'tester-gpt')
++        return original(conn,task_id,**kwargs)
++    monkeypatch.setattr(kb,'unblock_task',concurrent)
++    result=json.loads(registry.dispatch('kanban_reassign',{'task_id':tid,'profile':'developer-gpt','reason':'scoped'}))
++    assert result.get('ok') and result.get('unblocked') is False, result
++    assert result['assignee']=='tester-gpt' and result['superseded'] is True
++    with connect() as conn:
++        task=kb.get_task(conn,tid)
++        assert task.status=='blocked' and task.assignee=='tester-gpt'

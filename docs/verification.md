@@ -1052,3 +1052,7 @@ Eleven related test files passed 298 cases with 4 Windows-only skips on both the
 ## Snapshot integrity and traversal (v0.6.21)
 
 Nine related test files passed 141 offline cases on the candidate and on installed source in isolated Linux runs; these overlapping runs are not summed. Cases cover failed file and database copies, missing or inaccessible state, oversized files, unreadable directories, excluded subtrees, preserving the older snapshot, and incomplete restoration. Read-only enumeration of one existing board root returned the same included file names while skipping excluded subtrees; its timing is a single local sample, not a general backup-speed or disk-savings claim. No production backup was restored, no existing recovery snapshot was removed, and no provider request was made.
+
+## Safe autonomous reassignment (v0.6.22)
+
+Thirteen related test files passed 235 offline cases with one skip on the candidate and on installed source in isolated Linux runs; the overlapping runs are not summed. Regressions cover a live isolated sleeper and manual claims, stale bot status, concurrent completion, claims and reassignment, new and prior explicit holds, released historical holds, and sticky failures. No live card was reassigned and no provider request was made. These tests do not prove production behavior, current bot availability, or usage savings.
