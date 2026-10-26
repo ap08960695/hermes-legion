@@ -34,3 +34,7 @@ The full example has **34 profiles**: Captain and planner, two native-provider v
 A suitable, genuinely ready public-data Web route is considered alongside native twins. Private data cannot enter a public-only route. A name or subscription label proves neither quota nor tools, vision or audio support. An independent reviewer is a different worker/run with the appropriate gates, not merely a second account name.
 
 Start with `examples/team.small.json` if the full roster is unnecessary. Reference metadata in `roles.json` / `examples/` is **not** raw Hermes configuration. Native configuration fragments live under `profiles/native/`; follow [setup](setup-multi-account.md). No original private bot name, persona, account or rename map is included.
+
+## Planning and execution
+
+The Captain template names the optional Strategist role as a planning choice for complex work. A ready specialist can execute a bounded task directly, without a separate planning card when one adds no value. Create or assign cards only through the existing native workflow after checking duplicates, dependencies, permissions, holds and quotas. A template is guidance, not automatic dispatch or evidence that a particular session loaded it. Select only configured and authorized models and providers; existing account bindings and fallback policy remain in force.
