@@ -43131,3 +43131,440 @@ diff --git a/tests/hermes_cli/test_goals.py b/tests/hermes_cli/test_goals.py
              goals, "judge_goal",
              return_value=("wait", "remote job still running", False, {"pid": 4242}, False),
          ):
+diff --git a/hermes_cli/backup.py b/hermes_cli/backup.py
+--- a/hermes_cli/backup.py
++++ b/hermes_cli/backup.py
+@@ -1278,37 +1278,70 @@
+ 
+     manifest: dict[str, int] = {}  # rel_path -> file size
+     failed_dbs: list[str] = []  # present *.db that could not be snapshotted
+-    # #68805: track protected DB files skipped for size — they are snapshot
+-    # incompleteness just like a failed copy, so pruning must be suppressed
+-    # to preserve the older complete snapshot that may contain the only
+-    # recoverable database.
++    failed_files: list[str] = []  # other critical files that could not be captured
++    # A skipped critical file is incomplete just like a failed copy: the older
++    # snapshot may be the only recoverable copy of that state.
+     oversized_skipped: list[str] = []
++
++    def _capture_error(rel_name: str, exc: OSError, dst: Optional[Path] = None) -> None:
++        failures = failed_dbs if Path(rel_name).suffix == ".db" else failed_files
++        if rel_name not in failures:
++            failures.append(rel_name)
++        if dst is not None:
++            with suppress(OSError):
++                dst.unlink(missing_ok=True)
++        logger.warning("Could not snapshot %s: %s", rel_name, exc)
++
++    def _snapshot_files(directory: Path):
++        def _walk_error(exc: OSError) -> None:
++            failed = Path(exc.filename) if exc.filename else directory
++            try:
++                name = failed.relative_to(home).as_posix()
++            except ValueError:
++                name = directory.relative_to(home).as_posix()
++            failed_files.append(name)
++            logger.warning("Could not scan snapshot directory %s: %s", name, exc)
++
++        for base, dirs, files in os.walk(directory, onerror=_walk_error, followlinks=False):
++            # These paths are intentionally excluded; do not descend into their
++            # potentially large or unreadable trees merely to skip each file.
++            dirs[:] = [name for name in dirs if name not in {"workspaces", "attachments"}]
++            for name in files:
++                yield Path(base) / name
+ 
+     for rel in _QUICK_STATE_FILES:
+         src = home / rel
+-        if not src.exists():
++        try:
++            source_mode = src.stat().st_mode
++        except FileNotFoundError:
+             continue
+-
+-        if src.is_dir():
++        except OSError as exc:
++            _capture_error(rel, exc)
++            continue
++
++        if stat.S_ISDIR(source_mode):
+             # Walk the directory and record each file individually in the
+             # manifest so restore can treat them uniformly.  Empty dirs are
+             # skipped (nothing to snapshot).
+-            for sub in src.rglob("*"):
+-                if not sub.is_file():
+-                    continue
++            for sub in _snapshot_files(src):
+                 sub_rel = sub.relative_to(home).as_posix()
+                 # Skip heavy, regenerable per-board subtrees (scratch
+                 # workspaces and task attachments can be large); we only need
+                 # the board databases + their metadata to restore a board.
+                 if "/workspaces/" in f"/{sub_rel}/" or "/attachments/" in f"/{sub_rel}/":
+                     continue
++                try:
++                    if not stat.S_ISREG(sub.stat().st_mode):
++                        continue
++                except OSError as exc:
++                    _capture_error(sub_rel, exc)
++                    continue
+                 if _too_large(sub, sub_rel):
+-                    if sub.suffix == ".db":
+-                        oversized_skipped.append(sub_rel)
++                    oversized_skipped.append(sub_rel)
+                     continue
+                 dst = staging_dir / sub_rel
+-                dst.parent.mkdir(parents=True, exist_ok=True)
+                 try:
++                    dst.parent.mkdir(parents=True, exist_ok=True)
+                     # Route SQLite DBs through the WAL-safe backup() path so a
+                     # board DB with an open WAL (the gateway may hold it at
+                     # snapshot time) is captured consistently.
+@@ -1329,21 +1362,20 @@
+                         shutil.copy2(sub, dst)
+                     manifest[sub_rel] = dst.stat().st_size
+                 except (OSError, PermissionError) as exc:
+-                    logger.warning("Could not snapshot %s: %s", sub_rel, exc)
++                    _capture_error(sub_rel, exc, dst)
+             continue
+ 
+-        if not src.is_file():
++        if not stat.S_ISREG(source_mode):
+             continue
+ 
+         if _too_large(src, rel):
+-            if src.suffix == ".db":
+-                oversized_skipped.append(rel)
++            oversized_skipped.append(rel)
+             continue
+ 
+         dst = staging_dir / rel
+-        dst.parent.mkdir(parents=True, exist_ok=True)
+ 
+         try:
++            dst.parent.mkdir(parents=True, exist_ok=True)
+             if src.suffix == ".db":
+                 if not _safe_copy_db(src, dst):
+                     failed_dbs.append(rel)
+@@ -1361,7 +1393,7 @@
+                 shutil.copy2(src, dst)
+             manifest[rel] = dst.stat().st_size
+         except (OSError, PermissionError) as exc:
+-            logger.warning("Could not snapshot %s: %s", rel, exc)
++            _capture_error(rel, exc, dst)
+ 
+     if failed_dbs:
+         # Critical: update path used to log-and-continue with exit 0, so a
+@@ -1379,13 +1411,17 @@
+             ", ".join(failed_dbs),
+         )
+ 
++    if failed_files:
++        print("  ⚠ Snapshot: could not capture critical file(s): " + ", ".join(failed_files))
++        logger.error("Quick snapshot failed to capture file(s): %s", ", ".join(failed_files))
++
+     if not manifest:
+         shutil.rmtree(staging_dir, ignore_errors=True)
+-        if failed_dbs:
+-            # Distinguish "nothing to snapshot" from "state.db present but unreadable"
++        if failed_dbs or failed_files or oversized_skipped:
++            # Distinguish "nothing to snapshot" from present but uncaptured state.
+             print(
+                 "  ⚠ Snapshot aborted: no files captured "
+-                f"(failed DBs: {', '.join(failed_dbs)})"
++                f"(uncaptured: {', '.join(failed_dbs + failed_files + oversized_skipped)})"
+             )
+         return None
+ 
+@@ -1398,6 +1434,7 @@
+         "total_size": sum(manifest.values()),
+         "files": manifest,
+         "failed_dbs": failed_dbs,
++        "failed_files": failed_files,
+         "oversized_skipped": oversized_skipped,
+     }
+     with open(staging_dir / "manifest.json", "w", encoding="utf-8") as f:
+@@ -1422,31 +1459,31 @@
+     # Auto-prune. Defaults preserve historical manual /snapshot behavior; callers
+     # with known high-churn safety snapshots (for example pre-update) can pass a
+     # smaller keep value so large state.db copies do not accumulate indefinitely.
+-    # #68805 review: skip pruning when a present DB failed to capture OR was
+-    # skipped for size — either way the snapshot is incomplete and the older
+-    # snapshot may contain the only recoverable database.
+-    incomplete = failed_dbs or oversized_skipped
++    # Skip pruning if any critical state could not be captured. An older
++    # snapshot may hold the only recoverable copy of the missing state.
++    incomplete = failed_dbs or failed_files or oversized_skipped
+     if not incomplete:
+         _prune_quick_snapshots(root, keep=_QUICK_DEFAULT_KEEP if keep is None else keep)
+     else:
+         if oversized_skipped:
+             print(
+-                "  ⚠ Skipping snapshot prune: DB file(s) skipped for size: "
++                "  ⚠ Skipping snapshot prune: file(s) skipped for size: "
+                 + ", ".join(oversized_skipped)
+             )
+             logger.warning(
+-                "Quick snapshot skipped oversized DB file(s): %s",
++                "Quick snapshot skipped oversized file(s): %s",
+                 ", ".join(oversized_skipped),
+             )
+         logger.warning(
+-            "Skipping snapshot prune because %d DB(s) failed to capture "
++            "Skipping snapshot prune because %d DB(s) and %d other file(s) failed to capture "
+             "and/or %d were oversized — preserving older snapshots as "
+             "recovery source",
+-            len(failed_dbs), len(oversized_skipped),
++            len(failed_dbs), len(failed_files), len(oversized_skipped),
+         )
+ 
+     logger.info(
+-        "quick snapshot phase=copy status=complete id=%s files=%d bytes=%d",
++        "quick snapshot phase=copy status=%s id=%s files=%d bytes=%d",
++        "incomplete" if incomplete else "complete",
+         snap_id,
+         len(manifest),
+         sum(manifest.values()),
+@@ -1502,8 +1539,8 @@
+     """Restore state from a quick snapshot.
+ 
+     Overwrites current state files with the snapshot's copies.
+-    Returns True if at least one file was restored and the listed auth.json
+-    was not refused or skipped.
++    Returns True only when at least one file was restored and neither capture
++    nor restoration reported an incomplete or refused file.
+     """
+     home = hermes_home or get_hermes_home()
+     root = _quick_snapshot_root(home)
+@@ -1534,7 +1571,9 @@
+         meta = json.load(f)
+ 
+     restored = 0
+-    auth_restore_failed = False
++    restore_incomplete = bool(meta.get("failed_dbs") or meta.get("failed_files") or meta.get("oversized_skipped"))
++    if restore_incomplete:
++        logger.warning("Snapshot %s was incomplete when captured", snapshot_id)
+     for rel in meta.get("files", {}):
+         # Security: reject absolute paths and traversals in manifest entries
+         src = snap_dir / rel
+@@ -1542,8 +1581,7 @@
+             src.resolve().relative_to(snap_dir.resolve())
+         except ValueError:
+             logger.error("Manifest path traversal blocked: %s", rel)
+-            if rel == "auth.json":
+-                auth_restore_failed = True
++            restore_incomplete = True
+             continue
+ 
+         dst = home / rel
+@@ -1555,19 +1593,16 @@
+             # every other manifest destination outside the profile remains a traversal.
+             if rel != "auth.json" or not _is_trusted_root_auth_alias(dst, home):
+                 logger.error("Manifest path traversal blocked: %s", rel)
+-                if rel == "auth.json":
+-                    auth_restore_failed = True
++                restore_incomplete = True
+                 continue
+ 
+         if not src.exists():
+-            if rel == "auth.json":
+-                logger.error("Snapshot auth.json listed in manifest is missing: %s", src)
+-                auth_restore_failed = True
++            logger.error("Snapshot file listed in manifest is missing: %s", rel)
++            restore_incomplete = True
+             continue
+ 
+-        dst.parent.mkdir(parents=True, exist_ok=True)
+-
+         try:
++            dst.parent.mkdir(parents=True, exist_ok=True)
+             if dst.suffix == ".db":
+                 # Restore through SQLite backup API so live connections
+                 # (gateway, dashboard, another CLI session) see the
+@@ -1577,6 +1612,7 @@
+                     # Refused, failed, or source failed its integrity check:
+                     # dst left as it was. Count as a failure, not a restore.
+                     logger.error("Failed to restore %s: refused or source integrity check failed (see previous log)", rel)
++                    restore_incomplete = True
+                     continue
+             elif rel == "auth.json":
+                 # Refresh tokens for these OAuth providers rotate on use. A historical
+@@ -1585,18 +1621,17 @@
+                 # while retaining that live single-use grant under the auth-store lock.
+                 if not _restore_auth_json(src, dst):
+                     logger.error("Failed to restore %s safely", rel)
+-                    auth_restore_failed = True
++                    restore_incomplete = True
+                     continue
+             else:
+                 shutil.copy2(src, dst)
+             restored += 1
+         except (OSError, PermissionError) as exc:
+             logger.error("Failed to restore %s: %s", rel, exc)
+-            if rel == "auth.json":
+-                auth_restore_failed = True
++            restore_incomplete = True
+ 
+     logger.info("Restored %d files from snapshot %s", restored, snapshot_id)
+-    return restored > 0 and not auth_restore_failed
++    return restored > 0 and not restore_incomplete
+ 
+ 
+ def _count_cron_jobs(path: Path) -> Optional[int]:
+diff --git a/tests/hermes_cli/test_quick_snapshot_integrity.py b/tests/hermes_cli/test_quick_snapshot_integrity.py
+new file mode 100644
+--- /dev/null
++++ b/tests/hermes_cli/test_quick_snapshot_integrity.py
+@@ -0,0 +1,154 @@
++"""Incomplete state snapshots must not replace the only recoverable copy."""
++import json
++import sqlite3
++from pathlib import Path
++
++import pytest
++from hermes_cli import backup
++
++
++@pytest.fixture
++def home(tmp_path):
++    root = tmp_path / 'hermes'; root.mkdir()
++    (root / 'config.yaml').write_text('example: original\n')
++    (root / 'auth.json').write_text('{"providers": {}}\n')
++    pairing = root / 'pairing'; pairing.mkdir()
++    (pairing / 'approved.json').write_text('{"example": true}\n')
++    with sqlite3.connect(root / 'state.db') as db:
++        db.execute('CREATE TABLE facts (value TEXT)')
++        db.execute("INSERT INTO facts VALUES ('original')")
++    return root
++
++
++@pytest.mark.parametrize('relative', ['config.yaml', 'auth.json', 'pairing/approved.json'])
++def test_failed_file_copy_retains_previous_complete_snapshot_and_records_failure(home, monkeypatch, relative):
++    first = backup.create_quick_snapshot(label='a', hermes_home=home, keep=1)
++    root = home / 'state-snapshots'; first_dir = root / first
++    original = backup.shutil.copy2
++    target = home / relative
++    def interrupted(src, dst, *args, **kwargs):
++        if Path(src) == target:
++            Path(dst).write_bytes(b'partial')
++            raise OSError('injected interrupted copy')
++        return original(src, dst, *args, **kwargs)
++    monkeypatch.setattr(backup.shutil, 'copy2', interrupted)
++    second = backup.create_quick_snapshot(label='z', hermes_home=home, keep=1)
++    assert first_dir.is_dir(), 'last complete snapshot must survive a failed file copy'
++    assert (first_dir / relative).is_file()
++    current = root / second
++    meta = json.loads((current / 'manifest.json').read_text())
++    assert relative in meta['failed_files'] and relative not in meta['files']
++    assert not (current / relative).exists(), 'a partial copy is not a recovery file'
++
++
++def test_database_copy_exception_retains_previous_complete_snapshot(home, monkeypatch):
++    first = backup.create_quick_snapshot(label='a', hermes_home=home, keep=1)
++    def fail(*args): raise OSError('injected SQLite copy failure')
++    monkeypatch.setattr(backup, '_safe_copy_db', fail)
++    second = backup.create_quick_snapshot(label='z', hermes_home=home, keep=1)
++    root = home / 'state-snapshots'
++    assert (root / first / 'state.db').is_file()
++    meta = json.loads((root / second / 'manifest.json').read_text())
++    assert 'state.db' in meta['failed_dbs'] and 'state.db' not in meta['files']
++
++
++def test_oversized_critical_file_retains_previous_complete_snapshot(home):
++    first = backup.create_quick_snapshot(label='a', hermes_home=home, keep=1)
++    (home / 'auth.json').write_bytes(b'X' * 65536)
++    second = backup.create_quick_snapshot(label='z', hermes_home=home, keep=1, max_file_size=32768)
++    root = home / 'state-snapshots'
++    assert (root / first / 'auth.json').is_file()
++    meta = json.loads((root / second / 'manifest.json').read_text())
++    assert 'auth.json' in meta['oversized_skipped']
++
++
++def test_restore_reports_incomplete_when_a_listed_file_is_missing(home):
++    sid = backup.create_quick_snapshot(label='original', hermes_home=home)
++    snap = home / 'state-snapshots' / sid
++    (snap / 'config.yaml').unlink()
++    assert backup.restore_quick_snapshot(sid, hermes_home=home) is False
++
++
++@pytest.mark.parametrize('field', ['failed_files', 'failed_dbs', 'oversized_skipped'])
++def test_restore_reports_snapshot_that_was_incomplete_at_creation(home, field):
++    sid = backup.create_quick_snapshot(label='original', hermes_home=home)
++    manifest = home / 'state-snapshots' / sid / 'manifest.json'
++    data = json.loads(manifest.read_text()); data[field] = ['pairing/other.json']
++    manifest.write_text(json.dumps(data))
++    assert backup.restore_quick_snapshot(sid, hermes_home=home) is False
++
++
++def test_failed_database_restore_is_not_reported_as_complete(home, monkeypatch):
++    sid = backup.create_quick_snapshot(label='original', hermes_home=home)
++    monkeypatch.setattr(backup, '_safe_restore_db', lambda *args: False)
++    assert backup.restore_quick_snapshot(sid, hermes_home=home) is False
++
++
++def test_snapshot_parent_directory_failure_retains_older_snapshot(home, monkeypatch):
++    first = backup.create_quick_snapshot(label='a', hermes_home=home, keep=1)
++    original = Path.mkdir
++    def fail_pairing(self, *args, **kwargs):
++        if self.name == 'pairing' and self.parent.name.endswith('.partial'):
++            raise OSError('injected directory failure')
++        return original(self, *args, **kwargs)
++    monkeypatch.setattr(Path, 'mkdir', fail_pairing)
++    second = backup.create_quick_snapshot(label='z', hermes_home=home, keep=1)
++    root = home / 'state-snapshots'
++    assert (root / first / 'pairing' / 'approved.json').is_file()
++    meta = json.loads((root / second / 'manifest.json').read_text())
++    assert 'pairing/approved.json' in meta['failed_files']
++
++
++def test_unreadable_nested_directory_preserves_previous_snapshot(home):
++    if __import__('os').geteuid() == 0:
++        pytest.skip('directory permissions do not deny root')
++    restricted = home / 'pairing' / 'restricted'; restricted.mkdir()
++    (restricted / 'approved.json').write_text('{"example": true}')
++    first = backup.create_quick_snapshot(label='a', hermes_home=home, keep=1)
++    restricted.chmod(0)
++    try:
++        second = backup.create_quick_snapshot(label='z', hermes_home=home, keep=1)
++    finally:
++        restricted.chmod(0o700)
++    root = home / 'state-snapshots'
++    assert (root / first / 'pairing' / 'restricted' / 'approved.json').is_file()
++    meta = json.loads((root / second / 'manifest.json').read_text())
++    assert 'pairing/restricted' in meta['failed_files']
++
++
++def test_snapshot_never_walks_excluded_board_subtrees(home, monkeypatch):
++    import os
++    board = home / 'kanban' / 'boards' / 'board-a'; board.mkdir(parents=True)
++    (board / 'manifest.json').write_text('{}')
++    for dirname in ('workspaces', 'attachments'):
++        hidden = board / dirname / 'deep'; hidden.mkdir(parents=True)
++        (hidden / 'large-artifact').write_text('not part of quick snapshots')
++    original = os.scandir; walked = []
++    def record(path):
++        walked.append(str(path))
++        return original(path)
++    monkeypatch.setattr(os, 'scandir', record)
++    sid = backup.create_quick_snapshot(label='walk', hermes_home=home)
++    snap = home / 'state-snapshots' / sid
++    assert (snap / 'kanban' / 'boards' / 'board-a' / 'manifest.json').is_file()
++    assert not any('/workspaces' in path or '/attachments' in path for path in walked)
++
++
++@pytest.mark.parametrize('relative,exc', [
++    ('config.yaml', PermissionError('injected stat denial')),
++    ('pairing/approved.json', FileNotFoundError('file vanished during traversal')),
++])
++def test_unstatable_critical_state_does_not_replace_previous_snapshot(home, monkeypatch, relative, exc):
++    first = backup.create_quick_snapshot(label='a', hermes_home=home, keep=1)
++    target = home / relative
++    original = Path.stat
++    def refuse(self, *args, **kwargs):
++        if self == target:
++            raise exc
++        return original(self, *args, **kwargs)
++    monkeypatch.setattr(Path, 'stat', refuse)
++    second = backup.create_quick_snapshot(label='z', hermes_home=home, keep=1)
++    root = home / 'state-snapshots'
++    assert (root / first / relative).is_file()
++    meta = json.loads((root / second / 'manifest.json').read_text())
++    assert relative in meta['failed_files']

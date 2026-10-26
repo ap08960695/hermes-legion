@@ -147,3 +147,7 @@ Add `--cross-profile` to the read-only usage attribution command to summarize ex
 ## Verified goal waits (v0.6.20)
 
 A PID or process-session wait remains parked while its original target is verified live or its watch trigger has not fired. PID identity combines boot and process start information to recognize reuse. A missing, legacy or unreadable identity does not imply completion: after a bounded period the goal pauses for inspection, preserving the wait target and budget, without scheduling a model turn. Desktop and CLI show a single pause notice. An explicit timed wait and a verified process exit or watch trigger retain their existing continuation behavior.
+
+## Snapshot integrity and traversal (v0.6.21)
+
+Quick snapshots record critical file, directory and database capture failures and oversized skips. An incomplete snapshot cannot prune older snapshots, and restore reports an incomplete outcome when a listed file was not restored or the snapshot was incomplete at capture. Other files may still be restored; the result does not imply transactional rollback. Intentionally excluded board workspace and attachment trees are pruned from traversal, avoiding needless metadata scans.

@@ -1048,3 +1048,7 @@ Five related test files passed 32 offline cases on the candidate and the same 32
 ## Verified goal waits (v0.6.20)
 
 Eleven related test files passed 298 cases with 4 Windows-only skips on both the offline candidate and installed source in isolated Linux runs; the runs overlap and are not summed. Cases include a real isolated sleeper, saved state, PID reuse, registry error or missing handle, watch triggers, legacy targets and CLI/Desktop pause notices without dispatch. No provider request was made. An idle preflight is required for source installation; existing processes need a safe reload before they use new code. These tests do not establish live task behavior or measured token savings.
+
+## Snapshot integrity and traversal (v0.6.21)
+
+Nine related test files passed 141 offline cases on the candidate and on installed source in isolated Linux runs; these overlapping runs are not summed. Cases cover failed file and database copies, missing or inaccessible state, oversized files, unreadable directories, excluded subtrees, preserving the older snapshot, and incomplete restoration. Read-only enumeration of one existing board root returned the same included file names while skipping excluded subtrees; its timing is a single local sample, not a general backup-speed or disk-savings claim. No production backup was restored, no existing recovery snapshot was removed, and no provider request was made.
