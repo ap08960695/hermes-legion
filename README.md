@@ -85,4 +85,4 @@ This repository contains generic source changes and synthetic examples. Live dat
 
 MIT licensed. Preserve the upstream copyright notice when redistributing included Hermes code. This project does not grant permission to bypass a provider's terms or limits.
 
-Native UI guides: [Shared Spaces](docs/shared-spaces.md), [Rich answers](docs/rich-answers.md), and [Focus and Workflow](docs/focus-workspace.md).
+Native UI guides: [Hub and shared collections](docs/shared-spaces.md), [Rich answers](docs/rich-answers.md), and [Focus and Workflow](docs/focus-workspace.md).

@@ -45,6 +45,10 @@ The [Focus guide](focus-workspace.md) describes the Workflow dependency graph, t
 
 ## Shared content and native navigation
 
-- [Shared Spaces](shared-spaces.md): explicit bot readers, pages, imported copies, bounded read-only CLI, revision conflicts, trash and restore.
+- [Hub and shared collections](shared-spaces.md): explicit bot readers, pages, imported copies, bounded read-only CLI, revision conflicts, trash and restore.
 - [Rich answers](rich-answers.md): existing native tables/diagrams plus opt-in literal-data cards with sources.
 - Full Bots workspace, single Focus rail, working first-click session selection, Workflow ancestry and truthful running-only motion, and availability-gated internal file previews.
+
+### Unified Hub navigation (v0.5.1)
+
+The former Library and Spaces share a single Hub destination, header and search. Chat output provenance and private-by-default collection membership stay distinct. Old links resolve to Hub. The legacy sidebar titlebar/shortcut route is disabled in Focus while Wide retains its normal sidebar controls.

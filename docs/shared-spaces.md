@@ -1,14 +1,16 @@
-# Shared Spaces
+# Hub: files and shared collections
 
-Spaces is a local native Desktop feature for pages and copied files that selected bots can read together. It requires the complete Hermes Legion patch and a normal rebuilt Desktop lifecycle. It is not a connection to ChatGPT Space or a cloud synchronization service.
+Hub combines the former Library and Spaces in one native Desktop destination. It provides chat outputs and local shared collections. The collection storage is a local native feature for pages and copied files that selected bots can read together. It requires the complete Hermes Legion patch and a normal rebuilt Desktop lifecycle. It is not a connection to ChatGPT Space or a cloud synchronization service.
 
 ## Create and use a Space
 
-1. Open **Spaces → New Space**, enter a title, and select existing bot profiles on that connection. An empty member list is private.
+1. Open **Hub → New collection**, enter a collection title, and select existing bot profiles on that connection. An empty member list is private.
 2. Use **New page** for Markdown or **Add files** to choose files explicitly. The app copies the selected bytes into the Space; it never moves or edits the original file.
 3. Open supported files in the internal viewer. Unsupported formats remain listed with preview disabled. Use **Manage bot access** to add or revoke readers.
 4. Use the trash icon to remove an item after confirmation. **Trash → Restore** recovers it. This is recoverable removal, not secure erasure.
 5. **Copy bot reference** copies instructions and the Space ID. Give that reference to an appropriate bot through the normal work flow when needed; copying never sends a message or calls a model.
+
+**All items** shows shared collection entries and chat outputs under the same search and type filters. **From chats** narrows the source; selecting a named collection narrows it to that collection. Chat outputs are not automatically added to a collection or granted to its bot members. Collection membership controls only explicitly shared copies. The old `/artifacts` and `/spaces` routes still open Hub, so existing links remain useful. No database migration or old-content re-import is needed.
 
 The workspace follows its captured native connection/profile. There is no automatic import of old chats, documents or private folders. The owner UI manages content; bot CLI commands are read-only.
 

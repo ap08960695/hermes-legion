@@ -4,7 +4,7 @@ This release implements the approved interface in the native Hermes Desktop rend
 
 ## Find the work without a crowded sidebar
 
-Focus has five icon-led destinations: **Chat**, **Work**, **Bots**, **Library**, and **Spaces** (when registered). Short captions remain visible, and accessible names describe each control. **All features** opens a searchable catalog grouped by work, team capabilities, and system settings. Registered plugin pages are included when they become available.
+Focus has four icon-led destinations: **Chat**, **Work**, **Bots**, and **Hub**. Hub replaces the former Library and Spaces doors. Short captions remain visible, and accessible names describe each control. **All features** opens a searchable catalog grouped by work, team capabilities, and system settings. Registered plugin pages are included when they become available.
 
 Chat returns through the existing session-opening path. It does not create another conversation. Bots opens a full native workspace with role/source/status cards, search and group filters, using the existing canonical conversation rules; legacy installations fall back to the native roster or Profiles. Work opens an installed Kanban page, or the existing worker-runs page when no board is registered. Navigation never enables a plugin or dispatches a worker implicitly.
 
@@ -14,7 +14,7 @@ On a narrow viewport, the primary destinations move to a bottom bar. Motion uses
 
 ## Current work and task history
 
-Work uses the actual native Kanban board, card controls and detail dialog. Focus closes the old permanent Sessions/Bots side pane so the canvas has its own space. **All features → Sessions** opens the existing session picker; Wide retains the original advanced layout. Click and touch selection work immediately, including when the pointer has not moved. The Sessions pane keeps its New session entry and real project/session tree instead of repeating the global navigation. The rail follows the focused destination: leaving the Bots pane for Work, Library or Chat clears its highlight even if the roster remains mounted.
+Work uses the actual native Kanban board, card controls and detail dialog. Focus closes the old permanent Sessions/Bots side pane so the canvas has its own space. **All features → Sessions** opens the existing session picker. The old top-left sidebar trigger is absent in Focus, and its positional/keyboard actions cannot restore the legacy Sessions/Bots column; Wide retains the original advanced layout. Click and touch selection work immediately, including when the pointer has not moved. The Sessions pane keeps its New session entry and real project/session tree instead of repeating the global navigation. The rail follows the focused destination: leaving the Bots pane for Work, Hub or Chat clears its highlight even if the roster remains mounted.
 
 **Current work** excludes completed and archived columns. **History** shows terminal columns and initially mounts at most 50 cards per column; **Show more** adds another 50. Search still filters the complete board data already fetched from the native API, including older history beyond the visible batch. This bounds rendering, not backend fetching. It is not server pagination or an archive/delete operation. Unknown statuses remain in Current work rather than disappearing.
 
@@ -34,17 +34,17 @@ Use zoom, **Fit graph**, scrolling and keyboard focus. The initial graph is boun
 
 Workflow opts into links on the existing board read only while selected. It reuses native event invalidation and the existing fallback cadence. Selecting a node reuses the native task-detail query; it adds no model call, worker dispatch, automatic retry or separate polling loop. Reading the graph never changes task status.
 
-## Open files inside Library
+## Open files inside Hub
 
-Click a file in **Library** to open the internal viewer. Text and source files use the native read-only editor; HTML has a sanitized, opaque sandbox with scripts and external resource loading disabled. Images, PDFs, audio and supported video use embedded viewers. Image cards also have an explicit **Open** button.
+Click a file in **Hub** to open the internal viewer. Text and source files use the native read-only editor; HTML has a sanitized, opaque sandbox with scripts and external resource loading disabled. Images, PDFs, audio and supported video use embedded viewers. Image cards also have an explicit **Open** button.
 
 **Browse containing folder** lists files and subfolders inside the same dialog. Selecting a file opens it within Hermes; **Copy path** copies its resolved location. Existing native file and size guards still apply. A bounded metadata preflight disables unsupported, missing, unreadable and oversized files before opening the viewer. Explicit Refresh rechecks the visible batch; there is no new polling loop. A successful click reads once before opening the dialog, so stale entries do not create a known-failing preview. Files that disappear after the check remain unavailable in the app. This view does not edit, rename, delete or execute files. Office/archive conversion is not included. Ordinary web links retain their existing link behavior.
 
 A file read is pinned to its originating connection, profile and session. Relative paths resolve against that session's working directory. Switching the active gateway/profile does not silently redirect an already captured file to another machine. Closing a viewer discards late responses. Previewing a file does not ask a model to read or describe it.
 
-## Shared Spaces and richer answers
+## Shared collections and richer answers
 
-[Shared Spaces](shared-spaces.md) provides local pages, explicitly imported file copies, selected read-only bot membership, and recoverable removal. It does not import old conversations or dispatch bots automatically. [Rich answers](rich-answers.md) documents native Markdown tables, Mermaid and opt-in cards with supplied images and sources.
+[Hub collections](shared-spaces.md) provides local pages, explicitly imported file copies, selected read-only bot membership, and recoverable removal. It does not import old conversations or dispatch bots automatically. [Rich answers](rich-answers.md) documents native Markdown tables, Mermaid and opt-in cards with supplied images and sources.
 
 ## Configure an existing session's goal
 
