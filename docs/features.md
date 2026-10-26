@@ -143,3 +143,7 @@ For an intentionally selected additional database, pass `--board /path/to/kanban
 ## Cross-profile cache cohorts (v0.6.19)
 
 Add `--cross-profile` to the read-only usage attribution command to summarize existing diagnostic cohorts. A cohort requires matching installation namespace, route, declared-account fingerprint, cache key, common prefix, tools and options, with at least two returned requests with known usage from each of at least two profiles. The new section emits aggregate counts and token totals, not fingerprints or prompts. Conflicting copies, incomplete fields and unknown usage are excluded. Existing bounded log coverage applies. Declared headers do not prove authenticated account identity; matching prepared metadata and positive cached tokens do not prove which bot populated the provider cache or establish cost savings.
+
+## Verified goal waits (v0.6.20)
+
+A PID or process-session wait remains parked while its original target is verified live or its watch trigger has not fired. PID identity combines boot and process start information to recognize reuse. A missing, legacy or unreadable identity does not imply completion: after a bounded period the goal pauses for inspection, preserving the wait target and budget, without scheduling a model turn. Desktop and CLI show a single pause notice. An explicit timed wait and a verified process exit or watch trigger retain their existing continuation behavior.

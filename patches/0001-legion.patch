@@ -20103,21 +20103,60 @@ index 4207c0f832e78757146441e946c287ea9a31e7fb..95fc21e710d47be6c2ad518debebb1c8
 +        with _agent_tool_lock(agent):
              agent.tools = merged
 diff --git a/tools/process_registry.py b/tools/process_registry.py
-index 25bdc43394ed63a200b652e9f650567d0313afd9..76b922b7fcc66d17333b7ddcfaff47d07d34da07 100644
 --- a/tools/process_registry.py
 +++ b/tools/process_registry.py
-@@ -119,3 +119,5 @@ _MIN_WORKER_MEMORY_MAX_BYTES = 64 * 1024 * 1024
+@@ -117,7 +117,9 @@
+ _SYSTEMD_RUN_NO_EXPAND = True
+ _MIN_WORKER_MEMORY_MAX_BYTES = 64 * 1024 * 1024
  _DEFAULT_WORKER_MEMORY_MAX_BYTES = 1024 * 1024 * 1024
 -_WORKER_MEMORY_MAX_CAP_BYTES = 4 * 1024 * 1024 * 1024
 +# local patch 30: 4 GiB OOM-killed Digital Loan UI workers (node build/jest/playwright) 6 times on 2026-10-09;
 +# owner chose 8 GiB. The gateway cgroup and half of physical RAM still bound it.
 +_WORKER_MEMORY_MAX_CAP_BYTES = 8 * 1024 * 1024 * 1024
  
-@@ -587,2 +589,3 @@ class ProcessSession:
+ 
+ def _worker_memory_max_bytes() -> int:
+@@ -585,6 +587,7 @@
+     watch_patterns: list[str] = field(default_factory=list)
+     heartbeat_seconds: int = 0                  # 0 = off; else a "heartbeat" event every N s while running
      total_output_chars: int = 0                 # Chars ever ingested (the buffer is a rolling tail)
 +    _tool_progress_fingerprint: tuple = field(default=(), repr=False)
      _heartbeat_last: float = field(default=0.0, repr=False)          # time of the last heartbeat (or spawn)
-@@ -2056,21 +2059,15 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin):
+     _heartbeat_total_at_last: int = field(default=0, repr=False)     # total_output_chars at that moment
+     _heartbeat_seq: int = field(default=0, repr=False)
+@@ -1694,20 +1697,24 @@
+         """Check if a completion notification was already consumed via wait/log."""
+         return session_id in self._completion_consumed
+ 
+-    def is_session_waiting(self, session_id: str) -> bool:
++    def is_session_waiting(self, session_id: str, *, strict: bool = False) -> Optional[bool]:
+         """Whether a goal loop (``hermes_cli.goals`` wait barrier) should stay parked on
+         this session: still running AND, with ``watch_patterns``, none matched yet (a
+         long-lived watcher unblocks on its trigger, not on exit). Unknown/exited/
+-        already-fired sessions return False so a stale barrier can never wedge the loop."""
++        already-fired sessions return False. With strict=True, a missing or unreadable session
++        returns None instead: absence of a handle is not proof that the operation completed."""
+         with self._lock:
+             session = (self._running.get(session_id) or self._finished.get(session_id)) if session_id else None
+         if session is None:
+-            return False
+-        with suppress(Exception):
++            return None if strict else False
++        try:
+             refreshed = self._refresh_detached_session(session)
+             if refreshed is None:
+-                return False
++                return None if strict else False
+             session = refreshed
++        except Exception:
++            if strict:
++                return None
+         return not session.exited and not (
+             session.watch_patterns and not session._watch_disabled and session._watch_hits > 0)
+ 
+@@ -2054,25 +2061,19 @@
+         from tools.ansi_strip import strip_ansi
+ 
          session = self.get(session_id)
 -        if session is None:
 +        if session is None or self._uncollected_gone(session):
@@ -20149,17 +20188,26 @@ index 25bdc43394ed63a200b652e9f650567d0313afd9..76b922b7fcc66d17333b7ddcfaff47d0
 +            selected = lines[-limit:] if offset is None and limit > 0 else lines[(offset or 0):(offset or 0) + limit]
 +            stop = total_lines if offset is None and limit > 0 else slice(offset or 0, (offset or 0) + limit).indices(total_lines)[1]
              observed_completion_output = total_lines == 0 or (bool(selected) and stop == total_lines)
-@@ -2104,3 +2101,3 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin):
+         result = {
+             **self._status_head(session), "output": "\n".join(selected),
+@@ -2102,12 +2103,12 @@
+             effective_timeout = max_timeout
+             timeout_note = f"Requested wait of {timeout}s was clamped to configured limit of {max_timeout}s"
          session = self.get(session_id)
 -        if session is None:
 +        if session is None or self._uncollected_gone(session):
              return _not_found(session_id)
-@@ -2109,3 +2106,3 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin):
+         deadline = time.monotonic() + effective_timeout
+         while time.monotonic() < deadline:
              session = self._refresh_detached_session(session)
 -            if session is None:
 +            if session is None or self._uncollected_gone(session):
                  return _not_found(session_id)
-@@ -2696,16 +2693,2 @@ def _redact_process_result(result: dict) -> dict:
+             self._reconcile_local_exit(session)  # orphaned-pipe reader guard
+             result = None
+@@ -2694,20 +2695,6 @@
+     return result
+ 
  
 -def _list_processes(task_id) -> dict:
 -    # Also surface session-scoped background processes (e.g. a forgotten preview
@@ -20176,17 +20224,26 @@ index 25bdc43394ed63a200b652e9f650567d0313afd9..76b922b7fcc66d17333b7ddcfaff47d0
 -
 -
  # action -> (handler(session_id, args) -> dict, redact output?). Output-bearing
-@@ -2765,2 +2748,4 @@ _MAX_HANDOFFS_PER_CHILD = 3
+ # actions are redacted; stdin actions return only status.
+ _SESSION_ACTIONS = {
+@@ -2763,11 +2750,13 @@
+ 
+ 
  def _handle_process(args, **kw):
 +    from tools.process_registry_tool_output import compact_progress, list_processes
 +
      action = args.get("action", "")
-@@ -2769,3 +2754,3 @@ def _handle_process(args, **kw):
+     # Coerce to string — some models send session_id as an integer
+     session_id = str(args.get("session_id", "")) if args.get("session_id") is not None else ""
      if action == "list":
 -        return json.dumps(_list_processes(kw.get("task_id")), ensure_ascii=False)
 +        return json.dumps(list_processes(kw.get("task_id")), ensure_ascii=False)
      if action == "handoff":
-@@ -2779,3 +2764,7 @@ def _handle_process(args, **kw):
+         if not session_id:
+             return tool_error("session_id is required for handoff")
+@@ -2777,7 +2766,11 @@
+             return tool_error(f"session_id is required for {action}")
+         handler, redact = _SESSION_ACTIONS[action]
          result = handler(session_id, args)
 -        return json.dumps(_redact_process_result(result) if redact else result, ensure_ascii=False)
 +        result = _redact_process_result(result) if redact else result
@@ -20195,6 +20252,8 @@ index 25bdc43394ed63a200b652e9f650567d0313afd9..76b922b7fcc66d17333b7ddcfaff47d0
 +                                      (kw.get("task_id"), kw.get("session_id")), action)
 +        return json.dumps(result, ensure_ascii=False)
      return tool_error(f"Unknown process action: {action}. Use: list, poll, log, wait, kill, write, submit, close, handoff")
+ 
+ 
 diff --git a/tools/process_registry_env_log.py b/tools/process_registry_env_log.py
 index a9cac46b1a73872b13f707c706302a9937951f41..b7533e002061f17690007a04cb4b2727e5246800 100644
 --- a/tools/process_registry_env_log.py
@@ -21341,22 +21400,31 @@ index 0000000000000000000000000000000000000000..ed8e77cb68be42045819bb285d00808f
 +        s._notif_release_turn(session)
 +        raise
 diff --git a/tui_gateway/session_notifications.py b/tui_gateway/session_notifications.py
-index 6fea2d4bcb8f4a5b6339264e02b5e72ca1a377ea..51e48791612542ebcf7f9592478ce97af343d21f 100644
 --- a/tui_gateway/session_notifications.py
 +++ b/tui_gateway/session_notifications.py
-@@ -136,3 +136,4 @@ def _notification_event_dedup_key(evt: dict) -> tuple:
+@@ -134,7 +134,8 @@
+ 
+ # Mirror gateway/kanban_watchers.py TERMINAL_KINDS: claim silent kinds (archived/unblocked) too so the cursor advances
  # past them and they can't wedge a later completed/blocked event behind an unclaimed row.
 -_KANBAN_NOTIFY_KINDS = ("completed", "blocked", "gave_up", "crashed", "timed_out", "status", "archived", "unblocked")
 +_KANBAN_NOTIFY_KINDS = ("completed", "blocked", "gave_up", "crashed", "timed_out", "status", "archived", "unblocked",
 +                        "review_requested", "changes_requested", "block_loop_detected")
  # kanban, /loop + /heartbeat and the bot mailbox share one idle-poll cadence; probing the lease registry on
-@@ -169,3 +170,4 @@ def _notif_submit(rid: str, sid: str, session: dict, text: str, what: str, **kwa
+ # every 0.5s queue timeout cost ~a core at 11 sessions (#108005).
+ _KANBAN_POLL_SECONDS = _LOOP_POLL_SECONDS = _BOT_DELIVERY_POLL_SECONDS = 5.0
+@@ -167,7 +168,8 @@
+         with _session_profile_runtime_scope(session):
+             render_notification(lambda: _emit("message.start", sid), platform="tui",
                                  diagnostic=(kwargs.get("display_metadata") or {}).get("notification_category") == "diagnostic")
 -        _run_prompt_submit(rid, sid, session, text, **kwargs)
 +        if _run_prompt_submit(rid, sid, session, text, **kwargs) is False:
 +            raise RuntimeError("notification turn was not admitted")
      except Exception as exc:
-@@ -264,2 +266,37 @@ def _maybe_fire_tui_heartbeat_tick(sid: str, session: dict) -> None:
+         _notif_log_failure(what, exc)
+         _notif_release_turn(session)
+@@ -262,6 +264,43 @@
+             mgr.abandon_fire()
+ 
  
 +def _maybe_resume_tui_parked_goal(sid: str, session: dict) -> None:
 +    """Resume a /goal whose wait barrier lapsed while the TUI/Desktop session sat idle.
@@ -21377,7 +21445,9 @@ index 6fea2d4bcb8f4a5b6339264e02b5e72ca1a377ea..51e48791612542ebcf7f9592478ce97a
 +    if state.waiting_on_pid is None and state.waiting_on_session is None and not state.waiting_until:
 +        return  # not parked — the post-turn judge owns continuation
 +    if mgr.is_waiting():
-+        return  # barrier still holds (is_waiting() also clears a lapsed one)
++        if state.status == "paused":
++            _emit("status.update", sid, {"kind": "goal", "text": f"⏸ Goal paused — {state.paused_reason}"})
++        return  # still parked, or paused because its target cannot be verified
 +    if not _notif_claim_turn(session):
 +        return  # busy — next poll retries
 +    if not (prompt := mgr.next_continuation_prompt()):
@@ -21394,8 +21464,14 @@ index 6fea2d4bcb8f4a5b6339264e02b5e72ca1a377ea..51e48791612542ebcf7f9592478ce97a
 +
 +
  def _loop_route_is_gateway_chat(state) -> bool:
-@@ -343,2 +380,20 @@ def _kb_timed_out(task, payload: dict, title: str) -> str:
- 
+     """A /loop set from a messaging chat carries the gateway's ``route`` (platform + chat_id); its wakeup scanner
+     (``gateway/run_goals.py::_loop_wakeup_fire_one``) fires those and skips route-less CLI/TUI loops. Mirror it here
+@@ -339,6 +378,24 @@
+     with contextlib.suppress(TypeError, ValueError):
+         return f" timed out (max_runtime={int(payload.get('limit_seconds') or 0)}s); will retry"
+     return " timed out (max_runtime=0s); will retry"
++
++
 +def _kb_review_requested(task, payload: dict, title: str) -> str:
 +    reviewer = _kb_first_line(payload.get("reviewer") or "", 48).strip()
 +    target = f" → {reviewer}" if reviewer else ""
@@ -21412,16 +21488,22 @@ index 6fea2d4bcb8f4a5b6339264e02b5e72ca1a377ea..51e48791612542ebcf7f9592478ce97a
 +def _kb_block_loop_detected(task, payload: dict, title: str) -> str:
 +    attention = "owner input required" if payload.get("kind") == "needs_input" else "orchestration attention"
 +    return f" triage — {attention} after repeated block" + _kb_first_line(payload.get("reason") or "", 160)
-+
-+
+ 
+ 
  # kind -> (glyph, suffix after "Kanban <id>"); silent kinds (archived/unblocked) are absent → None.
-@@ -352,2 +407,5 @@ _KANBAN_EVENT_FORMATTERS = {
+@@ -350,6 +407,9 @@
+     "crashed": ("✖", lambda t, p, title: " worker crashed (pid gone); dispatcher will retry"),
+     "timed_out": ("⏱", _kb_timed_out),
      "status": ("🔄", lambda t, p, title: f" → {p.get('status') or ''}"),
 +    "review_requested": ("🔎", _kb_review_requested),
 +    "changes_requested": ("↩", _kb_changes_requested),
 +    "block_loop_detected": ("⚠", _kb_block_loop_detected),
  }
-@@ -378,3 +436,24 @@ def _kb_board_key(_kb, board_meta) -> tuple[str, str]:
+ 
+ 
+@@ -376,14 +436,38 @@
+         return slug, f"slug:{slug}"
+ 
  
 -def _kb_poll_board(_kb, slug: str, session_key: str) -> list:
 +def _kb_prepare_sub(_kb, conn, sub: dict, slug: str, sub_ident: dict) -> tuple[list, bool]:
@@ -21447,7 +21529,9 @@ index 6fea2d4bcb8f4a5b6339264e02b5e72ca1a377ea..51e48791612542ebcf7f9592478ce97a
 +
 +def _kb_poll_board(_kb, slug: str, session_key: str, *, session: dict | None = None) -> list:
      """Claim + format this session's unseen events on one board. One poller per live session: the board is not opened
-@@ -384,4 +463,7 @@ def _kb_poll_board(_kb, slug: str, session_key: str) -> list:
+     writable unless it has a subscription owned by this exact session (a failed read-only probe — locked/corrupt DB —
+     falls through so delivery is preserved)."""
+     from hermes_cli import kanban_db_connect as _kbc
      from hermes_cli import kanban_db_notify as _kbn
 +    from tui_gateway.session_kanban_lineage import has_destination, subscriptions
      with contextlib.suppress(Exception):
@@ -21456,12 +21540,16 @@ index 6fea2d4bcb8f4a5b6339264e02b5e72ca1a377ea..51e48791612542ebcf7f9592478ce97a
 +            return []
 +        if not has_destination(_kb.kanban_db_path(slug), session or {'session_key': session_key}):
              return []
-@@ -394,3 +476,3 @@ def _kb_poll_board(_kb, slug: str, session_key: str) -> list:
+     try:
+         conn = _kbc.connect(board=slug)
+@@ -392,27 +476,21 @@
+     texts: list = []
+     with contextlib.closing(conn):
          try:
 -            subs = _kbn.list_notify_subs(conn)
 +            subs = subscriptions(session or {'session_key': session_key}, _kbn.list_notify_subs(conn))
          except Exception:
-@@ -398,19 +480,13 @@ def _kb_poll_board(_kb, slug: str, session_key: str) -> list:
+             return []
          for sub in subs:
 -            if (sub.get("platform") or "").lower() != "tui" or sub.get("chat_id") != session_key:
 -                continue
@@ -21487,13 +21575,21 @@ index 6fea2d4bcb8f4a5b6339264e02b5e72ca1a377ea..51e48791612542ebcf7f9592478ce97a
 -            if task and getattr(task, "status", "") == "archived":
 +            if archived:
                  with contextlib.suppress(Exception):
-@@ -423,3 +499,4 @@ def _collect_kanban_notifications(session: dict) -> list:
+                     _kbn.remove_notify_sub(conn, **sub_ident)
+     return texts
+@@ -421,7 +499,8 @@
+ def _collect_kanban_notifications(session: dict) -> list:
+     """Claim unseen terminal kanban events for this session's ``platform="tui"`` subscriptions (``kanban_create``
      auto-subscribes with ``chat_id=HERMES_SESSION_KEY``; no "tui" messaging adapter exists, so this poller is the
 -    delivery path). Same atomic cursor-claim as the gateway notifier: exactly-once even if a gateway polls the same DB.
 +    delivery path). The atomic cursor claim prevents competing pollers from claiming the same range.
 +    Prepared texts and cursor commit together; the poller recovers pending delivery receipts.
  
-@@ -445,3 +522,9 @@ def _collect_kanban_notifications(session: dict) -> list:
+     See #59890.
+     """
+@@ -443,28 +522,40 @@
+     unique = {}
+     for slug, resolved in (_kb_board_key(_kb, board_meta) for board_meta in boards):
          unique.setdefault(resolved, slug)
 -    return [t for slug in unique.values() for t in _kb_poll_board(_kb, slug, session_key)]
 +    texts = []
@@ -21504,7 +21600,7 @@ index 6fea2d4bcb8f4a5b6339264e02b5e72ca1a377ea..51e48791612542ebcf7f9592478ce97a
 +            logger.exception("kanban notification collection failed on board %s", slug)
 +    return texts
  
-@@ -449,4 +532,8 @@ def _collect_kanban_notifications(session: dict) -> list:
+ 
  def _notif_poll_kanban(sid: str, session: dict) -> None:
 -    with _session_profile_runtime_scope(session):
 -        _notif_poll_kanban_scoped(sid, session)
@@ -21515,26 +21611,33 @@ index 6fea2d4bcb8f4a5b6339264e02b5e72ca1a377ea..51e48791612542ebcf7f9592478ce97a
 +        # A failed UI/worker boundary must not end the session's only notification poller.
 +        logger.exception("kanban notification poll failed for %s", sid)
  
-@@ -454,4 +541,4 @@ def _notif_poll_kanban(sid: str, session: dict) -> None:
+ 
  def _notif_poll_kanban_scoped(sid: str, session: dict) -> None:
 -    """One kanban poll: emit new texts, buffer them, and run the buffered batch as a turn if idle. Events are
 -    cursor-claimed (never re-queued), so they wait in the buffer instead of dropping the agent turn."""
 +    """Prepare/recover durable texts, buffer once, then admit them only when idle."""
 +    from tui_gateway import session_kanban_delivery as delivery
      try:
-@@ -461,2 +548,6 @@ def _notif_poll_kanban_scoped(sid: str, session: dict) -> None:
+         texts = _collect_kanban_notifications(session)
+     except Exception as exc:
+         _notif_log_failure("kanban notification poll failed", exc)
          texts = []
 +    texts = delivery.recover(session, texts)
 +    if texts:
 +        with session["history_lock"]:
 +            session["_kanban_pending"], texts = delivery.merge(session.get("_kanban_pending") or [], texts)
      for text in texts:
-@@ -465,4 +556,2 @@ def _notif_poll_kanban_scoped(sid: str, session: dict) -> None:
+         from gateway.warning_notifications import DiagnosticText, render_notification
+         render_notification(lambda: _emit("status.update", sid, {"kind": "process", "text": text}),
                              platform="tui", diagnostic=isinstance(text, DiagnosticText))
 -    if texts:
 -        session.setdefault("_kanban_pending", []).extend(texts)
      if not session.get("_kanban_pending") or not _notif_claim_turn(session):
-@@ -476,6 +565,8 @@ def _notif_poll_kanban_scoped(sid: str, session: dict) -> None:
+         return
+     with session["history_lock"]:
+@@ -474,10 +565,12 @@
+         diagnostic = split and isinstance(pending[0], DiagnosticText)
+         batch = [text for text in pending if not split or isinstance(text, DiagnosticText) == diagnostic]
          session["_kanban_pending"] = [text for text in pending if split and isinstance(text, DiagnosticText) != diagnostic]
 -    with contextlib.suppress(Exception):
 -        _notif_submit(f"__notif__{int(time.time() * 1000)}", sid, session, "\n".join(batch),
@@ -21547,12 +21650,18 @@ index 6fea2d4bcb8f4a5b6339264e02b5e72ca1a377ea..51e48791612542ebcf7f9592478ce97a
 +            session["_kanban_pending"] = batch + (session.get("_kanban_pending") or [])
 +        raise
  
-@@ -765,3 +856,4 @@ def _notification_poller_scoped_loop(stop_event: threading.Event, sid: str, sess
+ 
+ def _background_notifications_off(session: dict) -> bool:
+@@ -763,7 +856,8 @@
+         # as kanban dispatch). An active non-parked /goal owns the idle boundary and defers the loop tick.
+         if now - last_loop_poll >= _LOOP_POLL_SECONDS:
              last_loop_poll = now
 -            for what, fire in (("loop wakeup", _maybe_fire_tui_loop_tick), ("heartbeat", _maybe_fire_tui_heartbeat_tick)):
 +            for what, fire in (("loop wakeup", _maybe_fire_tui_loop_tick), ("heartbeat", _maybe_fire_tui_heartbeat_tick),
 +                               ("parked goal", _maybe_resume_tui_parked_goal)):
                  try:
+                     fire(sid, session)
+                 except Exception as tick_exc:
 diff --git a/website/docs/reference/cli-commands.md b/website/docs/reference/cli-commands.md
 index c01bf9e3fb8cfe8763f53079c28aebd86006de81..45f65f522bf69290c4370ccc14bc6a969f56dcd8 100644
 --- a/website/docs/reference/cli-commands.md
@@ -23658,7 +23767,28 @@ diff --git a/hermes_cli/subcommands/sessions.py b/hermes_cli/subcommands/session
 diff --git a/hermes_cli/cli_loops_mixin.py b/hermes_cli/cli_loops_mixin.py
 --- a/hermes_cli/cli_loops_mixin.py
 +++ b/hermes_cli/cli_loops_mixin.py
-@@ -698,7 +698,7 @@
+@@ -564,7 +564,7 @@
+ 
+     def _maybe_resume_parked_goal(self) -> None:
+         """Idle hook run from process_loop: when a parked /goal's barrier has lifted (the process
+-        exited, the timer elapsed, or the wait aged past its cap), queue the continuation so the
++        exited, its trigger fired, or the timer elapsed), queue the continuation so the
+         loop resumes WITHOUT waiting for an unrelated turn to re-evaluate it. The barrier used to be
+         checked only lazily, on the next turn; a session with nothing else arriving stayed parked
+         indefinitely (one run: 3 h 22 min on a grandchild's poller)."""
+@@ -582,7 +582,10 @@
+             if not (state.waiting_on_pid is not None or state.waiting_on_session is not None or state.waiting_until):
+                 return  # not parked
+             if mgr.is_waiting():
+-                return  # barrier still holds (is_waiting() also applies the age cap)
++                if state.status == "paused":
++                    from cli import _cprint
++                    _cprint(f"  ⏸ Goal paused — {state.paused_reason}")
++                return  # still parked, or paused because its target cannot be verified
+             prompt = mgr.next_continuation_prompt()
+             if prompt:
+                 from cli import _DIM, _RST, _cprint
+@@ -698,7 +701,7 @@
          via ``/goal resume``. Empty-response skip mirrors ``gateway/run.py``."""
          from cli import _DIM, _RST, _cprint, _looks_like_slash_command
          mgr = self._get_goal_manager()
@@ -25794,6 +25924,17 @@ new file mode 100644
 diff --git a/hermes_cli/goals.py b/hermes_cli/goals.py
 --- a/hermes_cli/goals.py
 +++ b/hermes_cli/goals.py
+@@ -50,8 +50,8 @@
+ # on concrete evidence instead of a vibe check.
+ DEFAULT_GATE_TIMEOUT_SECONDS = 300
+ DEFAULT_GATE_MAX_RETRIES = 3
+-# Longest a pid/session wait barrier may hold the loop before judging resumes. Timed barriers
+-# (``waiting_until``) carry their own deadline and are exempt.
++# Maximum age of an unverified pid/session barrier before the goal is paused for inspection.
++# A verified live operation is not considered complete merely because this time has passed.
+ _MAX_BARRIER_WAIT_S = 30 * 60
+ # Bounded tail of a failed gate's combined stdout/stderr fed back to the agent.
+ _GATE_OUTPUT_TAIL_CHARS = 3000
 @@ -153,6 +153,12 @@
      "nothing else dispatchable — return ``wait_for_seconds`` between 600 and "
      "1800. Their results wake the agent on their own; re-poking it now only "
@@ -25837,7 +25978,33 @@ diff --git a/hermes_cli/goals.py b/hermes_cli/goals.py
  
  # Judge prompt block listing running background processes (WAIT vs CONTINUE, which pid).
  JUDGE_BACKGROUND_BLOCK_TEMPLATE = (
-@@ -687,23 +716,9 @@
+@@ -441,6 +470,7 @@
+     # should_continue=False without burning a turn; cleared lazily when satisfied or by unwait/pause/
+     # resume/clear. Defaults empty so old state_meta rows load unchanged.
+     waiting_on_pid: Optional[int] = None
++    waiting_on_pid_fingerprint: Optional[str] = None
+     waiting_on_session: Optional[str] = None
+     waiting_until: float = 0.0
+     # Live delegation batches when a timed WAIT was set because of them; the barrier lifts as soon
+@@ -470,6 +500,9 @@
+             paused_reason=data.get("paused_reason"),
+             subgoals=[str(s).strip() for s in raw_subgoals if str(s).strip()] if isinstance(raw_subgoals, list) else [],
+             waiting_on_pid=(int(data["waiting_on_pid"]) if data.get("waiting_on_pid") else None),
++            waiting_on_pid_fingerprint=(data.get("waiting_on_pid_fingerprint")
++                if isinstance(data.get("waiting_on_pid_fingerprint"), str)
++                and 0 < len(data["waiting_on_pid_fingerprint"]) <= 256 else None),
+             waiting_on_session=(str(data["waiting_on_session"]) if data.get("waiting_on_session") else None),
+             waiting_reason=data.get("waiting_reason"),
+             contract=GoalContract.from_dict(data.get("contract")),
+@@ -489,6 +522,7 @@
+ 
+     def clear_wait(self) -> None:
+         self.waiting_on_pid = None
++        self.waiting_on_pid_fingerprint = None
+         self.waiting_on_session = None
+         self.waiting_until = 0.0
+         self.waiting_on_delegations = 0
+@@ -687,23 +721,9 @@
      so exactly one active goal row exists per logical conversation (avoids the "two active goals" hazard of
      a pure copy).
      """
@@ -25864,7 +26031,57 @@ diff --git a/hermes_cli/goals.py b/hermes_cli/goals.py
  
  
  # ── Judge ─────────────────────────────────────────────────────────────
-@@ -900,6 +915,7 @@
+@@ -734,17 +754,44 @@
+         return False
+ 
+ 
+-def _session_waiting(session_id: str) -> bool:
+-    """True while the process_registry session is running and its trigger hasn't fired. Fail-safe:
+-    any import/registry error yields False so a stale barrier can never wedge the loop."""
++def _pid_observation(pid: int) -> Optional[bool]:
++    """True for a live process, False for a confirmed exit, None when the probe is inconclusive."""
++    if not pid or pid <= 0:
++        return False
++    try:
++        import psutil  # type: ignore
++    except ImportError:
++        return True if _pid_alive(pid) else None
++    try:
++        process = psutil.Process(int(pid))
++        if process.status() in {psutil.STATUS_ZOMBIE, getattr(psutil, "STATUS_DEAD", "dead")}:
++            return False
++        return bool(process.is_running())
++    except (psutil.NoSuchProcess, psutil.ZombieProcess):
++        return False
++    except Exception:
++        return None
++
++
++def _pid_fingerprint(pid: int) -> Optional[str]:
++    """Use the existing boot-and-start-time identity to detect reuse of a PID."""
++    try:
++        from hermes_cli.kanban_db_dispatch import _process_fingerprint
++        return _process_fingerprint(pid)
++    except Exception:
++        return None
++
++
++def _session_waiting(session_id: str) -> Optional[bool]:
++    """True while the registry trigger is pending; None when the registry cannot be inspected."""
+     if not session_id:
+         return False
+     try:
+         from tools.process_registry import process_registry
+ 
+-        return bool(process_registry.is_session_waiting(session_id))
++        return process_registry.is_session_waiting(session_id, strict=True)
+     except Exception:
+-        return False
++        return None
+ 
+ 
+ _JSON_OBJECT_RE = re.compile(r"\{.*?\}", re.DOTALL)
+@@ -900,6 +947,7 @@
      background_processes: Optional[list[dict[str, Any]]] = None,
      contract: Optional[GoalContract] = None,
      active_delegations: int = 0,
@@ -25872,7 +26089,7 @@ diff --git a/hermes_cli/goals.py b/hermes_cli/goals.py
  ) -> tuple[str, str, bool, Optional[dict[str, Any]], bool]:
      """Ask the auxiliary model whether the goal is satisfied.
  
-@@ -928,7 +944,8 @@
+@@ -928,7 +976,8 @@
          goal=_truncate(goal, 2000),
          response=_truncate(last_response, _JUDGE_RESPONSE_SNIPPET_CHARS),
          background_block=_render_background_block(background_processes)
@@ -25882,11 +26099,10 @@ diff --git a/hermes_cli/goals.py b/hermes_cli/goals.py
          current_time=safe_strftime(datetime.now(tz=UTC).astimezone(), "%Y-%m-%d %H:%M:%S %Z"),
      )
      if contract is not None and not contract.is_empty():
-@@ -1104,6 +1121,20 @@
-     @property
+@@ -1105,6 +1154,20 @@
      def state(self) -> Optional[GoalState]:
          return self._state
-+
+ 
 +    def refresh(self) -> bool:
 +        """Observe external goal controls at a turn boundary; unknown is not absent."""
 +        try:
@@ -25900,10 +26116,23 @@ diff --git a/hermes_cli/goals.py b/hermes_cli/goals.py
 +            return False
 +        self._state = state
 +        return True
- 
++
      def is_active(self) -> bool:
          return self._state is not None and self._state.status == "active"
-@@ -1174,6 +1205,23 @@
+ 
+@@ -1124,9 +1187,9 @@
+         gat = f", {len(s.gates)} gate{'s' if len(s.gates) != 1 else ''}" if s.gates else ""
+         meta = f"{turns}{sub}{con}{gat}"
+         if s.status == "active":
+-            if s.waiting_on_session and _session_waiting(s.waiting_on_session):
++            if s.waiting_on_session and _session_waiting(s.waiting_on_session) is not False:
+                 return f"⏳ Goal (parked on {s.waiting_reason or f'session {s.waiting_on_session}'}, {meta}): {s.goal}"
+-            if s.waiting_on_pid and _pid_alive(s.waiting_on_pid):
++            if s.waiting_on_pid and _pid_observation(s.waiting_on_pid) is not False:
+                 return f"⏳ Goal (parked on {s.waiting_reason or f'pid {s.waiting_on_pid}'}, {meta}): {s.goal}"
+             if s.waiting_until and time.time() < s.waiting_until:
+                 remaining = int(s.waiting_until - time.time())
+@@ -1174,6 +1237,23 @@
              max_turns=int(max_turns) if max_turns else self.default_max_turns,
              contract=contract if contract is not None else GoalContract(),
          )
@@ -25927,7 +26156,82 @@ diff --git a/hermes_cli/goals.py b/hermes_cli/goals.py
          return self._save()
  
      def set_contract(self, contract: GoalContract) -> Optional[GoalState]:
-@@ -1507,6 +1555,7 @@
+@@ -1372,9 +1452,11 @@
+         pid = int(pid)
+         if pid <= 0:
+             raise ValueError("pid must be a positive integer")
+-        if not _pid_alive(pid):
++        observation = _pid_observation(pid)
++        if observation is False:
+             raise ValueError("pid is not alive on this host")
+-        return self._park(reason, waiting_on_pid=pid)
++        fingerprint = _pid_fingerprint(pid) if observation is True else None
++        return self._park(reason, waiting_on_pid=pid, waiting_on_pid_fingerprint=fingerprint)
+ 
+     def wait_on_session(self, session_id: str, reason: str = "") -> GoalState:
+         """Park on a process_registry session's OWN trigger: exit OR ``watch_patterns`` match. The
+@@ -1408,17 +1490,25 @@
+ 
+     def is_waiting(self) -> bool:
+         """True iff a barrier is set AND not yet satisfied. A satisfied barrier is cleared here
+-        (lazy auto-clear) so the next evaluation resumes normal judging. A pid/session barrier
+-        also expires after ``_MAX_BARRIER_WAIT_S``: a watcher or poller that never exits would
+-        otherwise park the goal indefinitely (one run sat 3 h 22 min on a poller that outlived
+-        the work it was polling)."""
++        (lazy auto-clear) so the next evaluation resumes normal judging. A long-running verified
++        operation remains parked; an unverified one is paused for inspection after the limit."""
+         s = self._state
+         if s is None:
+             return False
++        unverified = False
+         if s.waiting_on_session is not None:
+             still = _session_waiting(s.waiting_on_session)
++            unverified = still is None
+         elif s.waiting_on_pid is not None:
+-            still = _pid_alive(s.waiting_on_pid)
++            still = _pid_observation(s.waiting_on_pid)
++            if still is True:
++                fingerprint = _pid_fingerprint(s.waiting_on_pid)
++                if s.waiting_on_pid_fingerprint and fingerprint:
++                    still = fingerprint == s.waiting_on_pid_fingerprint
++                else:
++                    unverified = True
++            elif still is None:
++                unverified = True
+         elif s.waiting_until:
+             still = time.time() < s.waiting_until
+             if still and s.waiting_on_delegations > 0:
+@@ -1428,13 +1518,13 @@
+                     still = False
+         else:
+             return False
+-        if still and s.waiting_since and s.waiting_until == 0.0 and time.time() - s.waiting_since > _MAX_BARRIER_WAIT_S:
+-            logger.info("goal %s: wait barrier on %s exceeded %ds; resuming judging",
+-                        self.session_id, s.waiting_on_session or s.waiting_on_pid, _MAX_BARRIER_WAIT_S)
+-            still = False
+-        if not still:
++        if unverified:
++            if s.status == "active" and s.waiting_since and time.time() - s.waiting_since > _MAX_BARRIER_WAIT_S:
++                self._pause_state("wait target could not be verified; inspect the original operation before resuming")
++            return True
++        if still is False:
+             self.stop_waiting()
+-        return still
++        return bool(still)
+ 
+     # --- the main entry point called after every turn -----------------
+ 
+@@ -1491,6 +1581,9 @@
+ 
+         # Parked on a live process or an unexpired deadline: quiesce without burning a turn.
+         if self.is_waiting():
++            if state.status == "paused":
++                reason = state.paused_reason or "wait target could not be verified"
++                return _decision("paused", False, None, "wait_unverified", reason, f"⏸ Goal paused — {reason}")
+             return self._waiting_decision(state)
+ 
+         state.turns_used += 1
+@@ -1507,6 +1600,7 @@
          verdict, reason, parse_failed, wait_directive, transport_failed = judge_goal(
              state.goal, last_response, subgoals=state.subgoals or None, background_processes=background_processes,
              contract=state.contract if state.has_contract() else None, active_delegations=active_delegations,
@@ -42572,3 +42876,258 @@ new file mode 100644
 +    assert summarize(rows, 90, 110)['comparable_groups'] == 0
 +    with_bool = deepcopy(rows[3]); with_bool['usage']['cached_tokens'] = True
 +    assert summarize([rows[0], rows[1], event('b', '3'), with_bool], 90, 110)['comparable_groups'] == 0
+diff --git a/tests/hermes_cli/test_goal_verified_wait.py b/tests/hermes_cli/test_goal_verified_wait.py
+new file mode 100644
+--- /dev/null
++++ b/tests/hermes_cli/test_goal_verified_wait.py
+@@ -0,0 +1,199 @@
++"""A wait timeout is not evidence that a tracked operation finished."""
++import json
++import subprocess
++import sys
++import time
++from pathlib import Path
++from unittest.mock import Mock
++
++import pytest
++from hermes_cli import goals
++
++
++@pytest.fixture
++def home(tmp_path, monkeypatch):
++    home = tmp_path / '.hermes'
++    home.mkdir()
++    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
++    monkeypatch.setenv('HERMES_HOME', str(home))
++    goals._DB_CACHE.clear()
++    yield home
++    goals._DB_CACHE.clear()
++
++
++def test_long_running_pid_remains_parked_across_reload_until_real_exit(home, monkeypatch):
++    proc = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
++    try:
++        mgr = goals.GoalManager(session_id='long-pid')
++        mgr.set('finish original job', max_turns=3)
++        mgr.wait_on(proc.pid, reason='original job')
++        mgr.state.waiting_since = time.time() - goals._MAX_BARRIER_WAIT_S - 10
++        mgr._save()
++        mgr = goals.GoalManager(session_id='long-pid')
++        judge = Mock()
++        monkeypatch.setattr(goals, 'judge_goal', judge)
++        decision = mgr.evaluate_after_turn('still waiting')
++        assert decision['verdict'] == 'waiting'
++        assert not decision['should_continue'] and mgr.state.turns_used == 0
++        judge.assert_not_called()
++        proc.terminate(); proc.wait(timeout=10)
++        assert not mgr.is_waiting()
++        assert mgr.state.waiting_on_pid is None
++    finally:
++        if proc.poll() is None:
++            proc.terminate(); proc.wait(timeout=10)
++
++
++def test_live_session_is_not_treated_as_finished_after_timeout(home, monkeypatch):
++    mgr = goals.GoalManager(session_id='long-session'); mgr.set('finish original job')
++    mgr.wait_on_session('proc_original')
++    mgr.state.waiting_since = time.time() - goals._MAX_BARRIER_WAIT_S - 10
++    monkeypatch.setattr(goals, '_session_waiting', lambda _: True)
++    assert mgr.is_waiting() and mgr.state.waiting_on_session == 'proc_original'
++    monkeypatch.setattr(goals, '_session_waiting', lambda _: False)
++    assert not mgr.is_waiting() and mgr.state.waiting_on_session is None
++
++
++def test_pid_reuse_does_not_keep_waiting_on_an_unrelated_process(home, monkeypatch):
++    monkeypatch.setattr(goals, '_pid_alive', lambda _: True)
++    monkeypatch.setattr(goals, '_pid_observation', lambda _: True, raising=False)
++    fingerprint = ['boot|original']
++    monkeypatch.setattr(goals, '_pid_fingerprint', lambda _: fingerprint[0], raising=False)
++    mgr = goals.GoalManager(session_id='reused'); mgr.set('finish original job'); mgr.wait_on(4242)
++    assert getattr(mgr.state, 'waiting_on_pid_fingerprint', None) == 'boot|original'
++    fingerprint[0] = 'boot|replacement'
++    assert not mgr.is_waiting() and mgr.state.waiting_on_pid is None
++
++
++def test_unverified_pid_is_paused_after_timeout_without_judging(home, monkeypatch):
++    monkeypatch.setattr(goals, '_pid_alive', lambda _: True)
++    monkeypatch.setattr(goals, '_pid_observation', lambda _: None, raising=False)
++    monkeypatch.setattr(goals, '_pid_fingerprint', lambda _: None, raising=False)
++    mgr = goals.GoalManager(session_id='unknown'); mgr.set('finish original job'); mgr.wait_on(4242)
++    mgr.state.waiting_since = time.time() - goals._MAX_BARRIER_WAIT_S - 10
++    judge = Mock(); monkeypatch.setattr(goals, 'judge_goal', judge)
++    decision = mgr.evaluate_after_turn('waiting')
++    assert mgr.state.status == 'paused' and mgr.state.waiting_on_pid == 4242
++    assert mgr.state.turns_used == 0 and not decision['should_continue']
++    assert decision['verdict'] == 'wait_unverified' and mgr.next_continuation_prompt() is None
++    judge.assert_not_called()
++
++
++def test_registry_error_does_not_release_session_wait(home, monkeypatch):
++    mgr = goals.GoalManager(session_id='registry-unknown'); mgr.set('finish original job'); mgr.wait_on_session('proc_original')
++    monkeypatch.setattr(goals, '_session_waiting', lambda _: None)
++    assert mgr.is_waiting() and mgr.state.status == 'active'
++    mgr.state.waiting_since = time.time() - goals._MAX_BARRIER_WAIT_S - 10
++    assert mgr.is_waiting() and mgr.state.status == 'paused'
++    assert mgr.state.waiting_on_session == 'proc_original'
++
++
++def test_legacy_state_loads_without_fingerprint():
++    state = goals.GoalState.from_json(json.dumps({'goal':'legacy','status':'active','waiting_on_pid':123}))
++    assert getattr(state, 'waiting_on_pid_fingerprint', None) is None
++    state.clear_wait()
++    assert state.waiting_on_pid is None
++
++
++def test_missing_registry_handle_is_not_a_completion(home, monkeypatch):
++    mgr = goals.GoalManager(session_id='missing-session')
++    mgr.set('finish original job')
++    mgr.wait_on_session('proc_missing_verified_wait')
++    mgr.state.waiting_since = time.time() - goals._MAX_BARRIER_WAIT_S - 10
++    judge = Mock(); monkeypatch.setattr(goals, 'judge_goal', judge)
++    decision = mgr.evaluate_after_turn('waiting')
++    assert decision['verdict'] == 'wait_unverified'
++    assert mgr.state.status == 'paused'
++    assert mgr.state.waiting_on_session == 'proc_missing_verified_wait'
++    assert mgr.state.turns_used == 0
++    judge.assert_not_called()
++
++
++def test_registry_strict_probe_distinguishes_missing_and_trigger(home):
++    from tools.process_registry import ProcessSession, process_registry
++    sid = 'proc_strict_verified_wait'
++    session = ProcessSession(id=sid, command='watch', task_id='t', session_key='', cwd='/tmp', started_at=time.time())
++    session.watch_patterns = ['READY']
++    process_registry._running[sid] = session
++    try:
++        assert process_registry.is_session_waiting(sid, strict=True) is True
++        session._watch_hits = 1
++        assert process_registry.is_session_waiting(sid, strict=True) is False
++        assert process_registry.is_session_waiting('proc_missing_verified_wait', strict=True) is None
++        assert process_registry.is_session_waiting('proc_missing_verified_wait') is False
++    finally:
++        process_registry._running.pop(sid, None)
++
++
++def test_registry_refresh_error_is_unknown_in_strict_mode(home, monkeypatch):
++    from tools.process_registry import ProcessSession, process_registry
++    sid = 'proc_refresh_verified_wait'
++    session = ProcessSession(id=sid, command='watch', task_id='t', session_key='', cwd='/tmp', started_at=time.time())
++    process_registry._running[sid] = session
++    def fail(_): raise RuntimeError('probe unavailable')
++    monkeypatch.setattr(process_registry, '_refresh_detached_session', fail)
++    try:
++        assert process_registry.is_session_waiting(sid, strict=True) is None
++        assert process_registry.is_session_waiting(sid) is True
++        assert goals._session_waiting(sid) is None
++    finally:
++        process_registry._running.pop(sid, None)
++
++
++def test_legacy_pid_without_identity_pauses_when_unverified(home, monkeypatch):
++    monkeypatch.setattr(goals, '_pid_observation', lambda _: True)
++    monkeypatch.setattr(goals, '_pid_fingerprint', lambda _: 'boot|current')
++    mgr = goals.GoalManager(session_id='legacy-pid'); mgr.set('finish original job')
++    mgr.state.waiting_on_pid = 4242
++    mgr.state.waiting_since = time.time() - goals._MAX_BARRIER_WAIT_S - 10
++    mgr._save()
++    assert mgr.is_waiting() and mgr.state.status == 'paused'
++    assert mgr.state.waiting_on_pid == 4242 and mgr.state.waiting_on_pid_fingerprint is None
++
++
++def test_transient_probe_failure_parks_then_pauses_without_retry(home, monkeypatch):
++    fingerprint = 'boot|original'
++    monkeypatch.setattr(goals, '_pid_observation', lambda _: True)
++    monkeypatch.setattr(goals, '_pid_fingerprint', lambda _: fingerprint)
++    mgr = goals.GoalManager(session_id='probe-failure')
++    mgr.set('finish original job'); mgr.wait_on(4242)
++    monkeypatch.setattr(goals, '_pid_observation', lambda _: None)
++    assert mgr.is_waiting() and mgr.state.status == 'active'
++    mgr.state.waiting_since = time.time() - goals._MAX_BARRIER_WAIT_S - 10
++    assert mgr.is_waiting() and mgr.state.status == 'paused'
++    assert mgr.state.waiting_on_pid_fingerprint == fingerprint
++
++
++def test_idle_hooks_report_unverified_wait_once_without_dispatch(home, monkeypatch):
++    import queue
++    from hermes_cli.cli_loops_mixin import CLILoopsMixin
++    from tui_gateway import session_notifications
++    from tui_gateway.method_ctx import rebind
++
++    monkeypatch.setattr(goals, '_session_waiting', lambda _: None)
++    mgr = goals.GoalManager(session_id='unknown-ui'); mgr.set('finish original job')
++    mgr.wait_on_session('proc_original')
++    mgr.state.waiting_since = time.time() - goals._MAX_BARRIER_WAIT_S - 10
++    mgr._save()
++
++    class Cli(CLILoopsMixin):
++        _pending_input = queue.Queue()
++        def _get_goal_manager(self): return mgr
++
++    prints = Mock()
++    monkeypatch.setattr('cli._cprint', prints)
++    cli = Cli(); cli._maybe_resume_parked_goal(); cli._last_goal_barrier_check = 0
++    cli._maybe_resume_parked_goal()
++    assert mgr.state.status == 'paused' and cli._pending_input.empty()
++    assert prints.call_count == 1 and 'paused' in str(prints.call_args).lower()
++
++    mgr.resume(reset_budget=False); mgr.wait_on_session('proc_original')
++    mgr.state.waiting_since = time.time() - goals._MAX_BARRIER_WAIT_S - 10
++    mgr._save()
++    monkeypatch.setattr(goals, 'GoalManager', lambda session_id: mgr)
++    emit, submit = Mock(), Mock()
++    poll = rebind(session_notifications._maybe_resume_tui_parked_goal, {'_emit': emit, '_run_prompt_submit': submit})
++    poll('sid', {'session_key': 'unknown-ui'}); poll('sid', {'session_key': 'unknown-ui'})
++    assert mgr.state.status == 'paused' and emit.call_count == 1
++    assert 'paused' in str(emit.call_args).lower()
++    submit.assert_not_called()
+diff --git a/tests/hermes_cli/test_goals.py b/tests/hermes_cli/test_goals.py
+--- a/tests/hermes_cli/test_goals.py
++++ b/tests/hermes_cli/test_goals.py
+@@ -431,7 +431,7 @@
+         from hermes_cli import goals
+         from hermes_cli.goals import GoalManager
+ 
+-        monkeypatch.setattr(goals, "_pid_alive", lambda pid: False)
++        monkeypatch.setattr(goals, "_pid_observation", lambda pid: False)
+         mgr = GoalManager(session_id="wb-dead")
+         mgr.set("ship it")
+ 
+@@ -458,8 +458,8 @@
+             proc.terminate()
+             proc.wait(timeout=10)
+ 
+-    def test_barrier_on_a_process_that_never_exits_expires(self, hermes_home):
+-        """A poller that outlives the work parked one run for 3h22m; a live barrier ages out."""
++    def test_barrier_on_a_live_process_does_not_expire(self, hermes_home):
++        """Elapsed observation time is not evidence that a live process finished."""
+         from hermes_cli import goals
+         from hermes_cli.goals import GoalManager
+ 
+@@ -471,11 +471,16 @@
+             assert mgr.is_waiting() is True
+             mgr.state.waiting_since = time.time() - goals._MAX_BARRIER_WAIT_S - 1
+             mgr._save()
++            assert mgr.is_waiting() is True
++            assert mgr.state.waiting_on_pid == proc.pid
++            proc.terminate()
++            proc.wait(timeout=10)
+             assert mgr.is_waiting() is False
+             assert mgr.state.waiting_on_pid is None
+         finally:
+-            proc.terminate()
+-            proc.wait(timeout=10)
++            if proc.poll() is None:
++                proc.terminate()
++                proc.wait(timeout=10)
+ 
+ 
+ class TestGatherBackgroundProcessesOwnership:
+@@ -521,7 +526,7 @@
+ 
+         mgr = GoalManager(session_id="jw-dead-pid", default_max_turns=10)
+         mgr.set("ship the PR")
+-        with patch.object(goals, "_pid_alive", return_value=False), patch.object(
++        with patch.object(goals, "_pid_observation", return_value=False), patch.object(
+             goals, "judge_goal",
+             return_value=("wait", "remote job still running", False, {"pid": 4242}, False),
+         ):
