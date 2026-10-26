@@ -437,186 +437,6 @@ index 0000000000000000000000000000000000000000..8afb3638d40ba912eb8c2ef5af4a570e
 +        'complete': all(value is None or value['complete'] for value in digests.values()),
 +        'account_evidence': 'declared_headers' if fields['declared_account'] else 'unknown',
 +    }
-diff --git a/agent/cache_request_diagnostics.py b/agent/cache_request_diagnostics.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..2d1ce15453ae5d6f94c94a02a04502a5fbfd08e5
---- /dev/null
-+++ b/agent/cache_request_diagnostics.py
-@@ -0,0 +1,174 @@
-+"""Content-free fingerprints for the existing provider request log.
-+
-+Observe the prepared request after transport preflight, not the server's hidden prefix or
-+SDK wire serialization. HMACs are profile-local and survive resume; nothing here changes
-+cache policy, request data, compaction or routing. Fail-open diagnostics never retry calls.
-+"""
-+from __future__ import annotations
-+
-+from contextlib import suppress
-+import hashlib
-+import hmac
-+import json
-+import logging
-+import os
-+import stat
-+import time
-+
-+logger = logging.getLogger('agent.conversation_loop')
-+_MAX_BYTES = 8 * 1024 * 1024
-+_ANCHORS = (4096, 16384, 65536, 262144, 1048576, 4194304)
-+_ENCODER = json.JSONEncoder(ensure_ascii=True, sort_keys=True, separators=(',', ':'), allow_nan=False)
-+
-+
-+def _profile_key() -> bytes:
-+    from hermes_constants import get_hermes_home
-+
-+    directory = get_hermes_home() / 'telemetry' / 'cache-diagnostics'
-+    directory.mkdir(parents=True, mode=0o700, exist_ok=True)
-+    path = directory / 'fingerprint.key'
-+    # Exclusive creation makes simultaneous sessions share one key, without replacing it.
-+    try:
-+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-+    except FileExistsError:
-+        pass
-+    else:
-+        with os.fdopen(fd, 'wb') as stream:
-+            stream.write(os.urandom(32))
-+    fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
-+    with os.fdopen(fd, 'rb') as stream:
-+        info = os.fstat(stream.fileno())
-+        if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077:
-+            raise ValueError('unsafe diagnostic key permissions')
-+        key = stream.read(33)
-+    if len(key) != 32:
-+        raise ValueError('incomplete diagnostic key')
-+    return key
-+
-+
-+def _digest(key: bytes, value, budget: list[int], *, anchors: bool = False) -> dict:
-+    digest = hmac.new(key, digestmod=hashlib.sha256)
-+    count, prefixes = 0, {}
-+    for text in _ENCODER.iterencode(value):
-+        data = text.encode('ascii')
-+        if len(data) > budget[0]:
-+            return {'complete': False, 'bytes_hashed': count, 'prefixes': prefixes}
-+        budget[0] -= len(data)
-+        offset = 0
-+        for boundary in _ANCHORS if anchors else ():
-+            if count < boundary <= count + len(data):
-+                end = boundary - count
-+                digest.update(data[offset:end])
-+                prefixes[str(boundary)] = digest.hexdigest()
-+                offset = end
-+        digest.update(data[offset:])
-+        count += len(data)
-+    result = {'complete': True, 'bytes_hashed': count, 'hash': digest.hexdigest()}
-+    if anchors:
-+        result['prefixes'] = prefixes
-+    return result
-+
-+
-+def fingerprint(request: dict, *, key: bytes, session_id: str, request_id: str, base_url: str) -> dict:
-+    """Bounded canonical-JSON hashes. Dictionary ordering is normalized; list order is retained."""
-+    budget = [_MAX_BYTES]
-+    extra = request.get('extra_body')
-+    # SDK extra_body overrides these values; do not hash headers, credentials or unrelated fields.
-+    effective = dict(request)
-+    if isinstance(extra, dict):
-+        effective.update(extra)
-+    fields = {
-+        'route': [base_url, effective.get('model')],
-+        'session': session_id, 'request': request_id,
-+        'instructions': effective.get('instructions', effective.get('system', [
-+            m for m in effective.get('messages', []) if isinstance(m, dict) and m.get('role') in {'system', 'developer'}])),
-+        'tools': effective.get('tools'),
-+        'options': {name: effective.get(name) for name in (
-+            'reasoning', 'text', 'tool_choice', 'parallel_tool_calls',
-+            'prompt_cache_key', 'prompt_cache_options', 'prompt_cache_retention',
-+            'previous_response_id', 'conversation', 'context_management',
-+            'thinking', 'output_config', 'speed', 'service_tier', 'cache_control')},
-+    }
-+    result = {name: _digest(key, value, budget, anchors=name in {'instructions', 'tools'}) for name, value in fields.items()}
-+    history = effective.get('input', effective.get('messages'))
-+    result['history'] = _digest(key, history, budget, anchors=True)
-+    result['input_items'] = len(history) if isinstance(history, list) else None
-+    from agent.shared_prompt_cache import common_prefix
-+    instruction = fields['instructions']
-+    if isinstance(instruction, list) and instruction and isinstance(instruction[0], dict):
-+        instruction = instruction[0].get('text', instruction[0].get('content'))
-+    result['shared_prefix_used'] = common_prefix(instruction) is not None
-+    result['shared_key_used'] = str(effective.get('prompt_cache_key') or '').startswith(('hsp1_', 'hsp2_', 'hsp3_'))
-+    result['key_id'] = hmac.new(key, b'hermes-cache-diagnostics-v1', hashlib.sha256).hexdigest()[:16]
-+    result['complete'] = all(result[name]['complete'] for name in (*fields, 'history'))
-+    return result
-+
-+
-+def _field(value, name):
-+    return value.get(name) if isinstance(value, dict) else getattr(value, name, None)
-+
-+
-+def _count(value):
-+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
-+
-+
-+def _usage(response) -> dict:
-+    usage = _field(response, 'usage')
-+    read = _count(_field(usage, 'cache_read_input_tokens'))
-+    written = _count(_field(usage, 'cache_creation_input_tokens'))
-+    if read is not None or written is not None:
-+        # Anthropic input_tokens excludes both cache reads and writes.
-+        uncached = _count(_field(usage, 'input_tokens'))
-+        total = sum((uncached, read, written)) if all(v is not None for v in (uncached, read, written)) else None
-+        return {'input_tokens': total, 'cached_tokens': read, 'cache_write_tokens': written}
-+    total = _count(_field(usage, 'input_tokens'))
-+    details = _field(usage, 'input_tokens_details')
-+    if total is None:
-+        total = _count(_field(usage, 'prompt_tokens'))
-+        details = _field(usage, 'prompt_tokens_details')
-+    return {'input_tokens': total, 'cached_tokens': _count(_field(details, 'cached_tokens')),
-+            'cache_write_tokens': _count(_field(details, 'cache_write_tokens'))}
-+
-+
-+def _emit(snapshot, response, *, status: str, started: float, preparation_ms: float) -> None:
-+    # Never format exception text, response content, request bodies, credentials or raw identifiers.
-+    with suppress(Exception):
-+        row = {'version': 1, 'stage': 'prepared_after_transport_preflight',
-+               'implementation': 'cache-sharing-v1', 'status': status, 'process_id': os.getpid(), 'fingerprint': snapshot,
-+               'usage': _usage(response), 'elapsed_ms': round((time.perf_counter()-started)*1000, 3),
-+               'preparation_ms': round(preparation_ms, 3)}
-+        logger.info('CACHE_DIAGNOSTIC %s', json.dumps(row, separators=(',', ':')))
-+
-+
-+def observe_call(agent, request: dict, next_call, *, request_id: str):
-+    """Return/raise the downstream result unchanged, exactly once, even if diagnostics fail."""
-+    if (getattr(agent, 'api_mode', '') not in {'codex_responses', 'anthropic_messages', 'chat_completions'}
-+            or not logger.isEnabledFor(logging.INFO)):
-+        return next_call(request)
-+    before = time.perf_counter()
-+    snapshot = {'complete': False, 'unavailable': True}
-+    with suppress(Exception):
-+        key = _profile_key()
-+        snapshot = fingerprint(request, key=key, session_id=getattr(agent, 'session_id', '') or '',
-+                               request_id=request_id, base_url=getattr(agent, 'base_url', '') or '')
-+        snapshot['api_mode'] = agent.api_mode
-+    with suppress(Exception):
-+        from agent.usage_run_binding import snapshot as run_snapshot
-+        snapshot['task_run'] = run_snapshot(key)
-+    snapshot['cross_bot'] = {'version': 1, 'unavailable': True}
-+    with suppress(Exception):
-+        from agent.cache_cross_bot_diagnostics import fingerprint as cross_bot_fingerprint
-+        snapshot['cross_bot'] = cross_bot_fingerprint(agent, request, request_id=request_id)
-+    with suppress(Exception):
-+        from agent.cache_change_evidence import policy_evidence, transition
-+        snapshot['policy'] = policy_evidence(request)
-+        snapshot['transition'] = transition(agent, snapshot)
-+    preparation_ms = (time.perf_counter() - before) * 1000
-+    started = time.perf_counter()
-+    try:
-+        response = next_call(request)
-+    except BaseException:
-+        _emit(snapshot, None, status='failed_or_interrupted', started=started, preparation_ms=preparation_ms)
-+        raise
-+    _emit(snapshot, response, status='returned', started=started, preparation_ms=preparation_ms)
-+    return response
 diff --git a/agent/client_lifecycle.py b/agent/client_lifecycle.py
 index 879ca87398225a7db38990ce6ad9053daef2eb40..695c42f393cec9aaa5a04b13e883ffebf8a5d5c7 100644
 --- a/agent/client_lifecycle.py
@@ -1920,106 +1740,6 @@ index 550f77659ee633495a4432c13cdd136542928fde..c3c5a4e5b23a05744874f1e64433d92f
 +        is_web = (model or "").strip().lower().startswith("chatgpt-web/")
 +        return (*supported, "ultra") if api_mode == "codex_app_server" and "max" in supported and not is_web else supported
      return OPENAI_COMPAT_WIRE_EFFORTS
-diff --git a/agent/shared_prompt_cache.py b/agent/shared_prompt_cache.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..aab5a705cd5150764523be80b933c4f2c8b79308
---- /dev/null
-+++ b/agent/shared_prompt_cache.py
-@@ -0,0 +1,94 @@
-+"""Versioned common prefixes; existing v1 conversations retain their exact key.
-+
-+Cache keys never grant access to another bot's history or tools. Shared leading tool
-+schemas are a cache candidate, not proof of a provider breakpoint or cache hit.
-+"""
-+import hashlib
-+import json
-+from urllib.parse import urlsplit
-+
-+HEADER = '[Hermes common operating rules v3]'
-+END = '[/Hermes common operating rules v3]'
-+V2_HEADER = '[Hermes common operating rules v2]'
-+V2_END = '[/Hermes common operating rules v2]'
-+LEGACY_HEADER = '[Hermes common operating rules v1]'
-+LEGACY_END = '[/Hermes common operating rules v1]'
-+
-+# Order hints for already-granted, broadly used tools, NOT an enabled-tool registry.
-+# Role-specific browser, credential, delegation and dynamic catalog schemas follow.
-+_SHARED_TOOL_ORDER = ('read_file', 'search_files', 'terminal', 'process_manage', 'patch',
-+                      'write_file', 'skills_list', 'skill_view', 'skill_manage', 'todo_list')
-+_SHARED_TOOL_RANK = {name: i for i, name in enumerate(_SHARED_TOOL_ORDER)}
-+
-+
-+def canonical_tools(tools):
-+    """New prompt builds only: own schemas, keep native slots and every capability."""
-+    if not tools:
-+        return tools
-+    copied = json.loads(json.dumps(tools, sort_keys=True, ensure_ascii=False))
-+    slots = [i for i, t in enumerate(copied)
-+             if isinstance(t, dict) and isinstance(t.get('function'), dict) and t.get('type', 'function') == 'function']
-+    def rank(tool):
-+        name = tool['function'].get('name', '')
-+        return (_SHARED_TOOL_RANK.get(name, len(_SHARED_TOOL_RANK)), name)
-+    ordered = sorted((copied[i] for i in slots), key=rank)
-+    for i, tool in zip(slots, ordered):
-+        copied[i] = tool
-+    return copied
-+
-+
-+def common_prefix(instructions):
-+    """Recognize both persisted layouts without rewriting either."""
-+    if not isinstance(instructions, str):
-+        return None
-+    for header, end_marker in ((HEADER, END), (V2_HEADER, V2_END), (LEGACY_HEADER, LEGACY_END)):
-+        if instructions.startswith(header + '\n\n'):
-+            end = instructions.find('\n\n' + end_marker)
-+            if end >= 0:
-+                return instructions[:end + 2 + len(end_marker)]
-+    return None
-+
-+
-+def shared_tool_prefix(tools):
-+    """Exact leading Responses function schemas; stop at the first non-shared entry."""
-+    prefix = []
-+    previous = -1
-+    for tool in tools or []:
-+        if not isinstance(tool, dict) or tool.get('type') != 'function':
-+            break
-+        rank = _SHARED_TOOL_RANK.get(tool.get('name'), -1)
-+        if rank <= previous:
-+            break
-+        prefix.append(tool)
-+        previous = rank
-+    return prefix
-+
-+
-+def shared_cache_key(instructions, tools, model, base_url):
-+    """Public-prefix cohorts on existing exact OpenAI routes; no TTL/route changes."""
-+    url = urlsplit(str(base_url or ''))
-+    if url.hostname not in {'api.openai.com', 'chatgpt.com'}:
-+        return None
-+    if url.hostname == 'chatgpt.com' and not url.path.rstrip('/').endswith('/backend-api/codex'):
-+        return None
-+    prefix = common_prefix(instructions)
-+    if prefix is None:
-+        return None
-+    legacy = instructions.startswith(LEGACY_HEADER + '\n\n')
-+    # V1 includes the entire tool array exactly as before. V2 groups requests by
-+    # their actual shared leading schemas; private role tails still go unchanged
-+    # on the wire and provider matching still requires an eligible exact prefix.
-+    cohort_tools = tools if legacy else (shared_tool_prefix(tools) or tools)
-+    payload = json.dumps([url.hostname, url.path, model, prefix, cohort_tools],
-+                         sort_keys=True, ensure_ascii=False, separators=(',', ':'))
-+    version = layout_version(instructions)
-+    return f'hsp{version}_' + hashlib.sha256(payload.encode()).hexdigest()[:40]
-+
-+
-+def layout_version(instructions):
-+    if not isinstance(instructions, str):
-+        return 0
-+    for version, header in ((3, HEADER), (2, V2_HEADER), (1, LEGACY_HEADER)):
-+        if instructions.startswith(header + '\n\n'):
-+            return version
-+    return 0
 diff --git a/agent/skill_index_render.py b/agent/skill_index_render.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..208e4ce395a842ff04a89721fe2f9c94c7e14892
@@ -2080,65 +1800,6 @@ index 0000000000000000000000000000000000000000..208e4ce395a842ff04a89721fe2f9c94
 +    )
 +
 +
-diff --git a/agent/system_prompt.py b/agent/system_prompt.py
-index 29b2a4e65da29b0aa38135371da686ec1b6a7439..55e66ef6a7fc7f1578f69b3cf6e55cc073ba8199 100644
---- a/agent/system_prompt.py
-+++ b/agent/system_prompt.py
-@@ -729,5 +729,5 @@ def _join_tier(parts: list[Optional[str]]) -> str:
- 
--def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) -> dict[str, str]:
--    """Assemble the system prompt as three ordered cache tiers: ``stable`` (identity,
--    guidance and the coding brief), ``context`` (caller ``system_message``, project
-+def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None, *, legacy_layout: bool = False, shared_layout_version: int = 3) -> dict[str, str]:
-+    """Assemble the system prompt as three ordered cache tiers: ``stable`` (shared
-+    guidance and the coding brief), ``context`` (identity, caller ``system_message``, project
-     context files, workspace snapshot and remaining workspace guidance) and
-@@ -741,3 +741,6 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None)
-     # ── Stable tier ────────────────────────────────────────────────
--    stable_parts, _soul_loaded = _identity_parts(agent, _ctx_len)
-+    identity_parts, _soul_loaded = _identity_parts(agent, _ctx_len)
-+    from agent.shared_prompt_cache import HEADER, END, V2_HEADER, V2_END, LEGACY_HEADER, LEGACY_END
-+    header, end_marker = {1: (LEGACY_HEADER, LEGACY_END), 2: (V2_HEADER, V2_END), 3: (HEADER, END)}[shared_layout_version]
-+    stable_parts = list(identity_parts) if legacy_layout else [header]
-     # The skill_view() pointer dangles without skill tools OR without the
-@@ -755,3 +758,5 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None)
-     # Pinned skills are per-agent constants (resolved once), so they live in the stable prefix.
--    stable_parts.extend(_auto_load_parts(agent))
-+    role_skills = _auto_load_parts(agent)
-+    if legacy_layout or shared_layout_version < 3:
-+        stable_parts.extend(role_skills)
-     # Coding posture: the operating brief stays in the stable prefix. The
-@@ -764,3 +769,5 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None)
-     # ── Context tier (project/worktree-dependent, may change between sessions) ──
--    context_parts: list[str] = []
-+    context_parts: list[str] = [] if legacy_layout else list(identity_parts)
-+    if not legacy_layout and shared_layout_version >= 3:
-+        context_parts.extend(role_skills)
-     # ephemeral_system_prompt is injected at API-call time only, never cached.
-@@ -792,2 +799,4 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None)
-         volatile_parts.append(f"{_pb.RUNTIME_ENVIRONMENT_HEADING}\n\n{environment_hints}\n\n{_pb.RUNTIME_ENVIRONMENT_END}")
-+    if not legacy_layout:
-+        stable_parts.append(end_marker)
-     return {"stable": _join_tier(stable_parts), "context": _join_tier(context_parts), "volatile": _join_tier(volatile_parts)}
-@@ -799,2 +808,5 @@ def build_system_prompt(agent: Any, system_message: Optional[str] = None) -> str
-     volatile so implicit longest-prefix caches keep the unchanged scaffold."""
-+    from agent.shared_prompt_cache import canonical_tools
-+    if getattr(agent, "tools", None):
-+        agent.tools = canonical_tools(agent.tools)
-     parts = build_system_prompt_parts(agent, system_message=system_message)
-@@ -819,2 +831,4 @@ def invalidate_system_prompt(agent: Any) -> None:
-     """
-+    from tools.kanban_show_cache import reset_session
-+    reset_session(getattr(agent, "session_id", None))
-     agent._cached_system_prompt = None
-@@ -846,3 +860,6 @@ def reconstruct_static_prefix(agent: Any, system_message: Optional[str] = None,
-     try:
--        static = build_system_prompt_parts(agent, system_message=system_message)["stable"]
-+        from agent.shared_prompt_cache import layout_version, common_prefix
-+        static = build_system_prompt_parts(agent, system_message=system_message,
-+            legacy_layout=common_prefix(stored) is None,
-+            shared_layout_version=layout_version(stored) or 2)["stable"]
-         if static and stored.startswith(static):
 diff --git a/agent/tool_executor.py b/agent/tool_executor.py
 index 79d22e2b81282b37f14027ae7e885fbf38e8936a..8015519334601a50b9b4c7bf2384b4850e28c4ba 100644
 --- a/agent/tool_executor.py
@@ -10508,32 +10169,6 @@ index 0000000000000000000000000000000000000000..ac3d1cc508995905c2787229562a41a6
 +    assert 'BODY_SENTINEL' not in first
 +    assert len(first)<1000
 +    assert first==pb.build_skills_system_prompt(skills_dir_override=skills, available_tools={'skill_view'})
-diff --git a/tests/agent/test_system_prompt.py b/tests/agent/test_system_prompt.py
-index 38f3d739bb70ebfe0388d84ce00d57e7f1b5fda6..7ed8dd9cd05d54f973cae1eb19b0b9caf96e0059 100644
---- a/tests/agent/test_system_prompt.py
-+++ b/tests/agent/test_system_prompt.py
-@@ -487,3 +487,3 @@ def test_build_system_prompt_records_stable_prefix():
-     assert prompt.startswith(agent._cached_system_prompt_static)
--    assert prompt[len(agent._cached_system_prompt_static):].startswith("\n\ncontext")
-+    assert "context" in prompt[len(agent._cached_system_prompt_static):]
- 
-@@ -515,4 +515,5 @@ def test_coding_prompt_orders_shared_context_before_workspace(monkeypatch):
-     )
-+    from agent.shared_prompt_cache import HEADER, END
-     expected = "\n\n".join((
--        "IDENTITY",
-+        HEADER,
-         "HELP",
-@@ -520,2 +521,4 @@ def test_coding_prompt_orders_shared_context_before_workspace(monkeypatch):
-         "CODING_STABLE",
-+        END,
-+        "IDENTITY",
-         "SYSTEM_MESSAGE",
-@@ -546,3 +549,3 @@ def test_coding_prompt_orders_shared_context_before_workspace(monkeypatch):
-     assert prompt == expected
--    assert agent._cached_system_prompt_static == "\n\n".join(expected.split("\n\n")[:4])
-+    assert prompt.startswith(agent._cached_system_prompt_static + "\n\nIDENTITY")
- 
 diff --git a/tests/agent/test_usage_run_binding.py b/tests/agent/test_usage_run_binding.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..d38cc6970ec708e9bfc69e51ea704f6a652fc9dc
@@ -39804,3 +39439,648 @@ new file mode 100644
 +  expect(io.profiles).toHaveBeenCalledTimes(2)
 +  expect(io.api.mock.calls.every(([, , method]) => !method || method === 'GET')).toBe(true)
 +})
+diff --git a/agent/shared_prompt_cache.py b/agent/shared_prompt_cache.py
+new file mode 100644
+--- /dev/null
++++ b/agent/shared_prompt_cache.py
+@@ -0,0 +1,96 @@
++"""Versioned common prefixes; existing v1 conversations retain their exact key.
++
++Cache keys never grant access to another bot's history or tools. Shared leading tool
++schemas are a cache candidate, not proof of a provider breakpoint or cache hit.
++"""
++import hashlib
++import json
++from urllib.parse import urlsplit
++
++HEADER = '[Hermes common operating rules v4]'
++END = '[/Hermes common operating rules v4]'
++V3_HEADER = '[Hermes common operating rules v3]'
++V3_END = '[/Hermes common operating rules v3]'
++V2_HEADER = '[Hermes common operating rules v2]'
++V2_END = '[/Hermes common operating rules v2]'
++LEGACY_HEADER = '[Hermes common operating rules v1]'
++LEGACY_END = '[/Hermes common operating rules v1]'
++
++# Order hints for already-granted, broadly used tools, NOT an enabled-tool registry.
++# Role-specific browser, credential, delegation and dynamic catalog schemas follow.
++_SHARED_TOOL_ORDER = ('read_file', 'search_files', 'terminal', 'process_manage', 'patch',
++                      'write_file', 'skills_list', 'skill_view', 'skill_manage', 'todo_list')
++_SHARED_TOOL_RANK = {name: i for i, name in enumerate(_SHARED_TOOL_ORDER)}
++
++
++def canonical_tools(tools):
++    """New prompt builds only: own schemas, keep native slots and every capability."""
++    if not tools:
++        return tools
++    copied = json.loads(json.dumps(tools, sort_keys=True, ensure_ascii=False))
++    slots = [i for i, t in enumerate(copied)
++             if isinstance(t, dict) and isinstance(t.get('function'), dict) and t.get('type', 'function') == 'function']
++    def rank(tool):
++        name = tool['function'].get('name', '')
++        return (_SHARED_TOOL_RANK.get(name, len(_SHARED_TOOL_RANK)), name)
++    ordered = sorted((copied[i] for i in slots), key=rank)
++    for i, tool in zip(slots, ordered):
++        copied[i] = tool
++    return copied
++
++
++def common_prefix(instructions):
++    """Recognize both persisted layouts without rewriting either."""
++    if not isinstance(instructions, str):
++        return None
++    for header, end_marker in ((HEADER, END), (V3_HEADER, V3_END), (V2_HEADER, V2_END), (LEGACY_HEADER, LEGACY_END)):
++        if instructions.startswith(header + '\n\n'):
++            end = instructions.find('\n\n' + end_marker)
++            if end >= 0:
++                return instructions[:end + 2 + len(end_marker)]
++    return None
++
++
++def shared_tool_prefix(tools):
++    """Exact leading Responses function schemas; stop at the first non-shared entry."""
++    prefix = []
++    previous = -1
++    for tool in tools or []:
++        if not isinstance(tool, dict) or tool.get('type') != 'function':
++            break
++        rank = _SHARED_TOOL_RANK.get(tool.get('name'), -1)
++        if rank <= previous:
++            break
++        prefix.append(tool)
++        previous = rank
++    return prefix
++
++
++def shared_cache_key(instructions, tools, model, base_url):
++    """Public-prefix cohorts on existing exact OpenAI routes; no TTL/route changes."""
++    url = urlsplit(str(base_url or ''))
++    if url.hostname not in {'api.openai.com', 'chatgpt.com'}:
++        return None
++    if url.hostname == 'chatgpt.com' and not url.path.rstrip('/').endswith('/backend-api/codex'):
++        return None
++    prefix = common_prefix(instructions)
++    if prefix is None:
++        return None
++    legacy = instructions.startswith(LEGACY_HEADER + '\n\n')
++    # V1 includes the entire tool array exactly as before. V2 groups requests by
++    # their actual shared leading schemas; private role tails still go unchanged
++    # on the wire and provider matching still requires an eligible exact prefix.
++    cohort_tools = tools if legacy else (shared_tool_prefix(tools) or tools)
++    payload = json.dumps([url.hostname, url.path, model, prefix, cohort_tools],
++                         sort_keys=True, ensure_ascii=False, separators=(',', ':'))
++    version = layout_version(instructions)
++    return f'hsp{version}_' + hashlib.sha256(payload.encode()).hexdigest()[:40]
++
++
++def layout_version(instructions):
++    if not isinstance(instructions, str):
++        return 0
++    for version, header in ((4, HEADER), (3, V3_HEADER), (2, V2_HEADER), (1, LEGACY_HEADER)):
++        if instructions.startswith(header + '\n\n'):
++            return version
++    return 0
+diff --git a/agent/system_prompt.py b/agent/system_prompt.py
+--- a/agent/system_prompt.py
++++ b/agent/system_prompt.py
+@@ -550,7 +550,7 @@
+     return ([_soul_content], True) if _soul_content else ([DEFAULT_AGENT_IDENTITY], False)
+ 
+ 
+-def _guidance_parts(agent: Any) -> list[str]:
++def _guidance_parts(agent: Any, *, include_role: bool = True) -> list[str]:
+     """Universal + tool-aware + model-gated guidance blocks, each gated by its config.yaml key."""
+     parts: list[str] = []
+     if agent.valid_tool_names:
+@@ -560,7 +560,8 @@
+                 ("_parallel_tool_call_guidance", PARALLEL_TOOL_CALL_GUIDANCE),
+             ) if getattr(agent, flag, True)
+         ]
+-    parts.append(_tool_guidance_block(agent))  # None/empty entries are dropped by _join_tier
++    if include_role:
++        parts.append(_tool_guidance_block(agent))  # None/empty entries are dropped by _join_tier
+     if not agent.valid_tool_names:
+         return parts
+     # Steering only lands inside tool results, so only reachable with tools.
+@@ -573,10 +574,31 @@
+         parts.append(TOOL_USE_ENFORCEMENT_GUIDANCE)
+         if any(g in (agent.model or "").lower() for g in ("gemini", "gemma")):
+             parts.append(GOOGLE_MODEL_OPERATIONAL_GUIDANCE)
+-    if _model_gate(getattr(agent, "_execution_guidance", "auto"), agent.model, EXECUTION_GUIDANCE_MODELS):
++    if include_role:
++        parts.extend(_execution_guidance_parts(agent))
++    return parts
++
++
++def _execution_guidance_parts(agent: Any) -> list[str]:
++    """Execution hints name available tools, so only role-compatible requests share them."""
++    if agent.valid_tool_names and _model_gate(
++        getattr(agent, "_execution_guidance", "auto"), agent.model, EXECUTION_GUIDANCE_MODELS
++    ):
+         from agent.prompt_builder import execution_guidance_text
+-        parts.append(execution_guidance_text(agent.valid_tool_names))
+-    return parts
++        return [execution_guidance_text(agent.valid_tool_names)]
++    return []
++
++
++def _guidance_tiers(agent: Any, role_tail: bool) -> tuple[list[str], list[str], str]:
++    """Keep legacy order; new layouts put capability-dependent instructions after common rules."""
++    common = _guidance_parts(agent, include_role=not role_tail)
++    skills = _skills_prompt(agent)
++    help_guidance = HERMES_AGENT_HELP_GUIDANCE_NO_SKILLS
++    if "skill_view" in (agent.valid_tool_names or set()) and "- hermes-agent:" in skills:
++        help_guidance = HERMES_AGENT_HELP_GUIDANCE
++    if role_tail:
++        return common, [help_guidance, _tool_guidance_block(agent), *_execution_guidance_parts(agent)], skills
++    return [help_guidance, *common], [], skills
+ 
+ 
+ def _alibaba_identity_part(agent: Any) -> list[str]:
+@@ -727,9 +749,9 @@
+     return "\n\n".join(p.strip() for p in parts if p and p.strip())
+ 
+ 
+-def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) -> dict[str, str]:
+-    """Assemble the system prompt as three ordered cache tiers: ``stable`` (identity,
+-    guidance and the coding brief), ``context`` (caller ``system_message``, project
++def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None, *, legacy_layout: bool = False, shared_layout_version: int = 4) -> dict[str, str]:
++    """Assemble the system prompt as three ordered cache tiers: ``stable`` (shared
++    guidance and the coding brief), ``context`` (identity, role/surface guidance, caller ``system_message``, project
+     context files, workspace snapshot and remaining workspace guidance) and
+     ``volatile`` (skills index, memory, user profile, external memory block,
+     timestamp line, runtime environment hints).  Worktree-dependent blocks follow project context so a
+@@ -739,21 +761,18 @@
+     _cc_len = getattr(getattr(agent, "context_compressor", None), "context_length", None)
+     _ctx_len = _cc_len if isinstance(_cc_len, int) and _cc_len > 0 else None
+     # ── Stable tier ────────────────────────────────────────────────
+-    stable_parts, _soul_loaded = _identity_parts(agent, _ctx_len)
+-    # The skill_view() pointer dangles without skill tools OR without the
+-    # hermes-agent skill installed, so the variant is chosen after the skills
+-    # index is built; this slot holds its position.
+-    _help_guidance_slot = len(stable_parts)
+-    stable_parts.append(HERMES_AGENT_HELP_GUIDANCE_NO_SKILLS)
+-    stable_parts.extend(_guidance_parts(agent))
+-    skills_prompt = _skills_prompt(agent)
+-    # Skill-pointer variant requires BOTH skill_view AND the hermes-agent skill
+-    # in the rendered index (pure string check — inherits the index's stability).
+-    if "skill_view" in (agent.valid_tool_names or set()) and "- hermes-agent:" in skills_prompt:
+-        stable_parts[_help_guidance_slot] = HERMES_AGENT_HELP_GUIDANCE
++    identity_parts, _soul_loaded = _identity_parts(agent, _ctx_len)
++    from agent.shared_prompt_cache import HEADER, END, V3_HEADER, V3_END, V2_HEADER, V2_END, LEGACY_HEADER, LEGACY_END
++    header, end_marker = {1: (LEGACY_HEADER, LEGACY_END), 2: (V2_HEADER, V2_END), 3: (V3_HEADER, V3_END), 4: (HEADER, END)}[shared_layout_version]
++    stable_parts = list(identity_parts) if legacy_layout else [header]
++    role_tail = not legacy_layout and shared_layout_version >= 4
++    common_guidance, role_guidance, skills_prompt = _guidance_tiers(agent, role_tail)
++    stable_parts.extend(common_guidance)
+     stable_parts.extend(_alibaba_identity_part(agent))
+     # Pinned skills are per-agent constants (resolved once), so they live in the stable prefix.
+-    stable_parts.extend(_auto_load_parts(agent))
++    role_skills = _auto_load_parts(agent)
++    if legacy_layout or shared_layout_version < 3:
++        stable_parts.extend(role_skills)
+     # Coding posture: the operating brief stays in the stable prefix. The
+     # environment block contains the current cwd/backend and belongs after
+     # project context, not ahead of a large shared AGENTS.md block.
+@@ -762,12 +781,15 @@
+     stable_parts.extend(coding_prefix_parts)
+     post_workspace_parts = _post_workspace_parts(agent)
+     # ── Context tier (project/worktree-dependent, may change between sessions) ──
+-    context_parts: list[str] = []
++    context_parts: list[str] = [] if legacy_layout else list(identity_parts)
++    if not legacy_layout and shared_layout_version >= 3:
++        context_parts.extend(role_skills)
++    context_parts.extend(role_guidance)
+     # ephemeral_system_prompt is injected at API-call time only, never cached.
+     if system_message is not None:
+         context_parts.append(system_message)
+     context_parts.extend(_context_files_part(agent, _ctx_len, _soul_loaded))
+-    if coding_workspace_parts:
++    if coding_workspace_parts or role_tail:
+         context_parts.extend([*coding_workspace_parts, *coding_trailing_parts, *post_workspace_parts])
+     else:
+         # Preserve the stable placement for non-workspace sessions; there is no
+@@ -790,6 +812,8 @@
+         # Embedder hints are prose too; reserve the delimiter for the renderer.
+         environment_hints = environment_hints.replace(_pb.RUNTIME_ENVIRONMENT_HEADING, "> " + _pb.RUNTIME_ENVIRONMENT_HEADING)
+         volatile_parts.append(f"{_pb.RUNTIME_ENVIRONMENT_HEADING}\n\n{environment_hints}\n\n{_pb.RUNTIME_ENVIRONMENT_END}")
++    if not legacy_layout:
++        stable_parts.append(end_marker)
+     return {"stable": _join_tier(stable_parts), "context": _join_tier(context_parts), "volatile": _join_tier(volatile_parts)}
+ 
+ 
+@@ -797,6 +821,9 @@
+     """Assemble the full prompt; cached on ``agent._cached_system_prompt`` and
+     only rebuilt after compression.  Tiers are ordered stable -> context ->
+     volatile so implicit longest-prefix caches keep the unchanged scaffold."""
++    from agent.shared_prompt_cache import canonical_tools
++    if getattr(agent, "tools", None):
++        agent.tools = canonical_tools(agent.tools)
+     parts = build_system_prompt_parts(agent, system_message=system_message)
+     agent._cached_system_prompt_static = parts["stable"]
+     # Surface context-file truncation warnings in chat, not only in logs.
+@@ -817,6 +844,8 @@
+     inside plugin-land. The previous bytes are stashed so a plugin whose render RAISES falls back to its
+     last good section instead of vanishing (fail-open guard, not a freeze).
+     """
++    from tools.kanban_show_cache import reset_session
++    reset_session(getattr(agent, "session_id", None))
+     agent._cached_system_prompt = None
+     agent._cached_system_prompt_static = None
+     if hasattr(agent, "_plugin_system_prompt_sections_snapshot"):
+@@ -844,7 +873,10 @@
+     ):
+         return
+     try:
+-        static = build_system_prompt_parts(agent, system_message=system_message)["stable"]
++        from agent.shared_prompt_cache import layout_version, common_prefix
++        static = build_system_prompt_parts(agent, system_message=system_message,
++            legacy_layout=common_prefix(stored) is None,
++            shared_layout_version=layout_version(stored) or 2)["stable"]
+         if static and stored.startswith(static):
+             agent._cached_system_prompt_static = static
+             agent._static_rebuild_failed_for = None
+diff --git a/agent/cache_request_diagnostics.py b/agent/cache_request_diagnostics.py
+new file mode 100644
+--- /dev/null
++++ b/agent/cache_request_diagnostics.py
+@@ -0,0 +1,174 @@
++"""Content-free fingerprints for the existing provider request log.
++
++Observe the prepared request after transport preflight, not the server's hidden prefix or
++SDK wire serialization. HMACs are profile-local and survive resume; nothing here changes
++cache policy, request data, compaction or routing. Fail-open diagnostics never retry calls.
++"""
++from __future__ import annotations
++
++from contextlib import suppress
++import hashlib
++import hmac
++import json
++import logging
++import os
++import stat
++import time
++
++logger = logging.getLogger('agent.conversation_loop')
++_MAX_BYTES = 8 * 1024 * 1024
++_ANCHORS = (4096, 16384, 65536, 262144, 1048576, 4194304)
++_ENCODER = json.JSONEncoder(ensure_ascii=True, sort_keys=True, separators=(',', ':'), allow_nan=False)
++
++
++def _profile_key() -> bytes:
++    from hermes_constants import get_hermes_home
++
++    directory = get_hermes_home() / 'telemetry' / 'cache-diagnostics'
++    directory.mkdir(parents=True, mode=0o700, exist_ok=True)
++    path = directory / 'fingerprint.key'
++    # Exclusive creation makes simultaneous sessions share one key, without replacing it.
++    try:
++        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
++    except FileExistsError:
++        pass
++    else:
++        with os.fdopen(fd, 'wb') as stream:
++            stream.write(os.urandom(32))
++    fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
++    with os.fdopen(fd, 'rb') as stream:
++        info = os.fstat(stream.fileno())
++        if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077:
++            raise ValueError('unsafe diagnostic key permissions')
++        key = stream.read(33)
++    if len(key) != 32:
++        raise ValueError('incomplete diagnostic key')
++    return key
++
++
++def _digest(key: bytes, value, budget: list[int], *, anchors: bool = False) -> dict:
++    digest = hmac.new(key, digestmod=hashlib.sha256)
++    count, prefixes = 0, {}
++    for text in _ENCODER.iterencode(value):
++        data = text.encode('ascii')
++        if len(data) > budget[0]:
++            return {'complete': False, 'bytes_hashed': count, 'prefixes': prefixes}
++        budget[0] -= len(data)
++        offset = 0
++        for boundary in _ANCHORS if anchors else ():
++            if count < boundary <= count + len(data):
++                end = boundary - count
++                digest.update(data[offset:end])
++                prefixes[str(boundary)] = digest.hexdigest()
++                offset = end
++        digest.update(data[offset:])
++        count += len(data)
++    result = {'complete': True, 'bytes_hashed': count, 'hash': digest.hexdigest()}
++    if anchors:
++        result['prefixes'] = prefixes
++    return result
++
++
++def fingerprint(request: dict, *, key: bytes, session_id: str, request_id: str, base_url: str) -> dict:
++    """Bounded canonical-JSON hashes. Dictionary ordering is normalized; list order is retained."""
++    budget = [_MAX_BYTES]
++    extra = request.get('extra_body')
++    # SDK extra_body overrides these values; do not hash headers, credentials or unrelated fields.
++    effective = dict(request)
++    if isinstance(extra, dict):
++        effective.update(extra)
++    fields = {
++        'route': [base_url, effective.get('model')],
++        'session': session_id, 'request': request_id,
++        'instructions': effective.get('instructions', effective.get('system', [
++            m for m in effective.get('messages', []) if isinstance(m, dict) and m.get('role') in {'system', 'developer'}])),
++        'tools': effective.get('tools'),
++        'options': {name: effective.get(name) for name in (
++            'reasoning', 'text', 'tool_choice', 'parallel_tool_calls',
++            'prompt_cache_key', 'prompt_cache_options', 'prompt_cache_retention',
++            'previous_response_id', 'conversation', 'context_management',
++            'thinking', 'output_config', 'speed', 'service_tier', 'cache_control')},
++    }
++    result = {name: _digest(key, value, budget, anchors=name in {'instructions', 'tools'}) for name, value in fields.items()}
++    history = effective.get('input', effective.get('messages'))
++    result['history'] = _digest(key, history, budget, anchors=True)
++    result['input_items'] = len(history) if isinstance(history, list) else None
++    from agent.shared_prompt_cache import common_prefix
++    instruction = fields['instructions']
++    if isinstance(instruction, list) and instruction and isinstance(instruction[0], dict):
++        instruction = instruction[0].get('text', instruction[0].get('content'))
++    result['shared_prefix_used'] = common_prefix(instruction) is not None
++    result['shared_key_used'] = str(effective.get('prompt_cache_key') or '').startswith(('hsp1_', 'hsp2_', 'hsp3_', 'hsp4_'))
++    result['key_id'] = hmac.new(key, b'hermes-cache-diagnostics-v1', hashlib.sha256).hexdigest()[:16]
++    result['complete'] = all(result[name]['complete'] for name in (*fields, 'history'))
++    return result
++
++
++def _field(value, name):
++    return value.get(name) if isinstance(value, dict) else getattr(value, name, None)
++
++
++def _count(value):
++    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
++
++
++def _usage(response) -> dict:
++    usage = _field(response, 'usage')
++    read = _count(_field(usage, 'cache_read_input_tokens'))
++    written = _count(_field(usage, 'cache_creation_input_tokens'))
++    if read is not None or written is not None:
++        # Anthropic input_tokens excludes both cache reads and writes.
++        uncached = _count(_field(usage, 'input_tokens'))
++        total = sum((uncached, read, written)) if all(v is not None for v in (uncached, read, written)) else None
++        return {'input_tokens': total, 'cached_tokens': read, 'cache_write_tokens': written}
++    total = _count(_field(usage, 'input_tokens'))
++    details = _field(usage, 'input_tokens_details')
++    if total is None:
++        total = _count(_field(usage, 'prompt_tokens'))
++        details = _field(usage, 'prompt_tokens_details')
++    return {'input_tokens': total, 'cached_tokens': _count(_field(details, 'cached_tokens')),
++            'cache_write_tokens': _count(_field(details, 'cache_write_tokens'))}
++
++
++def _emit(snapshot, response, *, status: str, started: float, preparation_ms: float) -> None:
++    # Never format exception text, response content, request bodies, credentials or raw identifiers.
++    with suppress(Exception):
++        row = {'version': 1, 'stage': 'prepared_after_transport_preflight',
++               'implementation': 'cache-sharing-v1', 'status': status, 'process_id': os.getpid(), 'fingerprint': snapshot,
++               'usage': _usage(response), 'elapsed_ms': round((time.perf_counter()-started)*1000, 3),
++               'preparation_ms': round(preparation_ms, 3)}
++        logger.info('CACHE_DIAGNOSTIC %s', json.dumps(row, separators=(',', ':')))
++
++
++def observe_call(agent, request: dict, next_call, *, request_id: str):
++    """Return/raise the downstream result unchanged, exactly once, even if diagnostics fail."""
++    if (getattr(agent, 'api_mode', '') not in {'codex_responses', 'anthropic_messages', 'chat_completions'}
++            or not logger.isEnabledFor(logging.INFO)):
++        return next_call(request)
++    before = time.perf_counter()
++    snapshot = {'complete': False, 'unavailable': True}
++    with suppress(Exception):
++        key = _profile_key()
++        snapshot = fingerprint(request, key=key, session_id=getattr(agent, 'session_id', '') or '',
++                               request_id=request_id, base_url=getattr(agent, 'base_url', '') or '')
++        snapshot['api_mode'] = agent.api_mode
++    with suppress(Exception):
++        from agent.usage_run_binding import snapshot as run_snapshot
++        snapshot['task_run'] = run_snapshot(key)
++    snapshot['cross_bot'] = {'version': 1, 'unavailable': True}
++    with suppress(Exception):
++        from agent.cache_cross_bot_diagnostics import fingerprint as cross_bot_fingerprint
++        snapshot['cross_bot'] = cross_bot_fingerprint(agent, request, request_id=request_id)
++    with suppress(Exception):
++        from agent.cache_change_evidence import policy_evidence, transition
++        snapshot['policy'] = policy_evidence(request)
++        snapshot['transition'] = transition(agent, snapshot)
++    preparation_ms = (time.perf_counter() - before) * 1000
++    started = time.perf_counter()
++    try:
++        response = next_call(request)
++    except BaseException:
++        _emit(snapshot, None, status='failed_or_interrupted', started=started, preparation_ms=preparation_ms)
++        raise
++    _emit(snapshot, response, status='returned', started=started, preparation_ms=preparation_ms)
++    return response
+diff --git a/tests/agent/test_shared_guidance_prefix.py b/tests/agent/test_shared_guidance_prefix.py
+new file mode 100644
+--- /dev/null
++++ b/tests/agent/test_shared_guidance_prefix.py
+@@ -0,0 +1,74 @@
++"""New conversations share common guidance while retaining each role's instructions."""
++from unittest.mock import patch
++import pytest
++from agent import system_prompt as sp, shared_prompt_cache as shared
++from tests.agent.test_system_prompt import _make_agent
++
++@pytest.fixture
++def prompt_inputs():
++    with (patch.object(sp, '_coding_parts', return_value=(["Shared coding brief"], [], [])),
++          patch.object(sp, '_post_workspace_parts', return_value=[]),
++          patch.object(sp, '_context_files_part', return_value=[]),
++          patch.object(sp, '_memory_parts', return_value=[]),
++          patch.object(sp, '_active_profile_line', return_value="Synthetic profile"),
++          patch.object(sp, '_timestamp_line', return_value="Synthetic date"),
++          patch.object(sp, '_skills_prompt', return_value="- hermes-agent: Help skill"),
++          patch.object(sp._pb, 'load_soul_md', return_value="Synthetic identity"),
++          patch.object(sp._pb, 'build_environment_hints', return_value="")):
++        yield
++
++def make_agent(names, guidance=""):
++    return _make_agent(valid_tool_names=names, _kanban_worker_guidance=guidance,
++                       _task_completion_guidance=True, _parallel_tool_call_guidance=True,
++                       _execution_guidance=False)
++
++def test_worker_guidance_does_not_split_new_common_prefix(prompt_inputs):
++    worker = sp.build_system_prompt(make_agent(['read_file', 'kanban_show'], 'Synthetic worker lifecycle'))
++    chat = sp.build_system_prompt(make_agent(['read_file', 'kanban_show']))
++    assert shared.common_prefix(worker) == shared.common_prefix(chat)
++    assert 'Synthetic worker lifecycle' not in shared.common_prefix(worker)
++    assert worker.count('Synthetic worker lifecycle') == 1
++    assert 'Synthetic worker lifecycle' not in chat
++
++def test_skill_capability_variant_is_retained_after_the_common_prefix(prompt_inputs):
++    skilled = sp.build_system_prompt(make_agent(['read_file', 'skills_list', 'skill_view']))
++    plain = sp.build_system_prompt(make_agent(['read_file']))
++    assert shared.common_prefix(skilled) == shared.common_prefix(plain)
++    assert shared.common_prefix(skilled) is not None
++    assert sp.HERMES_AGENT_HELP_GUIDANCE in skilled
++    assert sp.HERMES_AGENT_HELP_GUIDANCE not in plain
++    assert sp.HERMES_AGENT_HELP_GUIDANCE_NO_SKILLS in plain
++    assert sp.HERMES_AGENT_HELP_GUIDANCE not in shared.common_prefix(skilled)
++
++def test_v3_prompt_restore_keeps_its_own_role_sensitive_static_bytes(prompt_inputs):
++    agent = make_agent(['read_file', 'kanban_show'], 'Original v3 lifecycle')
++    agent._use_prompt_caching = True
++    parts = sp.build_system_prompt_parts(agent, shared_layout_version=3)
++    stored = '\n\n'.join(p for p in parts.values() if p)
++    agent._cached_system_prompt = stored
++    agent._cached_system_prompt_static = None
++    sp.reconstruct_static_prefix(agent)
++    assert agent._cached_system_prompt == stored
++    assert agent._cached_system_prompt_static == parts['stable']
++    assert shared.layout_version(stored) == 3
++    assert 'Original v3 lifecycle' in shared.common_prefix(stored)
++
++
++def test_surface_and_environment_hints_do_not_split_new_common_prefix(prompt_inputs):
++    with patch.object(sp, '_post_workspace_parts', side_effect=[['Worker surface hint'], ['Chat surface hint']]):
++        worker = sp.build_system_prompt(make_agent(['read_file']))
++        chat = sp.build_system_prompt(make_agent(['read_file']))
++    assert shared.common_prefix(worker) == shared.common_prefix(chat)
++    assert 'Worker surface hint' not in shared.common_prefix(worker)
++    assert worker.count('Worker surface hint') == 1 and 'Worker surface hint' not in chat
++    assert chat.count('Chat surface hint') == 1 and 'Chat surface hint' not in worker
++
++
++def test_new_cache_layout_is_recognized_without_publishing_request_content():
++    from agent.cache_request_diagnostics import fingerprint
++    request = {'instructions': '[Hermes common operating rules v4]\n\nCommon\n\n[/Hermes common operating rules v4]',
++               'prompt_cache_key': 'hsp4_synthetic', 'input': [{'role': 'user', 'content': 'private'}]}
++    row = fingerprint(request, key=b'x' * 32, session_id='private', request_id='private', base_url='https://chatgpt.com')
++    assert row['shared_prefix_used'] and row['shared_key_used']
++    import json
++    assert 'private' not in json.dumps(row) and 'Common' not in json.dumps(row)
+diff --git a/tests/agent/test_system_prompt.py b/tests/agent/test_system_prompt.py
+--- a/tests/agent/test_system_prompt.py
++++ b/tests/agent/test_system_prompt.py
+@@ -241,6 +241,15 @@
+     (path / "main.py").write_text("print('hi')\n")
+ 
+ 
++def _full_prompt(agent):
++    with (
++        patch("agent.prompt_builder.load_soul_md", return_value=""),
++        patch("agent.prompt_builder.build_environment_hints", return_value=""),
++        patch("agent.prompt_builder.build_context_files_prompt", return_value=""),
++    ):
++        return "\n\n".join(build_system_prompt_parts(agent).values())
++
++
+ class TestCodingContextBlock:
+     def test_injected_when_active(self, monkeypatch, tmp_path):
+         _init_code_repo(tmp_path)
+@@ -347,7 +356,7 @@
+             _tool_use_enforcement=tool_use_enforcement,
+             _execution_guidance=execution_guidance,
+         )
+-        return _stable_prompt(agent)
++        return _full_prompt(agent)
+ 
+     def test_deepseek_gets_guidance_by_default(self):
+         stable = self._prompt("deepseek/deepseek-v4-pro")
+@@ -485,7 +494,7 @@
+         prompt = build_system_prompt(agent)
+ 
+     assert prompt.startswith(agent._cached_system_prompt_static)
+-    assert prompt[len(agent._cached_system_prompt_static):].startswith("\n\ncontext")
++    assert "context" in prompt[len(agent._cached_system_prompt_static):]
+ 
+ 
+ def test_coding_prompt_orders_shared_context_before_workspace(monkeypatch):
+@@ -513,11 +522,14 @@
+         "this one. Do not modify another profile's skills/plugins/cron/memories "
+         "unless the user explicitly directs you to."
+     )
++    from agent.shared_prompt_cache import HEADER, END
+     expected = "\n\n".join((
++        HEADER,
++        "STEER",
++        "CODING_STABLE",
++        END,
+         "IDENTITY",
+         "HELP",
+-        "STEER",
+-        "CODING_STABLE",
+         "SYSTEM_MESSAGE",
+         "CONTEXT_FILES",
+         "WORKSPACE",
+@@ -544,7 +556,7 @@
+         prompt = build_system_prompt(agent, system_message="SYSTEM_MESSAGE")
+ 
+     assert prompt == expected
+-    assert agent._cached_system_prompt_static == "\n\n".join(expected.split("\n\n")[:4])
++    assert prompt.startswith(agent._cached_system_prompt_static + "\n\nIDENTITY")
+ 
+ 
+ class TestTelegramRichMessagesHint:
+@@ -557,7 +569,7 @@
+             mock_cfg.return_value = {
+                 "gateway": {"platforms": {"telegram": {"extra": {"rich_messages": False}}}}
+             }
+-            stable = _stable_prompt(agent)
++            stable = _full_prompt(agent)
+         assert "Standard Markdown auto-converts" in stable
+         assert "lean into it" not in stable
+         assert "task lists" not in stable
+@@ -570,7 +582,7 @@
+             mock_cfg.return_value = {
+                 "gateway": {"platforms": {"telegram": {"extra": {"rich_messages": True}}}}
+             }
+-            stable = _stable_prompt(agent)
++            stable = _full_prompt(agent)
+         assert "lean into it" in stable
+         assert "task lists" in stable
+         assert "math/formulas" in stable
+@@ -583,7 +595,7 @@
+             mock_cfg.return_value = {
+                 "platforms": {"telegram": {"extra": {"rich_messages": True}}}
+             }
+-            stable = _stable_prompt(agent)
++            stable = _full_prompt(agent)
+         assert "lean into it" in stable
+         assert "task lists" in stable
+ 
+@@ -596,7 +608,7 @@
+                 "gateway": {"platforms": {"telegram": {"extra": {"rich_messages": False}}}},
+                 "platforms": {"telegram": {"extra": {"rich_messages": True}}},
+             }
+-            stable = _stable_prompt(agent)
++            stable = _full_prompt(agent)
+         assert "lean into it" in stable
+ 
+     def test_gateway_extra_other_keys_does_not_block_top_level_rich_messages(self):
+@@ -608,7 +620,7 @@
+                 "gateway": {"platforms": {"telegram": {"extra": {"disable_link_previews": True}}}},
+                 "platforms": {"telegram": {"extra": {"rich_messages": True}}},
+             }
+-            stable = _stable_prompt(agent)
++            stable = _full_prompt(agent)
+         assert "lean into it" in stable
+ 
+ 
+@@ -637,7 +649,7 @@
+         monkeypatch.setattr(_cfgmod, "get_config_path", lambda: home / "config.yaml")
+ 
+         agent = _make_agent(platform="telegram")
+-        stable = _stable_prompt(agent)
++        stable = _full_prompt(agent)
+         assert "lean into it" in stable
+         assert "task lists" in stable
+ 
+@@ -650,7 +662,7 @@
+             mock_cfg.return_value = {
+                 "gateway": {"platforms": {"telegram": {"extra": "not-a-map"}}}
+             }
+-            stable = _stable_prompt(agent)
++            stable = _full_prompt(agent)
+         assert "Standard Markdown auto-converts" in stable
+         assert "lean into it" not in stable
+ 
