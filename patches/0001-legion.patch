@@ -796,18 +796,37 @@ index 0000000000000000000000000000000000000000..c14b082fdc26a0193aaa399a5dc69415
 +        raise CompressionMainContextStopped()
 +    return ref.auxiliary(model,async_mode),model
 diff --git a/agent/context_compressor.py b/agent/context_compressor.py
-index 13b1d4a08b3d3ab5cfc69ac6fad8302735219f04..6000d85a142dd9e9cd4c6cee53a722cd6d78e23e 100644
 --- a/agent/context_compressor.py
 +++ b/agent/context_compressor.py
-@@ -3894,2 +3894,3 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
+@@ -322,2 +322,5 @@
+ _COMPACTION_TAIL_MARKER = "_compaction_tail"
++# This private, transient marker asks the in-place archive to prove the original
++# tool row remains searchable before publishing a recovery stub.
++_COMPACTION_RECOVERY_MARKER = "_compaction_tool_recovery"
+ PROACTIVE_PRUNE_REARM_MODEL_CONFIG_KEY = "_proactive_prune_rearm_tokens"
+@@ -3656,2 +3659,5 @@
+         session_id = getattr(self, "_session_id", "") or ""
++        session_db = getattr(self, "_session_db", None)
++        if not session_id or not callable(getattr(session_db, "archive_and_compact", None)):
++            return list(messages)
+         rounds_seen = 0
+@@ -3674,3 +3680,7 @@
+                 continue
++            row_id = msg.get("_row_id")
++            if not (type(row_id) is int and row_id > 0) and not msg.get("tool_call_id"):
++                continue  # no durable identity: do not promise recovery
+             result[i] = _rewritten(msg, _lean_recovery_stub(msg.get("tool_name") or "", len(content), session_id))
++            result[i][_COMPACTION_RECOVERY_MARKER] = True
+             demoted += 1
+@@ -3894,2 +3904,3 @@
          # call_llm writes the route it actually selected; never pre-resolve a second, stale pair.
 +        from agent.compression_main_context import current_main_compression_context
          _aux_route: dict[str, str] = {}
-@@ -3900,2 +3901,3 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
+@@ -3900,2 +3911,3 @@
                  "api_mode": self.api_mode,
 +                "compression_context": current_main_compression_context(),
              },
-@@ -4188,2 +4190,10 @@ Write only the summary body. Do not include any preamble or prefix."""
+@@ -4188,2 +4200,10 @@
          _raise_if_stale_attempt(self)
 +        from agent.auxiliary_client import _get_auxiliary_task_config
 +        from agent.compression_main_context import current_main_compression_context
@@ -819,11 +838,14 @@ index 13b1d4a08b3d3ab5cfc69ac6fad8302735219f04..6000d85a142dd9e9cd4c6cee53a722cd
 +            return None
          # Only a genuine no-provider RuntimeError gets the long cooldown; empty/invalid-response
 diff --git a/agent/conversation_compression.py b/agent/conversation_compression.py
-index 38757fd7e6558db1243948974b750e2e79f93121..b833e5f9a7b2b1a7f41948e03204b1b62d33e39d 100644
 --- a/agent/conversation_compression.py
 +++ b/agent/conversation_compression.py
-@@ -166,12 +166,2 @@ def is_compaction_progress_status(text: str | None) -> bool:
- 
+@@ -162,16 +162,6 @@
+     if "compaction complete" in lowered or "compression is currently blocked" in lowered:
+         return False
+     return "compact" in lowered or "compress" in lowered or "context reduced to" in lowered
+-
+-
 -def _refresh_agent_tool_definitions(agent) -> bool:
 -    """Rebuild agent.tools at the compaction commit boundary (the only moment config reaches a forever-session's
 -    frozen tool schemas; the prompt cache is already invalid). Returns True when tools were added."""
@@ -832,10 +854,12 @@ index 38757fd7e6558db1243948974b750e2e79f93121..b833e5f9a7b2b1a7f41948e03204b1b6
 -    if added:
 -        logger.info("Compaction tool refresh added tools: %s", sorted(added))
 -    return bool(added)
--
--
+ 
+ 
  _COMPRESSOR_ATTEMPT_STATE_FIELDS = (
-@@ -3110,60 +3100,2 @@ def _fold_todo_snapshot(agent: Any, compressed: list) -> None:
+@@ -3108,64 +3098,6 @@
+             compressed.append({"role": "user", "content": todo_snapshot, "_todo_snapshot_synthetic": True})
+ 
  
 -def _rebuild_system_prompt_at_boundary(agent: Any, system_message: str) -> str:
 -    """Refresh tool schemas and rebuild the system prompt at the commit boundary."""
@@ -896,11 +920,19 @@ index 38757fd7e6558db1243948974b750e2e79f93121..b833e5f9a7b2b1a7f41948e03204b1b6
 -
 -
  def _salvage_or_refuse_grown_transcript(
-@@ -3294,2 +3226,3 @@ def _publish_rotated_compaction(
+     agent: Any, original_messages: list, compressed: list, *, system_message: str, attempt: _Attempt,
+ ) -> tuple[Optional[list], Optional[str]]:
+@@ -3292,6 +3224,7 @@
+ def _publish_rotated_compaction(
+     agent: Any, messages: list, compressed: list, *, new_system_prompt: str, lease: _CompressionLease,
      old_session_id: str, compressed_user_turn_outcome: str,
 +    prefix_snapshot: Optional[dict[str, Any]] = None,
  ) -> None:
-@@ -3327,13 +3260,16 @@ def _publish_rotated_compaction(
+     """Rotate the session: flush the parent, publish the child, re-point the agent.
+     Flushes current-turn msgs to the OLD session, passing the durable prefix (messages[:persist idx]) so
+@@ -3325,17 +3258,20 @@
+     new_session_id = mint_session_id()
+     from agent.context_compressor import _DB_PERSISTED_MARKER
      from tools.approval_yolo import with_session_yolo
 -    agent._session_db.publish_compression_child(
 -        parent_session_id=old_session_id, child_session_id=new_session_id,
@@ -928,11 +960,19 @@ index 38757fd7e6558db1243948974b750e2e79f93121..b833e5f9a7b2b1a7f41948e03204b1b6
 +        )
 +        agent.session_id = new_session_id
      # `already_present` stamping is done by run_agent's _sync_persisted_markers;
-@@ -3355,3 +3291,2 @@ def _publish_rotated_compaction(
+     # this branch covers inserted/merged only; direct callers must use that wrapper.
+     if compressed_user_turn_outcome in {"inserted", "merged"}:
+@@ -3353,7 +3289,6 @@
+     for _handoff_message in compressed:
+         if isinstance(_handoff_message, dict):
              _handoff_message[_DB_PERSISTED_MARKER] = True
 -    agent.session_id = new_session_id
      agent._db_flush_scan_prefix = None
-@@ -3406,96 +3341,2 @@ def _reset_read_dedup_caches(task_id: str, *, session_id: str = "") -> None:
+     _rebind_session_context(agent.session_id)
+     agent._session_db_created = True
+@@ -3404,100 +3339,6 @@
+         reset_skill_view_dedup(task_id)
+ 
  
 -def _finish_compaction_boundary(
 -    agent: Any, compressed: list, *, new_system_prompt: str, old_session_id: Optional[str], in_place: bool,
@@ -1029,7 +1069,11 @@ index 38757fd7e6558db1243948974b750e2e79f93121..b833e5f9a7b2b1a7f41948e03204b1b6
 -
 -
  def _candidate_rejected(
-@@ -3591,2 +3432,9 @@ class _CommitOutcome:
+     agent: Any, compressed: Any, messages: list, messages_before_compression: list, *,
+     attempt: _Attempt,
+@@ -3589,6 +3430,13 @@
+     compacted_in_place: bool = False
+     made_progress: bool = False
  
 +    def applied(self) -> bool:
 +        """A published rewrite survives later metadata errors; a refused candidate never applies."""
@@ -1039,15 +1083,37 @@ index 38757fd7e6558db1243948974b750e2e79f93121..b833e5f9a7b2b1a7f41948e03204b1b6
 +        )
 +
  
-@@ -3674,2 +3522,3 @@ def _commit_compaction(
+ def _held_watermark(agent: Any, watermark: Optional[int], messages: list, verbatim_tail: Optional[list]) -> Optional[int]:
+     """The in-place commit's cap; see :func:`held_archive_watermark`."""
+@@ -3672,6 +3520,7 @@
+ def _commit_compaction(
+     agent: Any, messages: list, compressed: list, *, in_place: bool, lease: _CompressionLease,
      new_system_prompt: str, system_message: str, compressed_user_turn_outcome: str,
 +    prefix_snapshot: dict[str, Any],
      messages_before_compression: Optional[list], made_progress: bool, attempt: _Attempt,
-@@ -3689,2 +3538,3 @@ def _commit_compaction(
+     verbatim_tail: Optional[list] = None, carried_messages: Optional[list] = None,
+ ) -> _CommitOutcome:
+@@ -3687,6 +3536,17 @@
+     commit_started_at = time.monotonic()
+     split_status = "not_applicable"
      old_session_id: Optional[str] = None  # bound only once rotation begins
 +    indexed_session_id = agent.session_id  # rollback identity must precede every fallible prepublication step
++    from agent.context_compressor import _COMPACTION_RECOVERY_MARKER
++    if not agent._session_db and any(
++        isinstance(message, dict) and message.get(_COMPACTION_RECOVERY_MARKER) for message in compressed
++    ):
++        # The compressor may hold a stale store binding. Without the commit
++        # store there is no durable original behind its recovery promise.
++        _restore_prune_rearm_tokens(agent.context_compressor, attempt.snapshot)
++        _emit_aborted_attempt_telemetry(agent, attempt.started_at, "missing_recovery_store", attempt.seed)
++        return _CommitOutcome(compressed=messages, refused_prompt=_existing_system_prompt(agent, system_message),
++                              commit_started_at=commit_started_at)
      if agent._session_db:
-@@ -3751,10 +3601,13 @@ def _commit_compaction(
+         split_status = "pending"
+         try:
+@@ -3749,14 +3609,17 @@
+                     agent._session_db, agent.session_id,
+                     original_messages,
                      verbatim_tail)
 -                agent._session_db.archive_and_compact(
 -                    agent.session_id, persisted, model_config_patch={PROACTIVE_PRUNE_REARM_MODEL_CONFIG_KEY: None},
@@ -1067,7 +1133,11 @@ index 38757fd7e6558db1243948974b750e2e79f93121..b833e5f9a7b2b1a7f41948e03204b1b6
                  split_status = "in_place_committed"
 +                compacted_in_place = True  # publication survives any later bookkeeping failure
                  # compress() returned marker-swept copies; stamp them as persisted or the next
-@@ -3766,10 +3619,4 @@ def _commit_compaction(
+                 # flush re-INSERTs the whole compacted transcript, doubling the live set. Reset
+                 # the flush identity set so next turn diffs against the COMPACTED transcript.
+@@ -3764,14 +3627,8 @@
+                 # `compressed`, and the stamps tell the caller the tail is already in the list.
+                 stamp_db_persisted_markers([*compressed, *(verbatim_tail or ())])
                  agent._flushed_db_message_ids = set()
 -                # Rotation-independent signal; the gateway reads this (not an id diff) to
 -                # re-baseline transcript handling.
@@ -1078,7 +1148,11 @@ index 38757fd7e6558db1243948974b750e2e79f93121..b833e5f9a7b2b1a7f41948e03204b1b6
              else:
 -                # Bind old_session_id first: it is the rollback key in the handler below.
                  # ── Rotation (legacy): end this session, fork a continuation ─ Flush any un-persisted
-@@ -3783,6 +3630,5 @@ def _commit_compaction(
+                 # current-turn messages to the OLD session before ending it, so they survive in the
+                 # preserved parent transcript (#47202). (In-place skips this — see above.) Pass the
+@@ -3781,10 +3638,9 @@
+                 # _flush_messages_to_session_db treats every restored row as new and re-appends the whole
+                 # transcript to the parent. turn_context anchors _persist_user_message_idx at the
                  # current-turn user message before preflight runs, so messages[:idx] is exactly the
 -                # persisted prefix; only the current turn's new messages get written. Bound to
 -                # old_session_id, hoisted above the flush: the ``except`` handler below keys its in-memory
@@ -1088,16 +1162,28 @@ index 38757fd7e6558db1243948974b750e2e79f93121..b833e5f9a7b2b1a7f41948e03204b1b6
 +                # indexed_session_id was captured before extraction: an exception at ANY prepublication step
 +                # must restore the original transcript, including before old_session_id is bound here.
                  old_session_id = agent.session_id
-@@ -3795,2 +3641,3 @@ def _commit_compaction(
+                 if verbatim_tail:
+                     # Publish the kept exchanges with the head, as the in-place branch stores them: the
+@@ -3793,6 +3649,7 @@
+                 _publish_rotated_compaction(
+                     agent, messages, compressed, new_system_prompt=new_system_prompt, lease=lease,
                      old_session_id=old_session_id, compressed_user_turn_outcome=compressed_user_turn_outcome,
 +                    prefix_snapshot=prefix_snapshot,
                  )
-@@ -3809,3 +3656,3 @@ def _commit_compaction(
+                 if verbatim_tail:
+                     stamp_db_persisted_markers(verbatim_tail)
+@@ -3807,7 +3664,7 @@
+             # commit). Either way the deepcopy keeps markers/identity and only the prune runway rolls back (the full
+             # snapshot restore is for pre-commit cancels; telemetry keeps the failed values). _db_flush_scan_prefix is
              # intentionally NOT cleared: the scan is identity-based and the deepcopy replaces every row.
 -            rotation_rollback = not in_place and old_session_id and agent.session_id == old_session_id
 +            rotation_rollback = not in_place and agent.session_id == indexed_session_id
              if rotation_rollback or (
-@@ -3825,9 +3672,4 @@ def _commit_compaction(
+                 in_place and split_status != "in_place_committed" and messages_before_compression is not None
+             ):
+@@ -3823,13 +3680,8 @@
+                 # the turns it summarized; the next resume reloads both, the token count goes UP, preflight
+                 # fires again, and each failed attempt appends another copy of the protected head + tail
                  # (#99477: ~15 real turns stored as 3,814 rows, the first user message repeated 893 times).
 -                # Gate on ``split_status`` rather than ``compacted_in_place``: it is assigned on the
 -                # statement immediately after the atomic commit returns, so a committed compaction can never
@@ -1109,7 +1195,11 @@ index 38757fd7e6558db1243948974b750e2e79f93121..b833e5f9a7b2b1a7f41948e03204b1b6
 +                # The committed status precedes fallible metadata work. Restored rows carry their original
 +                # persistence markers; fresh dict identities also invalidate the append-only flush scan.
                  messages[:] = copy.deepcopy(messages_before_compression)
-@@ -4292,21 +4134,26 @@ def compress_context(
+                 compressed = messages
+                 made_progress = False
+@@ -4290,25 +4142,30 @@
+             )
+         _fold_todo_snapshot(agent, compressed)
          compressed_user_turn_outcome = _ensure_compressed_has_user_turn(messages, compressed)
 -        new_system_prompt = _rebuild_system_prompt_at_boundary(agent, system_message)
 -        commit = _commit_compaction(
@@ -1149,6 +1239,8 @@ index 38757fd7e6558db1243948974b750e2e79f93121..b833e5f9a7b2b1a7f41948e03204b1b6
              agent, compressed, new_system_prompt=new_system_prompt, old_session_id=commit.old_session_id,
 +            boundary_applied=commit.applied(),
              in_place=in_place, compacted_in_place=commit.compacted_in_place,
+             session_commit_succeeded=commit.session_commit_succeeded,
+             defer_context_engine_notification=defer_context_engine_notification,
 diff --git a/agent/conversation_compression_boundary.py b/agent/conversation_compression_boundary.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..2c868c9eec768859e135d3491e684d3746838f49
@@ -8590,34 +8682,79 @@ index 4779ac89476d5e8d7beb507c4a35dacff99ab8dc..f664227eb11765efb552809f273b44ba
 +        help="Report each persisted Claude/Codex account and configured external observations without rotating or refreshing credentials")
      usage_parser.set_defaults(func=cmd_usage)
 diff --git a/hermes_state_compression.py b/hermes_state_compression.py
-index 49d02ded151b52dd66245741b9d1eb2315bef604..4676e776556e1c03da87432b989f33edac7eccc0 100644
 --- a/hermes_state_compression.py
 +++ b/hermes_state_compression.py
-@@ -248,4 +248,3 @@ class SessionCompressionMixin:
+@@ -246,8 +246,7 @@
+                    if key in _CONVERSATION_MODEL_CONFIG_KEYS}
+         model_config = {**carried, **(model_config or {})}
          system_prompt_hash = self._store_system_prompt(conn, system_prompt)
 -        # The child continues the parent's tools[] pin (the compaction refresh re-pinned it just
 -        # before publish), or its first hop to another surface re-derives the array.
 +        # A legacy caller inherits the parent's pin; a staged prefix replaces it in this transaction.
          conn.execute(
-@@ -279,3 +278,4 @@ class SessionCompressionMixin:
+             """INSERT INTO sessions (
+                    id, source, model, model_config, system_prompt,
+@@ -277,7 +276,8 @@
+         system_prompt: str | None = None, cwd: str | None = None, profile_name: str | None = None,
+         compression_lock_holder: str | None = None, require_compression_lease: bool = True,
          require_lease_refresh: bool = False, lease_ttl_seconds: float = 300.0,
 -        watermark: Optional[int] = None, watermark_ceiling: Optional[int] = None) -> None:
 +        watermark: Optional[int] = None, watermark_ceiling: Optional[int] = None,
 +        prefix_snapshot: Optional[dict[str, Any]] = None) -> None:
          """Atomically close a parent and publish its durable compression child: closure, child row, and
-@@ -292,2 +292,4 @@ class SessionCompressionMixin:
+         handoff commit in one transaction, so readers see the live parent or a complete child, never an
+         ended parent with a missing/empty child. *watermark* (the parent's highest row already represented
+@@ -290,10 +290,13 @@
+         *compression_lock_holder* refreshes the lease on the same ``conn`` before the expiry check (no
+         TOCTOU window), so a refresher that died on transient DB errors gets one last chance.
  
 +        ``prefix_snapshot`` updates provided system_prompt/tool_pin fields atomically with the child.
 +
          See #75316.
-@@ -296,2 +298,3 @@ class SessionCompressionMixin:
+         ``None`` = unbounded (no internal flush happened). See #47202.
+         """
          from hermes_state_errors import CompressionSessionBusyError
 +        from hermes_state_prefix import apply_compaction_prefix
          def _do(conn):
-@@ -335,2 +338,3 @@ class SessionCompressionMixin:
+             if require_lease_refresh and compression_lock_holder:
+                 conn.execute(
+@@ -329,10 +332,21 @@
+                     (parent_session_id,))
+             if not messages:
+                 raise RuntimeError("Compression child handoff must not be empty")
++            # A rotation keeps parent rows as history. Before promising that a
++            # demoted tool result can be recovered, prove its original survived
++            # the best-effort parent flush in this same publication transaction.
++            from agent.context_compressor import _COMPACTION_RECOVERY_MARKER
++            recoveries = [m for m in messages if isinstance(m, dict) and m.get(_COMPACTION_RECOVERY_MARKER)]
++            if recoveries:
++                parent_tool_ids = [int(row["id"]) for row in conn.execute(
++                    "SELECT id FROM messages WHERE session_id = ? AND active = 1 AND role = 'tool'",
++                    (parent_session_id,)).fetchall()]
++                self._changed_carried_tool_originals(conn, parent_session_id, recoveries, parent_tool_ids)
+             self._publish_child_session_row(
+                 conn, parent, parent_session_id=parent_session_id, child_session_id=child_session_id,
+                 source=source, model=model, model_config=model_config, system_prompt=system_prompt,
                  cwd=cwd, profile_name=profile_name)
 +            apply_compaction_prefix(self, conn, child_session_id, prefix_snapshot)
              # Carried handoff tail rows arrive without a timestamp and would otherwise be stamped
+             # `now`, breaking their _display_dedupe_key identity with the parent's durable originals
+             # and duplicating them in the lineage display read (#59661).
+@@ -363,7 +377,13 @@
+                 # A live continuation under an idle-sweep archive re-activates the chat; after the
+                 # closure above the child is linked into the lineage walk (#117713).
+                 self._unarchive_auto_archived_lineage(conn, child_session_id)
+-        self._execute_transcript_write(_do, messages)
++        try:
++            self._execute_transcript_write(_do, messages)
++        finally:
++            from agent.context_compressor import _COMPACTION_RECOVERY_MARKER
++            for message in messages:
++                if isinstance(message, dict):
++                    message.pop(_COMPACTION_RECOVERY_MARKER, None)
+ 
+     def _write_sql_logged(self, op: str, session_id: str, sql: str, params) -> None:
+         """``_write_sql`` that logs (never raises) on ``sqlite3.Error``."""
 diff --git a/hermes_state_message_windows.py b/hermes_state_message_windows.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..44530120719d3f4b4833e6af3c644c7af47c0f9a
@@ -8649,34 +8786,150 @@ index 0000000000000000000000000000000000000000..44530120719d3f4b4833e6af3c644c7a
 +        message.pop("window_total", None)
 +    return messages, count
 diff --git a/hermes_state_messages.py b/hermes_state_messages.py
-index 19908aed1805ec93122bdf7584770833eb9fe965..84716ad22765ce3dc43a37ec12163f26169ad75c 100644
 --- a/hermes_state_messages.py
 +++ b/hermes_state_messages.py
-@@ -988,3 +988,4 @@ class SessionMessagesMixin:
+@@ -931,6 +931,63 @@
+             f"WHERE id IN ({_placeholders(tail_ids)}) ORDER BY id",
+             [session_id, *tail_ids] if retarget else tail_ids)
+ 
++    def _changed_carried_tool_originals(
++        self, conn, session_id: str, messages: list[dict[str, Any]], held_rewind_ids: list[int],
++    ) -> set[int]:
++        """Retain non-verbatim carried tool originals as searchable compacted history.
++
++        Only active originals already classified as held tail are eligible; unseen
++        concurrent appends and prior user rewinds are never candidates. A lean
++        recovery stub must resolve to exactly one such row or the transaction fails.
++        """
++        from agent.context_compressor import _COMPACTION_RECOVERY_MARKER
++
++        tool_messages = [m for m in messages if isinstance(m, dict) and m.get("role") == "tool"]
++        if not tool_messages:
++            return set()
++        # Do not copy every potentially huge tool output into Python memory.
++        # Compare individual matched bodies inside SQLite instead.
++        rows = [] if not held_rewind_ids else conn.execute(
++            "SELECT id, tool_call_id FROM messages WHERE session_id = ? AND active = 1 "
++            f"AND role = 'tool' AND id IN ({_placeholders(held_rewind_ids)})",
++            [session_id, *held_rewind_ids]).fetchall()
++        by_id = {int(row["id"]): row for row in rows}
++        by_call: dict[str, list[Any]] = {}
++        for row in rows:
++            if row["tool_call_id"]:
++                by_call.setdefault(row["tool_call_id"], []).append(row)
++        keep: set[int] = set()
++        for message in tool_messages:
++            required = bool(message.get(_COMPACTION_RECOVERY_MARKER))
++            row_id = message.get("_row_id")
++            call_id = message.get("tool_call_id")
++            if type(row_id) is int and row_id > 0:
++                row = by_id.get(row_id)
++                matches = [row] if row is not None else []
++            else:
++                matches = by_call.get(call_id, []) if call_id else []
++            if not matches:
++                if required:
++                    raise ValueError("cannot verify carried tool original during compaction")
++                continue
++            encoded = self._encode_content(message.get("content"))
++            def same_content(row: Any) -> bool:
++                return bool(conn.execute("SELECT content IS ? FROM messages WHERE id = ?", (encoded, row["id"])).fetchone()[0])
++            if len(matches) > 1:
++                if required or any(not same_content(row) for row in matches):
++                    raise ValueError("ambiguous carried tool original during compaction")
++                continue
++            row = matches[0]
++            if (row["tool_call_id"] or None) != (call_id or None):
++                if required:
++                    raise ValueError("carried tool identity changed during compaction")
++                continue
++            if not same_content(row):
++                keep.add(int(row["id"]))
++            elif required:
++                raise ValueError("recovery stub has no distinct durable original")
++        return keep
++
+     def _archive_named_rows(
+         self, conn, session_id: str, compacted_messages: list[dict[str, Any]], covered: list[int], *,
+         tail_count: int, carried_messages: Optional[list[dict[str, Any]]], patched_model_config: Any,
+@@ -951,6 +1008,8 @@
+         rewind_ids = list(carried_ids)
+         if tail_count > 0:
+             rewind_ids += self._tail_originals(covered_active, tail_count, merged_away)
++        keep_originals = self._changed_carried_tool_originals(conn, session_id, compacted_messages, rewind_ids)
++        rewind_ids = [row_id for row_id in rewind_ids if row_id not in keep_originals]
+         rewind_ids += unseen
+         rewind_ids = list(dict.fromkeys(rewind_ids))
+         if rewind_ids:
+@@ -986,7 +1045,8 @@
+         lock_holder: Optional[str] = None, tail_count: int = 0,
+         carried_messages: Optional[list[dict[str, Any]]] = None,
          covered_ids: Optional[list[int]] = None,
 -        unresolved_held: Optional[list[dict[str, Any]]] = None) -> int:
 +        unresolved_held: Optional[list[dict[str, Any]]] = None,
 +        prefix_snapshot: Optional[dict[str, Any]] = None) -> int:
          """Non-destructive in-place compaction under ONE session id: soft-archive the active rows (``active=0,
-@@ -1005,2 +1006,3 @@ class SessionMessagesMixin:
+         compacted=1``: summarized away, still searchable) and insert *compacted_messages* as fresh active
+         rows, atomically; returns the new ACTIVE count (= ``message_count``). *watermark* (compression
+@@ -1003,6 +1063,7 @@
+         timestamp. Those originals and the clones' originals are superseded duplicates and get rewind flags
+         (``active=0, compacted=0``) so search doesn't return each carried message once per compaction.
          ``model_config_patch`` merges in the same txn (``None`` removes a key).
 +        ``prefix_snapshot`` publishes provided system_prompt/tool_pin fields in that same transaction.
  
-@@ -1015,2 +1017,3 @@ class SessionMessagesMixin:
+         Concurrent-append safety (#75316): when *watermark* is provided (the value of
+         :meth:`get_active_message_watermark` captured at compression START), rows that arrived during the
+@@ -1013,6 +1074,7 @@
+         rows fresh ids; consumers that reference durable row ids re-resolve by content (see 3e8ab0610).
+         """
          from hermes_state import SessionCompressionInProgressError
 +        from hermes_state_prefix import apply_compaction_prefix
          def _do(conn):
-@@ -1025,2 +1028,3 @@ class SessionMessagesMixin:
+             if lock_holder is not None:
+                 lock_row = conn.execute(_COMPRESSION_LOCK_ROW_SQL, (session_id,)).fetchone()
+@@ -1023,6 +1085,7 @@
+             # on_missing="raise": never commit against a vanished session row (caller keeps the original).
+             patched_model_config = self._merge_model_config_json(
                  conn, session_id, model_config_patch, on_missing="raise") if patch else None
 +            apply_compaction_prefix(self, conn, session_id, prefix_snapshot)
              proved = self._proved_coverage(conn, session_id, covered_ids, unresolved_held, watermark)
-@@ -1440,2 +1444,6 @@ class SessionMessagesMixin:
+             if proved is not None:
+                 return self._archive_named_rows(
+@@ -1043,6 +1106,8 @@
+                     "ORDER BY id DESC LIMIT ?",
+                     (session_id, *((int(watermark),) if bound else ()),
+                      int(tail_count) + self._uncounted_merged_rows(compacted_messages[-int(tail_count):]))).fetchall()]
++            keep_originals = self._changed_carried_tool_originals(conn, session_id, compacted_messages, rewind_ids)
++            rewind_ids = [row_id for row_id in rewind_ids if row_id not in keep_originals]
+             rewind_ids += tail_ids
+             rewind_ids = list(dict.fromkeys(rewind_ids))
+             if rewind_ids:
+@@ -1067,7 +1132,13 @@
+             conn.execute(f"{_SET_COUNTERS_SQL}{', model_config = ?' if patch else ''} WHERE id = ?",
+                 (inserted, tool_calls_total, *((patched_model_config,) if patch else ()), session_id))
+             return inserted
+-        return self._execute_transcript_write(_do, compacted_messages)
++        try:
++            return self._execute_transcript_write(_do, compacted_messages)
++        finally:
++            from agent.context_compressor import _COMPACTION_RECOVERY_MARKER
++            for message in compacted_messages:
++                if isinstance(message, dict):
++                    message.pop(_COMPACTION_RECOVERY_MARKER, None)
  
+     def _message_column_names(self, conn) -> list[str]:
+         """Column names of the messages table, cached per-connection era."""
+@@ -1437,6 +1508,10 @@
+             if latest:
+                 rows.reverse()
+         return [self._row_to_message_dict(row, warn_context="get_messages", summary_flag=True) for row in rows]
++
 +    def get_message_bookends(self, session_id: str, head: int = 20, tail: int = 10):
 +        from hermes_state_message_windows import get_message_bookends
 +        return get_message_bookends(self, session_id, head, tail)
-+
+ 
      def find_pr_url_messages(self, session_ids: list[str]) -> list[dict[str, Any]]:
+         """Tool results containing ``/pull/``: a deliberately loose scan, oldest-first so the caller takes the last."""
 diff --git a/hermes_state_prefix.py b/hermes_state_prefix.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..6677f514d19e9aae410bff8037bcdcdd275e0b16
@@ -48337,3 +48590,301 @@ new file mode 100644
 +        reset_hermes_home_override(token)
 +        for db in dbs:
 +            db.close()
+diff --git a/tests/agent/test_compaction_demoted_recall.py b/tests/agent/test_compaction_demoted_recall.py
+new file mode 100644
+--- /dev/null
++++ b/tests/agent/test_compaction_demoted_recall.py
+@@ -0,0 +1,293 @@
++"""A demoted tail result remains recoverable after the native archive transaction."""
++
++import json
++from unittest.mock import patch
++
++import pytest
++
++from agent.context_compressor import ContextCompressor
++from hermes_state import SessionDB
++from tools.session_search_tool import session_search
++
++
++@pytest.mark.parametrize("covered", [False, True])
++@pytest.mark.parametrize("include_row_ids", [False, True])
++def test_demoted_tail_original_stays_searchable_without_reviving_verbatim_tail(tmp_path, covered, include_row_ids):
++    db = SessionDB(tmp_path / "state.db")
++    sid = "session"
++    db.create_session(sid, source="cli")
++    db.append_message(sid, role="user", content="earlier question")
++    original_tool_ids = []
++    for index in range(8):
++        db.append_message(sid, role="assistant", content=f"action {index}")
++        text = ("recoveryneedle " if index == 0 else "ordinary ") + "x" * 2000
++        original_tool_ids.append(db.append_message(sid, role="tool", tool_name="terminal",
++                                                   tool_call_id=f"call_{index}", content=text))
++    held = db.get_messages_as_conversation(sid, include_row_ids=include_row_ids)
++    compressor = object.__new__(ContextCompressor)
++    compressor._session_id = sid
++    compressor._session_db = db
++    compressor.quiet_mode = True
++    tail = compressor._demote_stale_tail_tools(held[1:], 0)
++    assert "output demoted at compaction" in tail[1]["content"]
++    watermark = db.get_active_message_watermark(sid)
++    covered_ids = [row[0] for row in db._conn.execute(
++        "SELECT id FROM messages WHERE session_id=? AND active=1 ORDER BY id", (sid,))] if covered else None
++    db.archive_and_compact(sid, [{"role": "user", "content": "summary"}, *tail],
++                           watermark=watermark, tail_count=len(tail), covered_ids=covered_ids)
++    assert all("_compaction_tool_recovery" not in m for m in tail)
++
++    flags = {row[0]: (row[1], row[2]) for row in db._conn.execute(
++        "SELECT id,active,compacted FROM messages WHERE id IN (?,?)",
++        (original_tool_ids[0], original_tool_ids[-1]))}
++    result = json.loads(session_search(db=db, query="recoveryneedle", session_id=sid,
++                                       current_session_id=sid))
++    assert flags[original_tool_ids[0]] == (0, 1)
++    assert flags[original_tool_ids[-1]] == (0, 0)
++    assert [row["match_message_id"] for row in result["results"]] == [original_tool_ids[0]]
++    db.close()
++
++
++def test_ambiguous_idless_tool_original_refuses_atomic_archive(tmp_path):
++    db = SessionDB(tmp_path / "state.db")
++    sid = "session"
++    db.create_session(sid, source="cli")
++    db.append_message(sid, role="user", content="old question")
++    for i in range(8):
++        db.append_message(sid, role="assistant", content=f"action {i}")
++        db.append_message(sid, role="tool", tool_name="terminal",
++                          tool_call_id="duplicate" if i < 2 else f"call_{i}",
++                          content=f"different{i} " + "x" * 2000)
++    held = db.get_messages_as_conversation(sid)
++    compressor = object.__new__(ContextCompressor)
++    compressor._session_db, compressor._session_id, compressor.quiet_mode = db, sid, True
++    tail = compressor._demote_stale_tail_tools(held[1:], 0)
++    before = db._conn.execute("SELECT id,active,compacted,content FROM messages WHERE session_id=? ORDER BY id", (sid,)).fetchall()
++    with pytest.raises(ValueError, match="ambiguous"):
++        db.archive_and_compact(sid, [{"role": "user", "content": "summary"}, *tail],
++                               watermark=db.get_active_message_watermark(sid), tail_count=len(tail))
++    after = db._conn.execute("SELECT id,active,compacted,content FROM messages WHERE session_id=? ORDER BY id", (sid,)).fetchall()
++    assert [tuple(r) for r in after] == [tuple(r) for r in before]
++    db.close()
++
++
++@pytest.mark.parametrize("has_db,has_identity", [(False, True), (True, False)])
++def test_lean_tail_does_not_promise_recovery_without_durable_identity(tmp_path, has_db, has_identity):
++    db = SessionDB(tmp_path / "state.db") if has_db else None
++    compressor = object.__new__(ContextCompressor)
++    compressor._session_db, compressor._session_id, compressor.quiet_mode = db, "session", True
++    original = {"role": "tool", "content": "important " + "x" * 2000}
++    if has_identity:
++        original["tool_call_id"] = "first"
++    messages = [original]
++    for i in range(6):
++        messages.extend([{"role": "assistant", "content": str(i)},
++                         {"role": "tool", "tool_call_id": str(i), "content": "ok"}])
++    assert compressor._demote_stale_tail_tools(messages, 0)[0]["content"] == original["content"]
++    if db:
++        db.close()
++
++
++@pytest.mark.parametrize("covered", [False, True])
++def test_demoted_tool_does_not_revive_a_rewind_or_capture_a_concurrent_append(tmp_path, covered):
++    db = SessionDB(tmp_path / "state.db")
++    sid = "session"
++    db.create_session(sid, source="cli")
++    undone = db.append_message(sid, role="user", content="undo this turn")
++    undone_tool = db.append_message(sid, role="tool", tool_name="terminal", tool_call_id="call_0",
++                                    content="undo-never-find " + "x" * 2000)
++    db.rewind_to_message(sid, undone)
++    db.append_message(sid, role="user", content="new question")
++    original = None
++    for i in range(8):
++        db.append_message(sid, role="assistant", content=f"action {i}")
++        rid = db.append_message(sid, role="tool", tool_name="terminal", tool_call_id=f"call_{i}",
++                                content=("retained-needle " if not i else f"other{i} ") + "x" * 2000)
++        if not i:
++            original = rid
++    held = db.get_messages_as_conversation(sid, include_row_ids=True)
++    watermark = db.get_active_message_watermark(sid)
++    covered_ids = [m["_row_id"] for m in held] if covered else None
++    compressor = object.__new__(ContextCompressor)
++    compressor._session_db, compressor._session_id, compressor.quiet_mode = db, sid, True
++    tail = compressor._demote_stale_tail_tools(held[1:], 0)
++    concurrent = db.append_message(sid, role="user", content="concurrent-append")
++    db.archive_and_compact(sid, [{"role": "user", "content": "summary"}, *tail],
++                           watermark=watermark, tail_count=len(tail), covered_ids=covered_ids)
++    assert tuple(db._conn.execute("SELECT active,compacted FROM messages WHERE id=?", (undone_tool,)).fetchone()) == (0, 0)
++    assert tuple(db._conn.execute("SELECT active,compacted FROM messages WHERE id=?", (original,)).fetchone()) == (0, 1)
++    assert tuple(db._conn.execute("SELECT active,compacted FROM messages WHERE id=?", (concurrent,)).fetchone()) == (0, 0)
++    assert [m["content"] for m in db.get_messages_as_conversation(sid)].count("concurrent-append") == 1
++    hidden = json.loads(session_search(db=db, query="undo-never-find", session_id=sid, current_session_id=sid))
++    assert not hidden["results"]
++    db.close()
++
++
++def test_missing_or_rewound_stub_source_refuses_without_reviving_it(tmp_path):
++    db = SessionDB(tmp_path / "state.db")
++    sid = "session"
++    db.create_session(sid, source="cli")
++    user = db.append_message(sid, role="user", content="will be rewound")
++    for i in range(8):
++        db.append_message(sid, role="assistant", content=f"action {i}")
++        db.append_message(sid, role="tool", tool_name="terminal", tool_call_id=f"call_{i}",
++                          content=f"result{i} " + "x" * 2000)
++    held = db.get_messages_as_conversation(sid, include_row_ids=True)
++    compressor = object.__new__(ContextCompressor)
++    compressor._session_db, compressor._session_id, compressor.quiet_mode = db, sid, True
++    tail = compressor._demote_stale_tail_tools(held[1:], 0)
++    watermark = db.get_active_message_watermark(sid)
++    db.rewind_to_message(sid, user)
++    with pytest.raises(ValueError, match="cannot verify"):
++        db.archive_and_compact(sid, [{"role": "user", "content": "summary"}, *tail],
++                               watermark=watermark, tail_count=len(tail))
++    assert not db.get_messages_as_conversation(sid)
++    assert db._conn.execute("SELECT COUNT(*) FROM messages WHERE session_id=? AND compacted=1", (sid,)).fetchone()[0] == 0
++    assert all("_compaction_tool_recovery" not in m for m in tail)
++    db.close()
++
++
++def test_rotation_refuses_a_stub_without_a_durable_parent_original(tmp_path):
++    db = SessionDB(tmp_path / "state.db")
++    db.create_session("parent", source="cli")
++    compressor = object.__new__(ContextCompressor)
++    compressor._session_db, compressor._session_id, compressor.quiet_mode = db, "parent", True
++    messages = [{"role": "tool", "tool_call_id": "unpersisted", "content": "lost " + "x" * 2000}]
++    for i in range(6):
++        messages.extend([{"role": "assistant", "content": str(i)},
++                         {"role": "tool", "tool_call_id": str(i), "content": "ok"}])
++    demoted = compressor._demote_stale_tail_tools(messages, 0)
++    with pytest.raises(ValueError, match="cannot verify"):
++        db.publish_compression_child(parent_session_id="parent", child_session_id="child", source="cli",
++                                     messages=demoted, require_compression_lease=False)
++    assert db.get_session("child") is None
++    assert db.get_session("parent")["ended_at"] is None
++    assert all("_compaction_tool_recovery" not in m for m in demoted)
++    db.close()
++
++
++def test_agent_without_a_session_store_keeps_the_unrecoverable_tool_body(tmp_path):
++    from agent.conversation_compression import compress_context
++    from run_agent import AIAgent
++
++    db = SessionDB(tmp_path / "state.db")
++    db.create_session("session", source="cli")
++    db.append_message("session", role="user", content="question")
++    for i in range(8):
++        db.append_message("session", role="assistant", content=f"action {i}")
++        db.append_message("session", role="tool", tool_name="terminal", tool_call_id=f"call_{i}",
++                          content=("must-remain " if not i else f"ordinary{i} ") + "x" * 2000)
++    held = db.get_messages_as_conversation("session", include_row_ids=True)
++    with patch("agent.process_bootstrap.OpenAI"):
++        agent = AIAgent(api_key="test-key", base_url="https://example.invalid/v1", model="test/model",
++                        quiet_mode=True, session_db=db, session_id="session", skip_context_files=True, skip_memory=True)
++    compressor = agent.context_compressor
++    def fake_summary(messages, **kwargs):
++        tail = compressor._demote_stale_tail_tools(messages[1:], 0)
++        compressor._last_compression_made_progress = True
++        return [{"role": "user", "content": "summary"}, *tail]
++    compressor.compress = fake_summary
++    compressor._last_compress_aborted = False
++    compressor._last_summary_error = None
++    compressor.compression_count = 1
++    agent._session_db = None  # the compressor retained a stale store binding
++    compressed, _ = compress_context(agent, held, system_message="sys", approx_tokens=100_000, force=True)
++    assert any("must-remain " in str(m.get("content")) for m in compressed)
++    assert all("_compaction_tool_recovery" not in m for m in compressed)
++    db.close()
++
++
++@pytest.mark.parametrize("include_row_ids", [False, True])
++def test_other_changed_carried_tool_outputs_remain_searchable(tmp_path, include_row_ids):
++    db = SessionDB(tmp_path / "state.db")
++    sid = "session"
++    db.create_session(sid, source="cli")
++    db.append_message(sid, role="user", content="old question")
++    first = db.append_message(sid, role="tool", tool_name="terminal", tool_call_id="changed",
++                              content="pressure-pruned-needle " + "x" * 2000)
++    second = db.append_message(sid, role="tool", tool_name="terminal", tool_call_id="unchanged",
++                               content="keep verbatim")
++    held = db.get_messages_as_conversation(sid, include_row_ids=include_row_ids)
++    tail = [dict(m) for m in held[1:]]
++    tail[0]["content"] = "short tool summary"
++    db.archive_and_compact(sid, [{"role": "user", "content": "summary"}, *tail],
++                           watermark=db.get_active_message_watermark(sid), tail_count=len(tail))
++    assert tuple(db._conn.execute("SELECT active,compacted FROM messages WHERE id=?", (first,)).fetchone()) == (0, 1)
++    assert tuple(db._conn.execute("SELECT active,compacted FROM messages WHERE id=?", (second,)).fetchone()) == (0, 0)
++    result = json.loads(session_search(db=db, query="pressure-pruned-needle", session_id=sid, current_session_id=sid))
++    assert result["results"]
++    db.close()
++
++
++def test_real_compressor_assembles_and_commits_recoverable_tool_stub(tmp_path):
++    from agent.conversation_compression import compress_context
++    from run_agent import AIAgent
++
++    db = SessionDB(tmp_path / "state.db")
++    sid = "session"
++    db.create_session(sid, source="cli", model="test/model")
++    db.append_message(sid, role="user", content="find the cause")
++    for i in range(8):
++        call = {"id": f"call_{i}", "type": "function",
++                "function": {"name": "terminal", "arguments": "{}"}}
++        db.append_message(sid, role="assistant", content=None, tool_calls=[call])
++        db.append_message(sid, role="tool", tool_name="terminal", tool_call_id=f"call_{i}",
++                          content=("assembled-needle " if not i else f"ordinary{i} ") + "x" * 2000)
++    held = db.get_messages_as_conversation(sid, include_row_ids=True)
++    with patch("agent.process_bootstrap.OpenAI"):
++        agent = AIAgent(api_key="test-key", base_url="https://example.invalid/v1", model="test/model",
++                        quiet_mode=True, session_db=db, session_id=sid, skip_context_files=True, skip_memory=True)
++    agent.compression_in_place = True
++    agent._session_db_created = True
++    compressor = agent.context_compressor
++    with patch.object(compressor, "_compress_window", return_value=(0, 1)), \
++         patch.object(compressor, "_prune_old_tool_results", side_effect=lambda messages, **kw: (list(messages), 0)), \
++         patch.object(compressor, "_generate_summary", return_value="The investigation continues."):
++        compressed, _ = compress_context(agent, held, system_message="sys", approx_tokens=100_000, force=True)
++    assert any("output demoted at compaction" in str(m.get("content")) for m in compressed)
++    assert all("_compaction_tool_recovery" not in m for m in compressed)
++    result = json.loads(session_search(db=db, query="assembled-needle", session_id=sid, current_session_id=sid))
++    assert result["results"]
++    db.close()
++
++
++@pytest.mark.parametrize("in_place", [True, False])
++def test_agent_commit_keeps_recovery_and_does_not_leak_private_marker(tmp_path, in_place):
++    from agent.conversation_compression import compress_context
++    from run_agent import AIAgent
++
++    db = SessionDB(tmp_path / "state.db")
++    sid = "session"
++    db.create_session(sid, source="cli", model="test/model")
++    db.append_message(sid, role="user", content="earlier question")
++    for i in range(8):
++        db.append_message(sid, role="assistant", content=f"action {i}")
++        db.append_message(sid, role="tool", tool_name="terminal", tool_call_id=f"call_{i}",
++                          content=("agent-needle " if not i else f"ordinary{i} ") + "x" * 2000)
++    held = db.get_messages_as_conversation(sid, include_row_ids=True)
++    with patch("agent.process_bootstrap.OpenAI"):
++        agent = AIAgent(api_key="test-key", base_url="https://example.invalid/v1", model="test/model",
++                        quiet_mode=True, session_db=db, session_id=sid, skip_context_files=True, skip_memory=True)
++    agent.compression_in_place = in_place
++    agent._session_db_created = True
++    compressor = agent.context_compressor
++    def fake_summary(messages, **kwargs):
++        tail = compressor._demote_stale_tail_tools(messages[1:], 0)
++        result = [{"role": "user", "content": "summary"}]
++        for message in tail:
++            copy = dict(message)
++            copy.pop("_db_persisted", None)
++            copy["_compaction_tail"] = True
++            result.append(copy)
++        compressor._last_compression_made_progress = True
++        return result
++    compressor.compress = fake_summary
++    compressor._last_compress_aborted = False
++    compressor._last_summary_error = None
++    compressor.compression_count = 1
++    compressed, _ = compress_context(agent, held, system_message="sys", approx_tokens=100_000, force=True)
++    assert any("output demoted at compaction" in str(m.get("content")) for m in compressed)
++    assert all("_compaction_tool_recovery" not in m for m in compressed)
++    result = json.loads(session_search(db=db, query="agent-needle", session_id=sid, current_session_id=sid))
++    assert result["results"]
++    db.close()

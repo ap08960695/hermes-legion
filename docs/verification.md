@@ -1100,3 +1100,7 @@ Ten related files passed 245 offline tests against installed Linux source; three
 ## Session-scoped recovery (v0.6.33)
 
 Twenty related files passed 318 offline tests against installed Linux source; three Windows-specific cases were skipped. Synthetic SQLite sessions covered middle-of-history tool output, colliding profiles, unrelated hits, visibility, bounded excerpts, Boolean queries, Thai, concurrency and interruption cleanup. A separate installed-source smoke used synthetic data and emitted an isolated update-bootstrap warning; production recall and real usage savings were not verified.
+
+## Recoverable tool results after compaction (v0.6.34)
+
+Thirty related test files passed 457 offline tests against installed Linux source. Isolated SQLite tests covered in-place and rotation publication, row-ID and unique call-ID resolution, ambiguous and missing originals, prior rewinds, concurrent appends, rollback, scoped search and removal of private markers. A native compressor with a deterministic local summary also recovered a demoted result. These fixtures do not establish production occurrence or quantify real usage savings.
