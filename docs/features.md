@@ -231,3 +231,7 @@ Read-only session searches can use an existing healthy CJK full-text index after
 ## Structured global recall (v0.6.41)
 
 Global session discovery verifies visible structured text and encoded tool arguments before pagination. Image payloads and hidden scaffolding do not become text matches. Decoded tool excerpts carry their original field and offset metadata. Unicode escapes nested inside argument strings retain recall, including prefix and Boolean queries. Existing indexes are reused; no database rebuild is required. Search errors and the three-second deadline remain explicit. A caller-owned SQLite transaction and progress handler are preserved. Frequent-word queries avoid repeated field decoding and cursor creation; supplemental candidates do not compute unused ranking scores.
+
+## Bounded history byte readers (v0.6.42)
+
+History search and paging read byte windows on the existing SQLite connection. An active anchor cursor keeps the same snapshot across windows; caller transactions and progress handlers stay intact. A prefix cache is capped at 64 KiB per reader and released when the view closes. This avoids repeated native Blob bookkeeping on long-lived connections while preserving binary, Unicode and paging behavior. It does not rotate connections, rewrite history or change model tools.

@@ -1146,3 +1146,11 @@ it was not a search across a live production database. These results do not esta
 natural-workload latency, usage savings, or compatibility with every SQLite build. The
 gateway adopted the installed files through native idle-only reload. No model calls were
 made.
+
+## Bounded history byte readers (v0.6.42)
+
+On the verified Python 3.14.7 / SQLite 3.53.1 runtime, 20,000 closed native Blob reads retained about 1.77 MB while their connection object remained alive. Closing and releasing that object returned the bookkeeping. This behavior agrees with the [CPython connection implementation](https://github.com/python/cpython/blob/v3.14.0/Modules/_sqlite/connection.c#L585-L590). The Hermes raw-search regression failed before the repair and passed afterward with a live-connection allocation budget below 256 KiB.
+
+A 24-file offline suite passed 468 tests on both candidate and installed source, including concurrent-writer snapshots, caller transactions/handlers, invalid bytes, two-megabyte fields and bounded page reads. The synthetic 460,000-row fixture passed all 15 trials. Peak process RSS was about 63.8 MiB instead of 134.3 MiB in the preceding fixture run; this is not a production memory measurement. CJK searches took 1.54–1.57 seconds versus about 1.03 seconds before this repair, a deliberate tradeoff for bounded retained memory. Frequent-word queries stayed near 1.17 seconds; the slower Latin case stayed near 2.78–2.79 seconds and has little margin under the unchanged three-second deadline.
+
+The gateway adopted installed source through native idle-only control. A permitted real-history subset was checked privately in transient RAM storage; this did not search an entire live profile or establish natural-workload usage savings. No extra model calls, provider probes or dependency changes were made.
