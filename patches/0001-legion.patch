@@ -21537,17 +21537,24 @@ index 0000000000000000000000000000000000000000..ed8e77cb68be42045819bb285d00808f
 diff --git a/tui_gateway/session_notifications.py b/tui_gateway/session_notifications.py
 --- a/tui_gateway/session_notifications.py
 +++ b/tui_gateway/session_notifications.py
-@@ -134,7 +134,8 @@
+@@ -134,7 +134,15 @@
  
  # Mirror gateway/kanban_watchers.py TERMINAL_KINDS: claim silent kinds (archived/unblocked) too so the cursor advances
  # past them and they can't wedge a later completed/blocked event behind an unclaimed row.
 -_KANBAN_NOTIFY_KINDS = ("completed", "blocked", "gave_up", "crashed", "timed_out", "status", "archived", "unblocked")
 +_KANBAN_NOTIFY_KINDS = ("completed", "blocked", "gave_up", "crashed", "timed_out", "status", "archived", "unblocked",
 +                        "review_requested", "changes_requested", "block_loop_detected")
++_KANBAN_INTERMEDIATE_STATUSES = frozenset(("todo", "ready", "running", "scheduled"))
++
++
++class _KanbanPassiveStatus(str):
++    """A transient UI status, not a model-delivery receipt."""
++
++
  # kanban, /loop + /heartbeat and the bot mailbox share one idle-poll cadence; probing the lease registry on
  # every 0.5s queue timeout cost ~a core at 11 sessions (#108005).
  _KANBAN_POLL_SECONDS = _LOOP_POLL_SECONDS = _BOT_DELIVERY_POLL_SECONDS = 5.0
-@@ -167,7 +168,8 @@
+@@ -167,7 +175,8 @@
          with _session_profile_runtime_scope(session):
              render_notification(lambda: _emit("message.start", sid), platform="tui",
                                  diagnostic=(kwargs.get("display_metadata") or {}).get("notification_category") == "diagnostic")
@@ -21557,7 +21564,7 @@ diff --git a/tui_gateway/session_notifications.py b/tui_gateway/session_notifica
      except Exception as exc:
          _notif_log_failure(what, exc)
          _notif_release_turn(session)
-@@ -262,6 +264,43 @@
+@@ -262,6 +271,43 @@
              mgr.abandon_fire()
  
  
@@ -21601,7 +21608,7 @@ diff --git a/tui_gateway/session_notifications.py b/tui_gateway/session_notifica
  def _loop_route_is_gateway_chat(state) -> bool:
      """A /loop set from a messaging chat carries the gateway's ``route`` (platform + chat_id); its wakeup scanner
      (``gateway/run_goals.py::_loop_wakeup_fire_one``) fires those and skips route-less CLI/TUI loops. Mirror it here
-@@ -339,6 +378,24 @@
+@@ -339,6 +385,24 @@
      with contextlib.suppress(TypeError, ValueError):
          return f" timed out (max_runtime={int(payload.get('limit_seconds') or 0)}s); will retry"
      return " timed out (max_runtime=0s); will retry"
@@ -21626,7 +21633,7 @@ diff --git a/tui_gateway/session_notifications.py b/tui_gateway/session_notifica
  
  
  # kind -> (glyph, suffix after "Kanban <id>"); silent kinds (archived/unblocked) are absent → None.
-@@ -350,6 +407,9 @@
+@@ -350,6 +414,9 @@
      "crashed": ("✖", lambda t, p, title: " worker crashed (pid gone); dispatcher will retry"),
      "timed_out": ("⏱", _kb_timed_out),
      "status": ("🔄", lambda t, p, title: f" → {p.get('status') or ''}"),
@@ -21636,7 +21643,7 @@ diff --git a/tui_gateway/session_notifications.py b/tui_gateway/session_notifica
  }
  
  
-@@ -376,14 +436,38 @@
+@@ -376,14 +443,48 @@
          return slug, f"slug:{slug}"
  
  
@@ -21657,6 +21664,16 @@ diff --git a/tui_gateway/session_notifications.py b/tui_gateway/session_notifica
 +        for ev in events:
 +            text = _format_kanban_event_text(sub, task, ev, slug)
 +            if text:
++                payload = ev.payload or {}
++                if (ev.kind == "status" and isinstance(payload, dict)
++                        and set(payload).issubset({"status", "requested_status"})
++                        and payload.get("requested_status") in (None, payload.get("status"))
++                        and str(payload.get("status") or "").strip().lower() in _KANBAN_INTERMEDIATE_STATUSES):
++                    # Preserve the status surface without creating a model wake.
++                    # The event itself and subscription cursor remain durable;
++                    # extra metadata can signal an invalidation or decision.
++                    texts.append(_KanbanPassiveStatus(text))
++                    continue
 +                prepared = DiagnosticText(text) if diagnostic_event(ev) else text
 +                texts.append(_kbd.prepare(conn, sub, ev.id, prepared))
 +    return texts, bool(task and getattr(task, "status", "") == "archived")
@@ -21677,7 +21694,7 @@ diff --git a/tui_gateway/session_notifications.py b/tui_gateway/session_notifica
              return []
      try:
          conn = _kbc.connect(board=slug)
-@@ -392,27 +476,21 @@
+@@ -392,27 +493,21 @@
      texts: list = []
      with contextlib.closing(conn):
          try:
@@ -21712,7 +21729,7 @@ diff --git a/tui_gateway/session_notifications.py b/tui_gateway/session_notifica
                  with contextlib.suppress(Exception):
                      _kbn.remove_notify_sub(conn, **sub_ident)
      return texts
-@@ -421,7 +499,8 @@
+@@ -421,7 +516,8 @@
  def _collect_kanban_notifications(session: dict) -> list:
      """Claim unseen terminal kanban events for this session's ``platform="tui"`` subscriptions (``kanban_create``
      auto-subscribes with ``chat_id=HERMES_SESSION_KEY``; no "tui" messaging adapter exists, so this poller is the
@@ -21722,7 +21739,7 @@ diff --git a/tui_gateway/session_notifications.py b/tui_gateway/session_notifica
  
      See #59890.
      """
-@@ -443,28 +522,40 @@
+@@ -443,28 +539,42 @@
      unique = {}
      for slug, resolved in (_kb_board_key(_kb, board_meta) for board_meta in boards):
          unique.setdefault(resolved, slug)
@@ -21757,11 +21774,14 @@ diff --git a/tui_gateway/session_notifications.py b/tui_gateway/session_notifica
      except Exception as exc:
          _notif_log_failure("kanban notification poll failed", exc)
          texts = []
+-    for text in texts:
++    passive = [text for text in texts if isinstance(text, _KanbanPassiveStatus)]
++    texts = [text for text in texts if not isinstance(text, _KanbanPassiveStatus)]
 +    texts = delivery.recover(session, texts)
 +    if texts:
 +        with session["history_lock"]:
 +            session["_kanban_pending"], texts = delivery.merge(session.get("_kanban_pending") or [], texts)
-     for text in texts:
++    for text in passive + texts:
          from gateway.warning_notifications import DiagnosticText, render_notification
          render_notification(lambda: _emit("status.update", sid, {"kind": "process", "text": text}),
                              platform="tui", diagnostic=isinstance(text, DiagnosticText))
@@ -21770,7 +21790,7 @@ diff --git a/tui_gateway/session_notifications.py b/tui_gateway/session_notifica
      if not session.get("_kanban_pending") or not _notif_claim_turn(session):
          return
      with session["history_lock"]:
-@@ -474,10 +565,12 @@
+@@ -474,10 +584,12 @@
          diagnostic = split and isinstance(pending[0], DiagnosticText)
          batch = [text for text in pending if not split or isinstance(text, DiagnosticText) == diagnostic]
          session["_kanban_pending"] = [text for text in pending if split and isinstance(text, DiagnosticText) != diagnostic]
@@ -21787,7 +21807,7 @@ diff --git a/tui_gateway/session_notifications.py b/tui_gateway/session_notifica
  
  
  def _background_notifications_off(session: dict) -> bool:
-@@ -763,7 +856,8 @@
+@@ -763,7 +875,8 @@
          # as kanban dispatch). An active non-parked /goal owns the idle boundary and defers the loop tick.
          if now - last_loop_poll >= _LOOP_POLL_SECONDS:
              last_loop_poll = now
@@ -43919,3 +43939,198 @@ new file mode 100644
 +    with connect() as conn:
 +        task=kb.get_task(conn,tid)
 +        assert task.status=='blocked' and task.assignee=='tester-gpt'
+diff --git a/tests/tui_gateway/test_kanban_status_wake.py b/tests/tui_gateway/test_kanban_status_wake.py
+new file mode 100644
+--- /dev/null
++++ b/tests/tui_gateway/test_kanban_status_wake.py
+@@ -0,0 +1,190 @@
++"""Intermediate card status is visible without another assistant turn."""
++import threading
++
++import pytest
++
++from hermes_cli import kanban_db as kb, kanban_db_connect as kbc, kanban_db_notify as kbn
++from tui_gateway import server
++
++KEY = 'status-wake-fixture'
++
++
++def _fixture():
++    with kbc.connect_closing() as conn:
++        tid = kb.create_task(conn, title='fixture card', assignee='worker')
++        kbn.add_notify_sub(conn, task_id=tid, platform='tui', chat_id=KEY)
++        cursor = kbn.list_notify_subs(conn, task_id=tid)[0]['last_event_id']
++    return tid, cursor
++
++
++def _event(tid, kind, payload):
++    with kbc.connect_closing() as conn, kb.write_txn(conn):
++        kb._append_event(conn, tid, kind, payload)
++        return conn.execute('SELECT MAX(id) FROM task_events WHERE task_id=?', (tid,)).fetchone()[0]
++
++
++def _session():
++    return {'session_key': KEY, 'history_lock': threading.RLock(), 'running': False, 'history': []}
++
++
++def _spies(monkeypatch):
++    rendered, admitted = [], []
++    monkeypatch.setattr(server, '_emit', lambda *args, **kwargs: rendered.append(args))
++    def submit(rid, sid, session, text, **kwargs):
++        admitted.append(text)
++        if callback := kwargs.get('terminal_callback'):
++            callback({'status': 'settled'})
++        return True
++    monkeypatch.setattr(server, '_run_prompt_submit', submit)
++    return rendered, admitted
++
++
++@pytest.mark.parametrize('status', ['todo', 'ready', 'running', 'scheduled'])
++def test_intermediate_status_is_visible_without_model_turn_and_cursor_advances(monkeypatch, status):
++    tid, before = _fixture()
++    event_id = _event(tid, 'status', {'status': status})
++    rendered, admitted = _spies(monkeypatch)
++    session = _session()
++    server._notif_poll_kanban('sid', session)
++    assert admitted == []
++    assert session['running'] is False
++    assert any(args[0]=='status.update' and status in args[2]['text'] for args in rendered)
++    with kbc.connect_closing() as conn:
++        assert kbn.list_notify_subs(conn, task_id=tid)[0]['last_event_id'] >= event_id > before
++        has_table = conn.execute("SELECT 1 FROM sqlite_master WHERE name='kanban_tui_deliveries'").fetchone()
++        if has_table:
++            assert conn.execute('SELECT COUNT(*) FROM kanban_tui_deliveries WHERE event_id=?', (event_id,)).fetchone()[0] == 0
++    server._notif_poll_kanban('sid', session)
++    assert admitted == [] and len([x for x in rendered if x[0]=='status.update']) == 1
++
++
++def test_status_churn_and_completion_wake_only_for_the_completion(monkeypatch):
++    tid, _ = _fixture()
++    rendered, admitted = _spies(monkeypatch)
++    session = _session()
++    for status in ('todo', 'ready', 'running'):
++        _event(tid, 'status', {'status': status})
++        server._notif_poll_kanban('sid', session)
++    assert admitted == []
++    with kbc.connect_closing() as conn:
++        assert kb.complete_task(conn, tid, summary='actual completion')
++    server._notif_poll_kanban('sid', session)
++    assert len(admitted) == 1 and 'actual completion' in admitted[0]
++    assert all(status not in admitted[0] for status in ('→ todo', '→ ready', '→ running'))
++    assert len([x for x in rendered if x[0]=='status.update']) == 4
++    session['running'] = False
++    server._notif_poll_kanban('sid', session)
++    assert len(admitted) == 1
++
++
++def test_dashboard_intermediate_move_is_visible_without_wake(monkeypatch):
++    from plugins.kanban.dashboard.plugin_api import _set_status_direct
++    tid, _ = _fixture()
++    with kbc.connect_closing() as conn:
++        assert _set_status_direct(conn, tid, 'todo')
++    rendered, admitted = _spies(monkeypatch)
++    server._notif_poll_kanban('sid', _session())
++    assert admitted == []
++    assert any(args[0] == 'status.update' and 'todo' in args[2]['text'] for args in rendered)
++
++
++@pytest.mark.parametrize('status', ['review', 'done', 'blocked', 'triage', 'unknown'])
++def test_other_statuses_are_not_silenced_without_outcome_proof(monkeypatch, status):
++    tid, _ = _fixture()
++    _event(tid, 'status', {'status': status})
++    _, admitted = _spies(monkeypatch)
++    server._notif_poll_kanban('sid', _session())
++    assert len(admitted) == 1 and status in admitted[0]
++
++
++def test_reopened_parent_invalidation_still_wakes_origin(monkeypatch):
++    with kbc.connect_closing() as conn:
++        parent = kb.create_task(conn, title='parent')
++        assert kb.complete_task(conn, parent, summary='parent done')
++        child = kb.create_task(conn, title='dependent', parents=(parent,))
++        assert kb.complete_task(conn, child, summary='dependent done')
++        kbn.add_notify_sub(conn, task_id=child, platform='tui', chat_id=KEY)
++        with kb.write_txn(conn):
++            conn.execute("UPDATE tasks SET status='ready' WHERE id=?", (parent,))
++            change = kb.invalidate_descendants_for_parent_reopen(conn, parent, author='fixture')
++        assert any(row['id'] == child for row in change['invalidated'])
++    _, admitted = _spies(monkeypatch)
++    server._notif_poll_kanban('sid', _session())
++    assert len(admitted) == 1 and child in admitted[0] and 'todo' in admitted[0]
++
++
++def test_status_with_unrecognized_metadata_is_not_silenced(monkeypatch):
++    tid, _ = _fixture()
++    _event(tid, 'status', {'status': 'ready', 'requires_attention': True})
++    _, admitted = _spies(monkeypatch)
++    server._notif_poll_kanban('sid', _session())
++    assert len(admitted) == 1 and tid in admitted[0]
++
++
++def test_status_routed_to_different_lane_is_not_silenced(monkeypatch):
++    tid, _ = _fixture()
++    _event(tid, 'status', {'status': 'todo', 'requested_status': 'ready'})
++    _, admitted = _spies(monkeypatch)
++    server._notif_poll_kanban('sid', _session())
++    assert len(admitted) == 1 and tid in admitted[0]
++
++
++def test_busy_session_displays_status_and_delivers_later_handoff_once(monkeypatch):
++    tid, _ = _fixture()
++    rendered, admitted = _spies(monkeypatch)
++    session = _session()
++    session['running'] = True
++    _event(tid, 'status', {'status': 'ready'})
++    server._notif_poll_kanban('sid', session)
++    assert admitted == [] and not session.get('_kanban_pending')
++    _event(tid, 'review_requested', {'summary': 'review handoff'})
++    server._notif_poll_kanban('sid', session)
++    assert admitted == [] and len(session['_kanban_pending']) == 1
++    session['running'] = False
++    server._notif_poll_kanban('sid', session)
++    assert len(admitted) == 1 and 'review handoff' in admitted[0]
++    assert len([x for x in rendered if x[0]=='status.update']) == 2
++
++
++def test_passive_render_failure_does_not_lose_a_prepared_handoff(monkeypatch):
++    tid, _ = _fixture()
++    _event(tid, 'status', {'status': 'ready'})
++    _event(tid, 'review_requested', {'summary': 'durable handoff'})
++    session = _session()
++    rendered, admitted = _spies(monkeypatch)
++    def failed_emit(*args, **kwargs):
++        raise RuntimeError('fixture renderer unavailable')
++    monkeypatch.setattr(server, '_emit', failed_emit)
++    server._notif_poll_kanban('sid', session)
++    assert admitted == []
++    monkeypatch.setattr(server, '_emit', lambda *args, **kwargs: rendered.append(args))
++    server._notif_poll_kanban('sid', session)
++    assert len(admitted) == 1 and 'durable handoff' in admitted[0]
++    session['running'] = False
++    server._notif_poll_kanban('sid', session)
++    assert len(admitted) == 1
++
++
++@pytest.mark.parametrize('state', ['pending', 'unknown'])
++def test_preexisting_receipt_keeps_its_original_recovery_contract(monkeypatch, state):
++    from hermes_cli import kanban_db_tui_delivery as receipts
++    tid, _ = _fixture()
++    _event(tid, 'status', {'status': 'ready'})
++    with kbc.connect_closing() as conn:
++        sub = kbn.list_notify_subs(conn, task_id=tid)[0]
++        with kb.write_txn(conn):
++            _, _, events = kbn.claim_unseen_events_for_sub(conn, task_id=tid, platform='tui',
++                                                          chat_id=KEY, kinds=('status',))
++            text = receipts.prepare(conn, sub, events[0].id, 'legacy status receipt')
++    if state == 'unknown':
++        _, claim = receipts.claim([text], home=receipts.owner_home(), session_key=KEY)
++        claim.mark('unknown')
++    _, admitted = _spies(monkeypatch)
++    server._notif_poll_kanban('sid', _session())
++    assert bool(admitted) is (state == 'pending')
++    if admitted:
++        assert admitted == ['legacy status receipt']
++    with kbc.connect_closing() as conn:
++        actual = conn.execute('SELECT state FROM kanban_tui_deliveries WHERE id=?',
++                              (text.delivery_ref.id,)).fetchone()[0]
++    assert actual == ('settled' if state == 'pending' else 'unknown')

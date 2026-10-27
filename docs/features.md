@@ -155,3 +155,7 @@ Quick snapshots record critical file, directory and database capture failures an
 ## Safe autonomous reassignment (v0.6.22)
 
 Captain reassignment refuses running tasks rather than interrupting an active claim based on a bot-status snapshot. Reassignment checks the observed status and owner inside the write transaction. Automatic recovery from a provider failure checks that the same failure and target remain, preserves explicit holds and sticky operator gates, and distinguishes a released historical hold from an active one. Explicit operator reclaim is unchanged.
+
+## Passive intermediate task status (v0.6.23)
+
+For TUI and Desktop subscriptions, plain todo, ready, running and scheduled status changes remain visible as status updates without creating an assistant turn. Outcomes, review handoffs, invalidation events, changed routing and unknown or additional metadata retain their existing wake behavior. Task events and the subscription cursor remain durable; the passive status display is transient and may be missed across a process crash. Existing delivery receipts are not rewritten.

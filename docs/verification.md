@@ -1056,3 +1056,7 @@ Nine related test files passed 141 offline cases on the candidate and on install
 ## Safe autonomous reassignment (v0.6.22)
 
 Thirteen related test files passed 235 offline cases with one skip on the candidate and on installed source in isolated Linux runs; the overlapping runs are not summed. Regressions cover a live isolated sleeper and manual claims, stale bot status, concurrent completion, claims and reassignment, new and prior explicit holds, released historical holds, and sticky failures. No live card was reassigned and no provider request was made. These tests do not prove production behavior, current bot availability, or usage savings.
+
+## Passive intermediate task status (v0.6.23)
+
+Seventeen related files passed 183 offline cases against installed source in an isolated Linux run. An earlier candidate suite passed 182 cases, followed by 18 focused cases including a real dashboard transition; these runs overlap and are not summed. Cases cover passive status visibility, actual completion and review delivery, parent invalidation, changed-lane and unknown metadata, busy sessions, renderer failure, and pre-existing pending or ambiguous receipts. No live task or provider call was used for verification. One read-only seven-day sample found no matching historical status receipts in the boards inspected, so runtime usage savings remain unmeasured.
