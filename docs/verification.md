@@ -1072,3 +1072,7 @@ Twenty-four related test files passed 279 offline cases with one Windows-only sk
 ## Emergency-stop inspection failures (v0.6.26)
 
 Thirteen related test files passed 148 offline cases against installed source on Linux; macOS-specific tests were skipped. Injected filesystem errors exercised profile and fleet-root paths, cron, gateway and Kanban admission. The tests do not establish that an I/O failure occurred in production or measure production usage.
+
+## Honest pause and resume status (v0.6.27)
+
+Twenty-one related files passed 264 offline tests against installed Linux source; macOS-specific tests were skipped. Tests cover CLI and gateway responses, partial deletion, unreadable state, unsaved reasons, localization catalog parity, and a real mode-000 directory in an isolated temporary home. These cases do not prove a production I/O failure occurred or measure usage savings.

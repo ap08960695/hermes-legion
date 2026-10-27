@@ -45521,7 +45521,7 @@ new file mode 100644
 diff --git a/agent/estop.py b/agent/estop.py
 --- a/agent/estop.py
 +++ b/agent/estop.py
-@@ -49,16 +49,20 @@
+@@ -49,16 +49,25 @@
      return [primary, root] if distinct else [primary]
  
  
@@ -45548,10 +45548,15 @@ diff --git a/agent/estop.py b/agent/estop.py
 -    return saw_stat_error
 +    """True if any sentinel exists or its state cannot be determined."""
 +    return any(_sentinel_exists(path) is not False for path in _candidate_sentinel_paths())
++
++
++def is_confirmed_engaged() -> bool:
++    """True only when at least one sentinel was observed, rather than uncertain."""
++    return any(_sentinel_exists(path) is True for path in _candidate_sentinel_paths())
  
  
  def engage(reason: Optional[str] = None) -> Path:
-@@ -89,19 +93,15 @@
+@@ -89,19 +98,15 @@
  def get_state() -> Optional[dict]:
      """Return ``{"reason", "engaged_at"}`` or None when not engaged; an unreadable/corrupt
      body still reports engaged with both fields None."""
@@ -45749,3 +45754,505 @@ new file mode 100644
 +    monkeypatch.setattr(Path, "read_text", guarded)
 +    assert estop.is_engaged() is True
 +    assert estop.get_state() == {"reason": None, "engaged_at": None}
+diff --git a/gateway/run_busy.py b/gateway/run_busy.py
+--- a/gateway/run_busy.py
++++ b/gateway/run_busy.py
+@@ -995,15 +995,23 @@
+         from agent import estop
+         args = (event.get_command_args() or "").strip()
+         if args.lower() in {"off", "resume", "stop", "disengage"}:
+-            if estop.disengage():
++            removed = estop.disengage()
++            if estop.is_engaged():
++                return t("gateway.pause.unconfirmed_resume")
++            if removed:
+                 return t("gateway.pause.resumed")
+             return t("gateway.pause.not_paused")
+         state = estop.get_state()
+         if state is not None and not args:
++            if not estop.is_confirmed_engaged():
++                return t("gateway.pause.unconfirmed_pause")
+             suffix = t("gateway.pause.reason_suffix", reason=state.get("reason")) if state.get("reason") else ""
+             return t("gateway.pause.already_paused", suffix=suffix)
+         estop.engage(reason=args or None)
+-        suffix = t("gateway.pause.reason_suffix", reason=args) if args else ""
++        state = estop.get_state()
++        if state is None or not estop.is_confirmed_engaged():
++            return t("gateway.pause.unconfirmed_pause")
++        suffix = t("gateway.pause.reason_suffix", reason=state.get("reason")) if state.get("reason") else ""
+         return t("gateway.pause.paused", suffix=suffix)
+ 
+     async def _busy_start_command(self, event: MessageEvent, quick_key: str, source):
+diff --git a/hermes_cli/subcommands/pause.py b/hermes_cli/subcommands/pause.py
+--- a/hermes_cli/subcommands/pause.py
++++ b/hermes_cli/subcommands/pause.py
+@@ -8,20 +8,29 @@
+ from __future__ import annotations
+ 
+ import argparse
++import sys
+ 
+ 
+ def cmd_pause(args: argparse.Namespace) -> int:
+     """Engage the global emergency stop."""
+-    from agent.estop import engage, get_state, is_engaged
++    from agent.estop import engage, get_state, is_confirmed_engaged
+ 
+     reason = getattr(args, "reason", None)
+-    already = is_engaged()
++    already = is_confirmed_engaged()
+     path = engage(reason=reason)
+-    state = get_state() or {}
++    state = get_state()
++    if state is None or not is_confirmed_engaged():
++        print("Unable to confirm pause. Check access to the emergency-stop files; new work may not be on hold.", file=sys.stderr)
++        return 1
+     verb = "Still paused" if already else "Hermes paused"
+     detail = f" — reason: {state['reason']}" if state.get("reason") else ""
+     print(f"⏸️  {verb}{detail}")
+-    print(f"    sentinel: {path}")
++    try:
++        path.stat()
++    except OSError:
++        print("    Local sentinel was not confirmed; pause was observed through another check.")
++    else:
++        print(f"    sentinel: {path}")
+     print(
+         "    Cron dispatch, kanban dispatch, and new gateway turns are on hold.\n"
+         "    In-flight work keeps running. Run `hermes resume` to lift the pause.")
+@@ -30,9 +39,13 @@
+ 
+ def cmd_resume(args: argparse.Namespace) -> int:
+     """Disengage the global emergency stop."""
+-    from agent.estop import disengage, sentinel_path
++    from agent.estop import disengage, is_engaged, sentinel_path
+ 
+-    if disengage():
++    removed = disengage()
++    if is_engaged():
++        print("Unable to confirm resume. An emergency-stop file remains or cannot be inspected.", file=sys.stderr)
++        return 1
++    if removed:
+         print("▶️  Hermes resumed — dispatch picks up on the next tick.")
+     else:
+         print(f"Hermes is not paused (no sentinel at {sentinel_path()}).")
+diff --git a/locales/af.yaml b/locales/af.yaml
+--- a/locales/af.yaml
++++ b/locales/af.yaml
+@@ -742,6 +742,8 @@
+     reason_suffix: " (rede: {reason})"
+     already_paused: "⏸️ Hermes is reeds gepouseer{suffix}. Gebruik `/pause off` om te hervat."
+     paused: "⏸️ Gepouseer{suffix}. Nuwe cron-/kanban-/gateway-werk is opgeskort; werk wat reeds loop, word normaal voltooi. Gebruik `/pause off` om te hervat."
++    unconfirmed_pause: "⚠️ Kan nie die pouse bevestig nie. Kontroleer toegang tot die noodstoplêers; nuwe werk kan dalk steeds begin."
++    unconfirmed_resume: "⚠️ Kan nie die hervatting bevestig nie. ’n Noodstoplêer bestaan steeds of kan nie nagegaan word nie."
+   queue:
+     usage: "Gebruik: /queue <prompt>"
+     queued: "In die tou vir die volgende beurt."
+diff --git a/locales/ar.yaml b/locales/ar.yaml
+--- a/locales/ar.yaml
++++ b/locales/ar.yaml
+@@ -742,6 +742,8 @@
+     reason_suffix: " (السبب: {reason})"
+     already_paused: "⏸️ Hermes متوقّف مؤقتًا بالفعل{suffix}. استخدم `/pause off` للاستئناف."
+     paused: "⏸️ تم الإيقاف المؤقت{suffix}. أعمال cron/كانبان/البوّابة الجديدة معلّقة؛ والأعمال الجارية تُكمَل كالمعتاد. استخدم `/pause off` للاستئناف."
++    unconfirmed_pause: "⚠️ تعذّر تأكيد الإيقاف المؤقت. تحقّق من الوصول إلى ملفات الإيقاف الطارئ؛ قد يستمر بدء أعمال جديدة."
++    unconfirmed_resume: "⚠️ تعذّر تأكيد استئناف العمل. لا يزال ملف إيقاف طارئ موجودًا أو يتعذّر فحصه."
+   queue:
+     usage: "الاستخدام: /queue <prompt>"
+     queued: "في قائمة الانتظار للدور التالي."
+diff --git a/locales/de.yaml b/locales/de.yaml
+--- a/locales/de.yaml
++++ b/locales/de.yaml
+@@ -742,6 +742,8 @@
+     reason_suffix: " (Grund: {reason})"
+     already_paused: "⏸️ Hermes ist bereits pausiert{suffix}. Verwenden Sie `/pause off` zum Fortsetzen."
+     paused: "⏸️ Pausiert{suffix}. Neue Cron-/Kanban-/Gateway-Arbeit wird zurückgehalten; laufende Arbeit wird normal abgeschlossen. Verwenden Sie `/pause off` zum Fortsetzen."
++    unconfirmed_pause: "⚠️ Pause kann nicht bestätigt werden. Prüfe den Zugriff auf die Notstoppdateien; neue Aufgaben könnten weiterhin starten."
++    unconfirmed_resume: "⚠️ Fortsetzung kann nicht bestätigt werden. Eine Notstoppdatei ist noch vorhanden oder kann nicht geprüft werden."
+   queue:
+     usage: "Verwendung: /queue <prompt>"
+     queued: "Für den nächsten Zug eingereiht."
+diff --git a/locales/en.yaml b/locales/en.yaml
+--- a/locales/en.yaml
++++ b/locales/en.yaml
+@@ -751,6 +751,8 @@
+     reason_suffix: " (reason: {reason})"
+     already_paused: "⏸️ Hermes is already paused{suffix}. Use `/pause off` to resume."
+     paused: "⏸️ Paused{suffix}. New cron/kanban/gateway work is on hold; in-flight work finishes normally. Use `/pause off` to resume."
++    unconfirmed_pause: "⚠️ Unable to confirm pause. Check access to the emergency-stop files; new work may not be on hold."
++    unconfirmed_resume: "⚠️ Unable to confirm resume. An emergency-stop file remains or cannot be inspected."
+ 
+   queue:
+     usage: "Usage: /queue <prompt>"
+diff --git a/locales/es.yaml b/locales/es.yaml
+--- a/locales/es.yaml
++++ b/locales/es.yaml
+@@ -742,6 +742,8 @@
+     reason_suffix: " (motivo: {reason})"
+     already_paused: "⏸️ Hermes ya está pausado{suffix}. Usa `/pause off` para reanudar."
+     paused: "⏸️ Pausado{suffix}. El trabajo nuevo de cron/kanban/gateway queda en espera; el trabajo en curso termina con normalidad. Usa `/pause off` para reanudar."
++    unconfirmed_pause: "⚠️ No se puede confirmar la pausa. Comprueba el acceso a los archivos de parada de emergencia; podrían iniciarse tareas nuevas."
++    unconfirmed_resume: "⚠️ No se puede confirmar la reanudación. Queda un archivo de parada de emergencia o no se puede comprobar."
+   queue:
+     usage: "Uso: /queue <prompt>"
+     queued: "En cola para el siguiente turno."
+diff --git a/locales/fr.yaml b/locales/fr.yaml
+--- a/locales/fr.yaml
++++ b/locales/fr.yaml
+@@ -868,6 +868,8 @@
+     reason_suffix: " (raison : {reason})"
+     already_paused: "⏸️ Hermes est déjà en pause{suffix}. Utilisez `/pause off` pour reprendre."
+     paused: "⏸️ En pause{suffix}. Le nouveau travail cron/kanban/gateway est suspendu ; le travail en cours se termine normalement. Utilisez `/pause off` pour reprendre."
++    unconfirmed_pause: "⚠️ Impossible de confirmer la pause. Vérifiez l’accès aux fichiers d’arrêt d’urgence ; de nouvelles tâches pourraient démarrer."
++    unconfirmed_resume: "⚠️ Impossible de confirmer la reprise. Un fichier d’arrêt d’urgence subsiste ou ne peut pas être vérifié."
+   queue:
+     usage: "Usage : /queue <prompt>"
+     queued: "Mis en file pour le prochain tour."
+diff --git a/locales/ga.yaml b/locales/ga.yaml
+--- a/locales/ga.yaml
++++ b/locales/ga.yaml
+@@ -742,6 +742,8 @@
+     reason_suffix: " (cúis: {reason})"
+     already_paused: "⏸️ Tá Hermes ar sos cheana féin{suffix}. Úsáid `/pause off` chun atosú."
+     paused: "⏸️ Ar sos{suffix}. Tá obair nua cron/kanban/gateway ar fionraí; críochnaíonn obair atá ar siúl mar is gnách. Úsáid `/pause off` chun atosú."
++    unconfirmed_pause: "⚠️ Ní féidir a dheimhniú go bhfuil an córas ar sos. Seiceáil rochtain ar chomhaid an stad éigeandála; d’fhéadfadh obair nua tosú fós."
++    unconfirmed_resume: "⚠️ Ní féidir a dheimhniú gur atosaíodh an obair. Tá comhad stad éigeandála fós ann nó ní féidir é a sheiceáil."
+   queue:
+     usage: "Úsáid: /queue <leid>"
+     queued: "Curtha i scuaine don chéad seal eile."
+diff --git a/locales/hu.yaml b/locales/hu.yaml
+--- a/locales/hu.yaml
++++ b/locales/hu.yaml
+@@ -752,6 +752,8 @@
+     reason_suffix: " (ok: {reason})"
+     already_paused: "⏸️ A Hermes már szünetel{suffix}. Folytatás: `/pause off`."
+     paused: "⏸️ Szüneteltetve{suffix}. Az új cron-/kanban-/átjárómunka várakozik; a folyamatban lévő munka rendesen befejeződik. Folytatás: `/pause off`."
++    unconfirmed_pause: "⚠️ A szüneteltetés nem erősíthető meg. Ellenőrizd a vészleállító fájlokhoz való hozzáférést; új feladatok még elindulhatnak."
++    unconfirmed_resume: "⚠️ A folytatás nem erősíthető meg. Egy vészleállító fájl még létezik, vagy nem ellenőrizhető."
+   queue:
+     usage: "Használat: /queue <prompt>"
+     queued: "Sorba állítva a következő körre."
+diff --git a/locales/it.yaml b/locales/it.yaml
+--- a/locales/it.yaml
++++ b/locales/it.yaml
+@@ -742,6 +742,8 @@
+     reason_suffix: " (motivo: {reason})"
+     already_paused: "⏸️ Hermes è già in pausa{suffix}. Usa `/pause off` per riprendere."
+     paused: "⏸️ In pausa{suffix}. Il nuovo lavoro cron/kanban/gateway è sospeso; il lavoro in corso termina normalmente. Usa `/pause off` per riprendere."
++    unconfirmed_pause: "⚠️ Impossibile confermare la pausa. Verifica l’accesso ai file di arresto di emergenza; potrebbero ancora avviarsi nuove attività."
++    unconfirmed_resume: "⚠️ Impossibile confermare la ripresa. Un file di arresto di emergenza è ancora presente o non è verificabile."
+   queue:
+     usage: "Uso: /queue <prompt>"
+     queued: "In coda per il prossimo turno."
+diff --git a/locales/ja.yaml b/locales/ja.yaml
+--- a/locales/ja.yaml
++++ b/locales/ja.yaml
+@@ -742,6 +742,8 @@
+     reason_suffix: " (理由: {reason})"
+     already_paused: "⏸️ Hermes はすでに一時停止しています{suffix}。再開するには `/pause off` を使ってください。"
+     paused: "⏸️ 一時停止しました{suffix}。新しい cron/kanban/ゲートウェイの作業は保留され、進行中の作業は通常どおり完了します。再開するには `/pause off` を使ってください。"
++    unconfirmed_pause: "⚠️ 一時停止を確認できません。緊急停止ファイルへのアクセスを確認してください。新しい作業が開始される可能性があります。"
++    unconfirmed_resume: "⚠️ 再開を確認できません。緊急停止ファイルが残っているか、確認できません。"
+   queue:
+     usage: "使い方: /queue <プロンプト>"
+     queued: "次のターンにキューしました。"
+diff --git a/locales/ko.yaml b/locales/ko.yaml
+--- a/locales/ko.yaml
++++ b/locales/ko.yaml
+@@ -742,6 +742,8 @@
+     reason_suffix: " (이유: {reason})"
+     already_paused: "⏸️ Hermes는 이미 일시 중지되어 있어요{suffix}. 재개하려면 `/pause off`를 사용하세요."
+     paused: "⏸️ 일시 중지됨{suffix}. 새 크론/칸반/게이트웨이 작업은 보류되고, 진행 중인 작업은 정상적으로 끝나요. 재개하려면 `/pause off`를 사용하세요."
++    unconfirmed_pause: "⚠️ 일시 중지를 확인할 수 없습니다. 비상 정지 파일에 대한 접근을 확인하세요. 새 작업이 시작될 수 있습니다."
++    unconfirmed_resume: "⚠️ 재개를 확인할 수 없습니다. 비상 정지 파일이 남아 있거나 확인할 수 없습니다."
+   queue:
+     usage: "사용법: /queue <prompt>"
+     queued: "다음 턴 대기열에 추가했어요."
+diff --git a/locales/pt.yaml b/locales/pt.yaml
+--- a/locales/pt.yaml
++++ b/locales/pt.yaml
+@@ -742,6 +742,8 @@
+     reason_suffix: " (motivo: {reason})"
+     already_paused: "⏸️ O Hermes já está pausado{suffix}. Use `/pause off` para retomar."
+     paused: "⏸️ Pausado{suffix}. Novo trabalho de cron/kanban/gateway está em espera; o trabalho em andamento termina normalmente. Use `/pause off` para retomar."
++    unconfirmed_pause: "⚠️ Não foi possível confirmar a pausa. Verifique o acesso aos ficheiros de paragem de emergência; novas tarefas ainda podem começar."
++    unconfirmed_resume: "⚠️ Não foi possível confirmar a retoma. Um ficheiro de paragem de emergência ainda existe ou não pode ser verificado."
+   queue:
+     usage: "Uso: /queue <prompt>"
+     queued: "Enfileirado para o próximo turno."
+diff --git a/locales/ru.yaml b/locales/ru.yaml
+--- a/locales/ru.yaml
++++ b/locales/ru.yaml
+@@ -742,6 +742,8 @@
+     reason_suffix: " (причина: {reason})"
+     already_paused: "⏸️ Hermes уже приостановлен{suffix}. Используйте `/pause off`, чтобы возобновить."
+     paused: "⏸️ Приостановлено{suffix}. Новая работа cron/kanban/шлюза отложена; уже запущенная завершится как обычно. Используйте `/pause off`, чтобы возобновить."
++    unconfirmed_pause: "⚠️ Не удалось подтвердить паузу. Проверьте доступ к файлам аварийной остановки: новые задачи всё ещё могут запускаться."
++    unconfirmed_resume: "⚠️ Не удалось подтвердить возобновление. Файл аварийной остановки остался или недоступен для проверки."
+   queue:
+     usage: "Использование: /queue <промпт>"
+     queued: "Поставлено в очередь на следующий ход."
+diff --git a/locales/tr.yaml b/locales/tr.yaml
+--- a/locales/tr.yaml
++++ b/locales/tr.yaml
+@@ -742,6 +742,8 @@
+     reason_suffix: " (neden: {reason})"
+     already_paused: "⏸️ Hermes zaten duraklatılmış{suffix}. Devam etmek için `/pause off` kullanın."
+     paused: "⏸️ Duraklatıldı{suffix}. Yeni cron/kanban/gateway işleri beklemeye alındı; sürmekte olan işler normal şekilde tamamlanır. Devam etmek için `/pause off` kullanın."
++    unconfirmed_pause: "⚠️ Duraklatma doğrulanamadı. Acil durdurma dosyalarına erişimi kontrol edin; yeni işler yine de başlayabilir."
++    unconfirmed_resume: "⚠️ Devam etme doğrulanamadı. Bir acil durdurma dosyası hâlâ var veya denetlenemiyor."
+   queue:
+     usage: "Kullanım: /queue <prompt>"
+     queued: "Sonraki tur için sıraya alındı."
+diff --git a/locales/uk.yaml b/locales/uk.yaml
+--- a/locales/uk.yaml
++++ b/locales/uk.yaml
+@@ -742,6 +742,8 @@
+     reason_suffix: " (причина: {reason})"
+     already_paused: "⏸️ Hermes уже на паузі{suffix}. Скористайтеся `/pause off`, щоб відновити."
+     paused: "⏸️ Пауза{suffix}. Нові завдання cron, kanban і шлюзу призупинено; вже розпочата робота завершується як звичайно. Скористайтеся `/pause off`, щоб відновити."
++    unconfirmed_pause: "⚠️ Не вдалося підтвердити паузу. Перевірте доступ до файлів аварійної зупинки: нові завдання все ще можуть запускатися."
++    unconfirmed_resume: "⚠️ Не вдалося підтвердити відновлення. Файл аварійної зупинки залишився або недоступний для перевірки."
+   queue:
+     usage: "Використання: /queue <prompt>"
+     queued: "Поставлено в чергу на наступний хід."
+diff --git a/locales/zh-hant.yaml b/locales/zh-hant.yaml
+--- a/locales/zh-hant.yaml
++++ b/locales/zh-hant.yaml
+@@ -742,6 +742,8 @@
+     reason_suffix: " （原因：{reason}）"
+     already_paused: "⏸️ Hermes 已處於暫停狀態{suffix}。使用 `/pause off` 恢復。"
+     paused: "⏸️ 已暫停{suffix}。新的排程／kanban／閘道工作將暫緩；進行中的工作會正常完成。使用 `/pause off` 恢復。"
++    unconfirmed_pause: "⚠️ 無法確認暫停。請檢查緊急停止檔案的存取權限；新工作可能仍會啟動。"
++    unconfirmed_resume: "⚠️ 無法確認恢復。緊急停止檔案仍然存在或無法檢查。"
+   queue:
+     usage: "用法：/queue <prompt>"
+     queued: "已排入下一輪佇列。"
+diff --git a/locales/zh.yaml b/locales/zh.yaml
+--- a/locales/zh.yaml
++++ b/locales/zh.yaml
+@@ -742,6 +742,8 @@
+     reason_suffix: " （原因：{reason}）"
+     already_paused: "⏸️ Hermes 已处于暂停状态{suffix}。用 `/pause off` 恢复。"
+     paused: "⏸️ 已暂停{suffix}。新的定时任务/看板/网关任务将被搁置；进行中的任务正常完成。用 `/pause off` 恢复。"
++    unconfirmed_pause: "⚠️ 无法确认暂停。请检查对紧急停止文件的访问权限；新任务可能仍会启动。"
++    unconfirmed_resume: "⚠️ 无法确认恢复。紧急停止文件仍然存在或无法检查。"
+   queue:
+     usage: "用法：/queue <提示词>"
+     queued: "已排队至下一回合。"
+diff --git a/tests/cron/test_estop_command_failures.py b/tests/cron/test_estop_command_failures.py
+new file mode 100644
+--- /dev/null
++++ b/tests/cron/test_estop_command_failures.py
+@@ -0,0 +1,211 @@
++"""Pause controls must not report success when sentinel I/O fails."""
++
++import argparse
++import errno
++import os
++from pathlib import Path
++
++import pytest
++
++from agent import estop
++
++
++@pytest.fixture
++def sentinels(tmp_path, monkeypatch):
++    local = tmp_path / "profile" / "ESTOP"
++    root = tmp_path / "root" / "ESTOP"
++    local.parent.mkdir()
++    root.parent.mkdir()
++    monkeypatch.setattr(estop, "sentinel_path", lambda: local)
++    monkeypatch.setattr(estop, "_candidate_sentinel_paths", lambda: [local, root])
++    return local, root
++
++
++def reject_creation(monkeypatch, path, *, reject_touch):
++    original_write = Path.write_text
++    original_touch = Path.touch
++
++    def write(target, *args, **kwargs):
++        if target == path:
++            raise PermissionError(errno.EACCES, "simulated write denial")
++        return original_write(target, *args, **kwargs)
++
++    def touch(target, *args, **kwargs):
++        if target == path and reject_touch:
++            raise PermissionError(errno.EACCES, "simulated touch denial")
++        return original_touch(target, *args, **kwargs)
++
++    monkeypatch.setattr(Path, "write_text", write)
++    monkeypatch.setattr(Path, "touch", touch)
++
++
++def reject_removal(monkeypatch, path):
++    original = Path.unlink
++
++    def unlink(target, *args, **kwargs):
++        if target == path:
++            raise PermissionError(errno.EACCES, "simulated unlink denial")
++        return original(target, *args, **kwargs)
++
++    monkeypatch.setattr(Path, "unlink", unlink)
++
++
++class PauseEvent:
++    def __init__(self, args):
++        self.args = args
++
++    def get_command_args(self):
++        return self.args
++
++
++def test_cli_pause_does_not_claim_success_when_creation_fails(sentinels, monkeypatch, capsys):
++    from hermes_cli.subcommands.pause import cmd_pause
++
++    local, _ = sentinels
++    reject_creation(monkeypatch, local, reject_touch=True)
++
++    assert cmd_pause(argparse.Namespace(reason="test")) != 0
++    assert "unable to confirm" in capsys.readouterr().err.lower()
++    assert estop.is_engaged() is False
++
++
++def test_cli_pause_does_not_present_a_missing_local_sentinel_as_created(sentinels, monkeypatch, capsys):
++    from hermes_cli.subcommands.pause import cmd_pause
++
++    local, root = sentinels
++    root.touch()
++    reject_creation(monkeypatch, local, reject_touch=True)
++
++    assert cmd_pause(argparse.Namespace(reason=None)) == 0
++    output = capsys.readouterr().out.lower()
++    assert "local sentinel was not confirmed" in output
++    assert f"sentinel: {local}" not in output
++    assert not local.exists() and root.exists()
++
++
++@pytest.mark.asyncio
++async def test_gateway_pause_does_not_claim_success_when_creation_fails(sentinels, monkeypatch):
++    from gateway.run import GatewayRunner
++
++    local, _ = sentinels
++    reject_creation(monkeypatch, local, reject_touch=True)
++    runner = object.__new__(GatewayRunner)
++
++    reply = await runner._handle_pause_command(PauseEvent("test"))
++    assert "unable to confirm" in reply.lower()
++    assert estop.is_engaged() is False
++
++
++@pytest.mark.parametrize("has_local", [False, True], ids=["root-only", "partial-removal"])
++def test_cli_resume_does_not_claim_success_when_root_remains(sentinels, monkeypatch, capsys, has_local):
++    from hermes_cli.subcommands.pause import cmd_resume
++
++    local, root = sentinels
++    if has_local:
++        local.touch()
++    root.touch()
++    reject_removal(monkeypatch, root)
++
++    assert cmd_resume(argparse.Namespace()) != 0
++    assert "unable to confirm" in capsys.readouterr().err.lower()
++    assert not local.exists()
++    assert root.exists()
++
++
++def test_cli_resume_does_not_claim_success_if_remaining_state_is_unknown(sentinels, monkeypatch, capsys):
++    from hermes_cli.subcommands.pause import cmd_resume
++
++    _, root = sentinels
++    reject_removal(monkeypatch, root)
++    original = os.stat
++
++    def stat(target, *args, **kwargs):
++        if isinstance(target, (str, bytes, os.PathLike)) and os.fspath(target) == os.fspath(root):
++            raise PermissionError(errno.EACCES, "simulated inspection denial")
++        return original(target, *args, **kwargs)
++
++    monkeypatch.setattr(os, "stat", stat)
++    assert cmd_resume(argparse.Namespace()) != 0
++    assert "unable to confirm" in capsys.readouterr().err.lower()
++
++
++@pytest.mark.platforms("posix")
++@pytest.mark.skipif(getattr(os, "geteuid", lambda: None)() == 0, reason="root can traverse a mode-000 directory")
++def test_cli_resume_reports_inaccessible_real_directory(sentinels, capsys):
++    from hermes_cli.subcommands.pause import cmd_resume
++
++    _, root = sentinels
++    root.parent.chmod(0)
++    try:
++        assert cmd_resume(argparse.Namespace()) != 0
++        assert "unable to confirm" in capsys.readouterr().err.lower()
++    finally:
++        root.parent.chmod(0o700)
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize("has_local", [False, True], ids=["root-only", "partial-removal"])
++async def test_gateway_resume_does_not_claim_success_when_root_remains(sentinels, monkeypatch, has_local):
++    from gateway.run import GatewayRunner
++
++    local, root = sentinels
++    if has_local:
++        local.touch()
++    root.touch()
++    reject_removal(monkeypatch, root)
++    runner = object.__new__(GatewayRunner)
++
++    reply = await runner._handle_pause_command(PauseEvent("off"))
++    assert "unable to confirm" in reply.lower()
++    assert not local.exists()
++    assert root.exists()
++
++
++@pytest.mark.asyncio
++async def test_gateway_pause_does_not_invent_unsaved_reason(sentinels, monkeypatch):
++    from gateway.run import GatewayRunner
++
++    local, _ = sentinels
++    reject_creation(monkeypatch, local, reject_touch=False)
++    runner = object.__new__(GatewayRunner)
++
++    reply = await runner._handle_pause_command(PauseEvent("unsaved reason"))
++    assert "paused" in reply.lower()
++    assert "unsaved reason" not in reply
++    assert estop.get_state()["reason"] is None
++
++
++@pytest.mark.asyncio
++async def test_gateway_pause_creation_failure_uses_the_selected_language(sentinels, monkeypatch):
++    from agent import i18n
++    from gateway.run import GatewayRunner
++
++    local, _ = sentinels
++    reject_creation(monkeypatch, local, reject_touch=True)
++    monkeypatch.setenv("HERMES_LANGUAGE", "de")
++    i18n.reset_language_cache()
++    try:
++        reply = await object.__new__(GatewayRunner)._handle_pause_command(PauseEvent("test"))
++        assert "Pause kann nicht bestätigt werden" in reply
++    finally:
++        i18n.reset_language_cache()
++
++
++@pytest.mark.asyncio
++async def test_gateway_does_not_claim_unknown_state_is_already_paused(sentinels, monkeypatch):
++    from gateway.run import GatewayRunner
++
++    local, root = sentinels
++    original = os.stat
++
++    def stat(target, *args, **kwargs):
++        if isinstance(target, (str, bytes, os.PathLike)) and os.fspath(target) == os.fspath(root):
++            raise PermissionError(errno.EACCES, "simulated inspection denial")
++        return original(target, *args, **kwargs)
++
++    monkeypatch.setattr(os, "stat", stat)
++    runner = object.__new__(GatewayRunner)
++    reply = await runner._handle_pause_command(PauseEvent(""))
++
++    assert "unable to confirm" in reply.lower()
++    assert not local.exists()

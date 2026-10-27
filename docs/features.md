@@ -171,3 +171,7 @@ The shared dispatcher honors the emergency stop before a tick and before each ne
 ## Emergency-stop inspection failures (v0.6.26)
 
 Treat an inaccessible or uninspectable emergency-stop sentinel as paused; only a missing sentinel permits work. This protects cron, gateway turns and Kanban admission without interrupting in-flight work. The operator can still use the existing pause controls.
+
+## Honest pause and resume status (v0.6.27)
+
+Pause controls confirm that an emergency-stop file is visible before claiming a pause. Resume controls check whether any known sentinel remains or cannot be inspected before reporting success. An unreadable state produces a clear warning, and a reason is shown only when it was actually read from a sentinel. Existing in-flight work is not interrupted.
