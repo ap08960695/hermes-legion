@@ -1128,3 +1128,21 @@ A Linux offline regression suite exercised long CJK and Latin tokens, long highl
 ## Read-only cross-profile CJK search (v0.6.40)
 
 Offline synthetic tests covered cross-profile search, tokenizer and index absence, stale indexes, a caller-owned transaction, a concurrent writer, and percent-sign fallbacks. Sixteen focused tests, 199 wider search tests, nine state tests and 80 read/write safety tests passed; seven platform-specific cases were skipped. These suites overlap. After installation, a three-file suite passed 91 tests on installed source. In a synthetic 40-run profile-open test, the query returned two matching rows instead of one, with median open times of 1.494 ms versus 1.421 ms before the change. This is not a production usage or speed measurement. The gateway reloaded through idle-only control; no model calls were made.
+
+## Structured global recall (v0.6.41)
+
+A 22-file offline suite passed 456 tests on both the candidate and installed source. Tests
+cover nested escapes, word boundaries, Boolean/prefix queries, image-only and hidden-row
+rejection, read-only CJK snapshots, bounded excerpts, timeout reporting, caller
+transactions and progress handlers. Two timeout-injection tests were updated to target an
+execution path that remains active after lazy evaluation; the retained assertions still
+require a timeout. A synthetic 460,000-row mixed fixture with 30% large argument fields
+passed all 15 trials: three trials each for two Latin terms, CJK, no-hit and frequent-word
+queries. The frequent-word case returned all 20 expected results in 1.17–1.18 seconds,
+compared with a three-second timeout in the earlier candidate. The slower Latin case took
+2.78–2.82 seconds, so its deadline margin remains small. A private, bounded real-history
+subset was searched in transient RAM storage with source identity and bounded-page checks;
+it was not a search across a live production database. These results do not establish
+natural-workload latency, usage savings, or compatibility with every SQLite build. The
+gateway adopted the installed files through native idle-only reload. No model calls were
+made.

@@ -227,3 +227,7 @@ Full-text search results cap each snippet at 1,000 characters, keeping a genuine
 ## Read-only cross-profile CJK search (v0.6.40)
 
 Read-only session searches can use an existing healthy CJK full-text index after loading its existing tokenizer. The index health marker and results are checked in the same SQLite read snapshot. If the index is stale or unavailable, the search uses an existing fallback without repairing or changing the source database. Queries with a percent sign retain their previous read-only search path.
+
+## Structured global recall (v0.6.41)
+
+Global session discovery verifies visible structured text and encoded tool arguments before pagination. Image payloads and hidden scaffolding do not become text matches. Decoded tool excerpts carry their original field and offset metadata. Unicode escapes nested inside argument strings retain recall, including prefix and Boolean queries. Existing indexes are reused; no database rebuild is required. Search errors and the three-second deadline remain explicit. A caller-owned SQLite transaction and progress handler are preserved. Frequent-word queries avoid repeated field decoding and cursor creation; supplemental candidates do not compute unused ranking scores.
