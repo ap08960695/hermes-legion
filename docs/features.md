@@ -167,3 +167,7 @@ For a given board, concurrent creation requests using the same nonempty idempote
 ## Dispatch pause and shared capacity (v0.6.25)
 
 The shared dispatcher honors the emergency stop before a tick and before each new admission; it leaves existing workers alone. The dashboard nudge and standalone daemon pass the configured host, board and per-profile limits. Within a shared Kanban home, a short nonblocking admission lock serializes capacity rechecks and claims across cooperating updated dispatchers. Read-only capacity checks include running tasks on known active boards. When an active board cannot be read or the admission lock cannot be used, capped dispatch defers new claims and reports why. A board omitted by the underlying enumeration cannot be counted, and manual claims outside the dispatcher are not governed by these caps.
+
+## Emergency-stop inspection failures (v0.6.26)
+
+Treat an inaccessible or uninspectable emergency-stop sentinel as paused; only a missing sentinel permits work. This protects cron, gateway turns and Kanban admission without interrupting in-flight work. The operator can still use the existing pause controls.

@@ -45518,3 +45518,234 @@ new file mode 100644
 +    assert spawns == []
 +    with kbc.connect_closing() as conn:
 +        assert kb.get_task(conn, tid).status == 'ready'
+diff --git a/agent/estop.py b/agent/estop.py
+--- a/agent/estop.py
++++ b/agent/estop.py
+@@ -49,16 +49,20 @@
+     return [primary, root] if distinct else [primary]
+ 
+ 
++def _sentinel_exists(path: Path) -> Optional[bool]:
++    """Return None when the sentinel cannot be inspected, not when it is missing."""
++    try:
++        path.stat()
++    except FileNotFoundError:
++        return False
++    except OSError:
++        return None
++    return True
++
++
+ def is_engaged() -> bool:
+-    """True if ANY candidate sentinel exists; fail SAFE (True) on stat errors."""
+-    saw_stat_error = False
+-    for path in _candidate_sentinel_paths():
+-        try:
+-            if path.exists():
+-                return True
+-        except OSError:
+-            saw_stat_error = True
+-    return saw_stat_error
++    """True if any sentinel exists or its state cannot be determined."""
++    return any(_sentinel_exists(path) is not False for path in _candidate_sentinel_paths())
+ 
+ 
+ def engage(reason: Optional[str] = None) -> Path:
+@@ -89,19 +93,15 @@
+ def get_state() -> Optional[dict]:
+     """Return ``{"reason", "engaged_at"}`` or None when not engaged; an unreadable/corrupt
+     body still reports engaged with both fields None."""
+-    if not is_engaged():
+-        return None
+     state = {"reason": None, "engaged_at": None}
+     found = False
+     for path in _candidate_sentinel_paths():
+-        try:
+-            if not path.exists():
+-                continue
+-        except OSError:
+-            return state
+-        except AttributeError:
++        exists = _sentinel_exists(path)
++        if exists is False:
+             continue
+         found = True
++        if exists is None:
++            continue
+         with suppress(OSError, ValueError, AttributeError):
+             raw = json.loads(path.read_text(encoding="utf-8-sig"))
+             if isinstance(raw, dict):
+diff --git a/tests/cron/test_estop.py b/tests/cron/test_estop.py
+--- a/tests/cron/test_estop.py
++++ b/tests/cron/test_estop.py
+@@ -255,7 +255,7 @@
+     hold even when HERMES_HOME is misbehaving, matching the module's
+     corrupt-sentinel doctrine."""
+     class _BoomPath:
+-        def exists(self):
++        def stat(self):
+             raise OSError("permission denied")
+ 
+     monkeypatch.setattr(estop, "sentinel_path", lambda: _BoomPath())
+diff --git a/tests/cron/test_estop_io_failure.py b/tests/cron/test_estop_io_failure.py
+new file mode 100644
+--- /dev/null
++++ b/tests/cron/test_estop_io_failure.py
+@@ -0,0 +1,157 @@
++"""ESTOP must remain engaged when a sentinel cannot be inspected."""
++
++import errno
++import os
++from pathlib import Path
++
++import pytest
++
++from agent import estop
++
++
++@pytest.fixture
++def sentinel_pair(tmp_path, monkeypatch):
++    profile = tmp_path / "profile" / "ESTOP"
++    root = tmp_path / "root" / "ESTOP"
++    profile.parent.mkdir()
++    root.parent.mkdir()
++    monkeypatch.setattr(estop, "_candidate_sentinel_paths", lambda: [profile, root])
++    return profile, root
++
++
++def deny_stat(monkeypatch, path, error):
++    original = os.stat
++
++    def guarded(target, *args, **kwargs):
++        if isinstance(target, (str, bytes, os.PathLike)) and os.fspath(target) == os.fspath(path):
++            raise OSError(error, "simulated sentinel inspection failure")
++        return original(target, *args, **kwargs)
++
++    monkeypatch.setattr(os, "stat", guarded)
++
++
++@pytest.mark.parametrize("error", [errno.EACCES, errno.EIO, errno.ELOOP])
++@pytest.mark.parametrize("index", [0, 1], ids=["profile", "fleet-root"])
++def test_stat_failure_holds_dispatch_and_gateway(sentinel_pair, monkeypatch, error, index):
++    deny_stat(monkeypatch, sentinel_pair[index], error)
++
++    assert estop.is_engaged() is True
++    assert estop.get_state() == {"reason": None, "engaged_at": None}
++    assert "paused" in estop.paused_reply().lower()
++
++
++def test_unreadable_sentinel_does_not_hide_known_reason(sentinel_pair, monkeypatch):
++    profile, root = sentinel_pair
++    root.write_text('{"reason":"maintenance"}', encoding="utf-8")
++    deny_stat(monkeypatch, profile, errno.EACCES)
++
++    assert estop.is_engaged() is True
++    assert estop.get_state()["reason"] == "maintenance"
++
++
++def test_state_remains_paused_when_inspection_fails(sentinel_pair, monkeypatch):
++    profile, _ = sentinel_pair
++    profile.touch()
++    original = os.stat
++    calls = 0
++
++    def initially_accessible(target, *args, **kwargs):
++        nonlocal calls
++        if isinstance(target, (str, bytes, os.PathLike)) and os.fspath(target) == os.fspath(profile):
++            calls += 1
++            if calls > 1:
++                raise PermissionError(errno.EACCES, "sentinel became inaccessible")
++        return original(target, *args, **kwargs)
++
++    monkeypatch.setattr(os, "stat", initially_accessible)
++    assert estop.is_engaged() is True
++
++    assert estop.get_state() == {"reason": None, "engaged_at": None}
++
++
++def test_cron_does_not_scan_jobs_when_sentinel_inspection_fails(sentinel_pair, monkeypatch):
++    from cron import scheduler
++
++    scans = []
++    monkeypatch.setattr(scheduler, "get_due_jobs", lambda: scans.append(True) or [])
++    deny_stat(monkeypatch, sentinel_pair[1], errno.EACCES)
++
++    assert scheduler.tick(verbose=False) == 0
++    assert scans == []
++
++
++def test_dispatch_preserves_ready_work_when_sentinel_inspection_fails(
++    sentinel_pair, tmp_path, monkeypatch
++):
++    from hermes_cli import kanban_db as kb
++    from hermes_cli import kanban_db_connect as kbc
++    from hermes_cli import kanban_db_dispatch as kbd
++
++    home = tmp_path / "kanban"
++    home.mkdir()
++    monkeypatch.setenv("HOME", str(tmp_path))
++    monkeypatch.setenv("HERMES_HOME", str(home))
++    monkeypatch.setenv("HERMES_KANBAN_HOME", str(home))
++    monkeypatch.setattr(Path, "home", lambda: tmp_path)
++    monkeypatch.setattr(kbd, "_profile_exists_fn", lambda: lambda _name: True)
++    monkeypatch.setattr(kbd, "_system_memory_sample", dict)
++    monkeypatch.setattr(kbd, "review_dispatch_enabled", lambda: False)
++    kb.init_db()
++    with kbc.connect_closing() as conn:
++        tid = kb.create_task(conn, title="waiting", assignee="alice")
++        spawns = []
++        deny_stat(monkeypatch, sentinel_pair[1], errno.EACCES)
++
++        result = kbd.dispatch_once(conn, spawn_fn=lambda *args, **kwargs: spawns.append(args))
++        assert result.skipped_paused is True
++        assert spawns == []
++        assert kb.get_task(conn, tid).status == "ready"
++
++
++@pytest.mark.asyncio
++async def test_gateway_rejects_new_turn_when_sentinel_inspection_fails(sentinel_pair, monkeypatch):
++    from gateway.run import GatewayRunner
++
++    class Source:
++        platform = None
++        chat_id = "c1"
++        user_id = "u1"
++        user_name = "user"
++        chat_type = "dm"
++        profile = None
++
++    class Event:
++        internal = False
++        text = "hello"
++        source = Source()
++
++        def get_command(self):
++            return None
++
++    runner = object.__new__(GatewayRunner)
++    runner._is_user_authorized = lambda source: True
++    deny_stat(monkeypatch, sentinel_pair[1], errno.EACCES)
++
++    reply = await runner._handle_message(Event())
++    assert "paused" in reply.lower()
++
++
++def test_missing_sentinels_are_not_paused(sentinel_pair):
++    assert estop.is_engaged() is False
++    assert estop.get_state() is None
++    assert estop.paused_reply() is None
++
++
++def test_unreadable_content_remains_paused(sentinel_pair, monkeypatch):
++    profile, _ = sentinel_pair
++    profile.touch()
++    original = Path.read_text
++
++    def guarded(path, *args, **kwargs):
++        if path == profile:
++            raise PermissionError(errno.EACCES, "simulated unreadable sentinel")
++        return original(path, *args, **kwargs)
++
++    monkeypatch.setattr(Path, "read_text", guarded)
++    assert estop.is_engaged() is True
++    assert estop.get_state() == {"reason": None, "engaged_at": None}

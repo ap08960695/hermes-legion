@@ -1068,3 +1068,7 @@ The previous implementation produced two tasks in isolated simultaneous two-conn
 ## Dispatch pause and shared capacity (v0.6.25)
 
 Twenty-four related test files passed 279 offline cases with one Windows-only skip against installed source on Linux. Cases cover direct and dashboard pause, an existing worker, a pause during a tick, root pause, resume, dashboard and daemon caps, independent profiles, two simultaneous processes on separate boards, unavailable or contended locks, unknown board capacity, and read-only WAL counts. In a small synthetic tmpfs sample, five runs of 16 fake admissions across four boards took a median 134.401 ms before and 143.475 ms after; this does not measure production latency. Actual behavior under a resumed live dispatcher and usage impact remain unverified.
+
+## Emergency-stop inspection failures (v0.6.26)
+
+Thirteen related test files passed 148 offline cases against installed source on Linux; macOS-specific tests were skipped. Injected filesystem errors exercised profile and fleet-root paths, cron, gateway and Kanban admission. The tests do not establish that an I/O failure occurred in production or measure production usage.
