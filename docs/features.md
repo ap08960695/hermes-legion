@@ -163,3 +163,7 @@ For TUI and Desktop subscriptions, plain todo, ready, running and scheduled stat
 ## Concurrent task idempotency (v0.6.24)
 
 For a given board, concurrent creation requests using the same nonempty idempotency key resolve to the same existing non-archived task. The lookup is checked again under the database write transaction. Different keys remain independent. Keys are board-scoped, archived keys may be reused, and historical duplicates are not modified. This does not deduplicate requests without a shared key.
+
+## Dispatch pause and shared capacity (v0.6.25)
+
+The shared dispatcher honors the emergency stop before a tick and before each new admission; it leaves existing workers alone. The dashboard nudge and standalone daemon pass the configured host, board and per-profile limits. Within a shared Kanban home, a short nonblocking admission lock serializes capacity rechecks and claims across cooperating updated dispatchers. Read-only capacity checks include running tasks on known active boards. When an active board cannot be read or the admission lock cannot be used, capped dispatch defers new claims and reports why. A board omitted by the underlying enumeration cannot be counted, and manual claims outside the dispatcher are not governed by these caps.

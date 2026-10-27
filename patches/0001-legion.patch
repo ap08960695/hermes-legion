@@ -5447,10 +5447,51 @@ index 0000000000000000000000000000000000000000..e5549c1d40f23bced4337c03f230505c
 +    except (ValueError, TypeError, KeyError, json.JSONDecodeError):
 +        return False
 diff --git a/hermes_cli/kanban_db_connect.py b/hermes_cli/kanban_db_connect.py
-index 27fcf568db9c4a67a349dd53f17748b55897cf6c..3ec2c7d8d3d83bbed107bd1f8d88af6483bbbdf2 100644
 --- a/hermes_cli/kanban_db_connect.py
 +++ b/hermes_cli/kanban_db_connect.py
-@@ -1250,39 +1250,32 @@ def write_txn(conn: sqlite3.Connection, *, allow_nested: bool = False):
+@@ -9,6 +9,7 @@
+ 
+ import contextlib
+ import hashlib
++import os
+ import random
+ import re
+ import secrets
+@@ -203,6 +204,31 @@
+                 pass
+             finally:
+                 handle.close()
++
++
++@contextlib.contextmanager
++def _dispatch_admission_lock(home: Path):
++    """Serialize cross-board capacity checks and claims, never worker execution."""
++    path = home / 'kanban' / '.dispatch-admission.lock'
++    try:
++        path.parent.mkdir(parents=True, exist_ok=True)
++        fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
++    except OSError:
++        yield 'unavailable'
++        return
++    with os.fdopen(fd, 'a+b') as handle:
++        try:
++            acquired = _try_lock_nb(handle)
++            state = 'held' if acquired else 'contended'
++        except (OSError, AttributeError, ImportError):
++            acquired = False
++            state = 'unavailable'
++        try:
++            yield state
++        finally:
++            if acquired:
++                with contextlib.suppress(OSError, AttributeError):
++                    _unlock(handle)
+ 
+ 
+ # Periodic explicit WAL checkpoint from the dispatcher tick: a passive
+@@ -1248,48 +1274,50 @@
+     (``complete_task`` & co.) must never run under an open outer transaction,
+     since those side effects would fire while the outer txn can still roll back.
      """
 -    _kb._assert_not_delegated_child_mutation(_main_db_file(conn))
 -    if getattr(conn, "in_transaction", False):
@@ -5463,11 +5504,6 @@ index 27fcf568db9c4a67a349dd53f17748b55897cf6c..3ec2c7d8d3d83bbed107bd1f8d88af64
 -            )
 -        savepoint = f"hermes_nested_{secrets.token_hex(8)}"
 -        conn.execute(f"SAVEPOINT {savepoint}")
--        try:
--            yield conn
--        except Exception:
--            with contextlib.suppress(sqlite3.OperationalError):
--                conn.execute(f"ROLLBACK TO {savepoint}")
 +    from hermes_cli.kanban_dispatch_wake import transaction_events
 +    with transaction_events(conn):
 +        _kb._assert_not_delegated_child_mutation(_main_db_file(conn))
@@ -5489,13 +5525,21 @@ index 27fcf568db9c4a67a349dd53f17748b55897cf6c..3ec2c7d8d3d83bbed107bd1f8d88af64
 +                    conn.execute(f"RELEASE {savepoint}")
 +                raise
 +            else:
-                 conn.execute(f"RELEASE {savepoint}")
++                conn.execute(f"RELEASE {savepoint}")
++            return
++
++        _execute_boundary_with_retry(conn, "BEGIN IMMEDIATE")
+         try:
+             yield conn
+         except Exception:
+-            with contextlib.suppress(sqlite3.OperationalError):
+-                conn.execute(f"ROLLBACK TO {savepoint}")
+-                conn.execute(f"RELEASE {savepoint}")
 -            raise
 -        else:
 -            conn.execute(f"RELEASE {savepoint}")
 -        return
-+            return
- 
+-
 -    _execute_boundary_with_retry(conn, "BEGIN IMMEDIATE")
 -    try:
 -        yield conn
@@ -5506,17 +5550,15 @@ index 27fcf568db9c4a67a349dd53f17748b55897cf6c..3ec2c7d8d3d83bbed107bd1f8d88af64
 -            conn.execute("ROLLBACK")
 -        raise
 -    else:
-+        _execute_boundary_with_retry(conn, "BEGIN IMMEDIATE")
-         try:
+-        try:
 -            _execute_boundary_with_retry(conn, "COMMIT")
-+            yield conn
-         except Exception:
+-        except Exception:
 -            # COMMIT exhausted retries with the txn still open; roll back so the
 -            # connection isn't poisoned for the next BEGIN IMMEDIATE.
 +            # SQLite may already have auto-rolled-back (EIO, contention, corruption);
 +            # don't let this secondary failure shadow the real one.
              with contextlib.suppress(sqlite3.OperationalError):
-@@ -1290,4 +1283,13 @@ def write_txn(conn: sqlite3.Connection, *, allow_nested: bool = False):
+                 conn.execute("ROLLBACK")
              raise
 -        # Post-commit torn-extend check — raise now rather than silently corrupt.
 -        _check_file_length_invariant(conn)
@@ -5532,41 +5574,148 @@ index 27fcf568db9c4a67a349dd53f17748b55897cf6c..3ec2c7d8d3d83bbed107bd1f8d88af64
 +            # Post-commit torn-extend check — raise now rather than silently corrupt.
 +            _check_file_length_invariant(conn)
  
+ 
+ # Late-bound origin namespace (see module docstring); imported LAST so this
 diff --git a/hermes_cli/kanban_db_dispatch.py b/hermes_cli/kanban_db_dispatch.py
-index 7ae9f4dcfcf2299cb886fea78b299f53f3fe8f31..68b2c5990da792b0d398af6ccf676c3189bfbb27 100644
 --- a/hermes_cli/kanban_db_dispatch.py
 +++ b/hermes_cli/kanban_db_dispatch.py
-@@ -923,3 +923,3 @@ def _error_fingerprint(error_text: str) -> str:
+@@ -149,6 +149,14 @@
+     skipped_locked: bool = False
+     """True when another process held the board's dispatch lock: this tick did
+     no DB writes; the lock holder is making progress on the same board."""
++    skipped_paused: bool = False
++    """True when the emergency stop prevented admission of new work."""
++    skipped_capacity_locked: bool = False
++    """True when the shared capacity lock is contended or unavailable."""
++    capacity_lock_reason: Optional[str] = None
++    """``contended`` or ``unavailable`` when capacity could not be reserved."""
++    skipped_capacity_unknown: bool = False
++    """True when a configured shared cap could not be checked."""
+     memory_pressure: Optional[str] = None
+     """Memory pressure that restricted this tick: ``"critical"`` (no new
+     workers), ``"elevated"`` (at most one), ``None`` (no restriction).
+@@ -176,6 +184,12 @@
+             counts["rate_limited"] = counts.get("rate_limited", 0) + len(res.rate_limited)
+         if res.skipped_locked:
+             counts["skipped_locked"] = counts.get("skipped_locked", 0) + 1
++        if res.skipped_paused:
++            counts["skipped_paused"] = counts.get("skipped_paused", 0) + 1
++        if res.skipped_capacity_locked:
++            counts["skipped_capacity_locked"] = counts.get("skipped_capacity_locked", 0) + 1
++        if res.skipped_capacity_unknown:
++            counts["skipped_capacity_unknown"] = counts.get("skipped_capacity_unknown", 0) + 1
+         if res.memory_pressure:
+             pressure = res.memory_pressure
+     parts = [f"{k}={v}" for k, v in sorted(counts.items())]
+@@ -921,7 +935,7 @@
+ # The budget is a violation-only STREAK (``_protocol_violation_streak``),
+ # independent of ``consecutive_failures``: other failure kinds neither consume
  # nor extend it. Per-task ``max_retries`` overrides it.
 -_PROTOCOL_VIOLATION_FAILURE_LIMIT = 3
 +_PROTOCOL_VIOLATION_FAILURE_LIMIT = 2  # local patch 13: one retry; board data 2026-10-07 had 1/3 recover on retry, one card burned 3 runs
  
-@@ -1378,2 +1378,3 @@ def _record_task_failure(
+ # Closed runs to walk when counting the streak; it trips at a handful anyway.
+ _PROTOCOL_VIOLATION_SCAN_LIMIT = 50
+@@ -1376,6 +1390,7 @@
+     """
+     if failure_limit is None:
          failure_limit = DEFAULT_FAILURE_LIMIT
 +    from hermes_cli.kanban_failure_receipt import failure_receipt
      error = error[:500]
-@@ -1418,3 +1419,3 @@ def _record_task_failure(
+     with _kb.write_txn(conn):
+         row = conn.execute(
+@@ -1416,7 +1431,7 @@
+                 )
+             # Timeout/crash path's caller already emitted its own event.
              if end_run:
 -                detail = {"failures": failures, "retry_status": retry_status}
 +                detail = {"failures": failures, "retry_status": retry_status, "failure_diagnostic": failure_receipt(task_id, row["current_run_id"], outcome, **(event_payload_extra or {}).get("diagnostic", {}))}
                  if infrastructure:
-@@ -1443,3 +1444,3 @@ def _record_task_failure(
+                     detail["infrastructure"] = True
+                 run_id = _kb._end_run(
+@@ -1441,7 +1456,7 @@
+             "limit_source": limit_source,
+             "error": error,
              "trigger_outcome": outcome,
 -            "retry_status": retry_status,
 +            "retry_status": retry_status, "failure_diagnostic": failure_receipt(task_id, row["current_run_id"], outcome, **(event_payload_extra or {}).get("diagnostic", {})),
          }
-@@ -1994,2 +1995,4 @@ def dispatch_once(
+         run_id = None
+         if end_run:
+@@ -1892,40 +1907,9 @@
+ 
+ 
+ def count_running_tasks_other_boards(board: Optional[str] = None) -> int:
+-    """Total ``running`` tasks across every board EXCEPT ``board``.
+-
+-    Caps bound the HOST, but each board's tick only sees its own DB; without
+-    this a derived cap of N gets multiplied by the number of active boards.
+-    Boards are matched by resolved DB path, so ``HERMES_KANBAN_DB`` (pins every
+-    board to one file) yields 0. Fails open per board.
+-    """
+-    try:
+-        current_path = str(_kb.kanban_db_path(board=board).expanduser().resolve())
+-    except Exception:
+-        current_path = None
+-    try:
+-        boards = _kb.list_boards(include_archived=False)
+-    except Exception:
+-        return 0
+-    total = 0
+-    for meta in boards:
+-        slug = meta.get("slug") or _kb.DEFAULT_BOARD
+-        try:
+-            path = _kb.kanban_db_path(board=slug).expanduser()
+-            resolved = str(path.resolve())
+-            if current_path is not None and resolved == current_path:
+-                continue
+-            if not path.exists():
+-                continue
+-            other = _kbc.connect(board=slug)
+-            try:
+-                total += count_running_tasks(other)
+-            finally:
+-                with contextlib.suppress(Exception):
+-                    other.close()
+-        except Exception:
+-            continue
+-    return total
++    """Count active rows on distinct other boards; unavailable boards remain unknown."""
++    from hermes_cli.kanban_dispatch_lane import other_board_running_counts
++    return other_board_running_counts(board)[0]
+ 
+ 
+ def _memory_pressure_level(sample: Optional[Mapping[str, Any]] = None) -> str:
+@@ -1970,6 +1954,11 @@
+     ``skipped_locked=True`` and writes nothing; the lock is keyed on the
+     resolved DB path so unrelated boards tick in parallel.
+     """
++    from hermes_cli.kanban_dispatch_lane import stop_if_paused
++    paused = DispatchResult()
++    if stop_if_paused(paused):
++        return paused
++
+     def _locked_tick() -> DispatchResult:
+         return _dispatch_once_locked(
+             conn,
+@@ -1992,6 +1981,8 @@
+         # Must not lose the tick — fall through to an unguarded dispatch.
+         result = _locked_tick()
          _kb._fire_dispatch_tick_hook(result, board=board, dry_run=dry_run)
 +        from hermes_cli.kanban_dispatch_evidence import emit
 +        emit(conn, result, dry_run=dry_run)
          return result
-@@ -2005,2 +2008,4 @@ def dispatch_once(
+     with _kbc._dispatch_tick_lock(db_path) as held:
+         if not held:
+@@ -2003,178 +1994,9 @@
+     # Lock released. Fire the tick observer strictly OUTSIDE the critical
+     # section: a slow subscriber must never stall a sibling dispatcher's tick.
      _kb._fire_dispatch_tick_hook(result, board=board, dry_run=dry_run)
 +    from hermes_cli.kanban_dispatch_evidence import emit
 +    emit(conn, result, dry_run=dry_run)
      return result
-@@ -2008,15 +2013,2 @@ def dispatch_once(
- 
+-
+-
 -def _call_spawn_fn(spawn_fn, task: Task, workspace: str, board: Optional[str]) -> Optional[int]:
 -    """Back-compat: older spawn_fn signatures (and test stubs) accept only
 -    ``(task, workspace)``; pass ``board`` only when the callable supports it."""
@@ -5580,60 +5729,133 @@ index 7ae9f4dcfcf2299cb886fea78b299f53f3fe8f31..68b2c5990da792b0d398af6ccf676c31
 -        return spawn_fn(task, workspace)
 -
 -
- def _dispatch_lane_task(
-@@ -2041,2 +2033,4 @@ def _dispatch_lane_task(
-     task_id = row["id"]
-+    from hermes_cli.kanban_dispatch_evidence import mark
-+    mark(result, task_id, "considered_at")
-     # Non-profile assignees (control-plane lanes that pull via ``claim_task``)
-@@ -2069,2 +2063,5 @@ def _dispatch_lane_task(
-             return False
-+    from hermes_cli.kanban_task_contract import guard_dispatch
-+    if lane == 'ready' and guard_dispatch(conn, row, assignee, result, dry_run=dry_run):
-+        return False
-     guard_reason = check_respawn_guard(conn, task_id, lane=lane)
-@@ -2073,8 +2070,2 @@ def _dispatch_lane_task(
-         # Event so ``hermes kanban tail`` shows why the task looks stuck.
+-def _dispatch_lane_task(
+-    conn: sqlite3.Connection,
+-    row: sqlite3.Row,
+-    assignee: str,
+-    result: DispatchResult,
+-    *,
+-    lane: str,
+-    dry_run: bool,
+-    ttl_seconds: Optional[int],
+-    board: Optional[str],
+-    failure_limit: int,
+-    spawn_fn,
+-    per_profile_cap: Optional[int],
+-    per_profile_running: dict[str, int],
+-) -> bool:
+-    """Guard, claim, resolve the workspace and spawn one ready/review row.
+-    Returns True when a spawn slot was consumed (real or ``dry_run``); every
+-    skip is recorded on ``result``.
+-    """
+-    task_id = row["id"]
+-    # Non-profile assignees (control-plane lanes that pull via ``claim_task``)
+-    # would fail ``hermes -p <assignee>`` at startup and loop ready→crash→ready
+-    # forever. Bucketed apart from skipped_unassigned: the operator cannot fix
+-    # it by assigning a profile, and health telemetry suppresses "stuck" for it.
+-    profile_exists = _profile_exists_fn()
+-    if profile_exists is not None and not profile_exists(assignee):
+-        result.skipped_nonspawnable.append(task_id)
+-        # Per-task diagnostic so ``show``/``tail`` name the missing profile instead of leaving
+-        # the card in ``ready`` with zero board evidence (#122422). Unlike a respawn guard the
+-        # condition never expires on its own, so write it once: a repeat only when something
+-        # else happened on the card since (reassign, comment) — not one row per tick forever,
+-        # and not one row per foreign home per tick on a shared board (#101015).
+-        if not dry_run:
+-            with _kb.write_txn(conn):
+-                last = conn.execute(
+-                    "SELECT kind, payload FROM task_events WHERE task_id = ? "
+-                    "ORDER BY created_at DESC, id DESC LIMIT 1", (task_id,)).fetchone()
+-                if (last is None or last["kind"] != "skipped_nonspawnable"
+-                        or last["payload"] != _kb._json_or_null({"assignee": assignee})):
+-                    _kb._append_event(conn, task_id, "skipped_nonspawnable", {"assignee": assignee})
+-        return False
+-    # Per-profile cap: one profile's local model / API quota / browser pool
+-    # must not be overwhelmed by a fan-out even with global headroom.
+-    if per_profile_cap is not None:
+-        current = per_profile_running.get(assignee, 0)
+-        if current >= per_profile_cap:
+-            result.skipped_per_profile_capped.append((task_id, assignee, current))
+-            return False
+-    guard_reason = check_respawn_guard(conn, task_id, lane=lane)
+-    if guard_reason is not None:
+-        result.respawn_guarded.append((task_id, guard_reason))
+-        # Event so ``hermes kanban tail`` shows why the task looks stuck.
 -        # Honour kanban.default_assignee: when the dispatcher hits an unassigned ready task and an
 -        # operator-configured fallback exists, persist the assignment and proceed. This removes the
 -        # dashboard footgun where a task created without an assignee parks in 'ready' forever even though
 -        # the operator's intent ("default") was perfectly clear (#27145). Mutating the row (not just the
 -        # in-memory view) keeps diagnostics and the board state consistent: the task is now legitimately
 -        # owned by ``kanban.default_assignee``, not "unassigned but secretly routed".
-         if not dry_run:
-@@ -2094,2 +2085,3 @@ def _dispatch_lane_task(
-         return True
-+    mark(result, task_id, "passed_dispatch_gates_at")
-     claim = _kb.claim_review_task if lane == "review" else _kb.claim_task
-@@ -2098,2 +2090,3 @@ def _dispatch_lane_task(
-         return False
-+    mark(result, task_id, "claimed_at", run_id=_kb._current_run_id(conn, task_id))
-     try:
-@@ -2108,2 +2101,3 @@ def _dispatch_lane_task(
-             outcome="spawn_failed", failure_limit=failure_limit, release_claim=True, end_run=True,
-+            event_payload_extra={"diagnostic": {"phase": "workspace", "error_type": type(exc).__name__}},
-         ):
-@@ -2120,3 +2114,4 @@ def _dispatch_lane_task(
-     try:
+-        if not dry_run:
+-            with _kb.write_txn(conn):
+-                _kb._append_event(conn, task_id, "respawn_guarded", {"reason": guard_reason})
+-        return False
+-
+-    def _count_spawn(name: str) -> None:
+-        # Later rows in this tick respect the per-profile cap; subsequent
+-        # ticks re-query from the DB.
+-        if per_profile_cap is not None and name:
+-            per_profile_running[name] = per_profile_running.get(name, 0) + 1
+-
+-    if dry_run:
+-        result.spawned.append((task_id, assignee, ""))
+-        _count_spawn(assignee)
+-        return True
+-    claim = _kb.claim_review_task if lane == "review" else _kb.claim_task
+-    claimed = claim(conn, task_id, ttl_seconds=ttl_seconds)
+-    if claimed is None:
+-        return False
+-    try:
+-        resolved_branch_name = None
+-        if claimed.workspace_kind == "worktree":
+-            workspace, resolved_branch_name = _kbw._resolve_worktree_workspace(claimed, board=board)
+-        else:
+-            workspace = _kbw.resolve_workspace(claimed, board=board)
+-    except Exception as exc:
+-        if _record_task_failure(
+-            conn, claimed.id, f"workspace: {exc}",
+-            outcome="spawn_failed", failure_limit=failure_limit, release_claim=True, end_run=True,
+-        ):
+-            result.auto_blocked.append(claimed.id)
+-        return False
+-    _kbw.set_workspace_path(conn, claimed.id, str(workspace))
+-    if claimed.workspace_kind == "worktree":
+-        _kbw.set_branch_name(conn, claimed.id, resolved_branch_name or (claimed.branch_name or "").strip() or f"wt/{claimed.id}")
+-    _kbw._maybe_emit_scratch_tip(conn, claimed.id, claimed.workspace_kind)
+-    if lane == "review":
+-        # Force-load sdlc-review; the kanban lifecycle is already in every
+-        # worker's system prompt via KANBAN_GUIDANCE.
+-        claimed.skills = list(dict.fromkeys([*(claimed.skills or []), "sdlc-review"]))
+-    try:
 -        pid = _call_spawn_fn(spawn_fn if spawn_fn is not None else _default_spawn, claimed, str(workspace), board)
-+        from hermes_cli.kanban_dispatch_lane import call_spawn
-+        pid = call_spawn(spawn_fn if spawn_fn is not None else _default_spawn, claimed, str(workspace), board)
-         if pid:
-@@ -2128,2 +2123,3 @@ def _dispatch_lane_task(
-         # only on successful completion (complete_task).
-+        mark(result, task_id, "spawn_returned_at")
-         result.spawned.append((claimed.id, claimed.assignee or "", str(workspace)))
-@@ -2133,2 +2129,3 @@ def _dispatch_lane_task(
-         from tools.process_registry import RestartSafeScopeUnavailable
-+        result._spawn_attempt_failed = True
- 
-@@ -2142,3 +2139,3 @@ def _dispatch_lane_task(
-             outcome="spawn_failed", failure_limit=failure_limit, release_claim=True, end_run=True,
+-        if pid:
+-            _set_worker_pid(conn, claimed.id, int(pid))
+-        # Fires AFTER the PID (when reported) is durably persisted. Best-effort.
+-        _kb._fire_worker_spawned_hook(conn, claimed, str(workspace), pid, board=board)
+-        # consecutive_failures is deliberately NOT reset here: resetting on
+-        # spawn would let a task that keeps timing out loop forever. Cleared
+-        # only on successful completion (complete_task).
+-        result.spawned.append((claimed.id, claimed.assignee or "", str(workspace)))
+-        _count_spawn(claimed.assignee)
+-        return True
+-    except Exception as exc:
+-        from tools.process_registry import RestartSafeScopeUnavailable
+-
+-        # The host refused the spawn (no restart-safe scope): nothing about the
+-        # card ran, so it must not spend the card's retry budget (#114720).
+-        infrastructure = isinstance(exc, RestartSafeScopeUnavailable)
+-        if infrastructure:
+-            _kb._log.warning("kanban dispatcher: spawn of %s deferred, host cannot place the worker: %s", claimed.id, exc)
+-        if _record_task_failure(
+-            conn, claimed.id, str(exc),
+-            outcome="spawn_failed", failure_limit=failure_limit, release_claim=True, end_run=True,
 -            infrastructure=infrastructure,
-+            infrastructure=infrastructure, event_payload_extra={"diagnostic": {"phase": "spawn", "error_type": type(exc).__name__}},
-         ):
-@@ -2148,33 +2145,2 @@ def _dispatch_lane_task(
- 
+-        ):
+-            result.auto_blocked.append(claimed.id)
+-        return False
+-
+-
 -def _apply_default_assignee(
 -    conn: sqlite3.Connection, task_id: str, assignee: str, *, dry_run: bool,
 -) -> bool:
@@ -5663,31 +5885,48 @@ index 7ae9f4dcfcf2299cb886fea78b299f53f3fe8f31..68b2c5990da792b0d398af6ccf676c31
 -        )
 -        return False
 -    return True
--
--
+ 
+ 
  def _run_reclaim_phase(
-@@ -2223,2 +2189,3 @@ def _tick_spawn_budget(
+@@ -2221,6 +2043,7 @@
+     # Count already-running tasks so max_spawn enforces concurrency, not a
+     # per-tick budget: "running" tasks stay running until the worker makes a terminal
      # board call (kanban_complete/kanban_block/kanban_request_review) or the TTL reclaims them.
 +    from hermes_cli.kanban_dispatch_evidence import capacity
      running_count = 0
-@@ -2231,2 +2198,3 @@ def _tick_spawn_budget(
+     spawn_budget: Optional[int] = None
+     if max_spawn is not None or max_in_progress is not None:
+@@ -2229,12 +2052,14 @@
+     # Both ready and review loops consume from the same budget.
+     if max_spawn is not None:
          if running_count >= max_spawn:
 +            capacity(result, "board_cap", 0)
              return False, None
-@@ -2237,2 +2205,3 @@ def _tick_spawn_budget(
+         spawn_budget = max_spawn - running_count
+ 
+     if max_in_progress is not None:
+         total_running = running_count + count_running_tasks_other_boards(board)
          if total_running >= max_in_progress:
 +            capacity(result, "host_cap", 0)
              return False, None
-@@ -2248,2 +2217,3 @@ def _tick_spawn_budget(
+         remaining = max_in_progress - total_running
+         if spawn_budget is None or spawn_budget > remaining:
+@@ -2246,6 +2071,7 @@
+     # wait for a later tick. "unknown" imposes no restriction.
+     pressure = _memory_pressure_level()
      if pressure == "critical":
 +        capacity(result, "memory_critical", 0)
          result.memory_pressure = pressure
-@@ -2262,2 +2232,3 @@ def _tick_spawn_budget(
+         _kb._log.warning(
+             "kanban dispatch: system memory pressure is critical; "
+@@ -2260,16 +2086,9 @@
+                 "limiting to at most 1 new worker this tick"
+             )
              spawn_budget = 1
 +    capacity(result, "memory_elevated" if pressure == "elevated" else "available", spawn_budget)
      return True, spawn_budget
-@@ -2265,10 +2236,2 @@ def _tick_spawn_budget(
  
+-
 -def _lane_rows(conn: sqlite3.Connection, status: str) -> list[sqlite3.Row]:
 -    """Unclaimed rows of one lane in dispatch order."""
 -    return conn.execute(
@@ -5695,9 +5934,38 @@ index 7ae9f4dcfcf2299cb886fea78b299f53f3fe8f31..68b2c5990da792b0d398af6ccf676c31
 -        f"WHERE status = '{status}' AND claim_lock IS NULL "
 -        "ORDER BY priority DESC, created_at ASC"
 -    ).fetchall()
--
  
-@@ -2355,6 +2318,7 @@ def _dispatch_once_locked(
+ 
+ def _any_spawnable_review(
+@@ -2282,7 +2101,7 @@
+     """Mirror review dispatch gates before reserving ready-lane capacity.
+ 
+     Unavailable profile metadata retains the historic fail-open behavior. A
+-    review row that :func:`_dispatch_lane_task` would refuse this tick — its
++    review row that :func:`dispatch_lane_task` would refuse this tick — its
+     assignee already at the per-profile cap, or respawn-guarded — cannot
+     consume the reservation, so it must not withhold capacity from an
+     otherwise ready task (one such row would pin ``ready_budget`` to 0).
+@@ -2343,6 +2162,16 @@
+     the PID so later ticks catch crashes before the TTL. Cap semantics:
+     :func:`_tick_spawn_budget`."""
+     result = DispatchResult()
++    from hermes_cli.kanban_dispatch_lane import stop_if_paused
++    if stop_if_paused(result):
++        return result
++    if dry_run and (max_in_progress is not None or max_in_progress_per_profile is not None):
++        from hermes_cli.kanban_dispatch_lane import CapacityUnavailable, other_board_running_counts
++        try:
++            other_board_running_counts(board, strict=True)
++        except CapacityUnavailable:
++            result.skipped_capacity_unknown = True
++            return result
+     _run_reclaim_phase(
+         conn, result, stale_timeout_seconds=stale_timeout_seconds,
+         failure_limit=failure_limit, reconcile_orphans=reconcile_orphans, board=board,
+@@ -2353,10 +2182,11 @@
+     if not may_spawn:
+         return result
  
 -    ready_rows = _lane_rows(conn, "ready")
 +    from hermes_cli.kanban_task_contract import lane_rows
@@ -5707,13 +5975,33 @@ index 7ae9f4dcfcf2299cb886fea78b299f53f3fe8f31..68b2c5990da792b0d398af6ccf676c31
 -    review_rows = _lane_rows(conn, "review") if review_dispatch_enabled() else []
 +    review_rows = lane_rows(conn, "review") if review_dispatch_enabled() else []
      # Per-profile cap. Deferred tasks go to skipped_per_profile_capped, not
-@@ -2395,18 +2359,10 @@ def _dispatch_once_locked(
+     # skipped_unassigned — "busy, retry later" differs from "needs routing".
+     # Resolved BEFORE the review reservation so the reservation can see which
+@@ -2377,6 +2207,10 @@
+             "GROUP BY assignee"
+         ):
+             per_profile_running[prow["assignee"]] = int(prow["n"])
++        from hermes_cli.kanban_dispatch_lane import other_board_running_counts
++        _, other_profiles = other_board_running_counts(board)
++        for profile, count in other_profiles.items():
++            per_profile_running[profile] = per_profile_running.get(profile, 0) + count
+     # Review-lane reservation: the ready loop runs first and would otherwise
+     # consume the ENTIRE shared budget, starving reviews under a sustained ready
+     # backlog. When spawnable review work exists and there is any budget, hold
+@@ -2391,24 +2225,19 @@
+         dry_run=dry_run, ttl_seconds=ttl_seconds, board=board,
+         failure_limit=failure_limit, spawn_fn=spawn_fn,
+         per_profile_cap=per_profile_cap, per_profile_running=per_profile_running,
++        host_cap=max_in_progress,
+     )
      default_assignee = _resolve_default_assignee(default_assignee)
-+    from hermes_cli.kanban_dispatch_lane import dispatch_ready_row
++    from hermes_cli.kanban_dispatch_lane import dispatch_lane_task, dispatch_ready_row
      spawned = 0
 -    for row in ready_rows:
 +    deferred_ready = []
 +    for index, row in enumerate(ready_rows):
++        if result.skipped_paused or result.skipped_capacity_locked or result.skipped_capacity_unknown or getattr(result, '_host_capacity_exhausted', False):
++            break
          if ready_budget is not None and spawned >= ready_budget:
 +            deferred_ready = ready_rows[index:]
              break
@@ -5731,17 +6019,51 @@ index 7ae9f4dcfcf2299cb886fea78b299f53f3fe8f31..68b2c5990da792b0d398af6ccf676c31
 -        if _dispatch_lane_task(conn, row, row_assignee, result, lane="ready", **lane_kwargs):
 +        if dispatch_ready_row(conn, row, result, default_assignee, lane_kwargs):
              spawned += 1
-@@ -2425,2 +2381,10 @@ def _dispatch_once_locked(
+ 
+     # A review agent (sdlc-review) approves (→ done) or requests changes
+@@ -2416,13 +2245,25 @@
+     # checks the FULL shared ``spawn_budget`` — the reservation above caps the
+     # ready lane, it grants no extra capacity here.
+     for row in review_rows:
++        if result.skipped_paused or result.skipped_capacity_locked or result.skipped_capacity_unknown or getattr(result, '_host_capacity_exhausted', False):
++            break
+         if spawn_budget is not None and spawned >= spawn_budget:
+             break
+         if not row["assignee"]:
+             result.skipped_unassigned.append(row["id"])
+             continue
+-        if _dispatch_lane_task(conn, row, row["assignee"], result, lane="review", **lane_kwargs):
++        if dispatch_lane_task(conn, row, row["assignee"], result, lane="review", **lane_kwargs):
              spawned += 1
 +    # A reserved review slot may fail before spawn. Reuse only for
 +    # previously unvisited ready rows, never retry a failed task in this tick.
 +    for row in (() if getattr(result, "_spawn_attempt_failed", False) else deferred_ready):
++        if result.skipped_paused or result.skipped_capacity_locked or result.skipped_capacity_unknown or getattr(result, '_host_capacity_exhausted', False):
++            break
 +        if spawn_budget is not None and spawned >= spawn_budget:
 +            break
 +        if dispatch_ready_row(conn, row, result, default_assignee, lane_kwargs):
 +            spawned += 1
 +            result._review_slot_reused = getattr(result, '_review_slot_reused', 0) + 1
      return result
+ 
+ 
+@@ -3011,11 +2852,14 @@
+             # Re-resolved every tick (config load is mtime-cached) so operator
+             # edits apply without a restart.
+             max_in_progress = resolve_max_in_progress(configured_max_in_progress())
++            from hermes_cli.kanban_dispatch_lane import configured_daemon_caps
++            configured_spawn, per_profile = configured_daemon_caps()
+             with contextlib.closing(_kbc.connect()) as conn:
+                 res = dispatch_once(
+                     conn,
+-                    max_spawn=max_spawn,
++                    max_spawn=max_spawn if max_spawn is not None else configured_spawn,
+                     max_in_progress=max_in_progress,
++                    max_in_progress_per_profile=per_profile,
+                     failure_limit=failure_limit,
+                 )
+             if on_tick is not None:
 diff --git a/hermes_cli/kanban_db_graph.py b/hermes_cli/kanban_db_graph.py
 index e3a1f306c46d076069c4c80334e04b4440aa1d18..a6490dce316a89cf26a683745eca06e125dcb117 100644
 --- a/hermes_cli/kanban_db_graph.py
@@ -6054,11 +6376,122 @@ index 0000000000000000000000000000000000000000..74bb3246a0abe4dcead3c5b6c0ebd4ef
 +        _LOG.info('DISPATCH_EVIDENCE %s', json.dumps(row, separators=(',', ':')))
 diff --git a/hermes_cli/kanban_dispatch_lane.py b/hermes_cli/kanban_dispatch_lane.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..0905b6114bcc27a1f44476cbc43bf52699e3c40d
 --- /dev/null
 +++ b/hermes_cli/kanban_dispatch_lane.py
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,330 @@
 +"""Native lane helpers; preserve fairness, caps and the existing spawn contract."""
++from __future__ import annotations
++
++import sqlite3
++from contextlib import closing
++from typing import Optional
++
++
++def stop_if_paused(result) -> bool:
++    """Stop before admitting new work; an existing claim is left alone."""
++    from agent.estop import check_paused
++    from hermes_cli import kanban_db
++
++    if check_paused('kanban', kanban_db._log):
++        result.skipped_paused = True
++        return True
++    return False
++
++
++def configured_daemon_caps():
++    """Read the optional board and profile caps without changing config."""
++    from hermes_cli import kanban_db_dispatch as dispatch
++    from hermes_cli.config import load_config_readonly
++
++    config = load_config_readonly().get('kanban') or {}
++    return (dispatch._positive_int(config.get('max_spawn'), None, minimum=0),
++            dispatch._positive_int(config.get('max_in_progress_per_profile'), None))
++
++
++class CapacityUnavailable(Exception):
++    """A configured host or profile cap cannot be verified across boards."""
++
++
++def other_board_running_counts(board, *, strict=False):
++    """Count other active board rows once per resolved database path."""
++    from hermes_cli import kanban_db as kb
++    from hermes_cli.sqlite_safe_read import connect_tracked
++
++    try:
++        current = str(kb.kanban_db_path(board=board).expanduser().resolve())
++        boards = kb.list_boards(include_archived=False)
++    except Exception as exc:
++        if strict:
++            raise CapacityUnavailable('board enumeration unavailable') from exc
++        return 0, {}
++    seen = {current}
++    total = 0
++    counts: dict[str, int] = {}
++    for meta in boards:
++        slug = meta.get('slug') or kb.DEFAULT_BOARD
++        try:
++            path = kb.kanban_db_path(board=slug).expanduser()
++            resolved = str(path.resolve())
++            if resolved in seen:
++                continue
++            if not path.exists():
++                if strict:
++                    raise CapacityUnavailable('board database unavailable')
++                continue
++            seen.add(resolved)
++            uri = path.resolve().as_uri() + '?mode=ro'
++            with closing(connect_tracked(uri, tracking_path=path, uri=True, timeout=1.0)) as conn:
++                conn.row_factory = sqlite3.Row
++                rows = conn.execute("SELECT assignee, COUNT(*) AS n FROM tasks WHERE status='running' GROUP BY assignee")
++                for row in rows:
++                    n = int(row['n'])
++                    total += n
++                    if row['assignee']:
++                        counts[row['assignee']] = counts.get(row['assignee'], 0) + n
++        except Exception as exc:
++            if strict:
++                raise CapacityUnavailable('board capacity unavailable') from exc
++            continue
++    return total, counts
++
++
++def claim_with_capacity(conn, task_id, assignee, result, *, lane, ttl_seconds, board,
++                        host_cap, per_profile_cap):
++    """Reserve a real claim while shared board capacity is serialized."""
++    from hermes_cli import kanban_db as kb
++    from hermes_cli import kanban_db_connect as kbc
++    from hermes_cli.kanban_dispatch_evidence import capacity
++
++    claim = kb.claim_review_task if lane == 'review' else kb.claim_task
++    if host_cap is None and per_profile_cap is None:
++        return None if stop_if_paused(result) else claim(conn, task_id, ttl_seconds=ttl_seconds)
++    with kbc._dispatch_admission_lock(kb.kanban_home()) as lock_state:
++        if lock_state != 'held':
++            result.skipped_capacity_locked = True
++            result.capacity_lock_reason = lock_state
++            return None
++        if stop_if_paused(result):
++            return None
++        try:
++            other_total, other_profiles = other_board_running_counts(board, strict=True)
++        except CapacityUnavailable:
++            result.skipped_capacity_unknown = True
++            capacity(result, 'board_capacity_unknown')
++            return None
++        if host_cap is not None:
++            local_total = conn.execute("SELECT COUNT(*) FROM tasks WHERE status='running'").fetchone()[0]
++            if local_total + other_total >= host_cap:
++                capacity(result, 'host_cap', 0)
++                result._host_capacity_exhausted = True
++                return None
++        if per_profile_cap is not None:
++            local = conn.execute("SELECT COUNT(*) FROM tasks WHERE status='running' AND assignee=?", (assignee,)).fetchone()[0]
++            current = local + other_profiles.get(assignee, 0)
++            if current >= per_profile_cap:
++                result.skipped_per_profile_capped.append((task_id, assignee, current))
++                return None
++        return claim(conn, task_id, ttl_seconds=ttl_seconds)
++
 +
 +def call_spawn(spawn_fn, task, workspace: str, board: str | None) -> int | None:
 +    """Back-compat: older spawn_fn signatures (and test stubs) accept only
@@ -6076,7 +6509,8 @@ index 0000000000000000000000000000000000000000..0905b6114bcc27a1f44476cbc43bf526
 +
 +
 +def dispatch_ready_row(conn, row, result, default_assignee, lane_kwargs):
-+    from hermes_cli import kanban_db_dispatch as dispatch
++    if stop_if_paused(result):
++        return False
 +    assignee = row['assignee']
 +    if not assignee:
 +        if not default_assignee or not apply_default_assignee(
@@ -6085,7 +6519,7 @@ index 0000000000000000000000000000000000000000..0905b6114bcc27a1f44476cbc43bf526
 +            return False
 +        assignee = default_assignee
 +        result.auto_assigned_default.append(row['id'])
-+    return dispatch._dispatch_lane_task(conn, row, assignee, result, lane='ready', **lane_kwargs)
++    return dispatch_lane_task(conn, row, assignee, result, lane='ready', **lane_kwargs)
 +
 +
 +def apply_default_assignee(
@@ -6121,6 +6555,159 @@ index 0000000000000000000000000000000000000000..0905b6114bcc27a1f44476cbc43bf526
 +        return False
 +    return True
 +
++
++
++
++def _lane_guard_rejects(conn, row, assignee, result, *, lane, dry_run, per_profile_cap, per_profile_running):
++    """Record pre-claim guard failures without changing their existing semantics."""
++    from hermes_cli import kanban_db_dispatch as dispatch
++    _kb = dispatch._kb
++    _profile_exists_fn = dispatch._profile_exists_fn
++    check_respawn_guard = dispatch.check_respawn_guard
++    task_id = row["id"]
++    # Non-profile assignees (control-plane lanes that pull via ``claim_task``)
++    # would fail ``hermes -p <assignee>`` at startup and loop ready→crash→ready
++    # forever. Bucketed apart from skipped_unassigned: the operator cannot fix
++    # it by assigning a profile, and health telemetry suppresses "stuck" for it.
++    profile_exists = _profile_exists_fn()
++    if profile_exists is not None and not profile_exists(assignee):
++        result.skipped_nonspawnable.append(task_id)
++        # Per-task diagnostic so ``show``/``tail`` name the missing profile instead of leaving
++        # the card in ``ready`` with zero board evidence (#122422). Unlike a respawn guard the
++        # condition never expires on its own, so write it once: a repeat only when something
++        # else happened on the card since (reassign, comment) — not one row per tick forever,
++        # and not one row per foreign home per tick on a shared board (#101015).
++        if not dry_run:
++            with _kb.write_txn(conn):
++                last = conn.execute(
++                    "SELECT kind, payload FROM task_events WHERE task_id = ? "
++                    "ORDER BY created_at DESC, id DESC LIMIT 1", (task_id,)).fetchone()
++                if (last is None or last["kind"] != "skipped_nonspawnable"
++                        or last["payload"] != _kb._json_or_null({"assignee": assignee})):
++                    _kb._append_event(conn, task_id, "skipped_nonspawnable", {"assignee": assignee})
++        return True
++    # Per-profile cap: one profile's local model / API quota / browser pool
++    # must not be overwhelmed by a fan-out even with global headroom.
++    if per_profile_cap is not None:
++        current = per_profile_running.get(assignee, 0)
++        if current >= per_profile_cap:
++            result.skipped_per_profile_capped.append((task_id, assignee, current))
++            return True
++    from hermes_cli.kanban_task_contract import guard_dispatch
++    if lane == 'ready' and guard_dispatch(conn, row, assignee, result, dry_run=dry_run):
++        return True
++    guard_reason = check_respawn_guard(conn, task_id, lane=lane)
++    if guard_reason is not None:
++        result.respawn_guarded.append((task_id, guard_reason))
++        # Event so ``hermes kanban tail`` shows why the task looks stuck.
++        if not dry_run:
++            with _kb.write_txn(conn):
++                _kb._append_event(conn, task_id, "respawn_guarded", {"reason": guard_reason})
++        return True
++
++    return False
++
++
++def dispatch_lane_task(
++    conn: sqlite3.Connection,
++    row: sqlite3.Row,
++    assignee: str,
++    result,
++    *,
++    lane: str,
++    dry_run: bool,
++    ttl_seconds: Optional[int],
++    board: Optional[str],
++    failure_limit: int,
++    spawn_fn,
++    per_profile_cap: Optional[int],
++    per_profile_running: dict[str, int],
++    host_cap: Optional[int],
++) -> bool:
++    """Guard, claim, resolve the workspace and spawn one ready/review row.
++    Returns True when a spawn slot was consumed (real or ``dry_run``); every
++    skip is recorded on ``result``.
++    """
++    from hermes_cli import kanban_db_dispatch as dispatch
++    _kb, _kbw = dispatch._kb, dispatch._kbw
++    _record_task_failure, _default_spawn = dispatch._record_task_failure, dispatch._default_spawn
++    _set_worker_pid = dispatch._set_worker_pid
++    if stop_if_paused(result):
++        return False
++    task_id = row["id"]
++    from hermes_cli.kanban_dispatch_evidence import mark
++    mark(result, task_id, "considered_at")
++    if _lane_guard_rejects(conn, row, assignee, result, lane=lane, dry_run=dry_run,
++                           per_profile_cap=per_profile_cap, per_profile_running=per_profile_running):
++        return False
++
++    def _count_spawn(name: str) -> None:
++        # Later rows in this tick respect the per-profile cap; subsequent
++        # ticks re-query from the DB.
++        if per_profile_cap is not None and name:
++            per_profile_running[name] = per_profile_running.get(name, 0) + 1
++
++    if dry_run:
++        result.spawned.append((task_id, assignee, ""))
++        _count_spawn(assignee)
++        return True
++    mark(result, task_id, "passed_dispatch_gates_at")
++    claimed = claim_with_capacity(conn, task_id, assignee, result, lane=lane, ttl_seconds=ttl_seconds,
++                                  board=board, host_cap=host_cap, per_profile_cap=per_profile_cap)
++    if claimed is None:
++        return False
++    mark(result, task_id, "claimed_at", run_id=_kb._current_run_id(conn, task_id))
++    try:
++        resolved_branch_name = None
++        if claimed.workspace_kind == "worktree":
++            workspace, resolved_branch_name = _kbw._resolve_worktree_workspace(claimed, board=board)
++        else:
++            workspace = _kbw.resolve_workspace(claimed, board=board)
++    except Exception as exc:
++        if _record_task_failure(
++            conn, claimed.id, f"workspace: {exc}",
++            outcome="spawn_failed", failure_limit=failure_limit, release_claim=True, end_run=True,
++            event_payload_extra={"diagnostic": {"phase": "workspace", "error_type": type(exc).__name__}},
++        ):
++            result.auto_blocked.append(claimed.id)
++        return False
++    _kbw.set_workspace_path(conn, claimed.id, str(workspace))
++    if claimed.workspace_kind == "worktree":
++        _kbw.set_branch_name(conn, claimed.id, resolved_branch_name or (claimed.branch_name or "").strip() or f"wt/{claimed.id}")
++    _kbw._maybe_emit_scratch_tip(conn, claimed.id, claimed.workspace_kind)
++    if lane == "review":
++        # Force-load sdlc-review; the kanban lifecycle is already in every
++        # worker's system prompt via KANBAN_GUIDANCE.
++        claimed.skills = list(dict.fromkeys([*(claimed.skills or []), "sdlc-review"]))
++    try:
++        pid = call_spawn(spawn_fn if spawn_fn is not None else _default_spawn, claimed, str(workspace), board)
++        if pid:
++            _set_worker_pid(conn, claimed.id, int(pid))
++        # Fires AFTER the PID (when reported) is durably persisted. Best-effort.
++        _kb._fire_worker_spawned_hook(conn, claimed, str(workspace), pid, board=board)
++        # consecutive_failures is deliberately NOT reset here: resetting on
++        # spawn would let a task that keeps timing out loop forever. Cleared
++        # only on successful completion (complete_task).
++        mark(result, task_id, "spawn_returned_at")
++        result.spawned.append((claimed.id, claimed.assignee or "", str(workspace)))
++        _count_spawn(claimed.assignee)
++        return True
++    except Exception as exc:
++        from tools.process_registry import RestartSafeScopeUnavailable
++        result._spawn_attempt_failed = True
++
++        # The host refused the spawn (no restart-safe scope): nothing about the
++        # card ran, so it must not spend the card's retry budget (#114720).
++        infrastructure = isinstance(exc, RestartSafeScopeUnavailable)
++        if infrastructure:
++            _kb._log.warning("kanban dispatcher: spawn of %s deferred, host cannot place the worker: %s", claimed.id, exc)
++        if _record_task_failure(
++            conn, claimed.id, str(exc),
++            outcome="spawn_failed", failure_limit=failure_limit, release_claim=True, end_run=True,
++            infrastructure=infrastructure, event_payload_extra={"diagnostic": {"phase": "spawn", "error_type": type(exc).__name__}},
++        ):
++            result.auto_blocked.append(claimed.id)
++        return False
 +
 diff --git a/hermes_cli/kanban_dispatch_wake.py b/hermes_cli/kanban_dispatch_wake.py
 new file mode 100644
@@ -21864,11 +22451,38 @@ index c01bf9e3fb8cfe8763f53079c28aebd86006de81..45f65f522bf69290c4370ccc14bc6a96
 +The ordinary single-account command and JSON schema below remain unchanged.
  
 diff --git a/website/docs/user-guide/features/kanban.md b/website/docs/user-guide/features/kanban.md
-index 66e72242300272fa8fcb2b6e7c4bc09c2a4138e2..d2fe6a5aa6a60a78c0ee5e194dcd8a872c138ae9 100644
 --- a/website/docs/user-guide/features/kanban.md
 +++ b/website/docs/user-guide/features/kanban.md
-@@ -1280,2 +1280,99 @@ Subscriptions created from inside the chat (`/kanban create`, `kanban_create`) r
+@@ -889,7 +889,7 @@
+ | `PUT` | `/orchestration` | Update one or more of the three orchestration keys in `config.yaml`. Validates that non-empty profile names actually exist. |
+ | `POST` | `/links` | Add a dependency (`parent_id` → `child_id`) |
+ | `DELETE` | `/links?parent_id=…&child_id=…` | Remove a dependency |
+-| `POST` | `/dispatch?max=…&dry_run=…` | Nudge the dispatcher — skip the 60 s wait |
++| `POST` | `/dispatch?max=…&dry_run=…` | Nudge the dispatcher without waiting for the next tick. The emergency stop and configured caps still apply; an engaged stop returns HTTP 409. |
+ | `GET` | `/config` | Read `dashboard.kanban` preferences from `config.yaml` — `default_tenant`, `lane_by_profile`, `include_archived_by_default`, `render_markdown` |
+ | `WS` | `/events?since=<event_id>` | Live stream of `task_events` rows. Without `since` the stream starts at the board's current tail (the `/board` snapshot already holds the past); pass `since=<latest_event_id>` to catch up from there, or `since=0` to replay history |
  
+@@ -1010,11 +1010,13 @@
+ 
+ | Config key | Default | What it does |
+ |------------|---------|--------------|
+-| `kanban.max_in_progress` | unset (unlimited) | Caps the number of simultaneously running tasks. When the board already has N running, the dispatcher skips spawning more — useful for slow workers (local LLMs, resource-constrained hosts) so they finish what they have before more pile up and time out. Invalid or below-1 values log a warning and behave as unlimited. |
+-| `kanban.max_in_progress_per_profile` | unset (unlimited) | Per-profile variant of `max_in_progress` — caps how many tasks any single assignee profile may run concurrently. Useful when one profile is slow or rate-limited but others should keep flowing. Applies alongside the board-wide `max_in_progress`; both must allow a spawn for it to proceed. |
++| `kanban.max_in_progress` | memory-derived when available | Caps simultaneously running tasks across active boards and ready/review lanes. When unset or invalid, a memory-derived default is used where available; otherwise it is uncapped. |
++| `kanban.max_in_progress_per_profile` | unset (unlimited) | Caps concurrently running tasks for each assignee profile across active boards. It applies alongside the host-wide `max_in_progress`. |
+ | `kanban.dispatch_profiles` | unset (any existing profile) | Per-home claim allowlist for boards shared across Hermes homes. When the key is present, this home's dispatcher only claims cards whose assignee is listed — fail-closed: an empty list, `null` or a bare `dispatch_profiles:` claims nothing, and a config read that fails logs a warning and claims nothing; other assignees land in `skipped_nonspawnable`. Only omitting the key means "any existing profile". `hermes kanban diagnostics` prints the resolved value for this home (`any`, the listed names, or `none (fail-closed: …)`). See [Shared boards across homes](#shared-boards-across-homes). |
+ | `kanban.auto_promote_children` | `true` | After `decompose_triage_task()` produces children with no parent-blocker dependencies, they're automatically promoted to `ready` so the dispatcher can pick them up. Set to `false` to require manual review — children stay in `todo` until you promote them. |
+ | `kanban.default_workdir` | unset | Board-level default working directory applied to new tasks when neither `--workspace` nor the task itself overrides it. Per-task `workspace:` still wins. |
++
++Capacity rechecks and claims use a short shared admission lock; a competing tick defers instead of waiting for worker execution. With a host or profile cap set, an unavailable board or admission lock defers new claims until capacity can be verified. Existing workers continue. Direct manual claims outside the dispatcher are not governed by these dispatch caps.
+ 
+ ```yaml
+ kanban:
+@@ -1277,6 +1279,103 @@
+ Subscriptions created from inside the chat (`/kanban create`, `kanban_create`) record these anchors automatically.
+ 
+ ### Delivery modes
++
 +TUI and Desktop store prepared notifications with their subscription cursor in one
 +board transaction. Pending notifications can recover after a process restart or
 +closed session. Inspect them without changing the board or retrying a model turn:
@@ -21965,8 +22579,9 @@ index 66e72242300272fa8fcb2b6e7c4bc09c2a4138e2..d2fe6a5aa6a60a78c0ee5e194dcd8a87
 +proved remains ambiguous. A separate CLI process is not controlled by a Desktop Stop
 +button. There is no execution-time deadline promise. Automation integration and its
 +independent review/apply gates are separate from installing this command.
-+
+ 
  `--delivery-mode` controls **how** the notifier reacts to a terminal event. Every subscription is in one of three modes (`notify` is the default and the original behavior):
+ 
 diff --git a/tests/agent/test_context_reference_dedup.py b/tests/agent/test_context_reference_dedup.py
 new file mode 100644
 --- /dev/null
@@ -27653,6 +28268,44 @@ diff --git a/plugins/kanban/dashboard/plugin_api.py b/plugins/kanban/dashboard/p
  
  
  # --- POST /tasks ------------------------------------------------------------
+@@ -1269,8 +1315,35 @@
+ @router.post("/dispatch")
+ def dispatch(dry_run: bool = Query(False), max_n: int = Query(8, alias="max"), board: Optional[str] = Query(None)):
+     """Dispatch nudge so the UI doesn't wait out the 60 s dispatcher tick."""
+-    with _board_conn(board) as (board, conn):
+-        result = kbd.dispatch_once(conn, dry_run=dry_run, max_spawn=max_n, board=board)
++    from agent.estop import is_engaged
++    if is_engaged():
++        raise HTTPException(status_code=409, detail="Hermes is paused; no new work was dispatched.")
++    from gateway.kanban_watchers_dispatcher import _resolve_dispatcher_settings
++    from hermes_cli.config import load_config_readonly
++    try:
++        config = load_config_readonly()
++        settings = asdict(_resolve_dispatcher_settings(config.get('kanban') or {}, kanban_db))
++        settings.pop('interval')
++        configured_max = settings['max_spawn']
++        if configured_max is not None:
++            configured_max = int(configured_max)
++            if configured_max < 0:
++                raise ValueError('max_spawn must be nonnegative')
++        settings['max_spawn'] = max_n if configured_max is None else min(max_n, configured_max)
++    except Exception as exc:  # health: allow BLE001 -- unreadable settings must not launch uncapped work
++        raise HTTPException(status_code=503, detail="Cannot resolve safe dispatch settings.") from exc
++    with _board_conn(board) as (board, conn):
++        result = kbd.dispatch_once(conn, dry_run=dry_run, board=board, **settings)
++        outcome = ("No tasks started in dry run." if dry_run else
++                   "Some tasks started before the stop." if result.spawned else "No new tasks started.")
++        if result.skipped_paused:
++            raise HTTPException(status_code=409, detail=f"Hermes paused during dispatch. {outcome}")
++        if result.skipped_capacity_unknown:
++            raise HTTPException(status_code=503, detail=f"Cannot verify capacity on every active board. {outcome}")
++        if result.skipped_capacity_locked:
++            if result.capacity_lock_reason == 'unavailable':
++                raise HTTPException(status_code=503, detail=f"Shared capacity lock is unavailable. {outcome}")
++            raise HTTPException(status_code=409, detail=f"Another dispatch is reserving capacity; wait for the next dispatch. {outcome}")
+         try:
+             return asdict(result)  # DispatchResult is a dataclass
+         except TypeError:
 diff --git a/tests/plugins/test_kanban_board_links.py b/tests/plugins/test_kanban_board_links.py
 new file mode 100644
 --- /dev/null
@@ -44312,3 +44965,556 @@ new file mode 100644
 +        new = kb.create_task(conn, title='after rollback', idempotency_key='rollback')
 +        assert kb.get_task(conn, new).title == 'after rollback'
 +        assert conn.execute('SELECT COUNT(*) FROM tasks WHERE idempotency_key=?', ('rollback',)).fetchone()[0] == 1
+diff --git a/hermes_cli/kanban_ops.py b/hermes_cli/kanban_ops.py
+--- a/hermes_cli/kanban_ops.py
++++ b/hermes_cli/kanban_ops.py
+@@ -112,6 +112,10 @@
+             ],
+             "rate_limited": res.rate_limited,
+             "skipped_locked": res.skipped_locked,
++            "skipped_paused": res.skipped_paused,
++            "skipped_capacity_locked": res.skipped_capacity_locked,
++            "capacity_lock_reason": res.capacity_lock_reason,
++            "skipped_capacity_unknown": res.skipped_capacity_unknown,
+             "memory_pressure": res.memory_pressure,
+         }, ascii=True)
+         return 0
+@@ -152,6 +156,12 @@
+         print(f"Rate-limited (released to ready, no failure counted): {', '.join(res.rate_limited)}")
+     if res.skipped_locked:
+         print("Skipped: another dispatcher holds this board's lock (no writes this tick)")
++    if res.skipped_paused:
++        print("Skipped: Hermes is paused; existing workers continue without new dispatch")
++    if res.skipped_capacity_locked:
++        print(f"Deferred: shared capacity lock is {res.capacity_lock_reason or 'unavailable'}")
++    if res.skipped_capacity_unknown:
++        print("Deferred: cannot verify shared capacity on all active boards")
+     if res.memory_pressure:
+         print(f"Memory pressure {res.memory_pressure}: new workers restricted this tick")
+     return 0
+@@ -214,6 +224,9 @@
+             return False
+ 
+     def _on_tick(res):
++        if res.skipped_paused:
++            health_state["bad_ticks"] = 0
++            return
+         ready_pending = bool(res.skipped_unassigned) or _ready_queue_nonempty()
+         if ready_pending and not res.spawned:
+             health_state["bad_ticks"] += 1
+diff --git a/tests/plugins/test_kanban_dispatch_safety.py b/tests/plugins/test_kanban_dispatch_safety.py
+new file mode 100644
+--- /dev/null
++++ b/tests/plugins/test_kanban_dispatch_safety.py
+@@ -0,0 +1,511 @@
++"""Dispatch entry points preserve the emergency stop and configured caps."""
++from __future__ import annotations
++
++import importlib.util
++import multiprocessing
++import os
++import sys
++import threading
++from concurrent.futures import ThreadPoolExecutor
++from pathlib import Path
++
++import pytest
++from fastapi import FastAPI
++from fastapi.testclient import TestClient
++
++from agent import estop
++from hermes_cli import config
++from hermes_cli import kanban_db as kb
++from hermes_cli import kanban_db_connect as kbc
++from hermes_cli import kanban_db_dispatch as kbd
++
++
++@pytest.fixture
++def board(tmp_path, monkeypatch):
++    home = tmp_path / '.hermes'
++    home.mkdir()
++    monkeypatch.setenv('HOME', str(tmp_path))
++    monkeypatch.setenv('HERMES_HOME', str(home))
++    monkeypatch.setenv('HERMES_KANBAN_HOME', str(home))
++    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
++    for name in ('HERMES_KANBAN_DB', 'HERMES_KANBAN_BOARD'):
++        monkeypatch.delenv(name, raising=False)
++    monkeypatch.setattr(kbd, '_profile_exists_fn', lambda: lambda _name: True)
++    monkeypatch.setattr(kbd, '_system_memory_sample', dict)
++    monkeypatch.setattr(kbd, 'review_dispatch_enabled', lambda: False)
++    kb.init_db()
++    return home
++
++
++@pytest.fixture
++def client(board):
++    path = Path(__file__).resolve().parents[2] / 'plugins/kanban/dashboard/plugin_api.py'
++    spec = importlib.util.spec_from_file_location('kanban_dispatch_safety_test', path)
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[spec.name] = module
++    spec.loader.exec_module(module)
++    app = FastAPI()
++    app.include_router(module.router, prefix='/api/plugins/kanban')
++    return TestClient(app)
++
++
++def _configuration(monkeypatch, **settings):
++    cfg = {'kanban': settings}
++    monkeypatch.setattr(config, 'load_config', lambda: cfg)
++    monkeypatch.setattr(config, 'load_config_readonly', lambda: cfg)
++
++
++def _running(conn, assignee='alice'):
++    tid = kb.create_task(conn, title='existing worker', assignee=assignee)
++    assert kb.claim_task(conn, tid)
++    kbd._set_worker_pid(conn, tid, os.getpid())
++    return tid
++
++
++class _OneTick:
++    stopped = False
++
++    def is_set(self):
++        return self.stopped
++
++    def set(self):
++        self.stopped = True
++
++    def wait(self, timeout):
++        self.stopped = True
++
++
++def test_paused_direct_dispatch_preserves_ready_and_existing_work(board):
++    with kbc.connect_closing() as conn:
++        running = _running(conn)
++        ready = kb.create_task(conn, title='waiting', assignee='alice')
++        before = list(conn.execute('SELECT id, status, current_run_id, worker_pid FROM tasks ORDER BY id'))
++        event_count = conn.execute('SELECT COUNT(*) FROM task_events').fetchone()[0]
++        estop.engage('fixture pause')
++        spawns = []
++        result = kbd.dispatch_once(conn, spawn_fn=lambda *args, **kwargs: spawns.append(args))
++        after = list(conn.execute('SELECT id, status, current_run_id, worker_pid FROM tasks ORDER BY id'))
++        assert spawns == []
++        assert after == before
++        assert conn.execute('SELECT COUNT(*) FROM task_events').fetchone()[0] == event_count
++        assert result.skipped_paused is True
++        assert kb.get_task(conn, running).status == 'running'
++        assert kb.get_task(conn, ready).status == 'ready'
++
++
++def test_pause_during_tick_stops_further_new_workers(board):
++    with kbc.connect_closing() as conn:
++        for name in ('first', 'second'):
++            kb.create_task(conn, title=name, assignee='alice')
++        spawns = []
++        def spawn(task, workspace, board=None):
++            spawns.append(task.id)
++            estop.engage('fixture mid-tick pause')
++        result = kbd.dispatch_once(conn, spawn_fn=spawn)
++        assert len(spawns) == 1
++        assert conn.execute("SELECT COUNT(*) FROM tasks WHERE status='ready'").fetchone()[0] == 1
++        assert result.skipped_paused is True
++
++
++def test_root_pause_applies_to_profile_and_resume_restores_dispatch(board, monkeypatch):
++    profile = board / 'profiles' / 'alice'
++    profile.mkdir(parents=True)
++    monkeypatch.setenv('HERMES_HOME', str(profile))
++    (board / 'ESTOP').write_text('')
++    with kbc.connect_closing() as conn:
++        tid = kb.create_task(conn, title='waiting', assignee='alice')
++        spawns = []
++        spawn = lambda task, workspace: spawns.append(task.id)
++        paused = kbd.dispatch_once(conn, spawn_fn=spawn)
++        assert paused.skipped_paused and spawns == []
++        assert kb.get_task(conn, tid).status == 'ready'
++        assert estop.disengage()
++        resumed = kbd.dispatch_once(conn, spawn_fn=spawn)
++        assert not resumed.skipped_paused and spawns == [tid]
++
++
++def test_dashboard_nudge_reports_pause_without_claiming(board, client, monkeypatch):
++    with kbc.connect_closing() as conn:
++        tid = kb.create_task(conn, title='waiting', assignee='alice')
++    spawns = []
++    monkeypatch.setattr(kbd, '_default_spawn', lambda task, workspace, board=None: spawns.append(task.id))
++    estop.engage('fixture pause')
++    response = client.post('/api/plugins/kanban/dispatch?max=8')
++    assert response.status_code == 409
++    assert 'paused' in response.json()['detail'].lower()
++    assert spawns == []
++    with kbc.connect_closing() as conn:
++        assert kb.get_task(conn, tid).status == 'ready'
++
++
++def test_dashboard_nudge_fails_closed_if_config_unreadable(board, client, monkeypatch):
++    def unavailable():
++        raise RuntimeError('unavailable')
++
++    monkeypatch.setattr(config, 'load_config_readonly', unavailable)
++    response = client.post('/api/plugins/kanban/dispatch?max=8')
++    assert response.status_code == 503
++
++
++def test_dashboard_nudge_honors_host_cap_across_boards(board, client, monkeypatch):
++    _configuration(monkeypatch, max_in_progress=1)
++    kb.create_board('other')
++    with kbc.connect_closing(board='other') as conn:
++        _running(conn)
++    with kbc.connect_closing() as conn:
++        tid = kb.create_task(conn, title='waiting', assignee='bob')
++    spawns = []
++    monkeypatch.setattr(kbd, '_default_spawn', lambda task, workspace, board=None: spawns.append(task.id))
++    response = client.post('/api/plugins/kanban/dispatch?max=8')
++    assert response.status_code == 200
++    assert spawns == []
++    with kbc.connect_closing() as conn:
++        assert kb.get_task(conn, tid).status == 'ready'
++
++
++def test_dashboard_nudge_honors_profile_cap_but_allows_other_profiles(board, client, monkeypatch):
++    _configuration(monkeypatch, max_in_progress=8, max_in_progress_per_profile=1)
++    with kbc.connect_closing() as conn:
++        _running(conn)
++        same = kb.create_task(conn, title='same profile', assignee='alice')
++        other = kb.create_task(conn, title='other profile', assignee='bob')
++    spawns = []
++    monkeypatch.setattr(kbd, '_default_spawn', lambda task, workspace, board=None: spawns.append(task.id))
++    response = client.post('/api/plugins/kanban/dispatch?max=8')
++    assert response.status_code == 200
++    assert spawns == [other]
++    with kbc.connect_closing() as conn:
++        assert kb.get_task(conn, same).status == 'ready'
++
++
++def test_dashboard_nudge_honors_configured_board_cap(board, client, monkeypatch):
++    _configuration(monkeypatch, max_in_progress=8, max_spawn=1)
++    with kbc.connect_closing() as conn:
++        for assignee in ('alice', 'bob'):
++            kb.create_task(conn, title=assignee, assignee=assignee)
++    spawns = []
++    monkeypatch.setattr(kbd, '_default_spawn', lambda task, workspace, board=None: spawns.append(task.id))
++    response = client.post('/api/plugins/kanban/dispatch?max=8')
++    assert response.status_code == 200
++    assert len(spawns) == 1
++
++
++def test_profile_cap_includes_other_board_but_allows_different_profile(board, monkeypatch):
++    kb.create_board('other')
++    with kbc.connect_closing(board='other') as conn:
++        _running(conn)
++    with kbc.connect_closing() as conn:
++        same = kb.create_task(conn, title='same profile', assignee='alice')
++        other = kb.create_task(conn, title='other profile', assignee='bob')
++        spawns = []
++        result = kbd.dispatch_once(conn, max_in_progress=8, max_in_progress_per_profile=1,
++                                   spawn_fn=lambda task, workspace, board=None: spawns.append(task.id))
++        assert spawns == [other]
++        assert result.skipped_per_profile_capped == [(same, 'alice', 1)]
++
++
++def test_other_board_count_reads_live_wal_without_write_access(board):
++    kb.create_board('other')
++    path = kb.kanban_db_path(board='other')
++    with kbc.connect_closing(board='other') as other:
++        _running(other)
++        with kbc.connect_closing() as conn:
++            tid = kb.create_task(conn, title='waiting', assignee='bob')
++            original_mode = path.stat().st_mode & 0o777
++            os.chmod(path, 0o444)
++            kbc._INITIALIZED_PATHS.discard(str(path.resolve()))
++            init_lock = path.with_name(path.name + '.init.lock')
++            init_lock.unlink(missing_ok=True)
++            try:
++                spawns = []
++                result = kbd.dispatch_once(conn, max_in_progress=1,
++                                           spawn_fn=lambda task, workspace: spawns.append(task.id))
++                assert spawns == []
++                assert not result.skipped_capacity_unknown
++                assert kb.get_task(conn, tid).status == 'ready'
++                assert not init_lock.exists()
++            finally:
++                os.chmod(path, original_mode)
++
++
++def test_parallel_boards_do_not_oversubscribe_host_cap(board, monkeypatch):
++    kb.create_board('other')
++    with kbc.connect_closing() as conn:
++        kb.create_task(conn, title='first', assignee='alice')
++    with kbc.connect_closing(board='other') as conn:
++        kb.create_task(conn, title='second', assignee='bob')
++    first_read = threading.Event()
++    release_first = threading.Event()
++    original = kbd.count_running_tasks_other_boards
++
++    def synchronized_count(board=None):
++        value = original(board)
++        if board == 'default':
++            first_read.set()
++            assert release_first.wait(timeout=10)
++        return value
++
++    monkeypatch.setattr(kbd, 'count_running_tasks_other_boards', synchronized_count)
++    spawns = []
++    def tick(slug):
++        with kbc.connect_closing(board=slug) as conn:
++            return kbd.dispatch_once(conn, board=slug, max_in_progress=1,
++                                     spawn_fn=lambda task, workspace, board=None: spawns.append(task.id))
++
++    with ThreadPoolExecutor(max_workers=2) as pool:
++        first = pool.submit(tick, 'default')
++        assert first_read.wait(timeout=10)
++        second = pool.submit(tick, 'other')
++        try:
++            second.result(timeout=10)
++        finally:
++            release_first.set()
++        first.result(timeout=10)
++    assert len(spawns) == 1
++
++
++@pytest.mark.parametrize('host_cap,profile_cap', [(1, None), (8, 1)])
++def test_parallel_claims_respect_shared_capacity(board, monkeypatch, host_cap, profile_cap):
++    kb.create_board('other')
++    with kbc.connect_closing() as conn:
++        first_id = kb.create_task(conn, title='first', assignee='alice')
++    with kbc.connect_closing(board='other') as conn:
++        kb.create_task(conn, title='second', assignee='alice')
++    entered = threading.Event()
++    release = threading.Event()
++    original_claim = kb.claim_task
++
++    def synchronized_claim(conn, tid, **kwargs):
++        if tid == first_id:
++            entered.set()
++            assert release.wait(timeout=10)
++        return original_claim(conn, tid, **kwargs)
++
++    monkeypatch.setattr(kb, 'claim_task', synchronized_claim)
++    spawns = []
++    def tick(slug):
++        with kbc.connect_closing(board=slug) as conn:
++            return kbd.dispatch_once(conn, board=slug, max_in_progress=host_cap,
++                                     max_in_progress_per_profile=profile_cap,
++                                     spawn_fn=lambda task, workspace, board=None: spawns.append(task.id))
++
++    with ThreadPoolExecutor(max_workers=2) as pool:
++        first = pool.submit(tick, 'default')
++        assert entered.wait(timeout=10)
++        second = pool.submit(tick, 'other')
++        try:
++            second.result(timeout=10)
++        finally:
++            release.set()
++        first.result(timeout=10)
++    assert len(spawns) == 1
++
++
++def _process_tick(slug, first_id, entered, release, queue):
++    kbd._profile_exists_fn = lambda: lambda _name: True
++    kbd._system_memory_sample = dict
++    kbd.review_dispatch_enabled = lambda: False
++    original_claim = kb.claim_task
++
++    def synchronized_claim(conn, tid, **kwargs):
++        if tid == first_id:
++            entered.set()
++            if not release.wait(timeout=10):
++                raise RuntimeError('fixture timeout')
++        return original_claim(conn, tid, **kwargs)
++
++    kb.claim_task = synchronized_claim
++    spawns = []
++    try:
++        with kbc.connect_closing(board=slug) as conn:
++            result = kbd.dispatch_once(conn, board=slug, max_in_progress=1,
++                                       spawn_fn=lambda task, workspace, board=None: spawns.append(task.id))
++        queue.put(('ok', len(spawns), result.skipped_capacity_locked))
++    except Exception as exc:
++        queue.put(('error', type(exc).__name__))
++
++
++def test_separate_processes_share_the_admission_lock(board):
++    kb.create_board('other')
++    with kbc.connect_closing() as conn:
++        first_id = kb.create_task(conn, title='first', assignee='alice')
++    with kbc.connect_closing(board='other') as conn:
++        kb.create_task(conn, title='second', assignee='bob')
++    ctx = multiprocessing.get_context('spawn')
++    entered, release, queue = ctx.Event(), ctx.Event(), ctx.Queue()
++    first = ctx.Process(target=_process_tick, args=('default', first_id, entered, release, queue))
++    second = ctx.Process(target=_process_tick, args=('other', first_id, entered, release, queue))
++    try:
++        first.start()
++        assert entered.wait(timeout=10)
++        second.start()
++        second.join(timeout=10)
++        assert not second.is_alive() and second.exitcode == 0
++        release.set()
++        first.join(timeout=10)
++        assert not first.is_alive() and first.exitcode == 0
++        results = [queue.get(timeout=2), queue.get(timeout=2)]
++        assert all(row[0] == 'ok' for row in results), results
++        assert sum(row[1] for row in results) == 1
++        assert sum(row[2] for row in results) == 1
++    finally:
++        release.set()
++        for child in (first, second):
++            if child.is_alive():
++                child.terminate()
++                child.join(timeout=5)
++        queue.close()
++
++
++def test_unavailable_admission_lock_leaves_task_ready(board):
++    (board / 'kanban' / '.dispatch-admission.lock').mkdir(parents=True)
++    with kbc.connect_closing() as conn:
++        tid = kb.create_task(conn, title='waiting', assignee='alice')
++        spawns = []
++        result = kbd.dispatch_once(conn, max_in_progress=1,
++                                   spawn_fn=lambda task, workspace: spawns.append(task.id))
++        assert result.skipped_capacity_locked is True
++        assert result.capacity_lock_reason == 'unavailable'
++        assert spawns == []
++        assert kb.get_task(conn, tid).status == 'ready'
++
++
++def test_dashboard_reports_unavailable_admission_lock(board, client, monkeypatch):
++    _configuration(monkeypatch, max_in_progress=2)
++    (board / 'kanban' / '.dispatch-admission.lock').mkdir(parents=True)
++    with kbc.connect_closing() as conn:
++        tid = kb.create_task(conn, title='waiting', assignee='alice')
++    spawns = []
++    monkeypatch.setattr(kbd, '_default_spawn', lambda task, workspace, board=None: spawns.append(task.id))
++    response = client.post('/api/plugins/kanban/dispatch?max=8')
++    assert response.status_code == 503
++    assert 'unavailable' in response.json()['detail'].lower()
++    assert spawns == []
++    with kbc.connect_closing() as conn:
++        assert kb.get_task(conn, tid).status == 'ready'
++
++
++def test_unknown_other_board_capacity_does_not_launch_new_work(board, monkeypatch):
++    with kbc.connect_closing() as conn:
++        tid = kb.create_task(conn, title='waiting', assignee='alice')
++        monkeypatch.setattr(kb, 'list_boards', lambda **kwargs: (_ for _ in ()).throw(OSError('fixture')))
++        spawns = []
++        result = kbd.dispatch_once(conn, max_in_progress=2,
++                                   spawn_fn=lambda task, workspace: spawns.append(task.id))
++        assert spawns == []
++        assert result.skipped_capacity_unknown is True
++        assert kb.get_task(conn, tid).status == 'ready'
++
++
++def test_dry_run_reports_unknown_capacity_instead_of_predicted_spawn(board, monkeypatch):
++    with kbc.connect_closing() as conn:
++        tid = kb.create_task(conn, title='waiting', assignee='alice')
++        monkeypatch.setattr(kb, 'list_boards', lambda **kwargs: (_ for _ in ()).throw(OSError('fixture')))
++        result = kbd.dispatch_once(conn, dry_run=True, max_in_progress=2)
++        assert result.skipped_capacity_unknown is True
++        assert result.spawned == []
++        assert kb.get_task(conn, tid).status == 'ready'
++
++
++def test_dashboard_reports_unknown_board_capacity(board, client, monkeypatch):
++    _configuration(monkeypatch, max_in_progress=2)
++    with kbc.connect_closing() as conn:
++        tid = kb.create_task(conn, title='waiting', assignee='alice')
++    monkeypatch.setattr(kb, 'list_boards', lambda **kwargs: (_ for _ in ()).throw(OSError('fixture')))
++    spawns = []
++    monkeypatch.setattr(kbd, '_default_spawn', lambda task, workspace, board=None: spawns.append(task.id))
++    response = client.post('/api/plugins/kanban/dispatch?max=8')
++    assert response.status_code == 503
++    assert 'capacity' in response.json()['detail'].lower()
++    assert spawns == []
++    with kbc.connect_closing() as conn:
++        assert kb.get_task(conn, tid).status == 'ready'
++
++
++def test_dashboard_reports_capacity_lock_contention(board, client, monkeypatch):
++    _configuration(monkeypatch, max_in_progress=2)
++    with kbc.connect_closing() as conn:
++        tid = kb.create_task(conn, title='waiting', assignee='alice')
++    spawns = []
++    monkeypatch.setattr(kbd, '_default_spawn', lambda task, workspace, board=None: spawns.append(task.id))
++    with kbc._dispatch_admission_lock(board) as acquired:
++        assert acquired == 'held'
++        response = client.post('/api/plugins/kanban/dispatch?max=8')
++    assert response.status_code == 409
++    assert 'capacity' in response.json()['detail'].lower()
++    assert spawns == []
++    with kbc.connect_closing() as conn:
++        assert kb.get_task(conn, tid).status == 'ready'
++
++
++def test_missing_board_database_makes_capacity_unknown(board, monkeypatch):
++    kb.create_board('other')
++    missing = kb.kanban_db_path(board='other')
++    missing.unlink()
++    with kbc.connect_closing() as conn:
++        tid = kb.create_task(conn, title='waiting', assignee='alice')
++        spawns = []
++        result = kbd.dispatch_once(conn, max_in_progress_per_profile=1,
++                                   spawn_fn=lambda task, workspace: spawns.append(task.id))
++        assert spawns == []
++        assert result.skipped_capacity_unknown is True
++        assert kb.get_task(conn, tid).status == 'ready'
++
++
++def test_independent_worker_can_start_while_first_spawn_is_slow(board):
++    kb.create_board('other')
++    with kbc.connect_closing() as conn:
++        kb.create_task(conn, title='first', assignee='alice')
++    with kbc.connect_closing(board='other') as conn:
++        kb.create_task(conn, title='second', assignee='bob')
++    entered, release = threading.Event(), threading.Event()
++    spawns = []
++
++    def spawn(task, workspace, board=None):
++        spawns.append(task.id)
++        if board == 'default':
++            entered.set()
++            assert release.wait(timeout=10)
++
++    def tick(slug):
++        with kbc.connect_closing(board=slug) as conn:
++            return kbd.dispatch_once(conn, board=slug, max_in_progress=2, spawn_fn=spawn)
++
++    with ThreadPoolExecutor(max_workers=2) as pool:
++        first = pool.submit(tick, 'default')
++        assert entered.wait(timeout=10)
++        second = pool.submit(tick, 'other')
++        try:
++            second.result(timeout=10)
++            assert len(spawns) == 2
++        finally:
++            release.set()
++        first.result(timeout=10)
++
++
++def test_standalone_daemon_honors_profile_cap(board, monkeypatch):
++    _configuration(monkeypatch, max_in_progress=8, max_in_progress_per_profile=1)
++    with kbc.connect_closing() as conn:
++        _running(conn)
++        same = kb.create_task(conn, title='same profile', assignee='alice')
++        other = kb.create_task(conn, title='other profile', assignee='bob')
++    spawns = []
++    monkeypatch.setattr(kbd, '_default_spawn', lambda task, workspace, board=None: spawns.append(task.id))
++    stop = _OneTick()
++    kbd.run_daemon(interval=0.01, stop_event=stop, on_tick=lambda _: stop.set())
++    assert spawns == [other]
++    with kbc.connect_closing() as conn:
++        assert kb.get_task(conn, same).status == 'ready'
++
++
++def test_standalone_daemon_does_not_launch_with_malformed_settings(board, monkeypatch):
++    with kbc.connect_closing() as conn:
++        tid = kb.create_task(conn, title='waiting', assignee='alice')
++    monkeypatch.setattr(config, 'load_config_readonly', lambda: {'kanban': 'malformed'})
++    spawns = []
++    monkeypatch.setattr(kbd, '_default_spawn', lambda task, workspace, board=None: spawns.append(task.id))
++    stop = _OneTick()
++    kbd.run_daemon(interval=0.01, stop_event=stop, on_tick=lambda _: stop.set())
++    assert spawns == []
++    with kbc.connect_closing() as conn:
++        assert kb.get_task(conn, tid).status == 'ready'
