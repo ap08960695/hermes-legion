@@ -1088,3 +1088,7 @@ Eighteen related files passed 206 offline tests against installed Linux source. 
 ## Scoped and fresh reassignment status (v0.6.30)
 
 Twenty-six related files passed 431 offline tests against installed Linux source; four Windows-specific cases were skipped. Regressions cover fleet isolation, context-local custom roles, stale and malformed snapshots, timestamp boundaries, unreadable or disappearing files, and blocked quota-failure behavior. A separate native registry/SQLite smoke used only temporary boards; no production card was reassigned or model request made.
+
+## Scoped session links (v0.6.31)
+
+Ten related files passed 239 offline tests against the installed Linux source; three Windows-specific cases were skipped. Temporary SQLite fleets covered direct links, profile mismatch, identical IDs, tombstones and live-context exclusion. A separate installed-source smoke used synthetic data only; it emitted an isolated update-bootstrap warning and did not validate a production session or measure model usage.

@@ -187,3 +187,7 @@ A symbolic link named ESTOP remains a pause even if its target is missing. A sym
 ## Scoped and fresh reassignment status (v0.6.30)
 
 The orchestrator `kanban_reassign` tool reads the status snapshot and checks custom profile identity in the calling profile fleet, including context-local home overrides. A configured snapshot must have a valid timestamp no older than 15 minutes and mark the target active. An unreadable, invalid or stale snapshot is not treated as readiness. If the optional snapshot is absent, legacy reassignment remains available but reports `availability: not_checked` and does not auto-unblock a provider failure. This is a snapshot freshness check, not proof of live provider quota. Direct CLI/dashboard assignment and other dispatch paths retain their own contracts.
+
+## Scoped session links (v0.6.31)
+
+Session recall accepts the returned `@session:` link directly for read or scroll. Named profiles resolve from the caller context, including a context-local fleet home; a mismatch between the embedded and explicit profiles is rejected. A current-session exclusion remains in effect when the named profile is the same database, while another profile with the same session ID stays independently searchable. Bare IDs remain scoped to the current store.
