@@ -48608,7 +48608,7 @@ diff --git a/hermes_state_search.py b/hermes_state_search.py
      def list_recent_user_messages(
          self, session_id: str, limit: int = 20, include_inactive: bool = False) -> list[dict[str, Any]]:
          """The *limit* most-recent real user turns, newest first, as ``{id, timestamp, preview}``
-@@ -928,17 +980,39 @@
+@@ -928,17 +980,91 @@
  
      @staticmethod
      def _fts_match_sql(table: str, match_query: str, order_by_sql: str, *, limit: int, offset: int,
@@ -48634,24 +48634,76 @@ diff --git a/hermes_state_search.py b/hermes_state_search.py
 +        sql, params = self._fts_match_sql(table, match_query, order_by_sql,
 +                                          snippet_markers=(opening, closing), **kwargs)
 +
-+        def read(conn):
-+            rows = []
-+            cursor = conn.execute(sql, params)
-+            try:
-+                for raw in cursor:
-+                    row = dict(raw)
-+                    row["snippet"] = _bounded_fts_snippet(row.get("snippet"), opening, closing)
-+                    rows.append(row)
-+                    del raw
-+                return rows
-+            finally:
-+                cursor.close()
++        return self._read_retrying_ioerr(
++            lambda conn: self._collect_bounded_fts(conn, sql, params, opening, closing))
 +
-+        return self._read_retrying_ioerr(read)
++    @staticmethod
++    def _collect_bounded_fts(conn, sql, params, opening, closing):
++        rows = []
++        cursor = conn.execute(sql, params)
++        try:
++            for raw in cursor:
++                row = dict(raw)
++                row["snippet"] = _bounded_fts_snippet(row.get("snippet"), opening, closing)
++                rows.append(row)
++                del raw
++            return rows
++        finally:
++            cursor.close()
++
++    def _read_only_cjk_snapshot(self, query, order_by_sql, **route):
++        """Read CJK health and hits in the same read-only SQLite snapshot."""
++        nonce = secrets.token_hex(16)
++        opening, closing = f"\x1e{nonce}:open\x1f", f"\x1e{nonce}:close\x1f"
++        sql, params = self._fts_match_sql(
++            "messages_fts_cjk", query, order_by_sql, snippet_markers=(opening, closing), **route)
++
++        def read(conn):
++            own_transaction = not conn.in_transaction
++            if own_transaction:
++                conn.execute("BEGIN")
++            try:
++                marker = conn.execute(
++                    "SELECT 1 FROM state_meta WHERE key IN (?, ?, ?) LIMIT 1",
++                    (FTS_STALE_KEY, FTS_CJK_STALE_KEY, "fts_cjk_rebuild_high_water"),
++                ).fetchone()
++                if marker:
++                    self._fts_cjk_available = False
++                    return ("stale", None)
++                rows = self._collect_bounded_fts(conn, sql, params, opening, closing)
++                self._fts_cjk_available = True
++                return ("ready", rows)
++            finally:
++                if own_transaction and conn.in_transaction:
++                    conn.rollback()
++
++        try:
++            return self._read_retrying_ioerr(read)
++        except sqlite3.OperationalError:
++            self._fts_cjk_available = False
++            logger.debug("read-only CJK search unavailable; falling back")
++            return ("unavailable", None)
++        except sqlite3.DatabaseError as exc:
++            if not self._is_fts_write_corruption_error(exc):
++                raise
++            self._fts_cjk_available = False
++            logger.warning("read-only CJK index is corrupt; falling back to canonical rows")
++            return ("stale", None)
++
++    def _read_only_cjk_route(self, match_query, fallback_query, route):
++        status, rows = self._read_only_cjk_snapshot(match_query, **route)
++        if status != "stale":
++            return status, rows
++        filters = {k: route[k] for k in ("include_inactive", "source_filter", "exclude_sources", "role_filter",
++                                         "after_ts", "before_ts")}
++        sort = "oldest" if route["order_by_sql"] == _FTS_ORDER_BY["oldest"] else "newest"
++        rows = self._search_messages_like_fallback(fallback_query, limit=route["limit"], offset=route["offset"],
++                                                   sort=sort, **filters)
++        return ("fallback", rows)
  
      def _match_rows(self, table: str, match_query: str, order_by_sql: str, *, fail_open: Optional[str] = None,
                      operational_debug: Optional[str] = None, **kwargs) -> Optional[list[dict[str, Any]]]:
-@@ -947,9 +1021,8 @@
+@@ -947,9 +1073,8 @@
          substring-capable routes: a corruption-class ``DatabaseError`` there detaches the
          derived indexes (``_enter_fts_fail_open``) and answers from canonical rows — a live
          search never runs the unbounded rebuild. Other ``DatabaseError``s propagate."""
@@ -48662,7 +48714,7 @@ diff --git a/hermes_state_search.py b/hermes_state_search.py
          except sqlite3.OperationalError:
              if operational_debug:
                  logger.debug(operational_debug, exc_info=True)
-@@ -968,7 +1041,11 @@
+@@ -968,7 +1093,11 @@
          return [dict(row) for row in self._read_all(sql, params)]
  
      @staticmethod
@@ -48675,7 +48727,7 @@ diff --git a/hermes_state_search.py b/hermes_state_search.py
          """Compile the supported FTS boolean subset into LIKE predicates: terms within an OR
          group are ANDed (FTS5's implicit conjunction) and ``NOT`` negates the next term."""
          groups: list[list[tuple[str, bool]]] = [[]]
-@@ -997,12 +1074,40 @@
+@@ -997,12 +1126,40 @@
              if not group or not any(not negated for _, negated in group):
                  continue
              clauses: list[str] = []
@@ -48719,7 +48771,7 @@ diff --git a/hermes_state_search.py b/hermes_state_search.py
          return " OR ".join(compiled_groups), params, snippet_term
  
      def _search_messages_like_fallback(
-@@ -1017,6 +1122,106 @@
+@@ -1017,6 +1174,106 @@
          return self._like_rows(where, [snippet_term, *params, limit, offset],
                                 order_by=f"ORDER BY m.timestamp {order}, m.id {order}", limit_sql="LIMIT ? OFFSET ?")
  
@@ -48826,7 +48878,7 @@ diff --git a/hermes_state_search.py b/hermes_state_search.py
      def _refresh_fts_stale_state(self) -> None:
          """Observe fail-open initiated by another process sharing state.db."""
          if self._fts_stale or not self._fts_enabled:
-@@ -1030,8 +1235,9 @@
+@@ -1030,8 +1287,9 @@
              self._fts_enabled = self._trigram_available = self._fts_cjk_available = False
  
      def _finalize_search_matches(
@@ -48838,7 +48890,7 @@ diff --git a/hermes_state_search.py b/hermes_state_search.py
          if result_fields is None or "context" in result_fields:
              for start in range(0, len(matches), 500):
                  batch = matches[start:start + 500]
-@@ -1051,6 +1257,18 @@
+@@ -1051,6 +1309,18 @@
                              for row in contexts.get(match["id"], [])]
                      except Exception:
                          match["context"] = []
@@ -48857,7 +48909,7 @@ diff --git a/hermes_state_search.py b/hermes_state_search.py
          # No route selects full content; the pop guards any future one that does.
          for match in matches:
              match.pop("content", None)
-@@ -1079,9 +1297,9 @@
+@@ -1079,9 +1349,9 @@
          finally:
              elapsed_ms = (time.time() - started) * 1000.0
              if elapsed_ms >= _search_slow_ms():
@@ -48869,7 +48921,7 @@ diff --git a/hermes_state_search.py b/hermes_state_search.py
  
      def _search_messages_impl(
          self, query: str, source_filter: list[str] | None = None, exclude_sources: list[str] | None = None,
-@@ -1109,11 +1327,11 @@
+@@ -1109,11 +1379,11 @@
          # opt-in full-body path and scans canonical rows via LIKE.
          if role_filter and "tool" in role_filter:
              matches = self._search_messages_like_fallback(query, limit=limit, offset=offset, sort=sort, **filters)
@@ -48883,7 +48935,7 @@ diff --git a/hermes_state_search.py b/hermes_state_search.py
          if not self._fts_enabled:
              return []
  
-@@ -1127,9 +1345,8 @@
+@@ -1127,9 +1397,8 @@
          if is_cjk:
              matches = self._search_cjk(query, wants_unindexed_rows, route)
          else:
@@ -48894,7 +48946,7 @@ diff --git a/hermes_state_search.py b/hermes_state_search.py
              except sqlite3.OperationalError:
                  return []  # FTS5 syntax error despite sanitization
              except sqlite3.DatabaseError as exc:
-@@ -1160,7 +1377,8 @@
+@@ -1160,7 +1429,8 @@
          # tokens). Gated on a miss so hits keep their ranking ("cat" may then match
          # "concatenate"). Skipped for role='tool' (both indexes exclude tool rows).
          if not matches and not is_cjk and not (bool(role_filter) and "tool" in role_filter):
@@ -48904,7 +48956,23 @@ diff --git a/hermes_state_search.py b/hermes_state_search.py
              # ── CJK-bigram route (messages_fts_cjk, cjk_unicode61) ────── When the bigram index is
              # available it serves EVERY CJK query shape the legacy code split between trigram (>=3
              # chars/token) and LIKE full scans (1-2 char tokens) — the whole point of the index (PR #65544).
-@@ -1187,7 +1405,7 @@
+@@ -1168,7 +1438,14 @@
+             # cjk index, same exclusion as trigram), - queries containing a LONE 1-char CJK run: the index
+             # stores bigrams for runs >=2, so a single-char term can only match isolated chars — LIKE
+             # substring semantics are broader.
+-            if self._fts_cjk_available:
++            if self.read_only and self._try_load_read_only_cjk():
++                status, cjk_matches = self._read_only_cjk_route(fb_query, query, route)
++                if status == "fallback":
++                    return self._finalize_search_matches(cjk_matches, result_fields=result_fields,
++                                                         include_inactive=include_inactive)
++                if status == "ready":
++                    matches = cjk_matches or matches
++            elif not self.read_only and self._fts_cjk_available:
+                 matches = self._match_rows("messages_fts_cjk", fb_query, **route) or matches
+             if not matches and self._trigram_available and self._trigram_eligible_tokens(query):
+                 matches = self._match_rows("messages_fts_trigram", fb_query, **route) or matches
+@@ -1187,7 +1464,7 @@
                  matches = self._match_rows("messages_fts", relaxed, fail_open="OR-relaxed",
                                             operational_debug="OR-relaxed FTS retry failed; keeping empty result",
                                             **route) or matches
@@ -48913,12 +48981,13 @@ diff --git a/hermes_state_search.py b/hermes_state_search.py
  
      def _search_cjk(self, query: str, wants_unindexed_rows: bool, route: dict[str, Any]) -> list[dict[str, Any]]:
          """CJK routing: the unicode61 table splits CJK into single characters (false positives,
-@@ -1196,8 +1414,15 @@
+@@ -1196,9 +1473,22 @@
          1-char CJK runs (bigrams only exist for runs >=2 — LIKE is broader); then trigram
          (>=3 CJK chars per token); then a LIKE substring scan with one clause per
          non-operator token so "广西 OR 桂林 OR 漓江" matches each term."""
 -        raw_query = _strip_cjk_wildcards(query).strip('"').strip()
 -        match_query = _quote_fts_tokens(raw_query)
+-        if self._fts_cjk_available and not wants_unindexed_rows and not self._has_lone_cjk_run(raw_query):
 +        match_query = _strip_cjk_wildcards(query).strip()
 +        raw_query = match_query.strip('"').strip()
 +        # Percent is preserved by the sanitizer for the LIKE route but is
@@ -48928,9 +48997,16 @@ diff --git a/hermes_state_search.py b/hermes_state_search.py
 +                f'"{token}"' if "%" in token and not token.startswith('"') else token
 +                for token in _LIKE_TOKEN_RE.findall(match_query)
 +            )
-         if self._fts_cjk_available and not wants_unindexed_rows and not self._has_lone_cjk_run(raw_query):
++        if (self.read_only and "%" not in match_query and not wants_unindexed_rows and not self._has_lone_cjk_run(raw_query)
++                and self._try_load_read_only_cjk()):
++            status, matches = self._read_only_cjk_route(match_query, query, route)
++            if status in ("ready", "fallback"):
++                return matches
++        if (not self.read_only and self._fts_cjk_available and not wants_unindexed_rows
++                and not self._has_lone_cjk_run(raw_query)):
              matches = self._match_rows(
                  "messages_fts_cjk", match_query, fail_open="CJK-bigram",
+                 operational_debug="messages_fts_cjk query failed; falling back to trigram/LIKE", **route)
 diff --git a/tests/tools/test_session_search_scoped_query.py b/tests/tools/test_session_search_scoped_query.py
 new file mode 100644
 --- /dev/null
@@ -51686,3 +51762,444 @@ new file mode 100644
 +    assert result["success"] is True and result["count"] == 1
 +    assert len(result["results"][0]["snippet"]) <= 1000
 +    assert "findme" in result["results"][0]["snippet"] and len(raw) < 25000
+diff --git a/hermes_state.py b/hermes_state.py
+--- a/hermes_state.py
++++ b/hermes_state.py
+@@ -28,6 +28,7 @@
+ from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, TypeVar, cast
+ 
+ from hermes_state_common import (
++    FTS_CJK_STALE_KEY, FTS_STALE_KEY,
+     TITLE_SOURCE_DERIVED as _TITLE_SOURCE_DERIVED, TITLE_SOURCE_LLM as _TITLE_SOURCE_LLM,
+     TITLE_SOURCE_USER as _TITLE_SOURCE_USER,
+     escape_like as _escape_like, _placeholders,
+@@ -735,6 +736,7 @@
+                         self._trigram_available = (
+                             self._fts_table_probe(cursor, "messages_fts_trigram") is True
+                         )
++                        self._probe_read_only_cjk(conn, cursor)
+                 except BaseException:
+                     self._conn = None
+                     self._close_connection_quietly(conn)
+@@ -751,6 +753,40 @@
+                 if attempt >= _READ_ONLY_IOERR_RETRY_ATTEMPTS or not transient:
+                     raise
+                 time.sleep(_READ_ONLY_IOERR_RETRY_BACKOFF_S)
++
++    def _probe_read_only_cjk(self, conn: sqlite3.Connection, cursor: sqlite3.Cursor) -> None:
++        """Register an existing CJK tokenizer without creating or repairing schema."""
++        cjk_table = cursor.execute(
++            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts_cjk'"
++        ).fetchone()
++        metadata = cursor.execute(
++            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='state_meta'"
++        ).fetchone()
++        if not cjk_table or not metadata or not load_fts5_cjk_extension(conn):
++            return
++        self._fts_cjk_loaded = self._fts_table_probe(cursor, "messages_fts_cjk") is True
++        if self._fts_cjk_loaded:
++            markers = cursor.execute(
++                "SELECT 1 FROM state_meta WHERE key IN (?, ?, ?) LIMIT 1",
++                (FTS_STALE_KEY, FTS_CJK_STALE_KEY, "fts_cjk_rebuild_high_water"),
++            ).fetchone()
++            self._fts_cjk_available = not bool(markers)
++
++    def _try_load_read_only_cjk(self) -> bool:
++        """Notice a CJK index installed after this read-only handle was opened."""
++        if self._fts_cjk_loaded:
++            return True
++
++        def probe(conn):
++            if not self._fts_cjk_loaded:
++                cursor = conn.cursor()
++                try:
++                    self._probe_read_only_cjk(conn, cursor)
++                finally:
++                    cursor.close()
++            return self._fts_cjk_loaded
++
++        return self._read_retrying_ioerr(probe)
+ 
+     def _connect_read_only(self, timeout: float) -> sqlite3.Connection:
+         """``mode=ro`` tracked connection with Row factory. check_same_thread=False: pooled connections
+diff --git a/tests/hermes_state/test_readonly_cjk.py b/tests/hermes_state/test_readonly_cjk.py
+new file mode 100644
+--- /dev/null
++++ b/tests/hermes_state/test_readonly_cjk.py
+@@ -0,0 +1,376 @@
++"""Cross-profile read-only CJK recall should use a healthy existing index."""
++import json
++import shutil
++import sqlite3
++import subprocess
++import threading
++from concurrent.futures import ThreadPoolExecutor
++from pathlib import Path
++
++import pytest
++
++from hermes_state import SessionDB
++
++
++REPO = Path(__file__).resolve().parent.parent.parent
++
++
++@pytest.fixture(scope="session")
++def cjk_so(tmp_path_factory):
++    source = REPO / "native/fts5_cjk/fts5_cjk.c"
++    vendor = source.parent / "vendor"
++    if not shutil.which("gcc") or not source.exists():
++        pytest.skip("native CJK compiler or source unavailable")
++    path = tmp_path_factory.mktemp("readonly-cjk") / "libfts5_cjk.so"
++    subprocess.run(["gcc", "-shared", "-fPIC", "-O2", f"-I{vendor}", str(source), "-o", str(path)],
++                   check=True, capture_output=True)
++    probe = sqlite3.connect(":memory:")
++    try:
++        probe.enable_load_extension(True)
++        probe.load_extension(str(path))
++    finally:
++        probe.close()
++    return path
++
++
++def test_readonly_cjk_search_keeps_native_unicode_folding(tmp_path, monkeypatch, cjk_so):
++    monkeypatch.setenv("HERMES_FTS5_CJK_SO", str(cjk_so))
++    writer = SessionDB(tmp_path / "state.db")
++    reader = None
++    try:
++        assert writer._fts_cjk_available
++        writer.create_session("s", source="cli")
++        accented = writer.append_message("s", role="user", content="café 完成率")
++        plain = writer.append_message("s", role="user", content="cafe 完成率")
++        writer.append_message("s", role="user", content="cafe unrelated")
++        query = '"café" AND 完成率'
++        assert {row["id"] for row in writer.search_messages(query, fields=["id"])} == {accented, plain}
++        reader = SessionDB(writer.db_path, read_only=True)
++        assert {row["id"] for row in reader.search_messages(query, fields=["id"])} == {accented, plain}
++        assert reader._conn.total_changes == 0
++        with pytest.raises(sqlite3.OperationalError):
++            reader._conn.execute("CREATE TABLE must_remain_read_only(x)")
++    finally:
++        if reader is not None:
++            reader.close()
++        writer.close()
++
++
++def test_session_search_finds_cjk_across_a_named_profile(tmp_path, monkeypatch, cjk_so):
++    from tools.session_search_tool import session_search
++
++    root = tmp_path / "fleet"
++    profile = root / "profiles" / "work"
++    profile.mkdir(parents=True)
++    (root / "config.yaml").write_text("model: {}\n", encoding="utf-8")
++    (profile / "config.yaml").write_text("model: {}\n", encoding="utf-8")
++    monkeypatch.setenv("HERMES_HOME", str(root))
++    monkeypatch.setenv("HERMES_FTS5_CJK_SO", str(cjk_so))
++    caller = SessionDB(root / "state.db")
++    other = SessionDB(profile / "state.db")
++    try:
++        other.create_session("accent", source="cli")
++        other.create_session("plain", source="cli")
++        other.append_message("accent", role="user", content="café 完成率")
++        other.append_message("plain", role="user", content="cafe 完成率")
++        result = json.loads(session_search(db=caller, profile="work", query='"café" AND 完成率', limit=10))
++        assert result["success"] is True
++        assert {row["session_id"] for row in result["results"]} == {"accent", "plain"}
++    finally:
++        other.close()
++        caller.close()
++
++
++@pytest.mark.parametrize("query", ["100%完成率", '"100%完成率"'])
++def test_readonly_cjk_keeps_percent_literal(tmp_path, monkeypatch, cjk_so, query):
++    monkeypatch.setenv("HERMES_FTS5_CJK_SO", str(cjk_so))
++    writer = SessionDB(tmp_path / "state.db")
++    reader = None
++    try:
++        writer.create_session("s", source="cli")
++        expected = writer.append_message("s", role="user", content="100%完成率")
++        writer.append_message("s", role="user", content="100完成率")
++        reader = SessionDB(writer.db_path, read_only=True)
++        assert {row["id"] for row in reader.search_messages(query, fields=["id"])} == {expected}
++    finally:
++        if reader is not None:
++            reader.close()
++        writer.close()
++
++
++def test_readonly_latin_fallback_does_not_use_stale_cjk_index(tmp_path, monkeypatch, cjk_so):
++    monkeypatch.setenv("HERMES_FTS5_CJK_SO", str(cjk_so))
++    writer = SessionDB(tmp_path / "state.db")
++    reader = None
++    try:
++        writer.create_session("s", source="cli")
++        first = writer.append_message("s", role="user", content="needle中文")
++        second = writer.append_message("s", role="user", content="needle中文")
++        reader = SessionDB(writer.db_path, read_only=True)
++
++        def mark_stale(conn):
++            conn.execute("INSERT INTO state_meta(key,value) VALUES('fts_cjk_stale','1')")
++            conn.execute(
++                "INSERT INTO messages_fts_cjk(messages_fts_cjk,rowid,content,tool_name,tool_calls) "
++                "VALUES('delete',?, ?, NULL, NULL)", (second, "needle中文"))
++        writer._execute_write(mark_stale)
++        assert {row["id"] for row in reader.search_messages("needle", fields=["id"])} == {first, second}
++    finally:
++        if reader is not None:
++            reader.close()
++        writer.close()
++
++
++def test_readonly_short_latin_fallback_uses_healthy_cjk_index(tmp_path, monkeypatch, cjk_so):
++    monkeypatch.setenv("HERMES_FTS5_CJK_SO", str(cjk_so))
++    writer = SessionDB(tmp_path / "state.db")
++    reader = None
++    try:
++        writer.create_session("s", source="cli")
++        expected = writer.append_message("s", role="user", content="xy中文")
++        reader = SessionDB(writer.db_path, read_only=True)
++        assert {row["id"] for row in reader.search_messages("xy", fields=["id"])} == {expected}
++    finally:
++        if reader is not None:
++            reader.close()
++        writer.close()
++
++
++def test_readonly_cjk_search_falls_back_without_extension(tmp_path, monkeypatch, cjk_so):
++    monkeypatch.setenv("HERMES_FTS5_CJK_SO", str(cjk_so))
++    writer = SessionDB(tmp_path / "state.db")
++    reader = None
++    try:
++        writer.create_session("s", source="cli")
++        expected = writer.append_message("s", role="user", content="完成率")
++        monkeypatch.setenv("HERMES_FTS5_CJK_SO", str(tmp_path / "missing.so"))
++        reader = SessionDB(writer.db_path, read_only=True)
++        assert {row["id"] for row in reader.search_messages("完成率", fields=["id"])} == {expected}
++        assert reader._conn.total_changes == 0
++        with pytest.raises(sqlite3.OperationalError):
++            reader._conn.execute("CREATE TABLE must_remain_read_only(x)")
++    finally:
++        if reader is not None:
++            reader.close()
++        writer.close()
++
++
++def test_readonly_cjk_search_falls_back_if_index_is_absent(tmp_path, monkeypatch, cjk_so):
++    monkeypatch.setenv("HERMES_FTS5_CJK_SO", str(cjk_so))
++    monkeypatch.setenv("HERMES_CJK_FTS", "false")
++    writer = SessionDB(tmp_path / "state.db")
++    reader = None
++    try:
++        writer.create_session("s", source="cli")
++        expected = writer.append_message("s", role="user", content="完成率")
++        reader = SessionDB(writer.db_path, read_only=True)
++        assert {row["id"] for row in reader.search_messages("完成率", fields=["id"])} == {expected}
++        with reader._read_ctx() as conn:
++            assert not conn.execute(
++                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts_cjk'").fetchone()
++    finally:
++        if reader is not None:
++            reader.close()
++        writer.close()
++
++
++@pytest.mark.parametrize("marker", ["fts_cjk_stale", "fts_cjk_rebuild_high_water"])
++def test_readonly_cjk_recovers_after_stale_index_is_rebuilt(tmp_path, monkeypatch, cjk_so, marker):
++    monkeypatch.setenv("HERMES_FTS5_CJK_SO", str(cjk_so))
++    writer = SessionDB(tmp_path / "state.db")
++    reader = None
++    try:
++        writer.create_session("s", source="cli")
++        accented = writer.append_message("s", role="user", content="café 完成率")
++        plain = writer.append_message("s", role="user", content="cafe 完成率")
++
++        def mark_stale(conn):
++            conn.execute("INSERT INTO state_meta(key,value) VALUES(?, '1')", (marker,))
++            conn.execute(
++                "INSERT INTO messages_fts_cjk(messages_fts_cjk,rowid,content,tool_name,tool_calls) "
++                "VALUES('delete',?, ?, NULL, NULL)", (plain, "cafe 完成率"))
++        writer._execute_write(mark_stale)
++        reader = SessionDB(writer.db_path, read_only=True)
++        assert {row["id"] for row in reader.search_messages("完成率", fields=["id"])} == {accented, plain}
++
++        def rebuild(conn):
++            conn.execute("INSERT INTO messages_fts_cjk(rowid,content,tool_name,tool_calls) VALUES(?,?,NULL,NULL)",
++                         (plain, "cafe 完成率"))
++            conn.execute("DELETE FROM state_meta WHERE key=?", (marker,))
++        writer._execute_write(rebuild)
++        assert {row["id"] for row in reader.search_messages('"café" AND 完成率', fields=["id"])} == {accented, plain}
++    finally:
++        if reader is not None:
++            reader.close()
++        writer.close()
++
++
++def test_readonly_cjk_respects_disabled_tokenizer_with_existing_index(tmp_path, monkeypatch, cjk_so):
++    monkeypatch.setenv("HERMES_FTS5_CJK_SO", str(cjk_so))
++    writer = SessionDB(tmp_path / "state.db")
++    reader = None
++    try:
++        writer.create_session("s", source="cli")
++        expected = writer.append_message("s", role="user", content="完成率")
++        monkeypatch.setenv("HERMES_CJK_FTS", "false")
++        reader = SessionDB(writer.db_path, read_only=True)
++        assert not reader._fts_cjk_loaded and not reader._fts_cjk_available
++        assert {row["id"] for row in reader.search_messages("完成率", fields=["id"])} == {expected}
++    finally:
++        if reader is not None:
++            reader.close()
++        writer.close()
++
++
++def test_readonly_cjk_keeps_callers_existing_transaction(tmp_path, monkeypatch, cjk_so):
++    monkeypatch.setenv("HERMES_FTS5_CJK_SO", str(cjk_so))
++    writer = SessionDB(tmp_path / "state.db")
++    reader = None
++    try:
++        writer.create_session("s", source="cli")
++        expected = writer.append_message("s", role="user", content="完成率")
++        reader = SessionDB(writer.db_path, read_only=True)
++        reader._conn.execute("BEGIN")
++        assert {row["id"] for row in reader.search_messages("完成率", fields=["id"])} == {expected}
++        assert reader._conn.in_transaction
++        reader._conn.rollback()
++    finally:
++        if reader is not None:
++            reader.close()
++        writer.close()
++
++
++def test_readonly_cjk_open_survives_legacy_store_without_metadata(tmp_path, monkeypatch, cjk_so):
++    monkeypatch.setenv("HERMES_FTS5_CJK_SO", str(cjk_so))
++    path = tmp_path / "legacy.db"
++    conn = sqlite3.connect(path)
++    try:
++        conn.enable_load_extension(True)
++        conn.load_extension(str(cjk_so))
++        conn.execute("CREATE VIRTUAL TABLE messages_fts USING fts5(content)")
++        conn.execute("CREATE VIRTUAL TABLE messages_fts_cjk USING fts5(content, tokenize='cjk_unicode61')")
++        conn.commit()
++    finally:
++        conn.close()
++    reader = SessionDB(path, read_only=True)
++    try:
++        assert reader._fts_enabled
++        assert not reader._fts_cjk_loaded and not reader._fts_cjk_available
++        assert reader._conn.total_changes == 0
++    finally:
++        reader.close()
++
++
++def test_readonly_cjk_discovers_index_created_after_open(tmp_path, monkeypatch, cjk_so):
++    from hermes_state_fts import load_fts5_cjk_extension
++
++    monkeypatch.setenv("HERMES_FTS5_CJK_SO", str(cjk_so))
++    monkeypatch.setenv("HERMES_CJK_FTS", "false")
++    writer = SessionDB(tmp_path / "state.db")
++    reader = None
++    try:
++        writer.create_session("s", source="cli")
++        accented = writer.append_message("s", role="user", content="café 完成率")
++        plain = writer.append_message("s", role="user", content="cafe 完成率")
++        reader = SessionDB(writer.db_path, read_only=True)
++        monkeypatch.setenv("HERMES_CJK_FTS", "true")
++        assert load_fts5_cjk_extension(writer._conn)
++
++        def create_index(conn):
++            conn.execute("CREATE VIEW messages_fts_cjk_src AS "
++                         "SELECT id,role,content,tool_name,tool_calls FROM messages WHERE role <> 'tool'")
++            conn.execute("CREATE VIRTUAL TABLE messages_fts_cjk USING fts5("
++                         "content,tool_name,tool_calls,content='messages_fts_cjk_src',content_rowid='id',"
++                         "tokenize='cjk_unicode61')")
++            conn.execute("INSERT INTO messages_fts_cjk(rowid,content,tool_name,tool_calls) "
++                         "SELECT id,content,tool_name,tool_calls FROM messages WHERE role <> 'tool'")
++        writer._execute_write(create_index)
++        assert {row["id"] for row in reader.search_messages('"café" AND 完成率', fields=["id"])} == {accented, plain}
++    finally:
++        if reader is not None:
++            reader.close()
++        writer.close()
++
++
++def test_readonly_cjk_snapshot_survives_concurrent_stale_marker(tmp_path, monkeypatch, cjk_so):
++    monkeypatch.setenv("HERMES_FTS5_CJK_SO", str(cjk_so))
++    writer = SessionDB(tmp_path / "state.db")
++    reader = None
++    entered, release = threading.Event(), threading.Event()
++    try:
++        assert writer._wal_active
++        writer.create_session("s", source="cli")
++        accented = writer.append_message("s", role="user", content="café 完成率")
++        plain = writer.append_message("s", role="user", content="cafe 完成率")
++        reader = SessionDB(writer.db_path, read_only=True)
++
++        def authorizer(action, table, _column, _db, _trigger):
++            if action == sqlite3.SQLITE_READ and table == "messages_fts_cjk":
++                entered.set()
++                if not release.wait(5):
++                    return sqlite3.SQLITE_DENY
++            return sqlite3.SQLITE_OK
++        reader._conn.set_authorizer(authorizer)
++
++        def mark_stale(conn):
++            conn.execute("INSERT INTO state_meta(key,value) VALUES('fts_cjk_stale','1')")
++            conn.execute(
++                "INSERT INTO messages_fts_cjk(messages_fts_cjk,rowid,content,tool_name,tool_calls) "
++                "VALUES('delete',?, ?, NULL, NULL)", (plain, "cafe 完成率"))
++        with ThreadPoolExecutor(max_workers=1) as pool:
++            future = pool.submit(reader.search_messages, '"café" AND 完成率', fields=["id"])
++            try:
++                assert entered.wait(4), "read-only search did not reach the CJK index"
++                writer._execute_write(mark_stale)
++            finally:
++                release.set()
++            assert {row["id"] for row in future.result(timeout=5)} == {accented, plain}
++        reader._conn.set_authorizer(None)
++        assert {row["id"] for row in reader.search_messages("完成率", fields=["id"])} == {accented, plain}
++    finally:
++        release.set()
++        if reader is not None:
++            reader.close()
++        writer.close()
++
++
++def test_readonly_latin_fallback_snapshot_survives_concurrent_stale_marker(tmp_path, monkeypatch, cjk_so):
++    monkeypatch.setenv("HERMES_FTS5_CJK_SO", str(cjk_so))
++    writer = SessionDB(tmp_path / "state.db")
++    reader = None
++    entered, release = threading.Event(), threading.Event()
++    try:
++        assert writer._wal_active
++        writer.create_session("s", source="cli")
++        first = writer.append_message("s", role="user", content="needle中文")
++        second = writer.append_message("s", role="user", content="needle中文")
++        reader = SessionDB(writer.db_path, read_only=True)
++
++        def authorizer(action, table, _column, _db, _trigger):
++            if action == sqlite3.SQLITE_READ and table == "messages_fts_cjk":
++                entered.set()
++                if not release.wait(5):
++                    return sqlite3.SQLITE_DENY
++            return sqlite3.SQLITE_OK
++        reader._conn.set_authorizer(authorizer)
++
++        def mark_stale(conn):
++            conn.execute("INSERT INTO state_meta(key,value) VALUES('fts_cjk_stale','1')")
++            conn.execute(
++                "INSERT INTO messages_fts_cjk(messages_fts_cjk,rowid,content,tool_name,tool_calls) "
++                "VALUES('delete',?, ?, NULL, NULL)", (second, "needle中文"))
++        with ThreadPoolExecutor(max_workers=1) as pool:
++            future = pool.submit(reader.search_messages, "needle", fields=["id"])
++            try:
++                assert entered.wait(4), "Latin fallback did not reach the CJK index"
++                writer._execute_write(mark_stale)
++            finally:
++                release.set()
++            assert {row["id"] for row in future.result(timeout=5)} == {first, second}
++        reader._conn.set_authorizer(None)
++        assert {row["id"] for row in reader.search_messages("needle", fields=["id"])} == {first, second}
++    finally:
++        release.set()
++        if reader is not None:
++            reader.close()
++        writer.close()

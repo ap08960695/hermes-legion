@@ -223,3 +223,7 @@ When an indexed search retries using the CJK or trigram index, paired quoted phr
 ## Bounded full-text search snippets (v0.6.39)
 
 Full-text search results cap each snippet at 1,000 characters, keeping a genuine match highlight and nearby context. Per-search highlight markers distinguish generated markup from marker-like text in a message. Result rows are handled individually instead of retaining all full snippets at once. SQLite may still materialize one large source field or snippet before the cap is applied.
+
+## Read-only cross-profile CJK search (v0.6.40)
+
+Read-only session searches can use an existing healthy CJK full-text index after loading its existing tokenizer. The index health marker and results are checked in the same SQLite read snapshot. If the index is stale or unavailable, the search uses an existing fallback without repairing or changing the source database. Queries with a percent sign retain their previous read-only search path.
