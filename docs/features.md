@@ -243,3 +243,23 @@ Answer cards respond to their own chat tile width. Single images and multi-image
 ## Native backend startup on Python 3.13 (v0.6.45)
 
 The onboarding module imports `Path` before its type annotations are evaluated. This prevents the native Desktop backend from failing during startup on Python 3.13; resolving annotations before server binding is also covered on Python 3.14. The fix changes no onboarding, provider, quota or session policy. See the [Mac installation and update guide](macos-install-update.md).
+
+## Scoped model catalogs (v0.6.46)
+
+Endpoint catalogs now use the owning Hermes home, normalized endpoint and an existing
+credential fingerprint for both in-process reuse and persistent memo identity. Raw
+credentials and home paths are not written into memo keys. Legacy URL-only memos
+are ignored for current-credential reuse; they are not deleted as user data.
+The existing five-minute TTL stays unchanged. Completed in-process entries expire
+on a fill and retain at most 128 recently filled scopes (insertion order, not LRU).
+
+Concurrent callers in one scope share a catalog read. A forced refresh arriving
+behind an ordinary read reserves one fresh read after it; queued refresh callers
+share that refresh. Network operations and waits do not hold the shared table lock,
+so unrelated credentials and homes can proceed independently. This coordinates
+catalog metadata reads, not model inference or provider-side prompt caches.
+
+Pricing extraction prefers explicit pricing objects over generic capability fields.
+Lists, objects, booleans, non-finite values and nonnumeric capability strings are
+not token prices. Existing numeric quote units and optional-probe fallbacks remain.
+The separate context-length persistent cache is outside this change's scope.

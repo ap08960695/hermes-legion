@@ -56646,3 +56646,584 @@ new file mode 100644
 +
 +    assert get_type_hints(module._shared_nous_store)["return"] == tuple[Path, ...]
 +    assert {"onboarding.state", "onboarding.set_run"} <= module._registry.names()
+diff --git a/agent/model_metadata.py b/agent/model_metadata.py
+--- a/agent/model_metadata.py
++++ b/agent/model_metadata.py
+@@ -9,9 +9,12 @@
+ import ipaddress
+ import json
+ import logging
++import math
+ import re
++import threading
+ import time
+ from pathlib import Path
++from itertools import chain
+ from typing import Any, Callable, Dict, List, Optional, Tuple
+ from urllib.parse import urlparse
+ 
+@@ -64,10 +67,11 @@
+ _model_metadata_cache: dict[str, dict[str, Any]] = {}
+ _model_metadata_cache_time: float = 0
+ _MODEL_CACHE_TTL = 3600
+-# In-memory memo keyed by (base_url, api-key fingerprint): per-key gateways return a per-key catalog, and
+-# in a multiplexed process two profiles may share a URL with different keys. The disk memo stays per URL.
+-_endpoint_model_metadata_cache: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
+-_endpoint_model_metadata_cache_time: dict[tuple[str, str], float] = {}
++# A multiplexed process must not reuse another profile's TLS or credential scope.
++_endpoint_model_metadata_cache: dict[tuple[str, str, str], dict[str, dict[str, Any]]] = {}
++_endpoint_model_metadata_cache_time: dict[tuple[str, str, str], float] = {}
++_endpoint_metadata_lock = threading.RLock()
++_MAX_ENDPOINT_MODEL_CACHE_ENTRIES = 128
+ _ENDPOINT_MODEL_CACHE_TTL = 300
+ # Server-type verdicts (server_type, monotonic_ts): positive ones live an hour so a
+ # server swap on the same port is re-detected; None gets the short TTL so a
+@@ -235,19 +239,25 @@
+     return _cache_file("endpoint_model_metadata.json")
+ 
+ 
+-def _endpoint_disk_cache_get(normalized: str) -> Optional[dict[str, dict[str, Any]]]:
+-    """Fresh cross-process memo of a remote ``/models`` probe (same TTL as in-memory): one-shot
+-    runs (``hermes -q``, cron) start cold and Nous bypasses the persistent context cache, so
+-    without this every launch paid the live probe. Local endpoints are never memoized."""
+-    models = _ttl_memo_get(_get_endpoint_metadata_cache_path(), normalized, _ENDPOINT_MODEL_CACHE_TTL, ts_key="at", value_key="models")
++def _endpoint_disk_cache_key(normalized: str, api_key: str) -> str:
++    scope = json.dumps(_endpoint_memo_key(normalized, api_key), separators=(",", ":"))
++    return "scoped-v1:" + hashlib.sha256(scope.encode()).hexdigest()
++
++
++def _endpoint_disk_cache_get(normalized: str, api_key: str = "") -> Optional[dict[str, dict[str, Any]]]:
++    """Fresh profile/credential-scoped remote catalog; legacy URL-only entries are not evidence
++    for the current credential. Local endpoints are never persisted here."""
++    with _endpoint_metadata_lock:
++        models = _ttl_memo_get(_get_endpoint_metadata_cache_path(), _endpoint_disk_cache_key(normalized, api_key), _ENDPOINT_MODEL_CACHE_TTL, ts_key="at", value_key="models")
+     return models if isinstance(models, dict) else None
+ 
+ 
+-def _endpoint_disk_cache_put(normalized: str, cache: dict[str, dict[str, Any]]) -> None:
++def _endpoint_disk_cache_put(normalized: str, cache: dict[str, dict[str, Any]], api_key: str = "") -> None:
+     """Memoize a successful remote ``/models`` probe; expired siblings are dropped."""
+-    _ttl_memo_put(
+-        _get_endpoint_metadata_cache_path(), normalized, cache, _ENDPOINT_MODEL_CACHE_TTL,
+-        ts_key="at", value_key="models", what="endpoint model metadata disk cache", ts_first=True)
++    with _endpoint_metadata_lock:
++        _ttl_memo_put(
++            _get_endpoint_metadata_cache_path(), _endpoint_disk_cache_key(normalized, api_key), cache, _ENDPOINT_MODEL_CACHE_TTL,
++            ts_key="at", value_key="models", what="endpoint model metadata disk cache", ts_first=True)
+ 
+ 
+ # Descending probe tiers for unknown models; tier[0] is also the default fallback.
+@@ -852,6 +862,15 @@
+     return pricing
+ 
+ 
++def _pricing_rate_known(value: Any) -> bool:
++    if isinstance(value, bool):
++        return False
++    try:
++        return math.isfinite(float(value))
++    except (TypeError, ValueError, OverflowError):
++        return False
++
++
+ def _extract_pricing(payload: dict[str, Any]) -> dict[str, Any]:
+     def _per_token(source: dict[str, Any], fields: dict[str, str], scale) -> dict[str, Any]:
+         # Provider $/MTok (or Novita's 1/10_000-$ per M) -> per-token strings, the same path usage_pricing uses for OpenRouter.
+@@ -872,12 +891,14 @@
+         "cache_read": ("cache_read", "cached_prompt", "input_cache_read", "cache_read_cost_per_token"),
+         "cache_write": ("cache_write", "cache_creation", "input_cache_write", "cache_write_cost_per_token"),
+     }
+-    for mapping in _iter_nested_dicts(payload):
++    explicit = (mapping["pricing"] for mapping in _iter_nested_dicts(payload)
++                if isinstance(mapping.get("pricing"), dict))
++    for mapping in chain(explicit, _iter_nested_dicts(payload)):
+         normalized = {str(key).lower(): value for key, value in mapping.items()}
+         pricing: dict[str, Any] = {}
+         for target, aliases in alias_map.items():
+             for alias in aliases:
+-                if alias in normalized and normalized[alias] not in {None, ""}:
++                if alias in normalized and _pricing_rate_known(normalized[alias]):
+                     pricing[target] = normalized[alias]
+                     break
+         if pricing:
+@@ -1004,15 +1025,26 @@
+             cache[child_id]["context_length"] = child_ctx
+ 
+ 
+-def _endpoint_memo_key(normalized: str, api_key: object) -> tuple[str, str]:
++def _endpoint_memo_key(normalized: str, api_key: object) -> tuple[str, str, str]:
+     from agent.credential_persistence import fingerprint_secret_value
++    from hermes_constants import hermes_home_key
+     # Callable (minted) keys are not fingerprinted here: doing so would mint on every cache hit.
+-    return normalized, (fingerprint_secret_value(api_key) or "") if isinstance(api_key, str) else ""
+-
+-
+-def _remember_endpoint_models(memo_key: tuple[str, str], cache: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+-    _endpoint_model_metadata_cache[memo_key] = cache
+-    _endpoint_model_metadata_cache_time[memo_key] = time.time()
++    return hermes_home_key(), normalized, (fingerprint_secret_value(api_key) or "") if isinstance(api_key, str) else ""
++
++
++def _remember_endpoint_models(memo_key: tuple[str, str, str], cache: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
++    with _endpoint_metadata_lock:
++        now = time.time()
++        for key in list(_endpoint_model_metadata_cache):
++            if key == memo_key or now - _endpoint_model_metadata_cache_time.get(key, 0) >= _ENDPOINT_MODEL_CACHE_TTL:
++                _endpoint_model_metadata_cache.pop(key, None)
++                _endpoint_model_metadata_cache_time.pop(key, None)
++        while len(_endpoint_model_metadata_cache) >= _MAX_ENDPOINT_MODEL_CACHE_ENTRIES:
++            oldest = next(iter(_endpoint_model_metadata_cache))
++            _endpoint_model_metadata_cache.pop(oldest)
++            _endpoint_model_metadata_cache_time.pop(oldest, None)
++        _endpoint_model_metadata_cache[memo_key] = cache
++        _endpoint_model_metadata_cache_time[memo_key] = now
+     return cache
+ 
+ 
+@@ -1026,62 +1058,10 @@
+ 
+ 
+ def fetch_endpoint_model_metadata(base_url: str, api_key: str = "", force_refresh: bool = False) -> dict[str, dict[str, Any]]:
+-    """Model metadata from an OpenAI-compatible ``/models`` endpoint (cached per base URL)."""
+-    normalized = _normalize_base_url(base_url)
+-    if not normalized or base_url_host_matches(normalized, "openrouter.ai"):
+-        return {}
+-    local = is_local_endpoint(normalized)
+-    memo_key = _endpoint_memo_key(normalized, api_key)
+-    if not force_refresh:
+-        cached = _endpoint_model_metadata_cache.get(memo_key)
+-        if cached is not None and (time.time() - _endpoint_model_metadata_cache_time.get(memo_key, 0)) < _ENDPOINT_MODEL_CACHE_TTL:
+-            return cached
+-        memo = _endpoint_disk_cache_get(normalized) if not local else None
+-        if memo is not None:
+-            return _remember_endpoint_models(memo_key, memo)
+-    # Blackholed: return empty WITHOUT caching so it is retried once the entry expires.
+-    if _endpoint_blackholed(normalized):
+-        return {}
+-    alternate = normalized[:-3].rstrip("/") if normalized.endswith("/v1") else normalized + "/v1"
+-    candidates = [normalized] + ([alternate] if alternate != normalized else [])
+-    headers = _auth_headers(api_key)
+-    verify = model_metadata_http.resolve_verify(normalized)
+-    last_error: Optional[Exception] = None
+-    if local:
+-        try:
+-            if detect_local_server_type(normalized, api_key=api_key) == "lm-studio":
+-                return _remember_endpoint_models(memo_key, _lmstudio_native_models(normalized, headers))
+-        except Exception as exc:
+-            last_error = exc
+-            _note_if_connect_timeout(exc, normalized)
+-    for candidate in candidates:
+-        # A connect timeout condemns the host, not the path.
+-        if _endpoint_blackholed(normalized):
+-            break
+-        # Cache keys stay unrewritten; only the outbound target is IPv4-resolved.
+-        request_candidate = _localhost_to_ipv4(candidate)
+-        url = request_candidate.rstrip("/") + "/models"
+-        try:
+-            with model_metadata_http.stream(url, headers=headers, timeout=(5, 10), verify=verify) as response:
+-                if response.status_code in (401, 403):
+-                    logger.debug("Model metadata probe received HTTP %s from %s; stopping candidate probing", response.status_code, url)
+-                    break
+-                response.raise_for_status()
+-                response.read()
+-                payload = response.json()
+-            cache = _parse_models_payload(payload)
+-            if any(m.get("owned_by") == "llamacpp" for m in payload.get("data", []) if isinstance(m, dict)):
+-                with contextlib.suppress(Exception):
+-                    _apply_llamacpp_props(cache, request_candidate, headers, verify)
+-            if cache and not local:
+-                _endpoint_disk_cache_put(normalized, cache)
+-            return _remember_endpoint_models(memo_key, cache)
+-        except Exception as exc:
+-            last_error = exc
+-            _note_if_connect_timeout(exc, normalized)
+-    if last_error:
+-        logger.debug("Failed to fetch model metadata from %s/models: %s", normalized, last_error)
+-    return _remember_endpoint_models(memo_key, {})
++    """Read a catalog once per concurrent profile/endpoint/credential scope."""
++    from agent.model_metadata_requests import fetch_endpoint_catalog
++
++    return fetch_endpoint_catalog(base_url, api_key, force_refresh)
+ 
+ 
+ def _resolve_endpoint_context_length(model: str, base_url: str, api_key: str = "") -> Optional[int]:
+diff --git a/agent/model_metadata_requests.py b/agent/model_metadata_requests.py
+new file mode 100644
+--- /dev/null
++++ b/agent/model_metadata_requests.py
+@@ -0,0 +1,113 @@
++"""Native catalog read coordination; no lock is held over another scope's HTTP call."""
++from concurrent.futures import Future
++import contextlib
++import threading
++import time
++from typing import Any, Optional
++
++_lock = threading.Lock()
++_pending: dict[tuple, tuple[Future, bool]] = {}
++
++
++def fetch_once(scope: tuple, query, *, force_refresh: bool = False):
++    """Reserve a refresh behind an ordinary read so queued refresh callers share it."""
++    prior = None
++    with _lock:
++        pending = _pending.get(scope)
++        if pending is not None and force_refresh and not pending[1]:
++            prior = pending[0]
++            pending = None
++        owner = pending is None
++        if owner:
++            pending = (Future(), force_refresh)
++            _pending[scope] = pending
++    future, _ = pending
++    if not owner:
++        return future.result()
++    try:
++        if prior is not None:
++            prior.result()
++        value = query()
++    except BaseException as exc:
++        with _lock:
++            if _pending.get(scope) == pending:
++                _pending.pop(scope)
++        future.set_exception(exc)
++        raise
++    else:
++        with _lock:
++            if _pending.get(scope) == pending:
++                _pending.pop(scope)
++        future.set_result(value)
++        return value
++
++
++def fetch_endpoint_catalog(base_url: str, api_key: str, force_refresh: bool):
++    from agent import model_metadata as metadata
++
++    normalized = metadata._normalize_base_url(base_url)
++    if not normalized or metadata.base_url_host_matches(normalized, "openrouter.ai"):
++        return {}
++    return fetch_once(metadata._endpoint_memo_key(normalized, api_key),
++                      lambda: _read_endpoint_catalog(base_url, api_key, force_refresh),
++                      force_refresh=force_refresh)
++
++
++def _read_endpoint_catalog(base_url: str, api_key: str, force_refresh: bool) -> dict[str, dict[str, Any]]:
++    from agent import model_metadata as metadata
++    normalized = metadata._normalize_base_url(base_url)
++    if not normalized or metadata.base_url_host_matches(normalized, "openrouter.ai"):
++        return {}
++    local = metadata.is_local_endpoint(normalized)
++    memo_key = metadata._endpoint_memo_key(normalized, api_key)
++    if not force_refresh:
++        with metadata._endpoint_metadata_lock:
++            cached = metadata._endpoint_model_metadata_cache.get(memo_key)
++            if cached is not None and (time.time() - metadata._endpoint_model_metadata_cache_time.get(memo_key, 0)) < metadata._ENDPOINT_MODEL_CACHE_TTL:
++                return cached
++        memo = metadata._endpoint_disk_cache_get(normalized, api_key) if not local else None
++        if memo is not None:
++            return metadata._remember_endpoint_models(memo_key, memo)
++    # Blackholed: return empty WITHOUT caching so it is retried once the entry expires.
++    if metadata._endpoint_blackholed(normalized):
++        return {}
++    alternate = normalized[:-3].rstrip("/") if normalized.endswith("/v1") else normalized + "/v1"
++    candidates = [normalized] + ([alternate] if alternate != normalized else [])
++    headers = metadata._auth_headers(api_key)
++    verify = metadata.model_metadata_http.resolve_verify(normalized)
++    last_error: Optional[Exception] = None
++    if local:
++        try:
++            if metadata.detect_local_server_type(normalized, api_key=api_key) == "lm-studio":
++                return metadata._remember_endpoint_models(memo_key, metadata._lmstudio_native_models(normalized, headers))
++        except Exception as exc:  # health: allow BLE001 -- Preserve the native optional-probe fallback and timeout tracking.
++            last_error = exc
++            metadata._note_if_connect_timeout(exc, normalized)
++    for candidate in candidates:
++        # A connect timeout condemns the host, not the path.
++        if metadata._endpoint_blackholed(normalized):
++            break
++        # Cache keys stay unrewritten; only the outbound target is IPv4-resolved.
++        request_candidate = metadata._localhost_to_ipv4(candidate)
++        url = request_candidate.rstrip("/") + "/models"
++        try:
++            with metadata.model_metadata_http.stream(url, headers=headers, timeout=(5, 10), verify=verify) as response:
++                if response.status_code in (401, 403):
++                    metadata.logger.debug("Model metadata probe received HTTP %s from %s; stopping candidate probing", response.status_code, url)
++                    break
++                response.raise_for_status()
++                response.read()
++                payload = response.json()
++            cache = metadata._parse_models_payload(payload)
++            if any(m.get("owned_by") == "llamacpp" for m in payload.get("data", []) if isinstance(m, dict)):
++                with contextlib.suppress(Exception):
++                    metadata._apply_llamacpp_props(cache, request_candidate, headers, verify)
++            if cache and not local:
++                metadata._endpoint_disk_cache_put(normalized, cache, api_key)
++            return metadata._remember_endpoint_models(memo_key, cache)
++        except Exception as exc:  # health: allow BLE001 -- Optional provider catalogs must retain the native fallback and timeout tracking.
++            last_error = exc
++            metadata._note_if_connect_timeout(exc, normalized)
++    if last_error:
++        metadata.logger.debug("Failed to fetch model metadata from %s/models: %s", normalized, last_error)
++    return metadata._remember_endpoint_models(memo_key, {})
+diff --git a/tests/agent/test_endpoint_metadata_scope.py b/tests/agent/test_endpoint_metadata_scope.py
+new file mode 100644
+--- /dev/null
++++ b/tests/agent/test_endpoint_metadata_scope.py
+@@ -0,0 +1,257 @@
++"""Native endpoint catalogs must follow credentials and coalesce startup reads."""
++
++from concurrent.futures import ThreadPoolExecutor
++from contextlib import contextmanager
++import json
++import threading
++import time
++
++import httpx
++import pytest
++
++from agent import model_metadata as metadata
++
++BASE = "https://catalog.example.invalid/v1"
++
++
++@pytest.fixture(autouse=True)
++def isolated_catalog(monkeypatch):
++    metadata._endpoint_model_metadata_cache.clear()
++    metadata._endpoint_model_metadata_cache_time.clear()
++    metadata._endpoint_blackhole_cache.clear()
++    monkeypatch.setattr(metadata.model_metadata_http, "resolve_verify", lambda _: False)
++    yield
++    metadata._endpoint_model_metadata_cache.clear()
++    metadata._endpoint_model_metadata_cache_time.clear()
++
++
++def transport(monkeypatch, reply):
++    calls = []
++
++    @contextmanager
++    def stream(url, *, headers, **kwargs):
++        calls.append((url, headers.get("Authorization"), kwargs.get("verify")))
++        result = reply(url, headers, kwargs)
++        yield httpx.Response(200, json={"data": [{"id": result, "context_length": 65536}]},
++                             request=httpx.Request("GET", url))
++
++    monkeypatch.setattr(metadata.model_metadata_http, "stream", stream)
++    return calls
++
++
++def parked_callers(monkeypatch, expected):
++    """Release a held transport only after all callers park; never delay by wall clock."""
++    reached = threading.Event()
++    seen = set()
++    lock = threading.Lock()
++    original = threading.Condition.wait
++
++    def wait(condition, *args, **kwargs):
++        if threading.current_thread().name.startswith("catalog-scope"):
++            with lock:
++                seen.add(threading.get_ident())
++                if len(seen) == expected:
++                    reached.set()
++        return original(condition, *args, **kwargs)
++
++    monkeypatch.setattr(threading.Condition, "wait", wait)
++    return reached
++
++
++@pytest.mark.parametrize("new_process", [False, True])
++def test_changed_credential_never_reuses_another_catalog(monkeypatch, new_process):
++    calls = transport(monkeypatch, lambda _, headers, __: headers["Authorization"].split()[-1])
++    assert "synthetic-a" in metadata.fetch_endpoint_model_metadata(BASE, "synthetic-a")
++    if new_process:
++        metadata._endpoint_model_metadata_cache.clear()
++        metadata._endpoint_model_metadata_cache_time.clear()
++    assert "synthetic-b" in metadata.fetch_endpoint_model_metadata(BASE, "synthetic-b")
++    assert len(calls) == 2
++
++
++def test_same_credential_reuses_its_disk_catalog(monkeypatch):
++    calls = transport(monkeypatch, lambda *_: "same-catalog")
++    metadata.fetch_endpoint_model_metadata(BASE, "synthetic-a")
++    metadata._endpoint_model_metadata_cache.clear()
++    metadata._endpoint_model_metadata_cache_time.clear()
++    assert "same-catalog" in metadata.fetch_endpoint_model_metadata(BASE, "synthetic-a")
++    assert len(calls) == 1
++    contents = metadata._get_endpoint_metadata_cache_path().read_text()
++    assert "synthetic-a" not in contents
++
++
++def test_unscoped_legacy_disk_entry_is_not_credential_evidence(monkeypatch):
++    path = metadata._get_endpoint_metadata_cache_path()
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps({BASE: {"at": time.time(), "models": {"legacy-only": {}}}}))
++    calls = transport(monkeypatch, lambda *_: "authorized-catalog")
++    result = metadata.fetch_endpoint_model_metadata(BASE, "synthetic-a")
++    assert "authorized-catalog" in result and "legacy-only" not in result
++    assert len(calls) == 1
++
++
++def test_profile_tls_scope_is_resolved_before_reusing_metadata(monkeypatch, tmp_path):
++    from hermes_constants import get_hermes_home
++
++    first = tmp_path / "first"
++    second = tmp_path / "second"
++    first.mkdir()
++    second.mkdir()
++    monkeypatch.setattr(metadata.model_metadata_http, "resolve_verify", lambda _: str(get_hermes_home()))
++    calls = transport(monkeypatch, lambda _, __, options: options["verify"])
++    monkeypatch.setenv("HERMES_HOME", str(first))
++    assert str(first) in metadata.fetch_endpoint_model_metadata(BASE, "synthetic-a")
++    monkeypatch.setenv("HERMES_HOME", str(second))
++    assert str(second) in metadata.fetch_endpoint_model_metadata(BASE, "synthetic-a")
++    assert len(calls) == 2
++
++
++def test_concurrent_same_scope_startup_read_uses_one_request(monkeypatch):
++    release = threading.Event()
++    parked = parked_callers(monkeypatch, 4)
++
++    def reply(*_):
++        assert release.wait(timeout=3)
++        return "shared-catalog"
++
++    calls = transport(monkeypatch, reply)
++
++    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="catalog-scope") as pool:
++        futures = [pool.submit(metadata.fetch_endpoint_model_metadata, BASE, "synthetic-a") for _ in range(4)]
++        try:
++            assert parked.wait(timeout=2)
++        finally:
++            release.set()
++        values = [future.result(timeout=2) for future in futures]
++    assert all("shared-catalog" in value for value in values)
++    assert len(calls) == 1
++
++
++def test_other_credential_is_not_blocked_by_an_inflight_request(monkeypatch):
++    entered = threading.Event()
++    release = threading.Event()
++
++    def reply(_, headers, __):
++        if headers["Authorization"] == "Bearer synthetic-a":
++            entered.set()
++            assert release.wait(timeout=3)
++        return "own-catalog"
++
++    transport(monkeypatch, reply)
++    with ThreadPoolExecutor(max_workers=2) as pool:
++        first = pool.submit(metadata.fetch_endpoint_model_metadata, BASE, "synthetic-a")
++        try:
++            assert entered.wait(timeout=2)
++            second = pool.submit(metadata.fetch_endpoint_model_metadata, BASE, "synthetic-b")
++            assert "own-catalog" in second.result(timeout=2)
++        finally:
++            release.set()
++        assert "own-catalog" in first.result(timeout=2)
++
++
++def test_force_refresh_still_reads_the_endpoint(monkeypatch):
++    generation = iter(("old-catalog", "new-catalog"))
++    calls = transport(monkeypatch, lambda *_: next(generation))
++    assert "old-catalog" in metadata.fetch_endpoint_model_metadata(BASE, "synthetic-a")
++    assert "new-catalog" in metadata.fetch_endpoint_model_metadata(BASE, "synthetic-a", force_refresh=True)
++    assert len(calls) == 2
++
++
++def test_refresh_after_an_inflight_read_keeps_the_fresh_catalog(monkeypatch):
++    entered = threading.Event()
++    release = threading.Event()
++    parked = parked_callers(monkeypatch, 2)
++    count = 0
++
++    def reply(*_):
++        nonlocal count
++        count += 1
++        if count == 1:
++            entered.set()
++            assert release.wait(timeout=3)
++            return "old-catalog"
++        return "new-catalog"
++
++    transport(monkeypatch, reply)
++    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="catalog-scope") as pool:
++        ordinary = pool.submit(metadata.fetch_endpoint_model_metadata, BASE, "synthetic-a")
++        assert entered.wait(timeout=2)
++        refresh = pool.submit(metadata.fetch_endpoint_model_metadata, BASE, "synthetic-a", True)
++        try:
++            assert parked.wait(timeout=2)
++        finally:
++            release.set()
++        assert "old-catalog" in ordinary.result(timeout=2)
++        assert "new-catalog" in refresh.result(timeout=2)
++    assert "new-catalog" in metadata.fetch_endpoint_model_metadata(BASE, "synthetic-a")
++
++
++def test_interrupted_read_does_not_leave_a_stuck_flight(monkeypatch):
++    attempts = 0
++
++    def reply(*_):
++        nonlocal attempts
++        attempts += 1
++        if attempts == 1:
++            raise KeyboardInterrupt
++        return "recovered-catalog"
++
++    transport(monkeypatch, reply)
++    with pytest.raises(KeyboardInterrupt):
++        metadata.fetch_endpoint_model_metadata(BASE, "synthetic-a")
++    assert "recovered-catalog" in metadata.fetch_endpoint_model_metadata(BASE, "synthetic-a")
++    assert attempts == 2
++
++
++def test_queued_refresh_callers_share_one_fresh_request(monkeypatch):
++    entered = threading.Event()
++    release = threading.Event()
++    parked = parked_callers(monkeypatch, 4)
++    count = 0
++
++    def reply(*_):
++        nonlocal count
++        count += 1
++        if count == 1:
++            entered.set()
++            assert release.wait(timeout=3)
++            return "old-catalog"
++        assert release.wait(timeout=3)
++        return "new-catalog"
++
++    calls = transport(monkeypatch, reply)
++
++    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="catalog-scope") as pool:
++        ordinary = pool.submit(metadata.fetch_endpoint_model_metadata, BASE, "synthetic-a")
++        assert entered.wait(timeout=2)
++        refreshes = [pool.submit(metadata.fetch_endpoint_model_metadata, BASE, "synthetic-a", True) for _ in range(3)]
++        try:
++            assert parked.wait(timeout=2)
++        finally:
++            release.set()
++        assert "old-catalog" in ordinary.result(timeout=2)
++        assert all("new-catalog" in future.result(timeout=2) for future in refreshes)
++    assert len(calls) == 2
++
++
++def test_completed_catalog_retention_is_bounded(monkeypatch):
++    monkeypatch.setattr(metadata, "_endpoint_disk_cache_get", lambda *_: None)
++    monkeypatch.setattr(metadata, "_endpoint_disk_cache_put", lambda *_: None)
++    calls = transport(monkeypatch, lambda *_: "own-catalog")
++    for index in range(300):
++        metadata.fetch_endpoint_model_metadata(f"https://catalog-{index}.example.invalid/v1", "synthetic-a")
++    before = len(calls)
++    metadata.fetch_endpoint_model_metadata("https://catalog-0.example.invalid/v1", "synthetic-a")
++    assert len(calls) == before + 1
++
++
++@pytest.mark.parametrize("capability", [["text", "image"], {"kind": "text"}, True, "text", 4096])
++def test_capability_fields_do_not_break_or_override_catalog_pricing(capability):
++    payload = {"data": [{"id": "multimodal-model", "context_length": 65536,
++                         "modalities": {"input": capability},
++                         "pricing": {"prompt": "0.0000006", "completion": "0.0000012"}}]}
++    result = metadata._parse_models_payload(payload)
++    entry = result["multimodal-model"]
++    assert entry["context_length"] == 65536
++    assert float(entry["pricing"]["prompt"]) == 0.0000006
++    assert float(entry["pricing"]["completion"]) == 0.0000012

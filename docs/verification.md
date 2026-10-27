@@ -1182,3 +1182,37 @@ Actual Electron startup then exposed `NameError: name 'Path' is not defined` whi
 After repair, two native Mac Electron tests passed: narrow answer-card layout beside an open HTML artifact, and cold restoration of a synthetic older session omitted from the first history page in the newly packaged app. The first uses source Electron; the second uses the local packaged executable and the explicitly selected patched backend. Mock-provider prompt counts were zero. A prior sandbox attempt denied local singleton IPC and was corrected to permit loopback and Unix sockets while keeping external networking blocked; no owner lock was deleted or process terminated. Original failures remain private evidence. The 12 native and two UI results cover different checks but are not a full upstream suite, full Mac feature audit, actual-provider acceptance or production-app adoption. No new usage, cache-saving, response-time or RSS improvement is claimed.
 
 The cumulative patch now contains 572 paths. Existing patch hunks remain byte-identical; only the onboarding module and its import regression are added. Seven broken relative links in the installation page were repaired. Current public files, reachable Git history, release contents and notes are scanned for credentials and known private identifiers before publication. Machine identities, private paths, test homes, logs, screenshots, source clones and the Mac application package are excluded from the public payload.
+
+## Scoped model catalogs (v0.6.46)
+
+Six failing scope/concurrency/retention regressions and three controls first reproduced
+incorrect catalog reuse and duplicate reads. A separate pricing reproduction showed
+that capability arrays/objects could discard a catalog, and a boolean could become a
+price. The final seven-file native suite passed 213 cases with zero retries, including
+17 focused scope, disk-reuse, refresh, concurrency, retention and pricing cases.
+Scoped Ruff found zero findings. The native health ratchet had zero unwaived blocking
+findings; two documented broad exception catches preserve the inherited optional
+provider-probe fallback rather than changing its failure behavior during this move.
+
+A synthetic 1,000-model catalog fixture with eight simultaneous callers ran three
+trials per version. Requests were [8, 8, 8] before and [1, 1, 1] after; all returned
+the same catalog digest. Median elapsed time was 0.301 s versus 0.135 s; median peak
+traced Python allocation was 3,615,725 versus 611,555 bytes. This equal-result fixture
+uses baseline-compatible pricing data. The capability-shape failure was retained
+separately and verified by correctness tests. These are synthetic transport results,
+not service RSS, production latency, token usage or billing savings.
+
+The exact three files were installed on Linux under native update custody with scoped
+rollback bytes and original permissions. Native idle-only Gateway restart admission
+was accepted; the replacement process postdated installation with zero active agents
+and the existing emergency stop retained. No model call was made. Desktop remained
+closed; no renderer rebuild was needed for this Python-only change.
+
+Two native Mac trial UI cases passed in isolated homes with external networking denied:
+narrow answer cards and cold restoration of an older saved session. Final runtime
+ASTs matched those tested bytes after comment-only cleanup. The trial source hashes
+were read back; the original Mac application and configuration were not changed.
+These UI cases establish backend startup and those interactions, not full production
+bot behavior. Natural-workload cache/usage acceptance remains incomplete because the
+current read-only sample is dominated by test or unknown provenance and sparse task
+bindings; no model requests were added to manufacture a favorable measurement.
