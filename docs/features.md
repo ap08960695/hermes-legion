@@ -219,3 +219,7 @@ Slow-search telemetry records the search route, elapsed time, result count, and 
 ## Search expression fallbacks (v0.6.38)
 
 When an indexed search retries using the CJK or trigram index, paired quoted phrases and boolean operators retain their meaning. Latin prefix searches retain their wildcard in the zero-result fallback. Existing CJK wildcard and LIKE fallback behavior is unchanged.
+
+## Bounded full-text search snippets (v0.6.39)
+
+Full-text search results cap each snippet at 1,000 characters, keeping a genuine match highlight and nearby context. Per-search highlight markers distinguish generated markup from marker-like text in a message. Result rows are handled individually instead of retaining all full snippets at once. SQLite may still materialize one large source field or snippet before the cap is applied.

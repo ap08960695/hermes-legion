@@ -1120,3 +1120,7 @@ Eight related test files passed 138 offline tests on the installed Linux source.
 ## Search expression fallbacks (v0.6.38)
 
 A Linux offline regression suite checked exact phrases, mixed CJK text, boolean operators, punctuation, and Latin prefixes with native CJK and trigram indexes. Fifteen targeted cases passed on the installed source, with ten existing CJK-index cases. A separate ten-file search suite passed 186 tests on the candidate. The gateway reloaded through its idle-only control. No model calls were made. These tests do not establish production latency or usage savings.
+
+## Bounded full-text search snippets (v0.6.39)
+
+A Linux offline regression suite exercised long CJK and Latin tokens, long highlights, literal marker-like text, multiple hits, and the session search tool. Seven targeted cases and 15 earlier phrase-fallback cases passed against installed source. A separate 15-file search suite passed 220 tests on the candidate; these suites overlap. In one synthetic three-hit run with roughly 8 MiB per message, the tool response shrank from 25,170,683 bytes to 5,293 bytes and sampled peak RSS increase fell from 114,344 KiB to 41,156 KiB. One-hit peak RSS remained high because SQLite may materialize a large field. These figures are not production usage or latency measurements. The gateway reloaded through idle-only control; no model calls were made.
