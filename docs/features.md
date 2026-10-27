@@ -263,3 +263,26 @@ Pricing extraction prefers explicit pricing objects over generic capability fiel
 Lists, objects, booleans, non-finite values and nonnumeric capability strings are
 not token prices. Existing numeric quote units and optional-probe fallbacks remain.
 The separate context-length persistent cache is outside this change's scope.
+
+## Credential-bound context windows (v0.6.47)
+
+Provider-confirmed context windows now persist under their credential identity.
+An authenticated lookup does not treat a legacy model/URL-only scalar as evidence
+for its current credential. Anonymous legacy readers retain their existing keys;
+explicit context pins still win. Bedrock provenance and the existing Codex/LM Studio
+persistent-read bypass remain. Provider-error and usage-confirmation writers carry
+the agent's current credential; a callable credential is not minted for bookkeeping.
+
+Context mutations use Hermes' native cross-process file-lock helper around the
+read/modify/atomic-write sequence. The newest fill is retained and at most 128
+credential-scoped windows are kept per home, with insertion-order eviction.
+Anonymous legacy values and unrelated Bedrock markers are not retired by this cap.
+Lock failures keep the existing best-effort cache behavior; the platform fallback
+semantics remain those of Hermes' existing lock helper.
+
+Local server detection, Ollama num_ctx disk memos and local context-probe memory
+memos now include owning home and credential identity. Existing success/failure TTLs
+and non-memoized failures remain unchanged. Disk memo keys use fingerprints rather
+than raw credentials. These are metadata caches, separate from provider prompt cache.
+Novita and DeepInfra numeric quote conversion also rejects boolean, container and
+non-finite values instead of throwing or recording a false price.

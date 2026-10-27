@@ -56678,6 +56678,27 @@ diff --git a/agent/model_metadata.py b/agent/model_metadata.py
  _ENDPOINT_MODEL_CACHE_TTL = 300
  # Server-type verdicts (server_type, monotonic_ts): positive ones live an hour so a
  # server swap on the same port is re-detected; None gets the short TTL so a
+@@ -188,14 +192,14 @@
+     return _cache_file("local_endpoint_probes.json")
+ 
+ 
+-def _local_probe_disk_get(kind: str, key: str) -> Optional[Any]:
++def _local_probe_disk_get(kind: str, key: str, api_key: str = "") -> Optional[Any]:
+     """Return a fresh cached value for ``kind:key``, else None."""
+-    return _ttl_memo_get(_local_probe_disk_cache_path(), f"{kind}:{key}", _LOCAL_PROBE_DISK_TTL_SECONDS, ts_key="ts", value_key="value")
+-
+-
+-def _local_probe_disk_put(kind: str, key: str, value: Any) -> None:
++    return _ttl_memo_get(_local_probe_disk_cache_path(), f"{kind}:{_endpoint_disk_cache_key(key, api_key)}", _LOCAL_PROBE_DISK_TTL_SECONDS, ts_key="ts", value_key="value")
++
++
++def _local_probe_disk_put(kind: str, key: str, value: Any, api_key: str = "") -> None:
+     """Persist a successful probe result. Best-effort; prunes stale entries."""
+-    _ttl_memo_put(_local_probe_disk_cache_path(), f"{kind}:{key}", value, _LOCAL_PROBE_DISK_TTL_SECONDS, ts_key="ts", value_key="value", what="local probe disk cache")
++    _ttl_memo_put(_local_probe_disk_cache_path(), f"{kind}:{_endpoint_disk_cache_key(key, api_key)}", value, _LOCAL_PROBE_DISK_TTL_SECONDS, ts_key="ts", value_key="value", what="local probe disk cache")
+ 
+ 
+ def _get_model_metadata_cache_path() -> Path:
 @@ -235,19 +239,25 @@
      return _cache_file("endpoint_model_metadata.json")
  
@@ -56713,7 +56734,85 @@ diff --git a/agent/model_metadata.py b/agent/model_metadata.py
  
  
  # Descending probe tiers for unknown models; tier[0] is also the default fallback.
-@@ -852,6 +862,15 @@
+@@ -633,17 +643,17 @@
+     return False
+ 
+ 
+-def _save_unless_skipped(model: str, base_url: str, ctx: int, provider: str) -> None:
++def _save_unless_skipped(model: str, base_url: str, ctx: int, provider: str, api_key: str = "") -> None:
+     """Persist ``ctx`` unless the provider opts out of the disk cache."""
+     if not _skip_persistent_context_cache(base_url, provider):
+-        save_context_length(model, base_url, ctx)
+-
+-
+-def _maybe_cache_local_context_length(model: str, base_url: str, length: int) -> None:
++        save_context_length(model, base_url, ctx, api_key=api_key)
++
++
++def _maybe_cache_local_context_length(model: str, base_url: str, length: int, api_key: str = "") -> None:
+     """Persist a probed local window only at/above MINIMUM_CONTEXT_LENGTH: sub-minimum windows are
+     still returned so agent_init can reject them, but must not be blessed into the disk cache."""
+     if length >= MINIMUM_CONTEXT_LENGTH:
+-        save_context_length(model, base_url, length)
++        save_context_length(model, base_url, length, api_key=api_key)
+ 
+ 
+ def _probe_local_context_length(model: str, base_url: str, api_key: str, provider: str) -> Optional[int]:
+@@ -652,7 +662,7 @@
+     if not (local_ctx and local_ctx > 0):
+         return None
+     if not _skip_persistent_context_cache(base_url, provider):
+-        _maybe_cache_local_context_length(model, base_url, local_ctx)
++        _maybe_cache_local_context_length(model, base_url, local_ctx, api_key)
+     return local_ctx
+ 
+ 
+@@ -667,9 +677,9 @@
+         logger.info("Live local probe for %s@%s reports %s (< minimum %s); invalidating stale cache — agent init should reject", model, base_url, f"{live_ctx:,}", f"{MINIMUM_CONTEXT_LENGTH:,}")
+     else:
+         logger.info("Reconciling stale local cache entry %s@%s: %s -> %s (live probe)", model, base_url, f"{cached:,}", f"{live_ctx:,}")
+-    _invalidate_cached_context_length(model, base_url)
++    _invalidate_cached_context_length(model, base_url, api_key=api_key)
+     if live_ctx >= MINIMUM_CONTEXT_LENGTH:
+-        _maybe_cache_local_context_length(model, base_url, live_ctx)
++        _maybe_cache_local_context_length(model, base_url, live_ctx, api_key)
+     return live_ctx
+ 
+ 
+@@ -728,16 +738,17 @@
+         return None
+     server_url = _server_root(normalized)
+     lmstudio_url = _lmstudio_server_root(normalized)
+-    cached = _endpoint_probe_path_cache.get(server_url)
++    memo_key = _endpoint_memo_key(server_url, api_key)
++    cached = _endpoint_probe_path_cache.get(memo_key)
+     if cached is not None and (time.monotonic() - cached[1]) < (_ENDPOINT_PROBE_TTL_SECONDS if cached[0] is not None else _ENDPOINT_PROBE_FAILURE_TTL_SECONDS):
+         return cached[0]
+     # Blackholed host: skip the waterfall. Deliberately NOT written to the
+     # hour-long verdict cache, which would pin "undetected" after it comes back.
+     if _endpoint_blackholed(server_url):
+         return None
+-    disk_hit = _local_probe_disk_get("server_type", server_url)
++    disk_hit = _local_probe_disk_get("server_type", server_url, api_key)
+     if isinstance(disk_hit, str):
+-        _endpoint_probe_path_cache[server_url] = (disk_hit, time.monotonic())
++        _endpoint_probe_path_cache[memo_key] = (disk_hit, time.monotonic())
+         return disk_hit
+     # Most specific first: (name, paths tried until one answers 200, body check). LM Studio answers /api/tags
+     # with {"error": ...} and 200, so Ollama's body must carry "models"; older llama.cpp builds have no /v1 prefix.
+@@ -767,9 +778,9 @@
+     except Exception:
+         pass
+     # Negative verdict in memory only (never on disk — failures are often transient).
+-    _endpoint_probe_path_cache[server_url] = (result, time.monotonic())
++    _endpoint_probe_path_cache[memo_key] = (result, time.monotonic())
+     if result is not None:
+-        _local_probe_disk_put("server_type", server_url, result)
++        _local_probe_disk_put("server_type", server_url, result, api_key)
+     return result
+ 
+ 
+@@ -852,10 +863,19 @@
      return pricing
  
  
@@ -56729,7 +56828,12 @@ diff --git a/agent/model_metadata.py b/agent/model_metadata.py
  def _extract_pricing(payload: dict[str, Any]) -> dict[str, Any]:
      def _per_token(source: dict[str, Any], fields: dict[str, str], scale) -> dict[str, Any]:
          # Provider $/MTok (or Novita's 1/10_000-$ per M) -> per-token strings, the same path usage_pricing uses for OpenRouter.
-@@ -872,12 +891,14 @@
+-        return {target: str(scale(float(source[key]))) for target, key in fields.items() if source.get(key) is not None}
++        return {target: str(scale(float(source[key]))) for target, key in fields.items() if _pricing_rate_known(source.get(key))}
+     novita_fields = {"prompt": "input_token_price_per_m", "completion": "output_token_price_per_m"}
+     if any(payload.get(k) is not None for k in novita_fields.values()):
+         return _per_token(payload, novita_fields, lambda v: v / 10_000 / 1_000_000)
+@@ -872,12 +892,14 @@
          "cache_read": ("cache_read", "cached_prompt", "input_cache_read", "cache_read_cost_per_token"),
          "cache_write": ("cache_write", "cache_creation", "input_cache_write", "cache_write_cost_per_token"),
      }
@@ -56746,7 +56850,7 @@ diff --git a/agent/model_metadata.py b/agent/model_metadata.py
                      pricing[target] = normalized[alias]
                      break
          if pricing:
-@@ -1004,15 +1025,26 @@
+@@ -1004,15 +1026,26 @@
              cache[child_id]["context_length"] = child_ctx
  
  
@@ -56780,7 +56884,7 @@ diff --git a/agent/model_metadata.py b/agent/model_metadata.py
      return cache
  
  
-@@ -1026,62 +1058,10 @@
+@@ -1026,62 +1059,10 @@
  
  
  def fetch_endpoint_model_metadata(base_url: str, api_key: str = "", force_refresh: bool = False) -> dict[str, dict[str, Any]]:
@@ -56847,6 +56951,215 @@ diff --git a/agent/model_metadata.py b/agent/model_metadata.py
  
  
  def _resolve_endpoint_context_length(model: str, base_url: str, api_key: str = "") -> Optional[int]:
+@@ -1136,56 +1117,40 @@
+     atomic_yaml_write(_get_context_cache_path(), document)
+ 
+ 
+-def _context_cache_key(model: str, base_url: str) -> str:
+-    """Canonical ``model@base_url`` key; trailing slashes stripped so ``/v1`` and ``/v1/`` share one entry."""
++def _context_cache_key(model: str, base_url: str, api_key: str = "") -> str:
++    """Credential-bound identity; legacy anonymous URL keys retain their native form."""
++    if isinstance(api_key, str) and api_key:
++        scope = json.dumps((model, *_endpoint_memo_key((base_url or '').rstrip('/'), api_key)), separators=(",", ":"))
++        return "credential-v1:" + hashlib.sha256(scope.encode()).hexdigest()
+     return f"{model}@{(base_url or '').rstrip('/')}"
+ 
+ 
+-def save_context_length(model: str, base_url: str, length: int, *, source: str = "") -> None:
+-    """Persist a discovered context length under ``model@base_url`` (same model, different providers, different limits)."""
+-    # 0/negative is always a bug and would make get_model_context_length() return 0 (`0 is not None`).
+-    if length <= 0:
+-        logger.warning("Refusing to cache non-positive context length %s -> %s tokens", f"{model}@{base_url}", length)
+-        return
+-    key = _context_cache_key(model, base_url)
+-    document = _load_context_cache_document()
+-    cache = document.get("context_lengths") or {}
+-    confirmed = document.get("bedrock_confirmed_v1") or {}
+-    confirmed = confirmed if isinstance(confirmed, dict) else {}
+-    old_confirmed = confirmed.copy()
+-    # Generic writes revoke provenance even for the same number. The marker
+-    # binds to the value, so an older writer cannot leave mismatched evidence.
+-    for alias in (key, f"{model}@{base_url}", f"{key}/"):
+-        confirmed.pop(alias, None)
+-    if source == "bedrock-confirmed-v1":
+-        confirmed[key] = length
+-    if cache.get(key) == length and confirmed == old_confirmed:
+-        return  # already stored
+-    cache[key] = length
+-    try:
+-        _write_context_cache(cache, confirmed)
+-        logger.info("Cached context length %s -> %s tokens", key, f"{length:,}")
+-    except Exception as e:
+-        logger.debug("Failed to save context length cache: %s", e)
+-
+-
+-def save_provider_context_length(model: str, base_url: str, length: int, provider: str = "") -> None:
++def save_context_length(model: str, base_url: str, length: int, *, source: str = "", api_key: str = "") -> None:
++    """Persist an observed window for its credential; anonymous legacy keys stay compatible."""
++    from agent.model_metadata_context_cache import save_window
++    save_window(model, base_url, length, source=source, api_key=api_key)
++
++
++def save_provider_context_length(model: str, base_url: str, length: int, provider: str = "", *, api_key: str = "") -> None:
+     """Persist a provider-confirmed window, distinguishing it from legacy Bedrock fallbacks."""
+     if _is_bedrock_context(base_url, provider):
+         save_context_length(model, base_url or "bedrock://", length, source="bedrock-confirmed-v1")
+     else:
+-        save_context_length(model, base_url, length)
+-
+-
+-def get_cached_context_length(model: str, base_url: str, *, bedrock_confirmed: bool = False) -> Optional[int]:
++        save_context_length(model, base_url, length, api_key=api_key)
++
++
++def get_cached_context_length(model: str, base_url: str, *, bedrock_confirmed: bool = False, api_key: str = "") -> Optional[int]:
+     """Look up a previously discovered context length for model+provider."""
+-    key = _context_cache_key(model, base_url)
++    if not isinstance(api_key, str):
++        return None
++    key = _context_cache_key(model, base_url, api_key)
+     document = _load_context_cache_document()
+     cache = document.get("context_lengths") or {}
+     if not isinstance(cache, dict):
+         return None
+     # Legacy rows may carry a trailing slash, so probe the canonical key, the literal form and the slashed canonical form.
+-    matched_key = next((k for k in (key, f"{model}@{base_url}", f"{key}/") if cache.get(k) is not None), None)
++    aliases = (key,) if api_key else (key, f"{model}@{base_url}", f"{key}/")
++    matched_key = next((k for k in aliases if cache.get(k) is not None), None)
+     length = cache.get(matched_key)
+     if type(length) is not int:
+         return None
+@@ -1197,38 +1162,10 @@
+     return length
+ 
+ 
+-def _invalidate_cached_context_length(model: str, base_url: str) -> None:
+-    """Drop a stale entry and its probe cooldown using the persisted cache URL.
+-
+-    Bedrock callers without a runtime endpoint must pass ``bedrock://``, as
+-    the resolver does; a blank URL addresses the distinct generic cache key.
+-    """
+-    key = _context_cache_key(model, base_url)
+-    document = _load_context_cache_document()
+-    cache = document.get("context_lengths") or {}
+-    confirmed = document.get("bedrock_confirmed_v1") or {}
+-    confirmed = confirmed if isinstance(confirmed, dict) else {}
+-    # Also drop the in-memory TTL probe entries, or the next resolution inside the TTL window reuses the stale value.
+-    bare, stripped = _strip_provider_prefix(model), (base_url or "").rstrip("/")
+-    _LOCAL_CTX_PROBE_CACHE.pop((bare, stripped), None)
+-    _LOCAL_CTX_PROBE_CACHE.pop(("ollama_show", bare, stripped), None)
+-    # Same for a memoised Bedrock probe failure (keyed by region, which the caller does not know):
+-    # the entry being dropped is the reason to ask the probe again, not to wait out its TTL.
+-    from hermes_constants import hermes_home_key
+-    for memo_key in list(_BEDROCK_PROBE_FAILURE_CACHE):  # snapshot: another thread may be memoising
+-        if memo_key[:2] == (hermes_home_key(), stripped) and memo_key[2] in (model, bare):
+-            _BEDROCK_PROBE_FAILURE_CACHE.pop(memo_key, None)
+-    # Every key shape get_cached_context_length consults.
+-    stale_keys = {key, f"{model}@{base_url}", f"{key}/"}
+-    if not any(k in cache or k in confirmed for k in stale_keys):
+-        return
+-    for k in stale_keys:
+-        cache.pop(k, None)
+-        confirmed.pop(k, None)
+-    try:
+-        _write_context_cache(cache, confirmed)
+-    except Exception as e:
+-        logger.debug("Failed to invalidate context length cache entry %s: %s", key, e)
++def _invalidate_cached_context_length(model: str, base_url: str, *, api_key: str = "") -> None:
++    """Invalidate only the caller's persisted window and native probe cooldown."""
++    from agent.model_metadata_context_cache import invalidate_window
++    invalidate_window(model, base_url, api_key=api_key)
+ 
+ 
+ def get_next_probe_tier(current_length: int) -> Optional[int]:
+@@ -1455,13 +1392,13 @@
+     if not _is_ollama_server(base_url, api_key):
+         return None
+     _disk_key = f"{server_url}|{bare_model}"
+-    disk_hit = _local_probe_disk_get("ollama_num_ctx", _disk_key)
++    disk_hit = _local_probe_disk_get("ollama_num_ctx", _disk_key, api_key)
+     if isinstance(disk_hit, int) and disk_hit > 0:
+         return disk_hit
+     data = _ollama_show(server_url, api_key, bare_model)
+     ctx = _ollama_show_context(data, gguf_first=False) if data is not None else None
+     if ctx is not None:
+-        _local_probe_disk_put("ollama_num_ctx", _disk_key, ctx)
++        _local_probe_disk_put("ollama_num_ctx", _disk_key, ctx, api_key)
+     return ctx
+ 
+ 
+@@ -1499,7 +1436,7 @@
+ def _query_ollama_api_show(model: str, base_url: str, api_key: str = "") -> Optional[int]:
+     """Provider-agnostic Ollama ``/api/show`` probe (any hostname; non-Ollama servers 404 fast).
+     GGUF-first (hosted users can't set num_ctx) — the reverse of query_ollama_num_ctx(), hence the namespaced memo key."""
+-    return _memo_local_probe(("ollama_show", _strip_provider_prefix(model), base_url.rstrip("/")), lambda: _query_ollama_api_show_uncached(model, base_url, api_key=api_key))
++    return _memo_local_probe(("ollama_show", _strip_provider_prefix(model), *_endpoint_memo_key(base_url.rstrip("/"), api_key)), lambda: _query_ollama_api_show_uncached(model, base_url, api_key=api_key))
+ 
+ 
+ def _query_ollama_api_show_uncached(model: str, base_url: str, api_key: str = "") -> Optional[int]:
+@@ -1566,7 +1503,7 @@
+ 
+ def _query_local_context_length(model: str, base_url: str, api_key: str = "") -> Optional[int]:
+     """Local-server context probe, short-TTL cached (see _LOCAL_CTX_PROBE_CACHE)."""
+-    return _memo_local_probe((_strip_provider_prefix(model), base_url.rstrip("/")), lambda: _query_local_context_length_uncached(model, base_url, api_key=api_key))
++    return _memo_local_probe(("context", _strip_provider_prefix(model), *_endpoint_memo_key(base_url.rstrip("/"), api_key)), lambda: _query_local_context_length_uncached(model, base_url, api_key=api_key))
+ 
+ 
+ def _positive_int(value: Any) -> Optional[int]:
+@@ -1995,7 +1932,7 @@
+     for hit, log, msg, shown in drop_rules:
+         if hit:
+             log(msg, model, base_url, shown)
+-            _invalidate_cached_context_length(model, base_url)
++            _invalidate_cached_context_length(model, base_url, api_key=api_key)
+             return None
+     # Nous Portal: /v1/models is authoritative. Bypass (don't drop) the cache so step
+     # 5b reconciles OR-seeded entries without touching disk when the portal is down.
+@@ -2078,7 +2015,7 @@
+     # 2b. Ollama native /api/show (GGUF-first for non-local). Non-Ollama servers 404/405 quickly.
+     ctx = _query_ollama_api_show(model, base_url, api_key=api_key)
+     if ctx is not None:
+-        _save_unless_skipped(model, base_url, ctx, provider)
++        _save_unless_skipped(model, base_url, ctx, provider, api_key)
+         return ctx
+     # 3. Probe-down fallback after endpoint-specific detection failed
+     logger.info(
+@@ -2190,7 +2127,7 @@
+         ctx, source, persist_on = sourced()
+         if ctx:
+             if base_url and source == persist_on:
+-                save_context_length(model, base_url, ctx)
++                save_context_length(model, base_url, ctx, api_key=api_key)
+             return ctx
+     if effective_provider in {"gmi", "commandcode", "commandcode-anthropic"} and base_url:
+         # GMI and CommandCode expose authoritative context_length via /models (e.g. muse-spark 1M) but are
+@@ -2204,7 +2141,7 @@
+         inferred = _infer_provider_from_url(base_url)
+         ctx = _query_ollama_api_show(model, base_url, api_key=api_key) if inferred is None or "ollama" in inferred else None
+         if ctx is not None:
+-            _save_unless_skipped(model, base_url, ctx, provider)
++            _save_unless_skipped(model, base_url, ctx, provider, api_key)
+             return ctx
+     # 5f. OpenRouter live /models — authoritative for OR-routed models, so it must win over models.dev
+     # and the family catch-all (a brand-new slug would otherwise fall to the generic "claude": 200K).
+@@ -2285,7 +2222,7 @@
+     # generic while the window is still the Codex OAuth one (#116191).
+     codex_route = _is_codex_route(provider, base_url, custom_providers)
+     # 1. Persistent cache (LM Studio / Codex routes excluded — see _skip_persistent_context_cache).
+-    cached = get_cached_context_length(model, base_url) if base_url and not is_bedrock_context and not codex_route and not _skip_persistent_context_cache(base_url, provider) else None
++    cached = get_cached_context_length(model, base_url, api_key=api_key) if base_url and not is_bedrock_context and not codex_route and not _skip_persistent_context_cache(base_url, provider) else None
+     validated = _validate_cached_context_length(model, base_url, cached, api_key=api_key) if cached is not None else None
+     if validated is not None:
+         return validated
+@@ -2298,7 +2235,7 @@
+         ctx = _resolve_endpoint_context_length(model, base_url or "https://api.novita.ai/openai/v1", api_key=api_key)
+         if ctx is not None:
+             if base_url:
+-                save_context_length(model, base_url, ctx)
++                save_context_length(model, base_url, ctx, api_key=api_key)
+             return ctx
+     # 2. Live /models for truly custom endpoints. Known providers skip this: their /models may
+     # report a provider-imposed limit (Copilot: 128k) rather than the window. The native
 diff --git a/agent/model_metadata_requests.py b/agent/model_metadata_requests.py
 new file mode 100644
 --- /dev/null
@@ -57227,3 +57540,428 @@ new file mode 100644
 +    assert entry["context_length"] == 65536
 +    assert float(entry["pricing"]["prompt"]) == 0.0000006
 +    assert float(entry["pricing"]["completion"]) == 0.0000012
+diff --git a/agent/model_metadata_context_cache.py b/agent/model_metadata_context_cache.py
+new file mode 100644
+--- /dev/null
++++ b/agent/model_metadata_context_cache.py
+@@ -0,0 +1,80 @@
++"""Credential-bound context cache mutations under the native cross-process lock."""
++from contextlib import contextmanager
++import threading
++
++_MAX_SCOPED_WINDOWS = 128
++
++
++@contextmanager
++def _mutation_lock(path):
++    from hermes_cli.auth import _file_lock
++    with _file_lock(path.with_name(path.name + ".lock"), threading.local(), 5.0,
++                    "Timed out waiting for the context metadata cache lock"):
++        yield
++
++
++def _aliases(metadata, model, base_url, api_key):
++    key = metadata._context_cache_key(model, base_url, api_key)
++    return (key,) if api_key else (key, f"{model}@{base_url}", f"{key}/")
++
++
++def save_window(model, base_url, length, *, source="", api_key=""):
++    from agent import model_metadata as metadata
++    if not isinstance(api_key, str):
++        return  # A callable credential must not be minted merely for a cache write.
++    if length <= 0:
++        metadata.logger.warning("Refusing to cache non-positive context length for %s", model)
++        return
++    try:
++        with _mutation_lock(metadata._get_context_cache_path()):
++            key = metadata._context_cache_key(model, base_url, api_key)
++            document = metadata._load_context_cache_document()
++            cache = document.get("context_lengths") or {}
++            confirmed = document.get("bedrock_confirmed_v1") or {}
++            confirmed = confirmed if isinstance(confirmed, dict) else {}
++            old_confirmed = confirmed.copy()
++            for alias in _aliases(metadata, model, base_url, api_key):
++                confirmed.pop(alias, None)
++            if source == "bedrock-confirmed-v1":
++                confirmed[key] = length
++            if cache.get(key) == length and confirmed == old_confirmed:
++                return
++            cache.pop(key, None)
++            cache[key] = length
++            scoped = [k for k in cache if k.startswith("credential-v1:")]
++            for stale in scoped[:-_MAX_SCOPED_WINDOWS]:
++                cache.pop(stale)
++                confirmed.pop(stale, None)
++            metadata._write_context_cache(cache, confirmed)
++            metadata.logger.info("Cached context length %s -> %s tokens", key, f"{length:,}")
++    except Exception as exc:  # health: allow BLE001 -- Keep the existing optional cache write fail-open.
++        metadata.logger.debug("Failed to save context length cache: %s", exc)
++
++
++def invalidate_window(model, base_url, *, api_key=""):
++    from agent import model_metadata as metadata
++    from hermes_constants import hermes_home_key
++    if not isinstance(api_key, str):
++        return
++    bare, stripped = metadata._strip_provider_prefix(model), (base_url or "").rstrip("/")
++    scope = metadata._endpoint_memo_key(stripped, api_key)
++    for name in ("context", "ollama_show"):
++        metadata._LOCAL_CTX_PROBE_CACHE.pop((name, bare, *scope), None)
++    for memo_key in list(metadata._BEDROCK_PROBE_FAILURE_CACHE):
++        if memo_key[:2] == (hermes_home_key(), stripped) and memo_key[2] in (model, bare):
++            metadata._BEDROCK_PROBE_FAILURE_CACHE.pop(memo_key, None)
++    try:
++        with _mutation_lock(metadata._get_context_cache_path()):
++            document = metadata._load_context_cache_document()
++            cache = document.get("context_lengths") or {}
++            confirmed = document.get("bedrock_confirmed_v1") or {}
++            confirmed = confirmed if isinstance(confirmed, dict) else {}
++            aliases = _aliases(metadata, model, base_url, api_key)
++            if not any(k in cache or k in confirmed for k in aliases):
++                return
++            for key in aliases:
++                cache.pop(key, None)
++                confirmed.pop(key, None)
++            metadata._write_context_cache(cache, confirmed)
++    except Exception as exc:  # health: allow BLE001 -- Keep native optional invalidation fail-open.
++        metadata.logger.debug("Failed to invalidate context length cache: %s", exc)
+diff --git a/agent/turn_overflow.py b/agent/turn_overflow.py
+--- a/agent/turn_overflow.py
++++ b/agent/turn_overflow.py
+@@ -339,7 +339,7 @@
+         # Persist the provider-reported limit BEFORE compression/retry: rate limit,
+         # missing usage, or restart must not lose confirmed metadata. Probe flags
+         # remain a fallback if this write fails.
+-        save_provider_context_length(agent.model, agent.base_url, new_ctx, agent.provider)
++        save_provider_context_length(agent.model, agent.base_url, new_ctx, agent.provider, api_key=getattr(agent, "api_key", ""))
+         # Probe flags only on the built-in compressor (plugin engines manage their
+         # own); provider-sourced value, so safe to cache.
+         if hasattr(compressor, "_context_probed"):
+diff --git a/agent/turn_usage.py b/agent/turn_usage.py
+--- a/agent/turn_usage.py
++++ b/agent/turn_usage.py
+@@ -173,7 +173,7 @@
+         if getattr(compressor, "_context_probe_persistable", False):
+             from agent.model_metadata import save_provider_context_length
+ 
+-            save_provider_context_length(agent.model, agent.base_url, ctx, agent.provider)
++            save_provider_context_length(agent.model, agent.base_url, ctx, agent.provider, api_key=getattr(agent, "api_key", ""))
+             agent._safe_print(f"{agent.log_prefix}💾 Cached context length: {ctx:,} tokens for {agent.model}")
+         compressor._context_probed = False
+         compressor._context_probe_persistable = False
+diff --git a/tests/agent/test_context_window_scope.py b/tests/agent/test_context_window_scope.py
+new file mode 100644
+--- /dev/null
++++ b/tests/agent/test_context_window_scope.py
+@@ -0,0 +1,185 @@
++"""Provider-confirmed windows belong to the credential that observed them."""
++from contextlib import contextmanager
++from types import SimpleNamespace
++
++import httpx
++import pytest
++
++from agent import model_metadata as metadata
++from agent.turn_overflow import _adopt_provider_context_limit
++
++BASE = "https://context.example.invalid/v1"
++MODEL = "synthetic-context-window"
++
++
++@pytest.fixture(autouse=True)
++def isolated_metadata(monkeypatch):
++    metadata._endpoint_model_metadata_cache.clear()
++    metadata._endpoint_model_metadata_cache_time.clear()
++    metadata._endpoint_blackhole_cache.clear()
++    monkeypatch.setattr(metadata.model_metadata_http, "resolve_verify", lambda _: False)
++
++
++def catalog(monkeypatch):
++    calls = []
++
++    @contextmanager
++    def stream(url, *, headers, **kwargs):
++        calls.append(headers.get("Authorization"))
++        yield httpx.Response(200, json={"data": [{"id": MODEL, "context_length": 65536}]},
++                             request=httpx.Request("GET", url))
++
++    monkeypatch.setattr(metadata.model_metadata_http, "stream", stream)
++    return calls
++
++
++def adopt(key, length=131072):
++    compressor = SimpleNamespace(update_model=lambda **_: None, _context_probed=False)
++    agent = SimpleNamespace(model=MODEL, base_url=BASE, provider="custom", api_mode="chat_completions",
++                            api_key=key, context_compressor=compressor, _buffer_vprint=lambda _: None)
++    assert _adopt_provider_context_limit(SimpleNamespace(agent=agent),
++                                        f"maximum context length is {length} tokens", 262144) == length
++
++
++def resolve(key, **kwargs):
++    return metadata.get_model_context_length(MODEL, BASE, api_key=key, provider="custom", **kwargs)
++
++
++def test_confirmed_window_does_not_cross_credentials(monkeypatch):
++    calls = catalog(monkeypatch)
++    adopt("synthetic-owner-a")
++    assert resolve("synthetic-owner-a") == 131072
++    assert resolve("synthetic-owner-b") == 65536
++    assert resolve("synthetic-owner-a") == 131072
++    assert calls == ["Bearer synthetic-owner-b"]
++
++
++def test_legacy_unqualified_window_is_not_current_credential_evidence(monkeypatch):
++    calls = catalog(monkeypatch)
++    metadata.save_context_length(MODEL, BASE, 131072)
++    assert resolve("synthetic-owner-b") == 65536
++    assert calls == ["Bearer synthetic-owner-b"]
++
++
++def test_anonymous_cache_compatibility_and_explicit_override(monkeypatch):
++    calls = catalog(monkeypatch)
++    metadata.save_context_length(MODEL, BASE, 131072)
++    assert resolve("") == 131072
++    assert resolve("synthetic-owner-a", config_context_length=524288) == 524288
++    assert calls == []
++
++
++@pytest.mark.parametrize("provider", ["novita", "deepinfra"])
++@pytest.mark.parametrize("invalid", [True, [], float("nan")])
++def test_provider_pricing_rejects_non_rate_values(provider, invalid):
++    payload = ({"input_token_price_per_m": invalid} if provider == "novita"
++               else {"metadata": {"pricing": {"input_tokens": invalid}}})
++    assert metadata._extract_pricing(payload) == {}
++
++
++@pytest.mark.parametrize("name", ["_query_local_context_length", "_query_ollama_api_show"])
++@pytest.mark.parametrize("change_home", [False, True])
++def test_local_probe_memo_follows_home_and_credential(monkeypatch, tmp_path, name, change_home):
++    from hermes_constants import get_hermes_home
++    metadata._LOCAL_CTX_PROBE_CACHE.clear()
++    first, second = tmp_path / "first", tmp_path / "second"
++    monkeypatch.setenv("HERMES_HOME", str(first))
++    calls = []
++
++    def probe(model, base_url, api_key=""):
++        calls.append((str(get_hermes_home()), api_key))
++        return 131072 if len(calls) == 1 else 65536
++
++    monkeypatch.setattr(metadata, name + "_uncached", probe)
++    query = getattr(metadata, name)
++    assert query(MODEL, BASE, api_key="synthetic-owner-a") == 131072
++    if change_home:
++        monkeypatch.setenv("HERMES_HOME", str(second))
++    key = "synthetic-owner-a" if change_home else "synthetic-owner-b"
++    assert query(MODEL, BASE, api_key=key) == 65536
++    assert len(calls) == 2
++
++
++def test_ollama_num_ctx_disk_memo_follows_credential(monkeypatch):
++    monkeypatch.setattr(metadata, "_is_ollama_server", lambda *_: True)
++    monkeypatch.setattr(metadata, "_ollama_show", lambda _, key, __: {
++        "parameters": "num_ctx " + ("131072" if key == "synthetic-owner-a" else "65536")})
++    assert metadata.query_ollama_num_ctx(MODEL, BASE, "synthetic-owner-a") == 131072
++    assert metadata.query_ollama_num_ctx(MODEL, BASE, "synthetic-owner-b") == 65536
++
++
++@pytest.mark.parametrize("new_process", [False, True])
++def test_server_detection_catalog_is_credential_scoped(monkeypatch, new_process):
++    metadata._endpoint_probe_path_cache.clear()
++    client = httpx.Client
++
++    def reply(request):
++        if request.headers["Authorization"] == "Bearer synthetic-owner-a":
++            return httpx.Response(200, json={"data": []})
++        if request.url.path.endswith("/api/tags"):
++            return httpx.Response(200, json={"models": []})
++        return httpx.Response(404)
++
++    monkeypatch.setattr(httpx, "Client", lambda **kw: client(transport=httpx.MockTransport(reply), **kw))
++    assert metadata.detect_local_server_type(BASE, "synthetic-owner-a") == "lm-studio"
++    if new_process:
++        metadata._endpoint_probe_path_cache.clear()
++    assert metadata.detect_local_server_type(BASE, "synthetic-owner-b") == "ollama"
++
++
++def test_callable_credential_does_not_mint_or_write_a_shared_window():
++    def mint():
++        raise AssertionError("Cache bookkeeping must not mint credentials")
++
++    adopt(mint)
++    assert not metadata._get_context_cache_path().exists()
++
++
++def test_scoped_windows_are_bounded_without_retiring_anonymous_entries():
++    metadata.save_context_length("legacy-anonymous", BASE, 65536)
++    for index in range(130):
++        adopt(f"synthetic-owner-{index}")
++    cache = metadata._load_context_cache()
++    assert len([key for key in cache if key.startswith("credential-v1:")]) == 128
++    assert metadata.get_cached_context_length("legacy-anonymous", BASE) == 65536
++    assert resolve("synthetic-owner-129") == 131072
++    assert "synthetic-owner" not in metadata._get_context_cache_path().read_text()
++
++
++@pytest.mark.platforms("posix")
++def test_parallel_window_writes_preserve_each_other(monkeypatch):
++    from concurrent.futures import ThreadPoolExecutor
++    import threading
++    from hermes_cli import auth
++
++    first_waiting, release = threading.Event(), threading.Event()
++    write = metadata._write_context_cache
++    kernel_lock = auth._kernel_lock
++
++    def enter_lock(handle, exclusive):
++        if threading.current_thread().name.endswith("_1"):
++            release.set()
++        return kernel_lock(handle, exclusive)
++
++    def write_window(cache, confirmed=None):
++        first = threading.current_thread().name.endswith("_0")
++        if first:
++            first_waiting.set()
++            assert release.wait(timeout=3)
++        write(cache, confirmed)
++        if not first:
++            release.set()
++
++    monkeypatch.setattr(auth, "_kernel_lock", enter_lock)
++    monkeypatch.setattr(metadata, "_write_context_cache", write_window)
++    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="context-write") as pool:
++        one = pool.submit(metadata.save_context_length, "first-model", BASE, 65536)
++        try:
++            assert first_waiting.wait(timeout=2)
++            two = pool.submit(metadata.save_context_length, "second-model", BASE, 131072)
++            two.result(timeout=4)
++            one.result(timeout=4)
++        finally:
++            release.set()
++    assert metadata.get_cached_context_length("first-model", BASE) == 65536
++    assert metadata.get_cached_context_length("second-model", BASE) == 131072
+diff --git a/tests/agent/test_model_metadata.py b/tests/agent/test_model_metadata.py
+--- a/tests/agent/test_model_metadata.py
++++ b/tests/agent/test_model_metadata.py
+@@ -543,10 +543,10 @@
+         [(272_000, 372_000), (372_000, 272_000)],
+         ids=("expansion", "rollback"),
+     )
+-    def test_live_codex_context_replaces_stale_cache_in_both_directions(
++    def test_live_codex_context_is_scoped_and_keeps_other_entries(
+         self, tmp_path, monkeypatch, stale_context, live_context
+     ):
+-        """Authenticated metadata must replace stale disk values in either direction."""
++        """Authenticated metadata updates its own scope without rewriting anonymous evidence."""
+         from agent import model_metadata as mm
+ 
+         cache_file = tmp_path / "context_length_cache.yaml"
+@@ -567,7 +567,7 @@
+             "models": [{"slug": "gpt-5.5", "context_window": live_context}]
+         }
+         # Exercise real persistence here: this test verifies that a live value
+-        # replaces the stale on-disk entry. Failure-path tests below mock the
++        # writes a credential-scoped value without rewriting anonymous entries. Failure-path tests below mock the
+         # writer because they assert that fallback values are not persisted.
+         with patch("agent.model_metadata.model_metadata_http.get", return_value=fake_response) as mock_get:
+             ctx = mm.get_model_context_length(
+@@ -582,7 +582,8 @@
+         remaining = _yaml.safe_load(cache_file.read_text(encoding="utf-8")).get(
+             "context_lengths", {}
+         )
+-        assert remaining.get(stale_key) == live_context
++        assert remaining.get(stale_key) == stale_context
++        assert mm.get_cached_context_length("gpt-5.5", base_url, api_key=_codex_jwt("fake-token")) == live_context
+         assert remaining.get(other_key) == 128_000
+ 
+ 
+@@ -1032,13 +1033,13 @@
+ 
+     @patch("agent.model_metadata.fetch_endpoint_model_metadata")
+     @patch("agent.model_metadata.fetch_model_metadata")
+-    def test_stale_cache_is_bypassed_and_overwritten_by_portal(
++    def test_stale_cache_is_bypassed_for_scoped_portal_value(
+         self, mock_or, mock_portal, tmp_path, monkeypatch
+     ):
+         """Users upgrading from pre-fix builds have ``qwen3.6-plus@…nous… =
+         1000000`` (OR-derived) sitting in their cache file.  Step 1 must
+         NOT short-circuit on that entry — step 5b reconciles against the
+-        portal and overwrites the persistent value with 262144."""
++        portal and stores 262144 under the authenticated credential scope."""
+         import agent.model_metadata as mm
+         cache_file = tmp_path / "context_length_cache.yaml"
+         monkeypatch.setattr(mm, "_get_context_cache_path", lambda: cache_file)
+@@ -1069,9 +1070,8 @@
+         remaining = yaml.safe_load(cache_file.read_text(encoding="utf-8")).get(
+             "context_lengths", {}
+         )
+-        assert remaining.get(stale_key) == 262_144, (
+-            "Portal value should have overwritten the stale entry on disk"
+-        )
++        assert remaining.get(stale_key) == 1_000_000
++        assert mm.get_cached_context_length("qwen3.6-plus", base_url, api_key="fake") == 262_144
+         assert remaining.get(other_key) == 128_000, (
+             "Unrelated cache entries must not be touched"
+         )
+diff --git a/tests/agent/test_model_metadata_local_ctx.py b/tests/agent/test_model_metadata_local_ctx.py
+--- a/tests/agent/test_model_metadata_local_ctx.py
++++ b/tests/agent/test_model_metadata_local_ctx.py
+@@ -790,7 +790,7 @@
+             result = get_model_context_length(model, base, provider="custom")
+ 
+         assert result == 32768
+-        mock_invalidate.assert_called_once_with(model, base)
++        mock_invalidate.assert_called_once_with(model, base, api_key="")
+         mock_save.assert_not_called()
+ 
+ 
+@@ -986,8 +986,8 @@
+             result = _reconcile_local_cached_context_length(model, base, poisoned)
+ 
+         assert result == real_window
+-        mock_invalidate.assert_called_once_with(model, base)
+-        mock_save.assert_called_once_with(model, base, real_window)
++        mock_invalidate.assert_called_once_with(model, base, api_key="")
++        mock_save.assert_called_once_with(model, base, real_window, api_key="")
+ 
+     def test_poisoned_cache_heals_end_to_end_from_probe_payload(self):
+         """Full path: live endpoint serves the issue's payload
+@@ -1027,7 +1027,7 @@
+         assert result == 1048576
+         mock_invalidate.assert_called_once()
+         mock_save.assert_called_once_with(
+-            "deepseek-v4-flash", "http://127.0.0.1:8080/v1", 1048576
++            "deepseek-v4-flash", "http://127.0.0.1:8080/v1", 1048576, api_key=""
+         )
+ 
+ 
+diff --git a/tests/agent/test_probe_cache_followups.py b/tests/agent/test_probe_cache_followups.py
+--- a/tests/agent/test_probe_cache_followups.py
++++ b/tests/agent/test_probe_cache_followups.py
+@@ -248,23 +248,20 @@
+         assert client.get.call_count == after_first
+ 
+ 
+-    def test_negative_verdict_expires_quickly(self):
++    def test_negative_verdict_expires_quickly(self, monkeypatch):
+         """The short failure TTL keeps a transient failure recoverable."""
+         import time as _time
+         from agent.model_metadata import detect_local_server_type
+         from agent import model_metadata
+ 
++        stamp = [_time.monotonic()]
++        monkeypatch.setattr(model_metadata.time, "monotonic", lambda: stamp[0])
+         client = self._client_all_401()
+         with patch("httpx.Client", return_value=client):
+             assert detect_local_server_type("http://remote3:8080/v1") is None
+             after_first = client.get.call_count
+             # Age the entry past the failure TTL.
+-            model_metadata._endpoint_probe_path_cache["http://remote3:8080"] = (
+-                None,
+-                _time.monotonic()
+-                - model_metadata._ENDPOINT_PROBE_FAILURE_TTL_SECONDS
+-                - 1,
+-            )
++            stamp[0] += model_metadata._ENDPOINT_PROBE_FAILURE_TTL_SECONDS + 1
+             assert detect_local_server_type("http://remote3:8080/v1") is None
+ 
+         assert client.get.call_count == 2 * after_first  # waterfall re-ran after expiry

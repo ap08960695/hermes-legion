@@ -1216,3 +1216,37 @@ These UI cases establish backend startup and those interactions, not full produc
 bot behavior. Natural-workload cache/usage acceptance remains incomplete because the
 current read-only sample is dominated by test or unknown provenance and sparse task
 bindings; no model requests were added to manufacture a favorable measurement.
+
+## Credential-bound context windows (v0.6.47)
+
+Native red cases demonstrated credential A's confirmed 131,072-token window being
+reused by credential B whose catalog reports 65,536; unqualified legacy reuse;
+credential/home-blind local memos; malformed provider-specific prices; callable
+bookkeeping; unbounded scoped storage; and a lost parallel window write.
+The final 14-file offline suite passed 302 cases with zero retries. The installed
+Linux source separately passed the 19 focused cases (a subset, not 321 distinct
+cases). Scoped Ruff found zero findings; the native health ratchet had zero
+unwaived blockers, with two documented inherited best-effort exception policies.
+
+Old fixture assumptions were updated explicitly: account-specific live windows now
+use their scoped key while preserving unrelated and anonymous entries; reconciliation
+spies include the credential argument; the negative-TTL test advances its clock rather
+than depending on a private memo-key shape. Test isolation was corrected by placing the
+checkout outside managed state and discarding owned stale compiled test caches after
+that move. An early callable test mistakenly called its sentinel in the test itself;
+it was corrected, then verified red on the exact baseline and green on the repair.
+No test guard, runtime dependency or provider policy was weakened.
+
+An isolated Mac native-Python smoke passed credential-bound overflow persistence,
+separate-credential catalog resolution, explicit pin precedence, malformed prices
+and non-minting bookkeeping. Two existing native UI journeys passed again with
+external networking denied. This is trial-source evidence, not installation of the
+custom desktop into the owner's original Mac application. No extra model calls,
+provider allowance checks, changed quotas or paid fallback were used.
+
+The exact eight files were installed on Linux under native custody and target-only
+rollback, followed by focused acceptance and native idle-only Gateway adoption.
+No renderer rebuild was needed; the owner Desktop remained closed. Production
+before/after token, latency, quality and whole-service RAM savings are not established
+by these tests. Official upstream version migration is a separate acceptance task;
+this release preserves its pinned upstream base and does not claim that migration done.
