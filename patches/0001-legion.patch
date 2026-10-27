@@ -45521,12 +45521,80 @@ new file mode 100644
 diff --git a/agent/estop.py b/agent/estop.py
 --- a/agent/estop.py
 +++ b/agent/estop.py
-@@ -49,16 +49,25 @@
+@@ -1,7 +1,7 @@
+ """Global emergency stop (ESTOP) — a resumable pause for NEW work only.
+ 
+-``hermes pause`` writes a sentinel at ``$HERMES_HOME/ESTOP``; ``hermes resume``
+-removes it. While it exists the cron scheduler, kanban dispatcher and new gateway
++``hermes pause`` writes a sentinel at the fleet root; ``hermes resume`` removes it.
++While it exists the cron scheduler, kanban dispatcher and new gateway
+ turns skip work; in-flight work is never killed. The check is one or two uncached
+ ``os.stat`` calls (process home + fleet root when they differ). The body is optional
+ JSON ``{"reason", "engaged_at"}``; a corrupt/empty file still counts as engaged
+@@ -18,9 +18,6 @@
+ from pathlib import Path
+ from typing import Optional
+ 
+-# Same profile-aware / fleet-root resolvers the file-safety guards use (fail-open to ~/.hermes).
+-from agent.file_safety import _hermes_home_path as _hermes_home, _hermes_root_path as _canonical_root
+-
+ SENTINEL_NAME = "ESTOP"
+ 
+ # Per-component "logged already for this engagement" flags: log once per engagement, not per tick.
+@@ -28,19 +25,39 @@
+ _logged_components: set[str] = set()
+ 
+ 
++def _hermes_home() -> Path:
++    from hermes_constants import get_hermes_home
++    return get_hermes_home()
++
++
++def _canonical_root() -> Path:
++    from hermes_constants import get_default_hermes_root
++    return get_default_hermes_root(home=_hermes_home())
++
++
+ def sentinel_path() -> Path:
+-    """Path of the ESTOP sentinel this process would write on `hermes pause`."""
++    """Path of this profile's independent ESTOP sentinel."""
+     return _hermes_home() / SENTINEL_NAME
++
++
++def fleet_sentinel_path() -> Path:
++    """Path shared by profiles in this Hermes fleet."""
++    return _canonical_root() / SENTINEL_NAME
+ 
+ 
+ def _candidate_sentinel_paths() -> list:
+     """Profile home first, then the fleet root if it is a different directory: a profile
+     gateway (HERMES_HOME=~/.hermes/profiles/<n>) must still honor an operator's ~/.hermes/ESTOP."""
+-    primary = sentinel_path()
+-    try:
+-        root = _canonical_root() / SENTINEL_NAME
+-    except Exception:
+-        return [primary]
++    try:
++        primary = sentinel_path()
++    except Exception:
++        primary = None
++    try:
++        root = fleet_sentinel_path()
++    except Exception:
++        root = None
++    if primary is None or root is None:
++        return [primary, root]
+     try:
+         distinct = root.resolve() != primary.resolve()
+     except Exception:
+@@ -49,21 +66,30 @@
      return [primary, root] if distinct else [primary]
  
  
-+def _sentinel_exists(path: Path) -> Optional[bool]:
++def _sentinel_exists(path: Optional[Path]) -> Optional[bool]:
 +    """Return None when the sentinel cannot be inspected, not when it is missing."""
++    if path is None:
++        return None
 +    try:
 +        path.stat()
 +    except FileNotFoundError:
@@ -45546,6 +45614,11 @@ diff --git a/agent/estop.py b/agent/estop.py
 -        except OSError:
 -            saw_stat_error = True
 -    return saw_stat_error
+-
+-
+-def engage(reason: Optional[str] = None) -> Path:
+-    """Create the ESTOP sentinel. Idempotent; re-engaging updates the file."""
+-    path = sentinel_path()
 +    """True if any sentinel exists or its state cannot be determined."""
 +    return any(_sentinel_exists(path) is not False for path in _candidate_sentinel_paths())
 +
@@ -45553,24 +45626,68 @@ diff --git a/agent/estop.py b/agent/estop.py
 +def is_confirmed_engaged() -> bool:
 +    """True only when at least one sentinel was observed, rather than uncertain."""
 +    return any(_sentinel_exists(path) is True for path in _candidate_sentinel_paths())
++
++
++def _engage_at(path: Path, reason: Optional[str]) -> Path:
+     payload = {"engaged_at": datetime.now(UTC).isoformat(), "reason": reason or None}
+     try:
+         path.parent.mkdir(parents=True, exist_ok=True)
+@@ -72,6 +98,35 @@
+         with suppress(OSError):  # Best effort: an empty/partial sentinel still pauses (fail safe).
+             path.touch(exist_ok=True)
+     return path
++
++
++def engage(reason: Optional[str] = None) -> Path:
++    """Create this profile's independent sentinel; re-engaging updates it."""
++    return _engage_at(sentinel_path(), reason)
++
++
++def engage_fleet(reason: Optional[str] = None) -> tuple[Path, bool]:
++    """Confirm the fleet sentinel, preserving an existing reason when none was requested."""
++    path = fleet_sentinel_path()
++    existing = _sentinel_exists(path)
++    if existing is None:
++        raise OSError("Unable to inspect the fleet emergency stop")
++    if existing is False and reason is None:
++        payload = {"engaged_at": datetime.now(UTC).isoformat(), "reason": None}
++        try:
++            path.parent.mkdir(parents=True, exist_ok=True)
++            with path.open("x", encoding="utf-8") as f:
++                f.write(json.dumps(payload, indent=2) + "\n")
++        except FileExistsError:
++            pass  # Another pause won the race; retain its reason.
++        except OSError:
++            with suppress(OSError):
++                path.touch(exist_ok=True)
++    elif reason is not None:
++        _engage_at(path, reason)
++    if _sentinel_exists(path) is not True:
++        raise OSError("Unable to confirm the fleet emergency stop")
++    return path, existing
  
  
- def engage(reason: Optional[str] = None) -> Path:
-@@ -89,19 +98,15 @@
- def get_state() -> Optional[dict]:
-     """Return ``{"reason", "engaged_at"}`` or None when not engaged; an unreadable/corrupt
-     body still reports engaged with both fields None."""
+ def disengage() -> bool:
+@@ -86,28 +141,43 @@
+     return lifted
+ 
+ 
+-def get_state() -> Optional[dict]:
+-    """Return ``{"reason", "engaged_at"}`` or None when not engaged; an unreadable/corrupt
+-    body still reports engaged with both fields None."""
 -    if not is_engaged():
 -        return None
++def _state_for_paths(paths) -> Optional[dict]:
      state = {"reason": None, "engaged_at": None}
      found = False
-     for path in _candidate_sentinel_paths():
+-    for path in _candidate_sentinel_paths():
 -        try:
 -            if not path.exists():
 -                continue
 -        except OSError:
 -            return state
 -        except AttributeError:
++    for path in paths:
 +        exists = _sentinel_exists(path)
 +        if exists is False:
              continue
@@ -45580,6 +45697,46 @@ diff --git a/agent/estop.py b/agent/estop.py
          with suppress(OSError, ValueError, AttributeError):
              raw = json.loads(path.read_text(encoding="utf-8-sig"))
              if isinstance(raw, dict):
+                 state = {"reason": raw.get("reason") or None, "engaged_at": raw.get("engaged_at") or None}
+                 break
+     return state if found else None
++
++
++def get_state() -> Optional[dict]:
++    """Return pause details, or None; unreadable and corrupt state remains paused."""
++    return _state_for_paths(_candidate_sentinel_paths())
++
++
++def get_fleet_state() -> Optional[dict]:
++    """Return only the fleet sentinel state, or unknown if the root cannot be resolved."""
++    try:
++        path = fleet_sentinel_path()
++    except Exception:
++        return {"reason": None, "engaged_at": None}
++    return _state_for_paths([path])
++
++
++def is_fleet_confirmed() -> bool:
++    try:
++        return _sentinel_exists(fleet_sentinel_path()) is True
++    except Exception:
++        return False
+ 
+ 
+ def paused_reply() -> Optional[str]:
+@@ -131,8 +201,10 @@
+     if first:
+         reason = (get_state() or {}).get("reason")
+         suffix = f" (reason: {reason})" if reason else ""
++        paths = ", ".join(str(path) if path is not None else "<unavailable>"
++                          for path in _candidate_sentinel_paths())
+         logger.info(
+-            "%s dispatch paused by global emergency stop%s — remove with `hermes resume` (%s)",
+-            component, suffix, sentinel_path(),
++            "%s dispatch paused by emergency stop%s — remove with `hermes resume` (candidate sentinels: %s)",
++            component, suffix, paths,
+         )
+     return True
 diff --git a/tests/cron/test_estop.py b/tests/cron/test_estop.py
 --- a/tests/cron/test_estop.py
 +++ b/tests/cron/test_estop.py
@@ -45757,7 +45914,7 @@ new file mode 100644
 diff --git a/gateway/run_busy.py b/gateway/run_busy.py
 --- a/gateway/run_busy.py
 +++ b/gateway/run_busy.py
-@@ -995,15 +995,23 @@
+@@ -995,16 +995,21 @@
          from agent import estop
          args = (event.get_command_args() or "").strip()
          if args.lower() in {"off", "resume", "stop", "disengage"}:
@@ -45768,25 +45925,37 @@ diff --git a/gateway/run_busy.py b/gateway/run_busy.py
 +            if removed:
                  return t("gateway.pause.resumed")
              return t("gateway.pause.not_paused")
-         state = estop.get_state()
-         if state is not None and not args:
-+            if not estop.is_confirmed_engaged():
-+                return t("gateway.pause.unconfirmed_pause")
-             suffix = t("gateway.pause.reason_suffix", reason=state.get("reason")) if state.get("reason") else ""
-             return t("gateway.pause.already_paused", suffix=suffix)
-         estop.engage(reason=args or None)
+-        state = estop.get_state()
+-        if state is not None and not args:
+-            suffix = t("gateway.pause.reason_suffix", reason=state.get("reason")) if state.get("reason") else ""
+-            return t("gateway.pause.already_paused", suffix=suffix)
+-        estop.engage(reason=args or None)
 -        suffix = t("gateway.pause.reason_suffix", reason=args) if args else ""
-+        state = estop.get_state()
-+        if state is None or not estop.is_confirmed_engaged():
+-        return t("gateway.pause.paused", suffix=suffix)
++        try:
++            _path, already = estop.engage_fleet(reason=args or None)
++        except Exception:
++            return t("gateway.pause.unconfirmed_pause")
++        state = estop.get_fleet_state()
++        if state is None or not estop.is_fleet_confirmed():
 +            return t("gateway.pause.unconfirmed_pause")
 +        suffix = t("gateway.pause.reason_suffix", reason=state.get("reason")) if state.get("reason") else ""
-         return t("gateway.pause.paused", suffix=suffix)
++        return t("gateway.pause.already_paused" if already and not args else "gateway.pause.paused", suffix=suffix)
  
      async def _busy_start_command(self, event: MessageEvent, quick_key: str, source):
+         # Telegram's /start is a platform ping (bot launch/deep-link), not a user command.
 diff --git a/hermes_cli/subcommands/pause.py b/hermes_cli/subcommands/pause.py
 --- a/hermes_cli/subcommands/pause.py
 +++ b/hermes_cli/subcommands/pause.py
-@@ -8,20 +8,29 @@
+@@ -1,6 +1,6 @@
+ """``hermes pause`` / ``hermes resume`` — the global emergency stop.
+ 
+-``pause`` writes the ESTOP sentinel at ``$HERMES_HOME/ESTOP``; cron, kanban and new gateway
++``pause`` writes the ESTOP sentinel at the fleet root; cron, kanban and new gateway
+ turns halt on their next check (in-flight work is never killed). ``resume`` removes it and
+ operation resumes on the next tick — no restart. Ported from gastownhall/gastown estop.go (MIT).
+ """
+@@ -8,16 +8,23 @@
  from __future__ import annotations
  
  import argparse
@@ -45796,31 +45965,25 @@ diff --git a/hermes_cli/subcommands/pause.py b/hermes_cli/subcommands/pause.py
  def cmd_pause(args: argparse.Namespace) -> int:
      """Engage the global emergency stop."""
 -    from agent.estop import engage, get_state, is_engaged
-+    from agent.estop import engage, get_state, is_confirmed_engaged
++    from agent.estop import engage_fleet, get_fleet_state, is_fleet_confirmed
  
      reason = getattr(args, "reason", None)
 -    already = is_engaged()
-+    already = is_confirmed_engaged()
-     path = engage(reason=reason)
+-    path = engage(reason=reason)
 -    state = get_state() or {}
-+    state = get_state()
-+    if state is None or not is_confirmed_engaged():
++    try:
++        path, already = engage_fleet(reason=reason)
++    except Exception:
++        print("Unable to confirm pause. Check access to the emergency-stop files; new work may not be on hold.", file=sys.stderr)
++        return 1
++    state = get_fleet_state()
++    if state is None or not is_fleet_confirmed():
 +        print("Unable to confirm pause. Check access to the emergency-stop files; new work may not be on hold.", file=sys.stderr)
 +        return 1
      verb = "Still paused" if already else "Hermes paused"
      detail = f" — reason: {state['reason']}" if state.get("reason") else ""
      print(f"⏸️  {verb}{detail}")
--    print(f"    sentinel: {path}")
-+    try:
-+        path.stat()
-+    except OSError:
-+        print("    Local sentinel was not confirmed; pause was observed through another check.")
-+    else:
-+        print(f"    sentinel: {path}")
-     print(
-         "    Cron dispatch, kanban dispatch, and new gateway turns are on hold.\n"
-         "    In-flight work keeps running. Run `hermes resume` to lift the pause.")
-@@ -30,9 +39,13 @@
+@@ -30,10 +37,14 @@
  
  def cmd_resume(args: argparse.Namespace) -> int:
      """Disengage the global emergency stop."""
@@ -45828,18 +45991,26 @@ diff --git a/hermes_cli/subcommands/pause.py b/hermes_cli/subcommands/pause.py
 +    from agent.estop import disengage, is_engaged, sentinel_path
  
 -    if disengage():
+-        print("▶️  Hermes resumed — dispatch picks up on the next tick.")
 +    removed = disengage()
 +    if is_engaged():
 +        print("Unable to confirm resume. An emergency-stop file remains or cannot be inspected.", file=sys.stderr)
 +        return 1
 +    if removed:
-         print("▶️  Hermes resumed — dispatch picks up on the next tick.")
++        print("▶️  Hermes resumed for this profile; the global pause is clear. Other profile pauses may remain.")
      else:
          print(f"Hermes is not paused (no sentinel at {sentinel_path()}).")
+     return 0
 diff --git a/locales/af.yaml b/locales/af.yaml
 --- a/locales/af.yaml
 +++ b/locales/af.yaml
-@@ -742,6 +742,8 @@
+@@ -737,11 +737,13 @@
+     save_failed: "Besig-invoermodus kon nie in die konfigurasie gestoor word nie. Modus onveranderd."
+     set: "Besig-invoermodus gestel op **`{mode}`** (gestoor).\n_{behavior}_"
+   pause:
+-    resumed: "▶️ Hervat — nuwe werk word weer aanvaar."
++    resumed: "▶️ Hierdie profiel is hervat; die globale pouse is opgehef. Ander profiele kan steeds afsonderlik gepouseer wees."
+     not_paused: "Hermes was nie gepouseer nie."
      reason_suffix: " (rede: {reason})"
      already_paused: "⏸️ Hermes is reeds gepouseer{suffix}. Gebruik `/pause off` om te hervat."
      paused: "⏸️ Gepouseer{suffix}. Nuwe cron-/kanban-/gateway-werk is opgeskort; werk wat reeds loop, word normaal voltooi. Gebruik `/pause off` om te hervat."
@@ -45851,7 +46022,13 @@ diff --git a/locales/af.yaml b/locales/af.yaml
 diff --git a/locales/ar.yaml b/locales/ar.yaml
 --- a/locales/ar.yaml
 +++ b/locales/ar.yaml
-@@ -742,6 +742,8 @@
+@@ -737,11 +737,13 @@
+     save_failed: "تعذّر حفظ وضع الإدخال أثناء الانشغال في الإعدادات. لم يتغيّر الوضع."
+     set: "تم تعيين وضع الإدخال أثناء الانشغال إلى **`{mode}`** (تم الحفظ).\n_{behavior}_"
+   pause:
+-    resumed: "▶️ تم الاستئناف — يُقبل العمل الجديد مجددًا."
++    resumed: "▶️ استؤنف العمل لهذا الملف الشخصي وأُلغي الإيقاف العام. قد تظل ملفات شخصية أخرى متوقفة مؤقتًا."
+     not_paused: "لم يكن Hermes متوقفًا مؤقتًا."
      reason_suffix: " (السبب: {reason})"
      already_paused: "⏸️ Hermes متوقّف مؤقتًا بالفعل{suffix}. استخدم `/pause off` للاستئناف."
      paused: "⏸️ تم الإيقاف المؤقت{suffix}. أعمال cron/كانبان/البوّابة الجديدة معلّقة؛ والأعمال الجارية تُكمَل كالمعتاد. استخدم `/pause off` للاستئناف."
@@ -45863,7 +46040,13 @@ diff --git a/locales/ar.yaml b/locales/ar.yaml
 diff --git a/locales/de.yaml b/locales/de.yaml
 --- a/locales/de.yaml
 +++ b/locales/de.yaml
-@@ -742,6 +742,8 @@
+@@ -737,11 +737,13 @@
+     save_failed: "Eingabemodus bei Beschäftigung konnte nicht in der Konfiguration gespeichert werden. Modus unverändert."
+     set: "Eingabemodus bei Beschäftigung auf **`{mode}`** gesetzt (gespeichert).\n_{behavior}_"
+   pause:
+-    resumed: "▶️ Fortgesetzt — neue Arbeit wird wieder angenommen."
++    resumed: "▶️ Dieses Profil wurde fortgesetzt; die globale Pause ist aufgehoben. Andere Profile können weiterhin einzeln pausiert sein."
+     not_paused: "Hermes war nicht pausiert."
      reason_suffix: " (Grund: {reason})"
      already_paused: "⏸️ Hermes ist bereits pausiert{suffix}. Verwenden Sie `/pause off` zum Fortsetzen."
      paused: "⏸️ Pausiert{suffix}. Neue Cron-/Kanban-/Gateway-Arbeit wird zurückgehalten; laufende Arbeit wird normal abgeschlossen. Verwenden Sie `/pause off` zum Fortsetzen."
@@ -45875,7 +46058,13 @@ diff --git a/locales/de.yaml b/locales/de.yaml
 diff --git a/locales/en.yaml b/locales/en.yaml
 --- a/locales/en.yaml
 +++ b/locales/en.yaml
-@@ -751,6 +751,8 @@
+@@ -746,11 +746,13 @@
+     save_failed: "Busy input mode could not be saved to config. Mode unchanged."
+     set: "Busy input mode set to **`{mode}`** (saved).\n_{behavior}_"
+   pause:
+-    resumed: "▶️ Resumed — new work is accepted again."
++    resumed: "▶️ Resumed for this profile; the global pause is clear. Other profiles may still have their own pauses."
+     not_paused: "Hermes wasn't paused."
      reason_suffix: " (reason: {reason})"
      already_paused: "⏸️ Hermes is already paused{suffix}. Use `/pause off` to resume."
      paused: "⏸️ Paused{suffix}. New cron/kanban/gateway work is on hold; in-flight work finishes normally. Use `/pause off` to resume."
@@ -45887,7 +46076,13 @@ diff --git a/locales/en.yaml b/locales/en.yaml
 diff --git a/locales/es.yaml b/locales/es.yaml
 --- a/locales/es.yaml
 +++ b/locales/es.yaml
-@@ -742,6 +742,8 @@
+@@ -737,11 +737,13 @@
+     save_failed: "No se pudo guardar el modo de entrada al estar ocupado en la configuración. El modo no cambió."
+     set: "Modo de entrada al estar ocupado establecido en **`{mode}`** (guardado).\n_{behavior}_"
+   pause:
+-    resumed: "▶️ Reanudado — se acepta trabajo nuevo de nuevo."
++    resumed: "▶️ Se reanudó este perfil y se levantó la pausa global. Otros perfiles pueden seguir pausados por separado."
+     not_paused: "Hermes no estaba pausado."
      reason_suffix: " (motivo: {reason})"
      already_paused: "⏸️ Hermes ya está pausado{suffix}. Usa `/pause off` para reanudar."
      paused: "⏸️ Pausado{suffix}. El trabajo nuevo de cron/kanban/gateway queda en espera; el trabajo en curso termina con normalidad. Usa `/pause off` para reanudar."
@@ -45899,7 +46094,13 @@ diff --git a/locales/es.yaml b/locales/es.yaml
 diff --git a/locales/fr.yaml b/locales/fr.yaml
 --- a/locales/fr.yaml
 +++ b/locales/fr.yaml
-@@ -868,6 +868,8 @@
+@@ -863,11 +863,13 @@
+       Mode de saisie quand occupé défini sur **`{mode}`** (enregistré).
+       _{behavior}_
+   pause:
+-    resumed: "▶️ Reprise — le nouveau travail est de nouveau accepté."
++    resumed: "▶️ Ce profil a repris et la pause globale est levée. D’autres profils peuvent rester en pause séparément."
+     not_paused: "Hermes n'était pas en pause."
      reason_suffix: " (raison : {reason})"
      already_paused: "⏸️ Hermes est déjà en pause{suffix}. Utilisez `/pause off` pour reprendre."
      paused: "⏸️ En pause{suffix}. Le nouveau travail cron/kanban/gateway est suspendu ; le travail en cours se termine normalement. Utilisez `/pause off` pour reprendre."
@@ -45911,7 +46112,13 @@ diff --git a/locales/fr.yaml b/locales/fr.yaml
 diff --git a/locales/ga.yaml b/locales/ga.yaml
 --- a/locales/ga.yaml
 +++ b/locales/ga.yaml
-@@ -742,6 +742,8 @@
+@@ -737,11 +737,13 @@
+     save_failed: "Níorbh fhéidir an mód ionchuir gnóthach a shábháil sa chumraíocht. Mód gan athrú."
+     set: "Mód ionchuir gnóthach socraithe go **`{mode}`** (sábháilte).\n_{behavior}_"
+   pause:
+-    resumed: "▶️ Atosaithe — glactar le hobair nua arís."
++    resumed: "▶️ Atosaíodh an phróifíl seo; tá an sos domhanda glanta. D’fhéadfadh próifílí eile a bheith ar sos fós."
+     not_paused: "Ní raibh Hermes ar sos."
      reason_suffix: " (cúis: {reason})"
      already_paused: "⏸️ Tá Hermes ar sos cheana féin{suffix}. Úsáid `/pause off` chun atosú."
      paused: "⏸️ Ar sos{suffix}. Tá obair nua cron/kanban/gateway ar fionraí; críochnaíonn obair atá ar siúl mar is gnách. Úsáid `/pause off` chun atosú."
@@ -45923,7 +46130,13 @@ diff --git a/locales/ga.yaml b/locales/ga.yaml
 diff --git a/locales/hu.yaml b/locales/hu.yaml
 --- a/locales/hu.yaml
 +++ b/locales/hu.yaml
-@@ -752,6 +752,8 @@
+@@ -747,11 +747,13 @@
+     save_failed: "A foglalt beviteli módot nem sikerült a konfigurációba menteni. A mód nem változott."
+     set: "Foglalt beviteli mód beállítva: **`{mode}`** (mentve).\n_{behavior}_"
+   pause:
+-    resumed: "▶️ Folytatás — újra fogadjuk az új munkát."
++    resumed: "▶️ Ez a profil folytatódott, a globális szünet feloldva. Más profilok külön továbbra is szünetelhetnek."
+     not_paused: "A Hermes nem volt szüneteltetve."
      reason_suffix: " (ok: {reason})"
      already_paused: "⏸️ A Hermes már szünetel{suffix}. Folytatás: `/pause off`."
      paused: "⏸️ Szüneteltetve{suffix}. Az új cron-/kanban-/átjárómunka várakozik; a folyamatban lévő munka rendesen befejeződik. Folytatás: `/pause off`."
@@ -45935,7 +46148,13 @@ diff --git a/locales/hu.yaml b/locales/hu.yaml
 diff --git a/locales/it.yaml b/locales/it.yaml
 --- a/locales/it.yaml
 +++ b/locales/it.yaml
-@@ -742,6 +742,8 @@
+@@ -737,11 +737,13 @@
+     save_failed: "Impossibile salvare la modalità input quando occupato nella configurazione. Modalità invariata."
+     set: "Modalità input quando occupato impostata su **`{mode}`** (salvata).\n_{behavior}_"
+   pause:
+-    resumed: "▶️ Ripreso — il nuovo lavoro viene di nuovo accettato."
++    resumed: "▶️ Questo profilo è stato ripreso e la pausa globale è stata rimossa. Altri profili possono restare in pausa separatamente."
+     not_paused: "Hermes non era in pausa."
      reason_suffix: " (motivo: {reason})"
      already_paused: "⏸️ Hermes è già in pausa{suffix}. Usa `/pause off` per riprendere."
      paused: "⏸️ In pausa{suffix}. Il nuovo lavoro cron/kanban/gateway è sospeso; il lavoro in corso termina normalmente. Usa `/pause off` per riprendere."
@@ -45947,7 +46166,13 @@ diff --git a/locales/it.yaml b/locales/it.yaml
 diff --git a/locales/ja.yaml b/locales/ja.yaml
 --- a/locales/ja.yaml
 +++ b/locales/ja.yaml
-@@ -742,6 +742,8 @@
+@@ -737,11 +737,13 @@
+     save_failed: "ビジー時の入力モードを設定に保存できませんでした。モードは変更されていません。"
+     set: "ビジー時の入力モードを **`{mode}`** に設定しました (保存済み)。\n_{behavior}_"
+   pause:
+-    resumed: "▶️ 再開しました — 新しい作業を再び受け付けます。"
++    resumed: "▶️ このプロファイルを再開し、全体の一時停止を解除しました。他のプロファイルは個別に停止したままの場合があります。"
+     not_paused: "Hermes は一時停止していませんでした。"
      reason_suffix: " (理由: {reason})"
      already_paused: "⏸️ Hermes はすでに一時停止しています{suffix}。再開するには `/pause off` を使ってください。"
      paused: "⏸️ 一時停止しました{suffix}。新しい cron/kanban/ゲートウェイの作業は保留され、進行中の作業は通常どおり完了します。再開するには `/pause off` を使ってください。"
@@ -45959,7 +46184,13 @@ diff --git a/locales/ja.yaml b/locales/ja.yaml
 diff --git a/locales/ko.yaml b/locales/ko.yaml
 --- a/locales/ko.yaml
 +++ b/locales/ko.yaml
-@@ -742,6 +742,8 @@
+@@ -737,11 +737,13 @@
+     save_failed: "바쁠 때 입력 모드를 설정에 저장하지 못했어요. 모드는 변경되지 않았어요."
+     set: "바쁠 때 입력 모드를 **`{mode}`**(으)로 설정했어요 (저장됨).\n_{behavior}_"
+   pause:
+-    resumed: "▶️ 재개됨 — 새 작업을 다시 받아요."
++    resumed: "▶️ 이 프로필을 재개하고 전체 일시 중지를 해제했습니다. 다른 프로필은 개별적으로 일시 중지된 상태일 수 있습니다."
+     not_paused: "Hermes는 일시 중지 상태가 아니었어요."
      reason_suffix: " (이유: {reason})"
      already_paused: "⏸️ Hermes는 이미 일시 중지되어 있어요{suffix}. 재개하려면 `/pause off`를 사용하세요."
      paused: "⏸️ 일시 중지됨{suffix}. 새 크론/칸반/게이트웨이 작업은 보류되고, 진행 중인 작업은 정상적으로 끝나요. 재개하려면 `/pause off`를 사용하세요."
@@ -45971,7 +46202,13 @@ diff --git a/locales/ko.yaml b/locales/ko.yaml
 diff --git a/locales/pt.yaml b/locales/pt.yaml
 --- a/locales/pt.yaml
 +++ b/locales/pt.yaml
-@@ -742,6 +742,8 @@
+@@ -737,11 +737,13 @@
+     save_failed: "Não foi possível salvar o modo de entrada quando ocupado na configuração. Modo inalterado."
+     set: "Modo de entrada quando ocupado definido como **`{mode}`** (salvo).\n_{behavior}_"
+   pause:
+-    resumed: "▶️ Retomado — novo trabalho é aceito novamente."
++    resumed: "▶️ Este perfil foi retomado e a pausa global foi removida. Outros perfis podem continuar em pausa individualmente."
+     not_paused: "O Hermes não estava pausado."
      reason_suffix: " (motivo: {reason})"
      already_paused: "⏸️ O Hermes já está pausado{suffix}. Use `/pause off` para retomar."
      paused: "⏸️ Pausado{suffix}. Novo trabalho de cron/kanban/gateway está em espera; o trabalho em andamento termina normalmente. Use `/pause off` para retomar."
@@ -45983,7 +46220,13 @@ diff --git a/locales/pt.yaml b/locales/pt.yaml
 diff --git a/locales/ru.yaml b/locales/ru.yaml
 --- a/locales/ru.yaml
 +++ b/locales/ru.yaml
-@@ -742,6 +742,8 @@
+@@ -737,11 +737,13 @@
+     save_failed: "Не удалось сохранить режим ввода при занятости в конфигурацию. Режим не изменён."
+     set: "Режим ввода при занятости: **`{mode}`** (сохранено).\n_{behavior}_"
+   pause:
+-    resumed: "▶️ Работа возобновлена — новые задачи снова принимаются."
++    resumed: "▶️ Этот профиль возобновлён, общая пауза снята. Другие профили могут оставаться на индивидуальной паузе."
+     not_paused: "Hermes не был приостановлен."
      reason_suffix: " (причина: {reason})"
      already_paused: "⏸️ Hermes уже приостановлен{suffix}. Используйте `/pause off`, чтобы возобновить."
      paused: "⏸️ Приостановлено{suffix}. Новая работа cron/kanban/шлюза отложена; уже запущенная завершится как обычно. Используйте `/pause off`, чтобы возобновить."
@@ -45995,7 +46238,13 @@ diff --git a/locales/ru.yaml b/locales/ru.yaml
 diff --git a/locales/tr.yaml b/locales/tr.yaml
 --- a/locales/tr.yaml
 +++ b/locales/tr.yaml
-@@ -742,6 +742,8 @@
+@@ -737,11 +737,13 @@
+     save_failed: "Meşgul giriş modu yapılandırmaya kaydedilemedi. Mod değişmedi."
+     set: "Meşgul giriş modu **`{mode}`** olarak ayarlandı (kaydedildi).\n_{behavior}_"
+   pause:
+-    resumed: "▶️ Devam ediliyor — yeni işler yeniden kabul ediliyor."
++    resumed: "▶️ Bu profil devam ediyor; genel duraklatma kaldırıldı. Diğer profiller ayrı olarak duraklatılmış olabilir."
+     not_paused: "Hermes duraklatılmamıştı."
      reason_suffix: " (neden: {reason})"
      already_paused: "⏸️ Hermes zaten duraklatılmış{suffix}. Devam etmek için `/pause off` kullanın."
      paused: "⏸️ Duraklatıldı{suffix}. Yeni cron/kanban/gateway işleri beklemeye alındı; sürmekte olan işler normal şekilde tamamlanır. Devam etmek için `/pause off` kullanın."
@@ -46007,7 +46256,13 @@ diff --git a/locales/tr.yaml b/locales/tr.yaml
 diff --git a/locales/uk.yaml b/locales/uk.yaml
 --- a/locales/uk.yaml
 +++ b/locales/uk.yaml
-@@ -742,6 +742,8 @@
+@@ -737,11 +737,13 @@
+     save_failed: "Не вдалося зберегти режим введення під час зайнятості в конфігурацію. Режим не змінено."
+     set: "Режим введення під час зайнятості: **`{mode}`** (збережено).\n_{behavior}_"
+   pause:
+-    resumed: "▶️ Відновлено — нова робота знову приймається."
++    resumed: "▶️ Цей профіль відновлено, глобальну паузу знято. Інші профілі можуть залишатися на окремій паузі."
+     not_paused: "Hermes не був на паузі."
      reason_suffix: " (причина: {reason})"
      already_paused: "⏸️ Hermes уже на паузі{suffix}. Скористайтеся `/pause off`, щоб відновити."
      paused: "⏸️ Пауза{suffix}. Нові завдання cron, kanban і шлюзу призупинено; вже розпочата робота завершується як звичайно. Скористайтеся `/pause off`, щоб відновити."
@@ -46019,7 +46274,13 @@ diff --git a/locales/uk.yaml b/locales/uk.yaml
 diff --git a/locales/zh-hant.yaml b/locales/zh-hant.yaml
 --- a/locales/zh-hant.yaml
 +++ b/locales/zh-hant.yaml
-@@ -742,6 +742,8 @@
+@@ -737,11 +737,13 @@
+     save_failed: "忙碌輸入模式無法儲存至設定。模式未變更。"
+     set: "忙碌輸入模式已設為 **`{mode}`**（已儲存）。\n_{behavior}_"
+   pause:
+-    resumed: "▶️ 已恢復 — 重新開始接受新工作。"
++    resumed: "▶️ 已恢復目前設定檔並解除全域暫停。其他設定檔可能仍處於個別暫停狀態。"
+     not_paused: "Hermes 並未暫停。"
      reason_suffix: " （原因：{reason}）"
      already_paused: "⏸️ Hermes 已處於暫停狀態{suffix}。使用 `/pause off` 恢復。"
      paused: "⏸️ 已暫停{suffix}。新的排程／kanban／閘道工作將暫緩；進行中的工作會正常完成。使用 `/pause off` 恢復。"
@@ -46031,7 +46292,13 @@ diff --git a/locales/zh-hant.yaml b/locales/zh-hant.yaml
 diff --git a/locales/zh.yaml b/locales/zh.yaml
 --- a/locales/zh.yaml
 +++ b/locales/zh.yaml
-@@ -742,6 +742,8 @@
+@@ -737,11 +737,13 @@
+     save_failed: "忙碌输入模式无法保存到配置。模式未更改。"
+     set: "忙碌输入模式已设为 **`{mode}`**（已保存）。\n_{behavior}_"
+   pause:
+-    resumed: "▶️ 已恢复——重新开始接受新任务。"
++    resumed: "▶️ 已恢复当前配置并解除全局暂停。其他配置可能仍处于单独暂停状态。"
+     not_paused: "Hermes 并未暂停。"
      reason_suffix: " （原因：{reason}）"
      already_paused: "⏸️ Hermes 已处于暂停状态{suffix}。用 `/pause off` 恢复。"
      paused: "⏸️ 已暂停{suffix}。新的定时任务/看板/网关任务将被搁置；进行中的任务正常完成。用 `/pause off` 恢复。"
@@ -46044,7 +46311,7 @@ diff --git a/tests/cron/test_estop_command_failures.py b/tests/cron/test_estop_c
 new file mode 100644
 --- /dev/null
 +++ b/tests/cron/test_estop_command_failures.py
-@@ -0,0 +1,211 @@
+@@ -0,0 +1,212 @@
 +"""Pause controls must not report success when sentinel I/O fails."""
 +
 +import argparse
@@ -46064,6 +46331,7 @@ new file mode 100644
 +    local.parent.mkdir()
 +    root.parent.mkdir()
 +    monkeypatch.setattr(estop, "sentinel_path", lambda: local)
++    monkeypatch.setattr(estop, "fleet_sentinel_path", lambda: root)
 +    monkeypatch.setattr(estop, "_candidate_sentinel_paths", lambda: [local, root])
 +    return local, root
 +
@@ -46108,15 +46376,15 @@ new file mode 100644
 +def test_cli_pause_does_not_claim_success_when_creation_fails(sentinels, monkeypatch, capsys):
 +    from hermes_cli.subcommands.pause import cmd_pause
 +
-+    local, _ = sentinels
-+    reject_creation(monkeypatch, local, reject_touch=True)
++    _, root = sentinels
++    reject_creation(monkeypatch, root, reject_touch=True)
 +
 +    assert cmd_pause(argparse.Namespace(reason="test")) != 0
 +    assert "unable to confirm" in capsys.readouterr().err.lower()
 +    assert estop.is_engaged() is False
 +
 +
-+def test_cli_pause_does_not_present_a_missing_local_sentinel_as_created(sentinels, monkeypatch, capsys):
++def test_cli_pause_reports_the_fleet_sentinel_when_local_is_missing(sentinels, monkeypatch, capsys):
 +    from hermes_cli.subcommands.pause import cmd_pause
 +
 +    local, root = sentinels
@@ -46125,8 +46393,8 @@ new file mode 100644
 +
 +    assert cmd_pause(argparse.Namespace(reason=None)) == 0
 +    output = capsys.readouterr().out.lower()
-+    assert "local sentinel was not confirmed" in output
-+    assert f"sentinel: {local}" not in output
++    assert f"sentinel: {root}".lower() in output
++    assert f"sentinel: {local}".lower() not in output
 +    assert not local.exists() and root.exists()
 +
 +
@@ -46134,8 +46402,8 @@ new file mode 100644
 +async def test_gateway_pause_does_not_claim_success_when_creation_fails(sentinels, monkeypatch):
 +    from gateway.run import GatewayRunner
 +
-+    local, _ = sentinels
-+    reject_creation(monkeypatch, local, reject_touch=True)
++    _, root = sentinels
++    reject_creation(monkeypatch, root, reject_touch=True)
 +    runner = object.__new__(GatewayRunner)
 +
 +    reply = await runner._handle_pause_command(PauseEvent("test"))
@@ -46212,8 +46480,8 @@ new file mode 100644
 +async def test_gateway_pause_does_not_invent_unsaved_reason(sentinels, monkeypatch):
 +    from gateway.run import GatewayRunner
 +
-+    local, _ = sentinels
-+    reject_creation(monkeypatch, local, reject_touch=False)
++    _, root = sentinels
++    reject_creation(monkeypatch, root, reject_touch=False)
 +    runner = object.__new__(GatewayRunner)
 +
 +    reply = await runner._handle_pause_command(PauseEvent("unsaved reason"))
@@ -46227,8 +46495,8 @@ new file mode 100644
 +    from agent import i18n
 +    from gateway.run import GatewayRunner
 +
-+    local, _ = sentinels
-+    reject_creation(monkeypatch, local, reject_touch=True)
++    _, root = sentinels
++    reject_creation(monkeypatch, root, reject_touch=True)
 +    monkeypatch.setenv("HERMES_LANGUAGE", "de")
 +    i18n.reset_language_cache()
 +    try:
@@ -46256,3 +46524,350 @@ new file mode 100644
 +
 +    assert "unable to confirm" in reply.lower()
 +    assert not local.exists()
+diff --git a/tests/cron/test_estop_fleet_scope.py b/tests/cron/test_estop_fleet_scope.py
+new file mode 100644
+--- /dev/null
++++ b/tests/cron/test_estop_fleet_scope.py
+@@ -0,0 +1,330 @@
++"""Global pause controls must operate on the fleet root, even from a profile."""
++
++import argparse
++import errno
++import json
++from pathlib import Path
++
++import pytest
++
++from agent import estop
++
++
++@pytest.fixture
++def fleet(tmp_path, monkeypatch):
++    root = tmp_path / "fleet"
++    alpha = root / "profiles" / "alpha"
++    beta = root / "profiles" / "beta"
++    alpha.mkdir(parents=True)
++    beta.mkdir(parents=True)
++    monkeypatch.setenv("HOME", str(tmp_path))
++    monkeypatch.setenv("HERMES_HOME", str(alpha))
++    monkeypatch.setenv("HERMES_KANBAN_HOME", str(root))
++    monkeypatch.setattr(Path, "home", lambda: tmp_path)
++    return root, alpha, beta
++
++
++class PauseEvent:
++    def __init__(self, args):
++        self.args = args
++
++    def get_command_args(self):
++        return self.args
++
++
++def reject_root_creation(monkeypatch, path):
++    write_text = Path.write_text
++    touch = Path.touch
++
++    def denied_write(target, *args, **kwargs):
++        if target == path:
++            raise PermissionError(errno.EACCES, "simulated root write denial")
++        return write_text(target, *args, **kwargs)
++
++    def denied_touch(target, *args, **kwargs):
++        if target == path:
++            raise PermissionError(errno.EACCES, "simulated root touch denial")
++        return touch(target, *args, **kwargs)
++
++    monkeypatch.setattr(Path, "write_text", denied_write)
++    monkeypatch.setattr(Path, "touch", denied_touch)
++
++
++def test_cli_pause_from_profile_is_visible_to_other_profile(fleet, monkeypatch, capsys):
++    from hermes_cli.subcommands.pause import cmd_pause
++
++    root, alpha, beta = fleet
++    assert cmd_pause(argparse.Namespace(reason="fleet work")) == 0
++    assert (root / "ESTOP").exists()
++    assert not (alpha / "ESTOP").exists()
++    assert str(root / "ESTOP") in capsys.readouterr().out
++    monkeypatch.setenv("HERMES_HOME", str(beta))
++    assert estop.is_engaged() is True
++    assert estop.get_state()["reason"] == "fleet work"
++
++
++@pytest.mark.asyncio
++async def test_gateway_pause_from_profile_is_visible_to_other_profile(fleet, monkeypatch):
++    from gateway.run import GatewayRunner
++
++    root, alpha, beta = fleet
++    runner = object.__new__(GatewayRunner)
++    reply = await runner._handle_pause_command(PauseEvent("fleet work"))
++    assert "paused" in reply.lower()
++    assert (root / "ESTOP").exists() and not (alpha / "ESTOP").exists()
++    monkeypatch.setenv("HERMES_HOME", str(beta))
++    assert estop.is_engaged() is True
++
++
++@pytest.mark.asyncio
++async def test_local_pause_does_not_prevent_a_fleet_pause(fleet, monkeypatch):
++    from gateway.run import GatewayRunner
++
++    root, alpha, beta = fleet
++    local = alpha / "ESTOP"
++    local.write_text(json.dumps({"reason": "local only"}), encoding="utf-8")
++    old = local.read_bytes()
++    reply = await object.__new__(GatewayRunner)._handle_pause_command(PauseEvent(""))
++    assert "paused" in reply.lower()
++    assert (root / "ESTOP").exists() and local.read_bytes() == old
++    monkeypatch.setenv("HERMES_HOME", str(beta))
++    assert estop.is_engaged() is True
++
++
++@pytest.mark.asyncio
++async def test_gateway_reports_the_root_reason_not_a_local_reason(fleet):
++    from gateway.run import GatewayRunner
++
++    root, alpha, _ = fleet
++    (root / "ESTOP").write_text(json.dumps({"reason": "fleet reason"}), encoding="utf-8")
++    (alpha / "ESTOP").write_text(json.dumps({"reason": "local reason"}), encoding="utf-8")
++    reply = await object.__new__(GatewayRunner)._handle_pause_command(PauseEvent(""))
++    assert "fleet reason" in reply and "local reason" not in reply
++
++
++def test_cli_pause_does_not_claim_fleet_success_on_local_pause_alone(fleet, monkeypatch, capsys):
++    from hermes_cli.subcommands.pause import cmd_pause
++
++    root, alpha, _ = fleet
++    local = alpha / "ESTOP"
++    local.write_text(json.dumps({"reason": "local only"}), encoding="utf-8")
++    old = local.read_bytes()
++    reject_root_creation(monkeypatch, root / "ESTOP")
++    assert cmd_pause(argparse.Namespace(reason="fleet request")) != 0
++    assert "unable to confirm" in capsys.readouterr().err.lower()
++    assert local.read_bytes() == old and not (root / "ESTOP").exists()
++
++
++@pytest.mark.asyncio
++async def test_gateway_does_not_claim_fleet_success_on_local_pause_alone(fleet, monkeypatch):
++    from gateway.run import GatewayRunner
++
++    root, alpha, _ = fleet
++    local = alpha / "ESTOP"
++    local.write_text(json.dumps({"reason": "local only"}), encoding="utf-8")
++    old = local.read_bytes()
++    reject_root_creation(monkeypatch, root / "ESTOP")
++    reply = await object.__new__(GatewayRunner)._handle_pause_command(PauseEvent("fleet request"))
++    assert "unable to confirm" in reply.lower()
++    assert local.read_bytes() == old and not (root / "ESTOP").exists()
++
++
++def test_existing_fleet_reason_is_preserved_when_pause_has_no_reason(fleet):
++    from hermes_cli.subcommands.pause import cmd_pause
++
++    root, alpha, _ = fleet
++    marker = root / "ESTOP"
++    marker.write_text(json.dumps({"reason": "existing fleet reason"}), encoding="utf-8")
++    before = marker.read_bytes()
++    assert cmd_pause(argparse.Namespace(reason=None)) == 0
++    assert marker.read_bytes() == before and not (alpha / "ESTOP").exists()
++
++
++def test_pause_without_reason_preserves_a_concurrently_created_fleet_pause(fleet, monkeypatch):
++    from hermes_cli.subcommands.pause import cmd_pause
++
++    root, _, _ = fleet
++    marker = root / "ESTOP"
++    original = estop._sentinel_exists
++    inserted = False
++
++    def concurrent_check(path):
++        nonlocal inserted
++        result = original(path)
++        if path == marker and result is False and not inserted:
++            inserted = True
++            marker.write_text(json.dumps({"reason": "other request"}), encoding="utf-8")
++        return result
++
++    monkeypatch.setattr(estop, "_sentinel_exists", concurrent_check)
++    assert cmd_pause(argparse.Namespace(reason=None)) == 0
++    assert json.loads(marker.read_text(encoding="utf-8"))["reason"] == "other request"
++
++
++def test_context_profile_override_targets_its_own_fleet(fleet, tmp_path):
++    import hermes_constants
++    from hermes_cli.subcommands.pause import cmd_pause
++
++    first_root, _, _ = fleet
++    second_root = tmp_path / "other-fleet"
++    other = second_root / "profiles" / "other"
++    other.mkdir(parents=True)
++    token = hermes_constants.set_hermes_home_override(other)
++    try:
++        assert cmd_pause(argparse.Namespace(reason="other fleet")) == 0
++        assert (second_root / "ESTOP").exists()
++        assert not (first_root / "ESTOP").exists()
++    finally:
++        hermes_constants.reset_hermes_home_override(token)
++
++
++def test_fleet_pause_blocks_other_profile_dispatch_without_touching_running_work(fleet, monkeypatch):
++    import os
++    from hermes_cli import kanban_db as kb
++    from hermes_cli import kanban_db_connect as kbc
++    from hermes_cli import kanban_db_dispatch as kbd
++    from hermes_cli.subcommands.pause import cmd_pause
++
++    _, _, beta = fleet
++    monkeypatch.setattr(kbd, "_profile_exists_fn", lambda: lambda _name: True)
++    monkeypatch.setattr(kbd, "_system_memory_sample", dict)
++    monkeypatch.setattr(kbd, "review_dispatch_enabled", lambda: False)
++    kb.init_db()
++    with kbc.connect_closing() as conn:
++        running = kb.create_task(conn, title="existing worker", assignee="alpha")
++        assert kb.claim_task(conn, running)
++        kbd._set_worker_pid(conn, running, os.getpid())
++        ready = kb.create_task(conn, title="waiting", assignee="beta")
++        before = list(conn.execute("SELECT id,status,current_run_id,worker_pid FROM tasks ORDER BY id"))
++        assert cmd_pause(argparse.Namespace(reason="fleet pause")) == 0
++        monkeypatch.setenv("HERMES_HOME", str(beta))
++        spawns = []
++        result = kbd.dispatch_once(conn, spawn_fn=lambda *args, **kwargs: spawns.append(args))
++        after = list(conn.execute("SELECT id,status,current_run_id,worker_pid FROM tasks ORDER BY id"))
++        assert result.skipped_paused is True
++        assert not spawns and before == after
++        assert kb.get_task(conn, ready).status == "ready"
++
++
++def test_fleet_pause_stops_other_profile_cron_scan(fleet, monkeypatch):
++    from cron import scheduler
++    from hermes_cli.subcommands.pause import cmd_pause
++
++    _, _, beta = fleet
++    scans = []
++    monkeypatch.setattr(scheduler, "get_due_jobs", lambda: scans.append(True) or [])
++    assert cmd_pause(argparse.Namespace(reason="fleet pause")) == 0
++    monkeypatch.setenv("HERMES_HOME", str(beta))
++    assert scheduler.tick(verbose=False) == 0
++    assert not scans
++
++
++@pytest.mark.asyncio
++async def test_fleet_pause_rejects_other_profile_gateway_new_turn(fleet, monkeypatch):
++    from gateway.run import GatewayRunner
++    from hermes_cli.subcommands.pause import cmd_pause
++
++    class Source:
++        platform = None
++        chat_id = "c1"
++        user_id = "u1"
++        user_name = "user"
++        chat_type = "dm"
++        profile = None
++
++    class Event:
++        internal = False
++        text = "hello"
++        source = Source()
++
++        def get_command(self):
++            return None
++
++    _, _, beta = fleet
++    assert cmd_pause(argparse.Namespace(reason="fleet pause")) == 0
++    monkeypatch.setenv("HERMES_HOME", str(beta))
++    runner = object.__new__(GatewayRunner)
++    runner._is_user_authorized = lambda source: True
++    reply = await runner._handle_message(Event())
++    assert "paused" in reply.lower()
++
++
++def test_root_resolution_failure_is_treated_as_unknown_not_unpaused(fleet, monkeypatch):
++    import hermes_constants
++
++    def unavailable(*args, **kwargs):
++        raise PermissionError(errno.EACCES, "simulated root resolution failure")
++
++    monkeypatch.setattr(hermes_constants, "get_default_hermes_root", unavailable)
++    assert estop.is_engaged() is True
++    assert estop.get_state() is not None
++    assert estop.paused_reply() is not None
++
++
++def test_home_resolution_failure_holds_dispatch_and_does_not_raise(fleet, monkeypatch):
++    import logging
++    import hermes_constants
++
++    def unavailable(*args, **kwargs):
++        raise PermissionError(errno.EACCES, "simulated home resolution failure")
++
++    monkeypatch.setattr(hermes_constants, "get_hermes_home", unavailable)
++    assert estop.is_engaged() is True
++    assert estop.get_state() is not None
++    assert estop.check_paused("test-home-resolution", logging.getLogger(__name__)) is True
++
++
++def test_pause_log_identifies_checked_fleet_path(fleet, caplog):
++    import logging
++
++    root, _, _ = fleet
++    (root / "ESTOP").touch()
++    with caplog.at_level(logging.INFO):
++        assert estop.check_paused("test-fleet-log", logging.getLogger(__name__)) is True
++    assert str(root / "ESTOP") in caplog.text
++
++
++def test_cli_pause_does_not_write_a_guessed_root_on_resolution_failure(fleet, monkeypatch, capsys):
++    import hermes_constants
++    from hermes_cli.subcommands.pause import cmd_pause
++
++    root, alpha, _ = fleet
++
++    def unavailable(*args, **kwargs):
++        raise PermissionError(errno.EACCES, "simulated root resolution failure")
++
++    monkeypatch.setattr(hermes_constants, "get_default_hermes_root", unavailable)
++    assert cmd_pause(argparse.Namespace(reason="test")) != 0
++    assert "unable to confirm" in capsys.readouterr().err.lower()
++    assert not (alpha / "ESTOP").exists() and not (root / "ESTOP").exists()
++
++
++def test_global_resume_keeps_another_profiles_local_pause(fleet, monkeypatch, capsys):
++    from hermes_cli.subcommands.pause import cmd_pause, cmd_resume
++
++    root, _, beta = fleet
++    local = beta / "ESTOP"
++    local.write_text(json.dumps({"reason": "beta only"}), encoding="utf-8")
++    assert cmd_pause(argparse.Namespace(reason="fleet pause")) == 0
++    assert (root / "ESTOP").exists()
++    assert cmd_resume(argparse.Namespace()) == 0
++    assert not (root / "ESTOP").exists() and local.exists()
++    assert "other profile" in capsys.readouterr().out.lower()
++    monkeypatch.setenv("HERMES_HOME", str(beta))
++    assert estop.is_engaged() is True
++
++
++@pytest.mark.asyncio
++async def test_gateway_resume_explains_other_profiles_may_still_be_paused(fleet, monkeypatch):
++    from gateway.run import GatewayRunner
++
++    root, _, beta = fleet
++    local = beta / "ESTOP"
++    local.write_text(json.dumps({"reason": "beta only"}), encoding="utf-8")
++    runner = object.__new__(GatewayRunner)
++    await runner._handle_pause_command(PauseEvent("fleet pause"))
++    reply = await runner._handle_pause_command(PauseEvent("off"))
++    assert "resumed" in reply.lower() and "other profile" in reply.lower()
++    assert not (root / "ESTOP").exists() and local.exists()
++    monkeypatch.setenv("HERMES_HOME", str(beta))
++    assert estop.is_engaged() is True
+diff --git a/website/docs/user-guide/features/cron.md b/website/docs/user-guide/features/cron.md
+--- a/website/docs/user-guide/features/cron.md
++++ b/website/docs/user-guide/features/cron.md
+@@ -273,6 +273,8 @@
+ ### Pausing everything: `hermes pause`
+ 
+ `hermes pause [--reason ...]` is the global emergency stop (`hermes resume` lifts it). While it is engaged no scheduled cron fire starts, whichever door it arrives through: the built-in ticker skips its dispatch, the managed-cron (hosted scheduler) fire webhook answers `503` with `Retry-After: 60` so the scheduler redelivers the fire after you resume, and the [misfire catch-up](#misfire-catch-up) sweep stays idle instead of force-firing everything that was held back. Runs already in flight are never killed, and nothing is lost: due work catches up on the first tick or sweep after `hermes resume`. Explicit manual runs (`hermes cron run`, the dashboard's Trigger button) are an operator override and still execute while paused.
++
++From a profile, the global pause command writes the shared fleet-root sentinel so other profiles on that root observe it too. A profile can also have an independent local sentinel. Resume removes the fleet sentinel and the current profile's sentinel; independent pauses in other profiles remain. If the relevant home or root cannot be resolved or inspected, Hermes holds new work and reports that the operation could not be confirmed. Separate Hermes roots, older processes that have not loaded this behavior, and the explicit manual overrides described above are outside this guarantee.
+ 
+ ### Creating a job paused (safe canary)
+ 
