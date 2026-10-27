@@ -1092,3 +1092,7 @@ Twenty-six related files passed 431 offline tests against installed Linux source
 ## Scoped session links (v0.6.31)
 
 Ten related files passed 239 offline tests against the installed Linux source; three Windows-specific cases were skipped. Temporary SQLite fleets covered direct links, profile mismatch, identical IDs, tombstones and live-context exclusion. A separate installed-source smoke used synthetic data only; it emitted an isolated update-bootstrap warning and did not validate a production session or measure model usage.
+
+## Session link identity (v0.6.32)
+
+Ten related files passed 245 offline tests against installed Linux source; three Windows-specific cases were skipped. Temporary SQLite fleets covered profile-switch round trips with colliding IDs, default and named profiles, discovery, browsing, aliases and reserved names. A separate installed-source smoke used synthetic data only; it emitted an isolated update-bootstrap warning and did not validate a production session or measure model usage.

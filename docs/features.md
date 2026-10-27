@@ -191,3 +191,7 @@ The orchestrator `kanban_reassign` tool reads the status snapshot and checks cus
 ## Scoped session links (v0.6.31)
 
 Session recall accepts the returned `@session:` link directly for read or scroll. Named profiles resolve from the caller context, including a context-local fleet home; a mismatch between the embedded and explicit profiles is rejected. A current-session exclusion remains in effect when the named profile is the same database, while another profile with the same session ID stays independently searchable. Bare IDs remain scoped to the current store.
+
+## Session link identity (v0.6.32)
+
+Session recall identifies the current context fleet when generating profile-qualified links. Those links preserve their originating profile if a caller switches to another profile in the same fleet. A profile alias is normalized; unresolvable reserved names stay unqualified. Links do not encode a globally unique fleet and should not be used as cross-fleet identifiers.
