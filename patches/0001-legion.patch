@@ -8919,7 +8919,7 @@ diff --git a/hermes_state_messages.py b/hermes_state_messages.py
  
      def _message_column_names(self, conn) -> list[str]:
          """Column names of the messages table, cached per-connection era."""
-@@ -1437,6 +1508,10 @@
+@@ -1437,6 +1508,22 @@
              if latest:
                  rows.reverse()
          return [self._row_to_message_dict(row, warn_context="get_messages", summary_flag=True) for row in rows]
@@ -8927,6 +8927,18 @@ diff --git a/hermes_state_messages.py b/hermes_state_messages.py
 +    def get_message_bookends(self, session_id: str, head: int = 20, tail: int = 10):
 +        from hermes_state_message_windows import get_message_bookends
 +        return get_message_bookends(self, session_id, head, tail)
++
++    def get_recall_bookends(self, session_id: str, head: int = 20, tail: int = 10):
++        from hermes_state_recall import recall_bookends
++        return recall_bookends(self, session_id, head, tail)
++
++    def get_recall_window(self, session_id: str, message_id: int, window: int = 5):
++        from hermes_state_recall import recall_window
++        return recall_window(self, session_id, message_id, window)
++
++    def get_recall_page(self, session_id: str, message_id: int, offset: int, limit: int, field: str):
++        from hermes_state_recall import recall_page
++        return recall_page(self, session_id, message_id, offset, limit, field)
  
      def find_pr_url_messages(self, session_ids: list[str]) -> list[dict[str, Any]]:
          """Tool results containing ``/pull/``: a deliberately loose scan, oldest-first so the caller takes the last."""
@@ -41703,7 +41715,7 @@ new file mode 100644
 +
 +def test_title_window_fallback_preserves_first_last_and_total_counts(archive, monkeypatch):
 +    db, ids = archive
-+    monkeypatch.setattr(db, "get_anchored_view", lambda *args, **kwargs: {})
++    monkeypatch.setattr(db, "get_recall_anchored_view", lambda *args, **kwargs: {})
 +    entry = title_result(db)
 +    assert [m["id"] for m in entry["bookend_start"]] == ids[:3]
 +    assert [m["id"] for m in entry["messages"]] == ids[:5]
@@ -41716,7 +41728,7 @@ new file mode 100644
 +    db, ids = archive
 +    db._conn.execute("UPDATE messages SET active=0 WHERE id=?", (ids[0],))
 +    db._conn.commit()
-+    monkeypatch.setattr(db, "get_anchored_view", lambda *args, **kwargs: {})
++    monkeypatch.setattr(db, "get_recall_anchored_view", lambda *args, **kwargs: {})
 +    entry = title_result(db)
 +    assert entry["match_message_id"] == ids[1]
 +    assert entry["bookend_start"][0]["id"] == ids[1]
@@ -41728,7 +41740,7 @@ new file mode 100644
 +    counts = watch_reads(monkeypatch, db)
 +    def refused(*args, **kwargs):
 +        raise OSError("Synthetic bounded read refusal")
-+    monkeypatch.setattr(db, "get_message_bookends", refused)
++    monkeypatch.setattr(db, "get_recall_bookends", refused)
 +    entry = title_result(db)
 +    assert entry is not None and not entry["messages"]
 +    assert entry["detail"] == "unavailable"
@@ -41737,17 +41749,17 @@ new file mode 100644
 +    assert counts == {"full_transcripts": 0, "hydrated": 0}
 +
 +
-+def test_legacy_adapter_keeps_title_evidence_without_bounded_extension(archive):
-+    db, ids = archive
++def test_legacy_adapter_keeps_title_but_not_unfiltered_messages(archive):
++    db, _ = archive
 +    class LegacyAdapter:
 +        def __getattr__(self, name):
-+            if name == "get_message_bookends":
++            if name == "get_recall_bookends":
 +                raise AttributeError(name)
 +            return getattr(db, name)
 +    entry = title_result(LegacyAdapter())
-+    assert entry is not None and entry["match_message_id"] == ids[0]
-+    assert entry["bookend_start"][0]["id"] == ids[0]
-+    assert entry["bookend_end"][-1]["id"] == ids[-1]
++    assert entry is not None and entry["detail"] == "unavailable"
++    assert entry["match_message_id"] is None and not entry["messages"]
++    assert not entry["bookend_start"] and not entry["bookend_end"]
 +
 +
 +def test_genuinely_empty_title_match_is_not_reported_as_failed(archive):
@@ -41786,7 +41798,31 @@ diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
  
  
  def _session_meta_block(meta: dict[str, Any]) -> dict[str, Any]:
-@@ -254,11 +258,29 @@
+@@ -101,7 +105,7 @@
+ 
+ 
+ def _is_compaction_summary(content: str) -> bool:
+-    return bool(content) and content.lstrip().startswith(_COMPACTION_PREFIXES)
++    return isinstance(content, str) and bool(content) and content.lstrip().startswith(_COMPACTION_PREFIXES)
+ 
+ 
+ def _resolve_to_parent(db, session_id: str) -> tuple[str, bool]:
+@@ -243,22 +247,42 @@
+         content = strip_ansi(content)
+     entry = {"id": m.get("id"), "role": m.get("role"), "content": content, "timestamp": m.get("timestamp")}
+     entry.update({k: m.get(k) for k in ("tool_name", "tool_calls", "tool_call_id") if m.get(k)})
++    entry.update({k: m[k] for k in ("content_truncated", "original_content_chars", "original_content_bytes",
++                                    "content_encoding", "tool_calls_truncated", "original_tool_calls_bytes") if k in m})
+     if anchor_id is not None and m.get("id") == anchor_id:
+         entry["anchor"] = True
+-    if max_content_len and content and len(content) > max_content_len:
++    if max_content_len and isinstance(content, str) and len(content) > max_content_len:
+         entry.update(content=content[:max_content_len] + "…", content_truncated=True,
+-                     original_content_chars=len(content))
++                     original_content_chars=m.get("original_content_chars", len(content)))
+     return {k: v for k, v in entry.items() if v is not None or k == "content"}
+ 
+ 
  def _session_link(session_id: str, profile: str | None = None) -> str:
      """The reference the agent writes for a session — same value the desktop composer
      emits, so it renders as a titled link. The profile segment is omitted when it
@@ -41819,19 +41855,17 @@ diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
      name = (profile or "").strip() or _quiet(_active, "", "get_active_profile_name failed for session link")
      return f"@session:{name}/{session_id}" if name else f"@session:{session_id}"
  
-@@ -273,7 +295,19 @@
+@@ -273,7 +297,17 @@
      return entry
  
  
 -def _title_match_result(db, query: str, current_lineage_root: Optional[str]) -> Optional[dict[str, Any]]:
 +def _title_message_sample(db, session_id: str) -> tuple[list[dict[str, Any]], int]:
 +    """Native title fallback needs only five head and three tail messages, plus total count."""
-+    bookends = getattr(db, "get_message_bookends", None)
-+    if callable(bookends):
-+        return bookends(session_id, 5, 3)
-+    # Compatibility for older DB adapters; a failed present bounded API never retries here.
-+    messages = db.get_messages(session_id)
-+    return messages, len(messages)
++    bookends = getattr(db, "get_recall_bookends", None)
++    if not callable(bookends):
++        raise RuntimeError("session database does not support safe recall bookends")
++    return bookends(session_id, 5, 3)
 +
 +
 +def _title_match_result(db, query: str, current_lineage_root: Optional[str], *,
@@ -41840,7 +41874,7 @@ diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
      """Discovery-shaped result when the query matches a session title, else None."""
      title_query = query.strip().strip("`'\"")  # models often quote a remembered title
      session_id = title_query and _quiet(lambda: db.resolve_session_by_title(title_query), None,
-@@ -285,11 +319,16 @@
+@@ -285,21 +319,36 @@
      # /new-reset and compression-ended parents are not.
      if current_lineage_root and lineage_root == current_lineage_root and not _session_left_live_context(db, session_id):
          return None
@@ -41859,17 +41893,32 @@ diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
 +    messages, total = sample if sample is not None else ([], 0)
      anchor_id = messages[0].get("id") if messages else None
      view = {} if anchor_id is None else _quiet(
-         lambda: db.get_anchored_view(session_id, anchor_id, window=5, bookend=3), {},
-@@ -299,7 +338,7 @@
+-        lambda: db.get_anchored_view(session_id, anchor_id, window=5, bookend=3), {},
+-        "get_anchored_view failed for title match %s/%s", session_id, anchor_id)
++        lambda: db.get_recall_anchored_view(session_id, anchor_id, window=5, bookend=3,
++                                            keep_roles=None, include_window_bookends=True), {},
++        "get_recall_anchored_view failed for title match %s/%s", session_id, anchor_id)
++    view_available = anchor_id is not None and any(row.get("id") == anchor_id for row in view.get("window", []))
++    if anchor_id is not None and not view_available:
++        # Never reuse a sample taken before an anchor disappeared. A fresh bounded
++        # read also preserves the title-only result when the session is now empty.
++        sample = _quiet(lambda: _title_message_sample(db, session_id), None,
++                        "title message refresh failed for %s", session_id)
++        messages, total = sample if sample is not None else ([], 0)
++        anchor_id = messages[0].get("id") if messages else None
++        view = {}
+     title = session_meta.get("title") or title_query
+     # Same caps as FTS hits (_bookend / _hydrate_hit): a title match is a discovery entry too.
      def shape(key, fallback, anchor=None, max_content_len=1200):
          return [_shape_message(m, anchor_id=anchor, max_content_len=max_content_len)
-                 for m in (view.get(key) or fallback)]
+-                for m in (view.get(key) or fallback)]
 -    return {**_discovery_entry(
++                for m in (view.get(key, []) if view_available else fallback)]
 +    entry = {**_discovery_entry(
          lineage_root, session_id=session_id, when=_format_timestamp(session_meta.get("started_at")),
          source=session_meta.get("source", "unknown"), model=session_meta.get("model") or "unknown",
          title=title, matched_role="session_title", match_message_id=anchor_id,
-@@ -307,8 +346,12 @@
+@@ -307,8 +356,12 @@
          bookend_start=shape("bookend_start", messages[:3]),
          messages=shape("window", messages[:5], anchor_id, max_content_len=4000),
          bookend_end=shape("bookend_end", messages[-3:]), messages_before=view.get("messages_before", 0),
@@ -41883,7 +41932,21 @@ diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
  
  
  def _discover_payload(db, query: str, detail: str, results: list, **extra) -> str:
-@@ -358,14 +401,8 @@
+@@ -331,9 +384,11 @@
+     """Discovery result from a surviving FTS row; None (dropped) if the view can't load."""
+     hit_sid, msg_id = match_info.get("session_id") or lineage_root, match_info.get("id")
+     try:
+-        view = db.get_anchored_view(hit_sid, msg_id, window=5, bookend=3)
++        view = db.get_recall_anchored_view(hit_sid, msg_id, window=5, bookend=3)
+     except Exception as e:
+-        logging.warning("get_anchored_view failed for %s/%s: %s", hit_sid, msg_id, e, exc_info=True)
++        logging.warning("get_recall_anchored_view failed for %s/%s: %s", hit_sid, msg_id, e, exc_info=True)
++        return None
++    if not any(message.get("id") == msg_id for message in view.get("window", [])):
+         return None
+     session_meta, full = _get_session_meta(db, lineage_root), result_detail == "full"
+     return _discovery_entry(
+@@ -358,14 +413,8 @@
      """Discovery shape: FTS5 plus adaptive or full result hydration."""
      current_lineage_root = _resolve_lineage(db, current_session_id) if current_session_id else None
      excluded_roots = _excluded_lineage_roots(db, exclude_session_ids or [])
@@ -41900,7 +41963,7 @@ diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
      raw_results, err = _loud(lambda: db.search_messages(
          query=query, role_filter=role_filter or ["user", "assistant"],
          exclude_sources=list(_HIDDEN_SESSION_SOURCES), limit=_DISCOVER_SCAN_LIMIT, offset=0, sort=sort,
-@@ -391,10 +428,16 @@
+@@ -391,10 +440,16 @@
      # Current-lineage hits are skipped UNLESS the transcript left live context
      # (compression-ended, /new-reset predecessor, or an in-place compacted row on the
      # SAME session); a live delegation child (end_reason=None) stays excluded.
@@ -41918,7 +41981,7 @@ diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
          if raw_sid in excluded_roots or resolved_sid in excluded_roots:
              continue
          # Skip the current session lineage — UNLESS the hit's transcript has left live context. Three
-@@ -407,9 +450,12 @@
+@@ -407,9 +462,12 @@
          # compaction: the FTS hit lives on the SAME session_id as the current session, but the matched
          # message row is an archived (active=0, compacted=1) row. The live-context load filters active=1, so
          # that content is no longer in context — let it through.
@@ -41933,7 +41996,7 @@ diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
              continue
          if current_session_id and raw_sid == current_session_id and not is_compacted_hit:
              continue
-@@ -435,13 +481,27 @@
+@@ -435,13 +493,27 @@
      """Another profile's ``state.db`` opened read-only (safe on a live DB); None = current."""
      if profile is None or not str(profile).strip():
          return None
@@ -41963,18 +42026,17 @@ diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
  
  
  def _read_session(db, session_id: str, head: int = 20, tail: int = 10, link_profile: str | None = None) -> str:
-@@ -449,15 +509,22 @@
+@@ -449,15 +521,21 @@
      meta = _get_session_meta(db, session_id)
      if not meta:
          return tool_error(f"session_id not found: {session_id}", success=False)
 -    rows, err = _loud(lambda: db.get_messages(session_id), "get_messages failed for %s: %s", "failed to load session",
 -                      session_id)
 +    def load():
-+        bookends = getattr(db, "get_message_bookends", None)
-+        if callable(bookends) and head > 0 and tail > 0:
-+            return bookends(session_id, head, tail)
-+        rows = db.get_messages(session_id)
-+        return rows, len(rows)
++        bookends = getattr(db, "get_recall_bookends", None)
++        if not callable(bookends):
++            raise RuntimeError("session database does not support safe recall bookends")
++        return bookends(session_id, head, tail)
 +    loaded, err = _loud(load, "get_messages failed for %s: %s", "failed to load session", session_id)
      if err:
          return err
@@ -41991,7 +42053,13 @@ diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
                 **({"message": (f"Session has {total} messages; showing first {head} + last {tail}. "
                                 "Pass around_message_id (any id above) to scroll the middle.")} if truncated else {}))
  
-@@ -475,6 +542,35 @@
+@@ -471,10 +549,41 @@
+     ask properly: ``@session:<profile>/<id>`` or ``profile=``.
+     """
+     result = _read_session(db, sid, link_profile=profile)
+-    if json.loads(result).get("success") is not False or profile:
++    payload = json.loads(result)
++    if profile or payload.get("error") != f"session_id not found: {sid}":
          return result
      return tool_error(f"session_id not found in this profile: {sid}. If it belongs to another "
                        "profile, pass profile=<name> (or the @session:<profile>/<id> link).", success=False)
@@ -42017,18 +42085,110 @@ diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
 +        if err:
 +            return err
 +    results = [{"match_message_id": row["id"], "role": row.get("role"),
-+                "snippet": row.get("snippet") or "", **({"tool_name": row["tool_name"]}
++                "snippet": row.get("snippet") or "", "snippet_offset": row.get("snippet_offset", 0),
++                **({"tool_name": row["tool_name"]}
 +                                                         if row.get("tool_name") else {})} for row in rows]
 +    return _ok(mode="search_session", session_id=sid, link=_session_link(sid, profile), query=query, detail=detail,
 +               results=results, count=len(results), message=(
 +                   "Matches are bounded excerpts; a match may be in a tool name or arguments. "
-+                   "Pass a match_message_id "
-+                   "as around_message_id to scroll when that message is outside live context."))
++                   "Pass match_message_id as around_message_id to scroll; add content_offset=snippet_offset "
++                   "to page the matched message when it is outside live context."))
  
  
  def _list_recent_sessions(db, limit: int, current_session_id: str | None = None, link_profile: str | None = None) -> str:
-@@ -579,26 +675,52 @@
-               after=None, before=None, exclude_session_ids=None) -> str:
+@@ -544,7 +653,7 @@
+     session_meta = _get_session_meta(db, session_id)
+     if not session_meta:
+         return tool_error(f"session_id not found: {session_id}", success=False)
+-    view, err = _loud(lambda: db.get_messages_around(session_id, around_message_id, window=window),
++    view, err = _loud(lambda: db.get_recall_window(session_id, around_message_id, window=window),
+                       "get_messages_around failed: %s", "failed to load messages")
+     if err:
+         return err
+@@ -554,7 +663,7 @@
+         # Lineage rebind: the caller paired a parent session_id with a message id
+         # living in a descendant — serve the owner's window transparently.
+         rebind_view = _same_lineage(db, session_id, owning) and _quiet(
+-            lambda: db.get_messages_around(owning, around_message_id, window=window),
++            lambda: db.get_recall_window(owning, around_message_id, window=window),
+             None, "rebind get_messages_around failed: %s", with_exc=True)
+         if rebind_view and rebind_view.get("window"):
+             extra["warning"] = (f"around_message_id {around_message_id} lives in {owning} "
+@@ -563,6 +672,9 @@
+             session_meta = _get_session_meta(db, owning) or session_meta
+     if not messages:
+         return tool_error(f"around_message_id {around_message_id} not in session_id {session_id}", success=False)
++    actual_anchor = next((m for m in messages if m.get("id") == around_message_id), None)
++    if current_session_id and _anchor_in_live_context(db, actual_anchor, session_id, current_session_id):
++        return tool_error("scroll rejected: anchor lives in the current session lineage (already in your active context)", success=False)
+     return _ok(
+         mode="scroll", session_id=session_id, around_message_id=around_message_id,
+         session_meta=_session_meta_block(session_meta), window=window,
+@@ -571,34 +683,121 @@
+         hint=("Scroll forward: re-call with around_message_id = the LAST message's "
+               "id; backward: the FIRST message's id (the boundary message repeats "
+               "as an orientation marker). messages_before/messages_after < window "
+-              "means you've hit that end of the session."), **extra)
++              "means you've hit that end of the session. For truncated content, use the message id "
++              "with content_offset=0 to page its body."), **extra)
++
++
++def _message_page(db, session_id: str, message_id: Any, offset: Any, limit: Any, field: Any,
++                  current_session_id: Optional[str], profile: Optional[str], after: Any, before: Any,
++                  exclude_session_ids: Any) -> str:
++    """Page one visible message without hydrating its full content or neighboring rows."""
++    def integer(value: Any) -> int:
++        if isinstance(value, bool) or not (isinstance(value, int) or isinstance(value, str) and value.isdecimal()):
++            raise ValueError("message page offset, limit and id must be integers")
++        return int(value)
++    try:
++        message_id, offset = integer(message_id), integer(offset)
++        limit = 2000 if limit is None else integer(limit)
++        if message_id <= 0 or offset < 0 or offset >= 2**63 - 1 or limit <= 0:
++            raise ValueError("message page id and limit must be positive; offset must be nonnegative")
++        limit = min(limit, 4000)
++        after_ts, before_ts = _parse_iso_bound(after), _parse_iso_bound(before)
++    except ValueError as exc:
++        return tool_error(str(exc), success=False)
++    field = "content" if field is None else field
++    if field not in ("content", "tool_calls"):
++        return tool_error("content_field must be content or tool_calls", success=False)
++    meta = _get_session_meta(db, session_id)
++    if not meta:
++        return tool_error(f"session_id not found: {session_id}", success=False)
++    state = _get_message_storage_state(db, message_id)
++    owning = (state or {}).get("session_id")
++    if owning and owning != session_id:
++        if not _same_lineage(db, session_id, owning):
++            return tool_error("message does not belong to this session lineage", success=False)
++        session_id = owning
++        meta = _get_session_meta(db, owning)
++    excluded = _excluded_lineage_roots(db, _normalize_exclude_session_ids(exclude_session_ids))
++    if ({session_id, _resolve_lineage(db, session_id)} & excluded
++            or not _in_time_window(_coerce_started_ts(meta.get("started_at")), after_ts, before_ts)):
++        return tool_error("message is outside the requested session scope", success=False)
++    if current_session_id and _anchor_in_live_context(db, state, session_id, current_session_id):
++        return tool_error("message page rejected: anchor lives in the current session lineage", success=False)
++    page, err = _loud(lambda: db.get_recall_page(session_id, message_id, offset, limit, field),
++                      "message page failed: %s", "failed to page message")
++    if err:
++        return err
++    if page is None:
++        return tool_error("message not found or not visible in this session", success=False)
++    # The row may have changed between the identity lookup and the bounded read.
++    if current_session_id and _anchor_in_live_context(db, page, session_id, current_session_id):
++        return tool_error("message page rejected: anchor lives in the current session lineage", success=False)
++    page.pop("active", None)
++    page.pop("compacted", None)
++    return _ok(mode="message_page", session_id=session_id, link=_session_link(session_id, profile),
++               message_id=message_id, content_field=field, **page)
+ 
+ 
+ def _dispatch(query, role_filter, limit, db, current_session_id, session_id,
+               around_message_id, window, sort, profile, detail, owned_dbs,
+-              after=None, before=None, exclude_session_ids=None) -> str:
++              after=None, before=None, exclude_session_ids=None, content_offset=None, content_limit=None,
++              content_field=None) -> str:
      """Mode dispatch (see module docstring); scroll wins when an anchor is set.
      Profile DBs opened here are appended to *owned_dbs* for the caller to close."""
 -    # A raw `@session:<profile>/<id>` link as session_id: ids never contain "/", so
@@ -42074,7 +42234,15 @@ diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
 +            current_session_id = None
 +        db = profile_db
          owned_dbs.append(profile_db)
++    if content_offset is not None and (not isinstance(session_id, str) or not session_id.strip()
++                                       or around_message_id is None):
++        return tool_error("message paging requires session_id and around_message_id", success=False)
++    if content_offset is None and (content_limit is not None or content_field is not None):
++        return tool_error("content_limit and content_field require content_offset", success=False)
      if isinstance(session_id, str) and session_id.strip():
++        if content_offset is not None:
++            return _message_page(db, session_id.strip(), around_message_id, content_offset, content_limit,
++                                 content_field, current_session_id, profile, after, before, exclude_session_ids)
          if around_message_id is not None:
              return _scroll(db, session_id.strip(), around_message_id, window, current_session_id)
 +        if isinstance(query, str) and query.strip():
@@ -42091,20 +42259,42 @@ diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
          return _read_scoped(db, session_id.strip(), profile)
      limit = _clamp_int(limit, 3, 1, 10)
      if not query or not isinstance(query, str) or not query.strip():
-@@ -652,9 +774,10 @@
+@@ -619,7 +818,9 @@
+ def session_search(query: str = "", role_filter: str | None = None, limit: int = 3, db=None,
+                    current_session_id: str | None = None, session_id: str | None = None, around_message_id: int | None = None,
+                    window: int = 5, sort: str | None = None, profile: str | None = None, detail: str = "adaptive",
+-                   after: str | None = None, before: str | None = None, exclude_session_ids: Optional[list[str]] = None) -> str:
++                   after: str | None = None, before: str | None = None, exclude_session_ids: Optional[list[str]] = None,
++                   content_offset: int | None = None, content_limit: int | None = None,
++                   content_field: str | None = None) -> str:
+     """Run session search, closing DBs opened here. Positional order is frozen for old callers;
+     new parameters are appended after ``detail``."""
+     from hermes_state import format_session_db_unavailable
+@@ -633,7 +834,8 @@
+     try:
+         return _dispatch(query, role_filter, limit, db, current_session_id, session_id,
+                          around_message_id, window, sort, profile, detail, owned_dbs,
+-                         after=after, before=before, exclude_session_ids=exclude_session_ids)
++                         after=after, before=before, exclude_session_ids=exclude_session_ids,
++                         content_offset=content_offset, content_limit=content_limit, content_field=content_field)
+     finally:
+         for owned_db in reversed(owned_dbs):
+             _quiet(lambda: release_or_close(owned_db), None, "Failed to close session_search SessionDB")
+@@ -652,9 +854,11 @@
      "name": "session_search",
      "description": (
          "Recall past conversations: search or read old Hermes sessions (FTS5), or "
 -        "scroll inside one. Four shapes, picked by args: `query` = discovery "
-+        "scroll inside one. Five shapes, picked by args: `query` = discovery "
++        "scroll inside one. Shapes are picked by args: `query` = discovery "
          "(top-N matching sessions, top result fully hydrated); `session_id` + "
 -        "`around_message_id` = scroll (window of messages around an anchor); "
 +        "`query` = bounded search within that session including tool outputs; "
 +        "`session_id` + `around_message_id` = scroll (window around an anchor); "
++        "add `content_offset` to page one bounded message body; "
          "`session_id` alone = read a whole session — how you resolve an "
          "`@session:<profile>/<id>` link (split on '/' into profile + id); no "
          "args = browse recent sessions. Results are actual DB messages, no LLM. "
-@@ -672,7 +795,8 @@
+@@ -672,7 +876,8 @@
                  "type": "string",
                  "description": (
                      "Search query (discovery shape). Keywords, phrases, or boolean "
@@ -42114,7 +42304,7 @@ diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
                      "sessions. Ignored when session_id + around_message_id are set "
                      "(scroll shape)."
                  ),
-@@ -680,7 +804,8 @@
+@@ -680,7 +885,8 @@
              "limit": {
                  "type": "integer",
                  "description": (
@@ -42124,7 +42314,7 @@ diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
                      "Bump to 5–10 when the topic likely spans several sessions and you "
                      "want to pick the right one to scroll into."
                  ),
-@@ -690,7 +815,8 @@
+@@ -690,7 +896,8 @@
                  "type": "string",
                  "enum": ["newest", "oldest"],
                  "description": (
@@ -42134,7 +42324,7 @@ diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
                      "for relevance-only (exploratory recall), 'newest' for "
                      "\"where did we leave X\", 'oldest' for \"how did X start\"."
                  ),
-@@ -699,7 +825,8 @@
+@@ -699,7 +906,8 @@
                  "type": "string",
                  "enum": ["adaptive", "full"],
                  "description": (
@@ -42144,7 +42334,7 @@ diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
                      "top-ranked result and returns only the exact anchor message for "
                      "lower-ranked results. 'full' returns bookends and the complete "
                      "anchored window for every result."
-@@ -709,7 +836,7 @@
+@@ -709,7 +917,7 @@
              "after": {
                  "type": "string",
                  "description": (
@@ -42153,7 +42343,7 @@ diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
                      "time. ISO date/datetime (e.g. 2026-06-01) or relative duration "
                      "(7d, 24h, 2w = within the last N). Use only when the user names "
                      "a time frame. sort is a ranking bias, not a bound."
-@@ -718,7 +845,7 @@
+@@ -718,7 +926,7 @@
              "before": {
                  "type": "string",
                  "description": (
@@ -42162,7 +42352,7 @@ diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
                      "time. ISO date/datetime (a date-only value is midnight UTC that "
                      "day) or relative duration (7d = older than a week). Use only "
                      "when the user names a time frame."
-@@ -728,7 +855,7 @@
+@@ -728,7 +936,7 @@
                  "type": "array",
                  "items": {"type": "string"},
                  "description": (
@@ -42171,7 +42361,7 @@ diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
                      "Those sessions and their lineage are omitted so a later query "
                      "explores instead of repeating the same hit. Cap 20."
                  ),
-@@ -736,9 +863,8 @@
+@@ -736,9 +944,8 @@
              "session_id": {
                  "type": "string",
                  "description": (
@@ -42183,7 +42373,28 @@ diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
                  ),
              },
              "around_message_id": {
-@@ -761,7 +887,8 @@
+@@ -749,6 +956,20 @@
+                     "prior window."
+                 ),
+             },
++            "content_offset": {
++                "type": "integer", "minimum": 0,
++                "description": ("Page one visible message when session_id and around_message_id are set. "
++                                "Zero-based character offset, or byte offset when the result says base64. "
++                                "Use snippet_offset from scoped search, then next_offset to continue."),
++            },
++            "content_limit": {
++                "type": "integer", "minimum": 1, "maximum": 4000,
++                "description": "Message page size; default 2000, capped at 4000.",
++            },
++            "content_field": {
++                "type": "string", "enum": ["content", "tool_calls"],
++                "description": "Field to page; default content. Structured values are returned as serialized JSON.",
++            },
+             "window": {
+                 "type": "integer",
+                 "description": (
+@@ -761,7 +982,8 @@
                  "type": "string",
                  "description": (
                      "Optional. Comma-separated roles to include. Discovery defaults to "
@@ -42193,6 +42404,15 @@ diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
                      "'user,assistant,tool' to include tool output (debugging tool "
                      "behaviour) or 'tool' to search tool output only."
                  ),
+@@ -791,6 +1013,7 @@
+         query=args.get("query") or "", limit=args.get("limit", 3), window=args.get("window", 5),
+         detail=args.get("detail", "adaptive"), db=kw.get("db"), current_session_id=kw.get("current_session_id"),
+         **{k: args.get(k) for k in ("role_filter", "session_id", "around_message_id", "sort", "profile",
+-                                    "after", "before", "exclude_session_ids")}),
++                                    "after", "before", "exclude_session_ids", "content_offset", "content_limit",
++                                    "content_field")}),
+     check_fn=check_session_search_requirements,
+     emoji="🔍")
 diff --git a/tests/hermes_state/test_session_search_metadata.py b/tests/hermes_state/test_session_search_metadata.py
 new file mode 100644
 --- /dev/null
@@ -48282,7 +48502,51 @@ new file mode 100644
 diff --git a/hermes_state_search.py b/hermes_state_search.py
 --- a/hermes_state_search.py
 +++ b/hermes_state_search.py
-@@ -968,7 +968,9 @@
+@@ -59,15 +59,24 @@
+ # Indexed neighbor seeks avoid scanning whole sessions for a sparse set of hits.
+ _CONTEXT_WINDOW_SQL = """WITH target AS (
+     SELECT session_id, timestamp, id FROM messages WHERE id IN ({ids})
++      AND (active = 1 OR compacted = 1) AND COALESCE(display_kind, '') <> 'hidden'
+ )
+-SELECT t.id AS match_id, m.role, m.content
++SELECT t.id AS match_id, m.role,
++    CASE WHEN m.content IS NULL THEN NULL
++         WHEN substr(CAST(m.content AS BLOB), 1, 6) = X'006a736f6e3a'
++              AND length(CAST(m.content AS BLOB)) <= 1200 THEN m.content
++         WHEN typeof(m.content) != 'text' OR instr(CAST(m.content AS BLOB), X'00') > 0
++              THEN '[structured or binary content]'
++         ELSE substr(m.content, 1, 1200) END AS content
+ FROM target t JOIN messages m ON m.id IN (
+     t.id,
+     (SELECT p.id FROM messages p
+-     WHERE p.session_id = t.session_id AND (p.timestamp, p.id) < (t.timestamp, t.id)
++     WHERE p.session_id = t.session_id AND (p.active = 1 OR p.compacted = 1)
++       AND COALESCE(p.display_kind, '') <> 'hidden' AND (p.timestamp, p.id) < (t.timestamp, t.id)
+      ORDER BY p.timestamp DESC, p.id DESC LIMIT 1),
+     (SELECT n.id FROM messages n
+-     WHERE n.session_id = t.session_id AND (n.timestamp, n.id) > (t.timestamp, t.id)
++     WHERE n.session_id = t.session_id AND (n.active = 1 OR n.compacted = 1)
++       AND COALESCE(n.display_kind, '') <> 'hidden' AND (n.timestamp, n.id) > (t.timestamp, t.id)
+      ORDER BY n.timestamp, n.id LIMIT 1)
+ )
+ ORDER BY t.id, m.timestamp, m.id"""
+@@ -775,6 +784,15 @@
+             "bookend_end": [_hydrate(r) for r in bookend_end_rows],
+         }
+ 
++    def get_recall_anchored_view(
++        self, session_id: str, around_message_id: int, window: int = 5, bookend: int = 3,
++        keep_roles: Optional[tuple[str, ...]] = ("user", "assistant"),
++        include_window_bookends: bool = False) -> dict[str, Any]:
++        """Bounded, visible-only anchored projection for model-facing recall."""
++        from hermes_state_recall import recall_anchored_view
++        return recall_anchored_view(self, session_id, around_message_id, window, bookend,
++                                    keep_roles, include_window_bookends)
++
+     def list_recent_user_messages(
+         self, session_id: str, limit: int = 20, include_inactive: bool = False) -> list[dict[str, Any]]:
+         """The *limit* most-recent real user turns, newest first, as ``{id, timestamp, preview}``
+@@ -968,7 +986,9 @@
          return [dict(row) for row in self._read_all(sql, params)]
  
      @staticmethod
@@ -48293,7 +48557,7 @@ diff --git a/hermes_state_search.py b/hermes_state_search.py
          """Compile the supported FTS boolean subset into LIKE predicates: terms within an OR
          group are ANDed (FTS5's implicit conjunction) and ``NOT`` negates the next term."""
          groups: list[list[tuple[str, bool]]] = [[]]
-@@ -1002,6 +1004,8 @@
+@@ -1002,6 +1022,8 @@
                  params.extend(_like_params(term))
                  if snippet_term is None and not negated:
                      snippet_term = term
@@ -48302,11 +48566,10 @@ diff --git a/hermes_state_search.py b/hermes_state_search.py
              compiled_groups.append(f"({' AND '.join(clauses)})")
          return " OR ".join(compiled_groups), params, snippet_term
  
-@@ -1016,6 +1020,60 @@
-         order = "ASC" if isinstance(sort, str) and sort.strip().lower() == "oldest" else "DESC"
+@@ -1017,6 +1039,62 @@
          return self._like_rows(where, [snippet_term, *params, limit, offset],
                                 order_by=f"ORDER BY m.timestamp {order}, m.id {order}", limit_sql="LIMIT ? OFFSET ?")
-+
+ 
 +    def search_messages_in_session(
 +        self, session_id: str, query: str, *, role_filter: Optional[list[str]] = None,
 +        limit: int = 3, sort: Optional[str] = None, excerpt_chars: int = 512,
@@ -48344,15 +48607,17 @@ diff --git a/hermes_state_search.py b/hermes_state_search.py
 +        folded_positions = ["NULLIF(instr(lower(COALESCE(m.content, '')), lower(?)), 0)" for _ in positive_terms]
 +        position = "COALESCE(" + ", ".join([*exact_positions, *folded_positions, "0"]) + ")"
 +        leading_chars = min(1000, excerpt_chars // 3)
-+        snippet = (f"substr(COALESCE(m.content, ''), max(1, {position} - {leading_chars}), "
-+                   f"{excerpt_chars}) AS snippet")
++        start = f"max(1, {position} - {leading_chars})"
++        snippet = (f"substr(COALESCE(m.content, ''), {start}, {excerpt_chars}) AS snippet, "
++                   f"{start} - 1 AS snippet_offset")
 +        sql = _search_select_sql(snippet, "messages m INDEXED BY idx_messages_session", where,
 +                                 f"ORDER BY m.timestamp {order}, m.id {order}", "LIMIT ?")
 +        deadline = time.monotonic() + max(0.0, float(timeout_seconds))
 +        with self._read_ctx() as conn:
 +            conn.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
 +            try:
-+                rows = conn.execute(sql, [*positive_terms, *positive_terms, *params, limit]).fetchall()
++                rows = conn.execute(sql, [*positive_terms, *positive_terms, *positive_terms,
++                                          *positive_terms, *params, limit]).fetchall()
 +            except sqlite3.OperationalError as exc:
 +                if "interrupted" in str(exc).lower() and time.monotonic() >= deadline:
 +                    raise TimeoutError("scoped session search timed out") from exc
@@ -48360,9 +48625,64 @@ diff --git a/hermes_state_search.py b/hermes_state_search.py
 +            finally:
 +                conn.set_progress_handler(None, 0)
 +        return [dict(row) for row in rows]
- 
++
      def _refresh_fts_stale_state(self) -> None:
          """Observe fail-open initiated by another process sharing state.db."""
+         if self._fts_stale or not self._fts_enabled:
+@@ -1030,8 +1108,9 @@
+             self._fts_enabled = self._trigram_available = self._fts_cjk_available = False
+ 
+     def _finalize_search_matches(
+-        self, matches: list[dict[str, Any]], result_fields: Optional[Collection[str]] = None) -> list[dict[str, Any]]:
+-        """Attach neighboring messages in bounded batches, only when context is requested."""
++        self, matches: list[dict[str, Any]], result_fields: Optional[Collection[str]] = None,
++        *, include_inactive: bool = False) -> list[dict[str, Any]]:
++        """Attach bounded context and discard hits no longer eligible for recall."""
+         if result_fields is None or "context" in result_fields:
+             for start in range(0, len(matches), 500):
+                 batch = matches[start:start + 500]
+@@ -1051,6 +1130,18 @@
+                             for row in contexts.get(match["id"], [])]
+                     except Exception:
+                         match["context"] = []
++        # The row may have been rewound between the search and hydration queries.
++        # Recheck after hydration rather than returning its stale search snippet.
++        visible_ids: set[int] = set()
++        for start in range(0, len(matches), 500):
++            ids = [match["id"] for match in matches[start:start + 500]]
++            active_filter = "" if include_inactive else " AND (active = 1 OR compacted = 1)"
++            with self._read_ctx() as conn:
++                rows = conn.execute(
++                    f"SELECT id FROM messages WHERE id IN ({','.join('?' for _ in ids)}) "
++                    f"AND COALESCE(display_kind, '') <> 'hidden'{active_filter}", ids).fetchall()
++            visible_ids.update(row["id"] for row in rows)
++        matches = [match for match in matches if match["id"] in visible_ids]
+         # No route selects full content; the pop guards any future one that does.
+         for match in matches:
+             match.pop("content", None)
+@@ -1109,11 +1200,11 @@
+         # opt-in full-body path and scans canonical rows via LIKE.
+         if role_filter and "tool" in role_filter:
+             matches = self._search_messages_like_fallback(query, limit=limit, offset=offset, sort=sort, **filters)
+-            return self._finalize_search_matches(matches, result_fields=result_fields)
++            return self._finalize_search_matches(matches, result_fields=result_fields, include_inactive=include_inactive)
+         self._refresh_fts_stale_state()
+         if self._fts_stale:
+             matches = self._search_messages_like_fallback(query, limit=limit, offset=offset, sort=sort, **filters)
+-            return self._finalize_search_matches(matches, result_fields=result_fields)
++            return self._finalize_search_matches(matches, result_fields=result_fields, include_inactive=include_inactive)
+         if not self._fts_enabled:
+             return []
+ 
+@@ -1187,7 +1278,7 @@
+                 matches = self._match_rows("messages_fts", relaxed, fail_open="OR-relaxed",
+                                            operational_debug="OR-relaxed FTS retry failed; keeping empty result",
+                                            **route) or matches
+-        return self._finalize_search_matches(matches, result_fields=result_fields)
++        return self._finalize_search_matches(matches, result_fields=result_fields, include_inactive=include_inactive)
+ 
+     def _search_cjk(self, query: str, wants_unindexed_rows: bool, route: dict[str, Any]) -> list[dict[str, Any]]:
+         """CJK routing: the unicode61 table splits CJK into single characters (false positives,
 diff --git a/tests/tools/test_session_search_scoped_query.py b/tests/tools/test_session_search_scoped_query.py
 new file mode 100644
 --- /dev/null
@@ -48888,3 +49208,592 @@ new file mode 100644
 +    result = json.loads(session_search(db=db, query="agent-needle", session_id=sid, current_session_id=sid))
 +    assert result["results"]
 +    db.close()
+diff --git a/agent/inline_tool_executors.py b/agent/inline_tool_executors.py
+--- a/agent/inline_tool_executors.py
++++ b/agent/inline_tool_executors.py
+@@ -133,7 +133,8 @@
+             ("session_id", "session_id"), ("around_message_id", "around_message_id"),
+             ("window", "window", 5), ("sort", "sort"), ("profile", "profile"),
+             ("detail", "detail", "adaptive"), ("after", "after"), ("before", "before"),
+-            ("exclude_session_ids", "exclude_session_ids"),
++            ("exclude_session_ids", "exclude_session_ids"), ("content_offset", "content_offset"),
++            ("content_limit", "content_limit"), ("content_field", "content_field"),
+         ),
+         db=session_db, current_session_id=agent.session_id,
+     )
+diff --git a/hermes_state_recall.py b/hermes_state_recall.py
+new file mode 100644
+--- /dev/null
++++ b/hermes_state_recall.py
+@@ -0,0 +1,187 @@
++"""Bounded, visibility-filtered projections for model-facing session recall."""
++
++from __future__ import annotations
++
++import base64
++import json
++from contextlib import contextmanager
++from typing import Any, Optional
++
++_VISIBLE = "(active = 1 OR compacted = 1) AND COALESCE(display_kind, '') <> 'hidden'"
++_LIVE_VISIBLE = "active = 1 AND COALESCE(display_kind, '') <> 'hidden'"
++_JSON_PREFIX = "substr(CAST(content AS BLOB), 1, 6) = X'006a736f6e3a'"
++_HAS_NUL = "instr(CAST(content AS BLOB), X'00') > 0"
++_TOOL_CALLS_MAX_BYTES = 512
++_RESPONSE_CONTENT_BUDGET = 16000
++
++
++@contextmanager
++def _snapshot(db):
++    """Use one read snapshot without leaving a transaction on a pooled connection."""
++    with db._read_ctx() as conn:
++        started = not conn.in_transaction
++        if started:
++            conn.execute("BEGIN")
++        try:
++            yield conn
++        finally:
++            if started:
++                conn.rollback()
++
++
++def _cap(max_rows: int, requested: int) -> int:
++    return max(1, min(4000, int(requested), _RESPONSE_CONTENT_BUDGET // max(1, max_rows)))
++
++
++def _columns(content_cap: int) -> str:
++    """Select bounded payloads; full original bodies never cross into Python."""
++    cap = max(1, min(4000, int(content_cap)))
++    return f"""id, role, timestamp, active, compacted,
++        substr(tool_name, 1, 256) AS tool_name, substr(tool_call_id, 1, 256) AS tool_call_id,
++        CASE WHEN length(CAST(tool_calls AS BLOB)) <= {_TOOL_CALLS_MAX_BYTES}
++             THEN tool_calls ELSE NULL END AS tool_calls,
++        length(CAST(tool_calls AS BLOB)) AS tool_calls_bytes,
++        CASE WHEN content IS NULL THEN 'none'
++             WHEN {_JSON_PREFIX} THEN 'json'
++             WHEN typeof(content) != 'text' OR {_HAS_NUL} THEN 'base64'
++             ELSE 'text' END AS content_kind,
++        CASE WHEN content IS NULL THEN NULL
++             WHEN {_JSON_PREFIX} AND length(CAST(content AS BLOB)) <= {cap} THEN content
++             WHEN typeof(content) != 'text' OR {_HAS_NUL} THEN NULL
++             ELSE substr(content, 1, {cap}) END AS content,
++        CASE WHEN typeof(content) = 'text' AND NOT ({_HAS_NUL}) THEN length(content) END AS content_chars,
++        length(CAST(content AS BLOB)) AS content_bytes"""
++
++
++def _row(db, raw, content_cap: int) -> dict[str, Any]:
++    row = dict(raw)
++    kind = row.pop("content_kind")
++    chars = row.pop("content_chars")
++    size = row.pop("content_bytes")
++    tool_size = row.pop("tool_calls_bytes")
++    if kind == "json" and row["content"] is not None:
++        row["content"] = db._decode_content(row["content"])
++    elif kind in ("json", "base64") and row["content"] is None:
++        row["content"] = "[Structured or binary content omitted; use message paging.]"
++        row.update(content_truncated=True, content_encoding=kind, original_content_bytes=size)
++    elif kind == "text" and chars is not None and chars > content_cap:
++        row.update(content_truncated=True, original_content_chars=chars)
++    if row.get("tool_calls"):
++        try:
++            row["tool_calls"] = json.loads(row["tool_calls"])
++        except (TypeError, ValueError):
++            row["tool_calls"] = None
++    elif tool_size and tool_size > _TOOL_CALLS_MAX_BYTES:
++        row.update(tool_calls_truncated=True, original_tool_calls_bytes=tool_size)
++    return row
++
++
++def _window(conn, db, session_id: str, message_id: int, window: int, cap: int) -> dict[str, Any]:
++    anchor = conn.execute(
++        f"SELECT 1 FROM messages WHERE session_id = ? AND id = ? AND {_VISIBLE}",
++        (session_id, message_id)).fetchone()
++    if anchor is None:
++        return {"window": [], "messages_before": 0, "messages_after": 0}
++    columns = _columns(cap)
++    before = conn.execute(
++        f"SELECT {columns} FROM messages WHERE session_id = ? AND id <= ? AND {_VISIBLE} "
++        "ORDER BY id DESC LIMIT ?", (session_id, message_id, window + 1)).fetchall()
++    after = conn.execute(
++        f"SELECT {columns} FROM messages WHERE session_id = ? AND id > ? AND {_VISIBLE} "
++        "ORDER BY id ASC LIMIT ?", (session_id, message_id, window)).fetchall()
++    return {"window": [_row(db, row, cap) for row in (*reversed(before), *after)],
++            "messages_before": max(0, len(before) - 1), "messages_after": len(after)}
++
++
++def recall_window(db, session_id: str, message_id: int, window: int = 5) -> dict[str, Any]:
++    window = max(0, min(20, int(window)))
++    cap = _cap(2 * window + 1, 4000)
++    with _snapshot(db) as conn:
++        return _window(conn, db, session_id, message_id, window, cap)
++
++
++def recall_anchored_view(db, session_id: str, message_id: int, window: int = 5, bookend: int = 3,
++                         keep_roles: Optional[tuple[str, ...]] = ("user", "assistant"),
++                         include_window_bookends: bool = False) -> dict[str, Any]:
++    window, bookend = max(0, min(20, int(window))), max(0, min(20, int(bookend)))
++    cap = _cap(2 * window + 1 + 2 * bookend, 4000)
++    empty = {"window": [], "messages_before": 0, "messages_after": 0, "bookend_start": [], "bookend_end": []}
++    with _snapshot(db) as conn:
++        view = _window(conn, db, session_id, message_id, window, cap)
++        rows = view["window"]
++        if not rows:
++            return empty
++        role_clause = "" if keep_roles is None else " AND role IN (" + ",".join("?" for _ in keep_roles) + ")"
++        role_args = [] if keep_roles is None else list(keep_roles)
++        columns = _columns(cap)
++        def book(op, boundary, order):
++            return conn.execute(
++                f"SELECT {columns} FROM messages WHERE session_id = ? AND id {op} ? AND {_VISIBLE}"
++                f"{role_clause} AND length(CAST(content AS BLOB)) > 0 ORDER BY id {order} LIMIT ?",
++                (session_id, boundary, *role_args, bookend)).fetchall()
++        def whole_book(order):
++            return conn.execute(
++                f"SELECT {columns} FROM messages WHERE session_id = ? AND {_VISIBLE}"
++                f"{role_clause} AND length(CAST(content AS BLOB)) > 0 ORDER BY id {order} LIMIT ?",
++                (session_id, *role_args, bookend)).fetchall()
++        if bookend and include_window_bookends:
++            start, end = whole_book("ASC"), list(reversed(whole_book("DESC")))
++        else:
++            start = book("<", rows[0]["id"], "ASC") if bookend else []
++            end = list(reversed(book(">", rows[-1]["id"], "DESC"))) if bookend else []
++        if keep_roles is not None:
++            rows = [row for row in rows if row["id"] == message_id or row.get("role") in keep_roles]
++        return {**view, "window": rows, "bookend_start": [_row(db, row, cap) for row in start],
++                "bookend_end": [_row(db, row, cap) for row in end]}
++
++
++def recall_bookends(db, session_id: str, head: int = 20, tail: int = 10) -> tuple[list[dict], int]:
++    if head < 0 or tail < 0:
++        raise ValueError("message bookend counts must be nonnegative")
++    cap = _cap(head + tail, 2000)
++    with _snapshot(db) as conn:
++        total = int(conn.execute(f"SELECT COUNT(*) FROM messages WHERE session_id = ? AND {_LIVE_VISIBLE}",
++                                 (session_id,)).fetchone()[0])
++        rows = conn.execute(f"""WITH first_ids AS (
++                SELECT id FROM messages WHERE session_id = ? AND {_LIVE_VISIBLE} ORDER BY id LIMIT ?
++            ), last_ids AS (
++                SELECT id FROM messages WHERE session_id = ? AND {_LIVE_VISIBLE} ORDER BY id DESC LIMIT ?
++            ) SELECT {_columns(cap)} FROM messages WHERE session_id = ? AND {_LIVE_VISIBLE}
++                AND id IN (SELECT id FROM first_ids UNION SELECT id FROM last_ids) ORDER BY id""",
++            (session_id, head, session_id, tail, session_id)).fetchall()
++        return [_row(db, row, cap) for row in rows], total
++
++
++def recall_page(db, session_id: str, message_id: int, offset: int, limit: int, field: str) -> Optional[dict[str, Any]]:
++    if field not in ("content", "tool_calls"):
++        raise ValueError("content_field must be content or tool_calls")
++    column = field  # fixed allowlist, never a caller-supplied SQL identifier
++    structured = _JSON_PREFIX if field == "content" else "0"
++    nul = f"instr(CAST({column} AS BLOB), X'00') > 0"
++    with _snapshot(db) as conn:
++        row = conn.execute(f"""SELECT id, role, active, compacted, substr(tool_name,1,256) AS tool_name,
++            CASE WHEN {column} IS NULL THEN 'none'
++                 WHEN {structured} THEN 'json'
++                 WHEN typeof({column}) != 'text' OR {nul} THEN 'base64'
++                 WHEN ? = 'tool_calls' THEN 'json' ELSE 'text' END AS encoding,
++            CASE WHEN {structured} THEN length(CAST(substr(CAST({column} AS BLOB),7) AS TEXT))
++                 WHEN typeof({column}) != 'text' OR {nul} THEN length(CAST({column} AS BLOB))
++                 ELSE length({column}) END AS total,
++            CASE WHEN {structured} THEN substr(CAST(substr(CAST({column} AS BLOB),7) AS TEXT), ?, ?)
++                 WHEN typeof({column}) != 'text' OR {nul} THEN substr(CAST({column} AS BLOB), ?, ?)
++                 ELSE substr({column}, ?, ?) END AS part
++            FROM messages WHERE session_id = ? AND id = ? AND {_VISIBLE}""",
++            (field, offset + 1, limit, offset + 1, limit, offset + 1, limit, session_id, message_id)).fetchone()
++        if row is None:
++            return None
++        result = dict(row)
++    part = result.pop("part")
++    if result["encoding"] == "base64" and part is not None:
++        part = base64.b64encode(part).decode("ascii")
++    total = result.pop("total") or 0
++    length = len(base64.b64decode(part)) if result["encoding"] == "base64" and part else len(part or "")
++    result.update(content=part, total=total, offset=offset, limit=limit,
++                  offset_unit="bytes" if result["encoding"] == "base64" else "characters",
++                  next_offset=offset + length if offset + length < total else None,
++                  previous_offset=max(0, min(offset, total) - limit) if offset else None)
++    return result
+diff --git a/tests/tools/test_session_search_safe_window.py b/tests/tools/test_session_search_safe_window.py
+new file mode 100644
+--- /dev/null
++++ b/tests/tools/test_session_search_safe_window.py
+@@ -0,0 +1,379 @@
++"""Session recall must not resurrect rewound data or return unbounded tool output."""
++
++import base64
++import json
++from types import SimpleNamespace
++
++import pytest
++
++from hermes_state import SessionDB
++from hermes_constants import reset_hermes_home_override, set_hermes_home_override
++from tools.session_search_tool import session_search
++
++
++@pytest.fixture
++def history(tmp_path):
++    db = SessionDB(tmp_path / "state.db")
++    sid = "target"
++    db.create_session(sid, source="cli")
++    undo = db.append_message(sid, role="user", content="undone-secret-marker")
++    db.rewind_to_message(sid, undo)
++    hidden = db.append_message(sid, role="user", content="hidden-secret-marker", display_kind="hidden")
++    anchor = db.append_message(sid, role="user", content="visible-anchor-needle")
++    body = "begin " + "x" * 9000 + " middle-unique-needle " + "y" * 9000 + " end"
++    large = db.append_message(sid, role="tool", tool_name="terminal", tool_call_id="c1", content=body)
++    try:
++        yield db, sid, undo, hidden, anchor, large, body
++    finally:
++        db.close()
++
++
++def call(db, **kwargs):
++    return json.loads(session_search(db=db, **kwargs))
++
++
++def test_scroll_omits_rewound_and_hidden_neighbors(history):
++    db, sid, undo, hidden, anchor, _, _ = history
++    result = call(db, session_id=sid, around_message_id=anchor, window=5)
++    assert result["success"] is True
++    ids = [m["id"] for m in result["messages"]]
++    assert anchor in ids and undo not in ids and hidden not in ids
++    assert "undone-secret-marker" not in json.dumps(result)
++    assert "hidden-secret-marker" not in json.dumps(result)
++
++
++@pytest.mark.parametrize("which", ["rewound", "hidden"])
++def test_scroll_refuses_invisible_anchor_even_without_current_session(history, which):
++    db, sid, undo, hidden, _, _, _ = history
++    result = call(db, session_id=sid, around_message_id=undo if which == "rewound" else hidden)
++    assert result["success"] is False
++    assert "messages" not in result
++
++
++def test_discovery_hydration_does_not_return_invisible_neighbors(history):
++    db, _, _, _, _, _, _ = history
++    result = call(db, query="visible-anchor-needle", detail="full")
++    assert result["success"] is True and result["results"]
++    payload = json.dumps(result)
++    assert "undone-secret-marker" not in payload
++    assert "hidden-secret-marker" not in payload
++
++
++def test_read_omits_hidden_rows(history):
++    db, sid, _, hidden, _, _, _ = history
++    result = call(db, session_id=sid)
++    assert result["success"] is True
++    assert hidden not in [m["id"] for m in result["messages"]]
++
++
++def test_read_reports_a_database_failure_instead_of_a_missing_session(history, monkeypatch):
++    db, sid, _, _, _, _, _ = history
++    def refused(*args, **kwargs):
++        raise OSError("synthetic read refusal")
++    monkeypatch.setattr(db, "get_recall_bookends", refused)
++    result = call(db, session_id=sid)
++    assert not result["success"]
++    assert "failed to load session" in result["error"]
++    assert "not found" not in result["error"]
++
++
++def test_native_search_context_omits_rewound_and_hidden_neighbors(history):
++    db, _, _, _, _, _, _ = history
++    hits = db.search_messages("visible anchor needle")
++    assert hits
++    payload = json.dumps(hits)
++    assert "undone-secret-marker" not in payload
++    assert "hidden-secret-marker" not in payload
++
++
++def test_scroll_bounds_each_large_message_and_advertises_a_page(history):
++    db, sid, _, _, anchor, large, _ = history
++    result = call(db, session_id=sid, around_message_id=anchor, window=5)
++    item = next(m for m in result["messages"] if m["id"] == large)
++    assert len(item["content"]) <= 4001
++    assert item["content_truncated"] is True
++    assert item["original_content_chars"] > 18000
++    assert len(json.dumps(result)) < 16000
++
++
++def test_message_pages_recover_text_after_the_initial_excerpt(history):
++    db, sid, _, _, _, large, body = history
++    found = call(db, session_id=sid, query="middle-unique-needle")
++    assert found["results"][0]["match_message_id"] == large
++    result = call(db, session_id=sid, around_message_id=large, content_offset=9000, content_limit=1000)
++    assert result["success"] is True and result["mode"] == "message_page"
++    assert result["content"] == body[9000:10000]
++    assert result["next_offset"] == 10000
++
++
++def test_scoped_match_supplies_offset_for_one_targeted_page(history):
++    db, sid, _, _, _, large, body = history
++    found = call(db, session_id=sid, query="middle-unique-needle")
++    match = found["results"][0]
++    result = call(db, session_id=sid, around_message_id=large, content_offset=match["snippet_offset"])
++    assert "middle-unique-needle" in result["content"]
++    assert result["content"] == body[match["snippet_offset"]:match["snippet_offset"] + result["limit"]]
++
++
++def test_unicode_pages_use_character_offsets_without_corruption(history):
++    db, sid, _, _, _, _, _ = history
++    text = "ไทย🙂ก" * 1200 + "last"
++    mid = db.append_message(sid, role="tool", tool_call_id="unicode", content=text)
++    first = call(db, session_id=sid, around_message_id=mid, content_offset=2001, content_limit=1000)
++    assert first["content"] == text[2001:3001]
++    assert first["offset_unit"] == "characters" and first["next_offset"] == 3001
++    end = call(db, session_id=sid, around_message_id=mid, content_offset=len(text) - 4)
++    assert end["content"] == "last" and end["next_offset"] is None
++
++
++def test_large_structured_content_can_be_reassembled_without_unbounded_scroll(history):
++    db, sid, _, _, anchor, _, _ = history
++    value = [{"type": "text", "text": "ไทย🙂" + "z" * 9000}, {"type": "image", "data": "a" * 9000}]
++    mid = db.append_message(sid, role="user", content=value)
++    result = call(db, session_id=sid, around_message_id=anchor, window=5)
++    item = next(m for m in result["messages"] if m["id"] == mid)
++    assert item["content_truncated"] and item["content_encoding"] == "json"
++    assert len(json.dumps(result)) < 16000
++    chunks, offset = [], 0
++    while offset is not None:
++        page = call(db, session_id=sid, around_message_id=mid, content_offset=offset, content_limit=4000)
++        assert page["success"] and page["encoding"] == "json"
++        chunks.append(page["content"])
++        offset = page["next_offset"]
++    assert json.loads("".join(chunks)) == value
++
++
++def test_embedded_nul_pages_are_lossless_base64(history):
++    db, sid, _, _, _, _, _ = history
++    value = "ก่อน\x00หลัง🙂" * 200
++    mid = db.append_message(sid, role="tool", tool_call_id="nul", content=value)
++    chunks, offset = [], 0
++    while offset is not None:
++        page = call(db, session_id=sid, around_message_id=mid, content_offset=offset, content_limit=127)
++        assert page["success"] and page["encoding"] == "base64" and page["offset_unit"] == "bytes"
++        chunks.append(base64.b64decode(page["content"]))
++        offset = page["next_offset"]
++    assert b"".join(chunks).decode("utf-8") == value
++
++
++def test_large_tool_arguments_are_omitted_from_scroll_but_can_be_paged(history):
++    db, sid, _, _, anchor, _, _ = history
++    calls = [{"id": "large", "type": "function", "function": {"name": "terminal", "arguments": "x" * 9000}}]
++    mid = db.append_message(sid, role="assistant", content="calling tool", tool_calls=calls)
++    result = call(db, session_id=sid, around_message_id=anchor, window=5)
++    item = next(m for m in result["messages"] if m["id"] == mid)
++    assert item["tool_calls_truncated"] is True and "tool_calls" not in item
++    chunks, offset = [], 0
++    while offset is not None:
++        page = call(db, session_id=sid, around_message_id=mid, content_offset=offset,
++                    content_limit=4000, content_field="tool_calls")
++        assert page["success"] and page["encoding"] == "json"
++        chunks.append(page["content"])
++        offset = page["next_offset"]
++    assert json.loads("".join(chunks)) == calls
++
++
++@pytest.mark.parametrize("kwargs", [
++    {"content_offset": -1}, {"content_offset": True}, {"content_offset": 2**63},
++    {"content_offset": 0, "content_limit": 0}, {"content_offset": 0, "content_field": "role"},
++    {"content_limit": 100}, {"content_field": "content"},
++])
++def test_invalid_page_arguments_fail_closed(history, kwargs):
++    db, sid, _, _, _, large, _ = history
++    result = call(db, session_id=sid, around_message_id=large, **kwargs)
++    assert result["success"] is False and "content" not in result
++
++
++@pytest.mark.parametrize("kind", ["hidden", "rewound", "foreign"])
++def test_message_page_never_crosses_visibility_or_session_boundaries(history, kind):
++    db, sid, undo, hidden, _, _, _ = history
++    db.create_session("other", source="cli")
++    foreign = db.append_message("other", role="tool", content="foreign-content")
++    mid = {"hidden": hidden, "rewound": undo, "foreign": foreign}[kind]
++    result = call(db, session_id=sid, around_message_id=mid, content_offset=0)
++    assert result["success"] is False and "content" not in result
++
++
++def test_live_current_anchor_is_rejected_but_compacted_original_is_pageable(history):
++    db, sid, _, _, _, large, body = history
++    live = call(db, session_id=sid, around_message_id=large, content_offset=0, current_session_id=sid)
++    assert live["success"] is False
++    db.archive_and_compact(sid, [{"role": "user", "content": "summary"}])
++    archived = call(db, session_id=sid, around_message_id=large, content_offset=0, current_session_id=sid)
++    assert archived["success"] is True and archived["content"] == body[:2000]
++
++
++def test_page_honors_exclusion_and_time_bounds(history):
++    db, sid, _, _, _, large, _ = history
++    for extra in ({"exclude_session_ids": [sid]}, {"after": "2100-01-01"}, {"after": "bad-date"}):
++        assert call(db, session_id=sid, around_message_id=large, content_offset=0, **extra)["success"] is False
++
++
++def test_inline_executor_and_registry_forward_paging(history):
++    from agent.inline_tool_executors import _session_search
++    from tools.registry import registry
++    db, sid, _, _, _, large, body = history
++    args = {"session_id": sid, "around_message_id": large, "content_offset": 9000, "content_limit": 1000}
++    agent = SimpleNamespace(_get_session_db_for_recall=lambda: db, session_id="other")
++    inline = json.loads(_session_search(agent, args, None))
++    direct = json.loads(registry.dispatch("session_search", args, db=db, current_session_id="other"))
++    assert inline["content"] == direct["content"] == body[9000:10000]
++
++
++def test_recall_does_not_hydrate_whole_database_rows(history, monkeypatch):
++    db, sid, _, _, anchor, large, _ = history
++    def forbidden(*args, **kwargs):
++        pytest.fail("recall must not load and deserialize a complete message row")
++    monkeypatch.setattr(db, "_row_to_message_dict", forbidden)
++    assert call(db, session_id=sid, around_message_id=anchor)["success"] is True
++    assert call(db, session_id=sid, around_message_id=large, content_offset=0)["success"] is True
++
++
++def test_discovery_drops_a_hit_rewound_during_hydration(history, monkeypatch):
++    db, sid, _, _, anchor, _, _ = history
++    original = db.get_recall_anchored_view
++    def rewind_then_read(session_id, message_id, **kwargs):
++        db.rewind_to_message(sid, anchor)
++        return original(session_id, message_id, **kwargs)
++    monkeypatch.setattr(db, "get_recall_anchored_view", rewind_then_read)
++    result = call(db, query="visible-anchor-needle", detail="full")
++    assert result["success"] is True
++    assert not result["results"] and "visible-anchor-needle" not in json.dumps(result.get("results"))
++
++
++def test_native_search_drops_a_hit_rewound_before_context_hydration(history, monkeypatch):
++    db, sid, _, _, anchor, _, _ = history
++    original = db._finalize_search_matches
++    def rewind_then_finish(matches, *args, **kwargs):
++        db.rewind_to_message(sid, anchor)
++        return original(matches, *args, **kwargs)
++    monkeypatch.setattr(db, "_finalize_search_matches", rewind_then_finish)
++    assert db.search_messages("visible anchor needle") == []
++
++
++def test_page_size_is_bounded_even_if_the_caller_requests_more(history):
++    db, sid, _, _, _, large, body = history
++    result = call(db, session_id=sid, around_message_id=large, content_offset=0, content_limit=100_000)
++    assert result["success"] and result["limit"] == 4000 and result["content"] == body[:4000]
++
++
++def test_title_discovery_omits_hidden_and_rewound_rows(history):
++    db, sid, _, _, _, _, _ = history
++    db.set_session_title(sid, "uniquely named recall session")
++    result = call(db, query="uniquely named recall session")
++    assert result["success"] and result["results"]
++    assert "undone-secret-marker" not in json.dumps(result)
++    assert "hidden-secret-marker" not in json.dumps(result)
++
++
++def test_title_discovery_does_not_reuse_sample_rewound_during_hydration(history, monkeypatch):
++    db, sid, _, _, anchor, _, _ = history
++    db.set_session_title(sid, "uniquely named recall session")
++    original = db.get_recall_anchored_view
++    def rewind_then_read(session_id, message_id, **kwargs):
++        db.rewind_to_message(sid, anchor)
++        return original(session_id, message_id, **kwargs)
++    monkeypatch.setattr(db, "get_recall_anchored_view", rewind_then_read)
++    result = call(db, query="uniquely named recall session")
++    assert result["success"]
++    assert "visible-anchor-needle" not in json.dumps(result)
++
++
++def test_title_discovery_does_not_reuse_a_neighbor_rewound_during_hydration(history, monkeypatch):
++    db, sid, _, _, _, _, _ = history
++    db.set_session_title(sid, "uniquely named recall session")
++    neighbor = db.append_message(sid, role="user", content="rewound-neighbor-marker")
++    tool = db.append_message(sid, role="tool", tool_call_id="neighbor", content="rewound-tool-marker")
++    original = db.get_recall_anchored_view
++    def rewind_then_read(session_id, message_id, **kwargs):
++        db.rewind_to_message(sid, neighbor)
++        return original(session_id, message_id, **kwargs)
++    monkeypatch.setattr(db, "get_recall_anchored_view", rewind_then_read)
++    result = call(db, query="uniquely named recall session")
++    assert result["success"]
++    assert "rewound-neighbor-marker" not in json.dumps(result)
++    assert "rewound-tool-marker" not in json.dumps(result)
++    assert not any(message.get("id") in {neighbor, tool} for entry in result["results"]
++                   for key in ("messages", "bookend_start", "bookend_end") for message in entry[key])
++
++
++def test_native_audit_search_can_explicitly_include_rewound_rows(history):
++    db, _, undo, hidden, _, _, _ = history
++    assert not db.search_messages("undone secret marker")
++    assert any(hit["id"] == undo for hit in db.search_messages("undone secret marker", include_inactive=True))
++    assert not any(hit["id"] == hidden for hit in db.search_messages("hidden secret marker", include_inactive=True))
++
++
++def test_message_pages_keep_fleet_and_profile_boundaries_with_colliding_ids(tmp_path, monkeypatch):
++    roots = [tmp_path / "fleet-a", tmp_path / "fleet-b"]
++    databases = {}
++    for root in roots:
++        root.mkdir()
++        (root / "config.yaml").write_text("model: {}\n", encoding="utf-8")
++        for name in ("work", "review"):
++            home = root / "profiles" / name
++            home.mkdir(parents=True)
++            (home / "config.yaml").write_text("model: {}\n", encoding="utf-8")
++            db = SessionDB(home / "state.db")
++            db.create_session("shared", source="cli")
++            message_id = db.append_message("shared", role="user", content=f"{root.name}-{name}")
++            databases[root.name, name] = (db, message_id)
++    monkeypatch.setenv("HERMES_HOME", str(roots[0]))
++    token = set_hermes_home_override(roots[1] / "profiles/work")
++    try:
++        current, current_id = databases["fleet-b", "work"]
++        _, review_id = databases["fleet-b", "review"]
++        assert current_id == review_id
++        page = call(current, session_id="@session:review/shared", around_message_id=review_id,
++                    content_offset=0, current_session_id="shared")
++        assert page["success"] and page["content"] == "fleet-b-review"
++        conflicting = call(current, session_id="@session:review/shared", profile="work",
++                           around_message_id=review_id, content_offset=0)
++        assert not conflicting["success"] and "content" not in conflicting
++        active = call(current, session_id="@session:work/shared", around_message_id=current_id,
++                      content_offset=0, current_session_id="shared")
++        assert not active["success"] and "content" not in active
++    finally:
++        reset_hermes_home_override(token)
++        for db, _ in databases.values():
++            db.close()
++
++
++def test_compacted_tool_output_can_be_searched_and_paged_in_its_live_session(tmp_path):
++    from agent.context_compressor import ContextCompressor
++    db = SessionDB(tmp_path / "state.db")
++    sid = "session"
++    db.create_session(sid, source="cli")
++    db.append_message(sid, role="user", content="question")
++    body = "x" * 9000 + " recoverpageword " + "y" * 9000
++    for index in range(8):
++        db.append_message(sid, role="assistant", content=f"action {index}")
++        row = db.append_message(sid, role="tool", tool_name="terminal", tool_call_id=f"call_{index}",
++                                content=body if index == 0 else "ordinary " + "z" * 2000)
++        if index == 0:
++            original = row
++    held = db.get_messages_as_conversation(sid, include_row_ids=True)
++    compressor = object.__new__(ContextCompressor)
++    compressor._session_db, compressor._session_id, compressor.quiet_mode = db, sid, True
++    tail = compressor._demote_stale_tail_tools(held[1:], 0)
++    db.archive_and_compact(sid, [{"role": "user", "content": "summary"}, *tail],
++                           watermark=db.get_active_message_watermark(sid), tail_count=len(tail))
++    assert tuple(db._conn.execute("SELECT active,compacted FROM messages WHERE id=?", (original,)).fetchone()) == (0, 1)
++    result = call(db, session_id=sid, query="recoverpageword", current_session_id=sid)
++    match = result["results"][0]
++    assert match["match_message_id"] == original
++    page = call(db, session_id=sid, around_message_id=original, content_offset=match["snippet_offset"],
++                current_session_id=sid)
++    assert page["success"] and "recoverpageword" in page["content"]
++    assert page["content"] == body[page["offset"]:page["offset"] + page["limit"]]
++    db.close()
++
++
++def test_many_large_neighbors_have_a_bounded_combined_response(history):
++    db, sid, _, _, anchor, _, _ = history
++    for index in range(40):
++        db.append_message(sid, role="tool", tool_name="terminal", tool_call_id=f"bulk-{index}",
++                          content="large synthetic output " * 1000)
++    result = call(db, session_id=sid, around_message_id=anchor, window=20)
++    assert result["success"] and len(result["messages"]) > 20
++    assert len(json.dumps(result)) < 42000

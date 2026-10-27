@@ -1104,3 +1104,7 @@ Twenty related files passed 318 offline tests against installed Linux source; th
 ## Recoverable tool results after compaction (v0.6.34)
 
 Thirty related test files passed 457 offline tests against installed Linux source. Isolated SQLite tests covered in-place and rotation publication, row-ID and unique call-ID resolution, ambiguous and missing originals, prior rewinds, concurrent appends, rollback, scoped search and removal of private markers. A native compressor with a deterministic local summary also recovered a demoted result. These fixtures do not establish production occurrence or quantify real usage savings.
+
+## Bounded session recall (v0.6.35)
+
+Twenty-five related test files passed 283 offline tests against installed Linux source. Isolated database fixtures cover rewinds and hidden rows, concurrent changes to title and search results, profile collisions, Unicode and structured pages, legacy readers, and recovery of compacted tool output. One synthetic scroll of eleven large messages returned 178,005 bytes before and 18,611 bytes after; this is not a measurement of production usage or model tokens. No model calls were made.

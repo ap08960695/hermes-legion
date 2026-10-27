@@ -203,3 +203,7 @@ A session ID combined with a query searches only that session, including canonic
 ## Recoverable tool results after compaction (v0.6.34)
 
 When a carried tool result is rewritten, a verified original remains searchable as compacted history rather than being hidden as a duplicate. Recovery stubs are published only when an original can be proven in the same transaction; ambiguous or missing originals abort safely. Existing rewind and concurrent-append boundaries remain in force. Sessions without durable identity do not receive the lean recovery stub.
+
+## Bounded session recall (v0.6.35)
+
+Session discovery and scroll read visibility-filtered, size-bounded database projections. A message can be retrieved in bounded pages, including compacted tool output, with character offsets for text and byte offsets for binary content. Profile and active-context boundaries remain enforced. Search hits are revalidated after hydration so results already rewound at that check are omitted. Existing transcript readers retain their original API.
