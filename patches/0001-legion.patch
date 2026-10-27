@@ -48781,7 +48781,17 @@ diff --git a/hermes_state_search.py b/hermes_state_search.py
          if not self._fts_enabled:
              return []
  
-@@ -1187,7 +1352,7 @@
+@@ -1160,7 +1325,8 @@
+         # tokens). Gated on a miss so hits keep their ranking ("cat" may then match
+         # "concatenate"). Skipped for role='tool' (both indexes exclude tool rows).
+         if not matches and not is_cjk and not (bool(role_filter) and "tool" in role_filter):
+-            fb_query = _quote_fts_tokens(query.strip('"').strip())
++            # The query is already sanitized; preserve phrases and prefix operators.
++            fb_query = query
+             # ── CJK-bigram route (messages_fts_cjk, cjk_unicode61) ────── When the bigram index is
+             # available it serves EVERY CJK query shape the legacy code split between trigram (>=3
+             # chars/token) and LIKE full scans (1-2 char tokens) — the whole point of the index (PR #65544).
+@@ -1187,7 +1353,7 @@
                  matches = self._match_rows("messages_fts", relaxed, fail_open="OR-relaxed",
                                             operational_debug="OR-relaxed FTS retry failed; keeping empty result",
                                             **route) or matches
@@ -48790,6 +48800,24 @@ diff --git a/hermes_state_search.py b/hermes_state_search.py
  
      def _search_cjk(self, query: str, wants_unindexed_rows: bool, route: dict[str, Any]) -> list[dict[str, Any]]:
          """CJK routing: the unicode61 table splits CJK into single characters (false positives,
+@@ -1196,8 +1362,15 @@
+         1-char CJK runs (bigrams only exist for runs >=2 — LIKE is broader); then trigram
+         (>=3 CJK chars per token); then a LIKE substring scan with one clause per
+         non-operator token so "广西 OR 桂林 OR 漓江" matches each term."""
+-        raw_query = _strip_cjk_wildcards(query).strip('"').strip()
+-        match_query = _quote_fts_tokens(raw_query)
++        match_query = _strip_cjk_wildcards(query).strip()
++        raw_query = match_query.strip('"').strip()
++        # Percent is preserved by the sanitizer for the LIKE route but is
++        # special to FTS5; quote only unquoted tokens containing it.
++        if "%" in match_query:
++            match_query = " ".join(
++                f'"{token}"' if "%" in token and not token.startswith('"') else token
++                for token in _LIKE_TOKEN_RE.findall(match_query)
++            )
+         if self._fts_cjk_available and not wants_unindexed_rows and not self._has_lone_cjk_run(raw_query):
+             matches = self._match_rows(
+                 "messages_fts_cjk", match_query, fail_open="CJK-bigram",
 diff --git a/tests/tools/test_session_search_scoped_query.py b/tests/tools/test_session_search_scoped_query.py
 new file mode 100644
 --- /dev/null
@@ -51346,3 +51374,103 @@ new file mode 100644
 +        assert ('rows=err' in records[0]) == (scenario == 'error')
 +    finally:
 +        store.close()
+diff --git a/tests/hermes_state/test_search_fallback_phrases.py b/tests/hermes_state/test_search_fallback_phrases.py
+new file mode 100644
+--- /dev/null
++++ b/tests/hermes_state/test_search_fallback_phrases.py
+@@ -0,0 +1,95 @@
++"""Exact phrase and prefix behavior through native search fallbacks."""
++import shutil
++import sqlite3
++import subprocess
++from pathlib import Path
++
++import pytest
++
++from hermes_state import SessionDB
++
++
++REPO = Path(__file__).resolve().parent.parent.parent
++
++
++@pytest.fixture(scope='session')
++def cjk_so(tmp_path_factory):
++    source = REPO / 'native/fts5_cjk/fts5_cjk.c'
++    vendor = REPO / 'native/fts5_cjk/vendor'
++    if not shutil.which('gcc') or not source.exists():
++        pytest.skip('native CJK compiler or source unavailable')
++    path = tmp_path_factory.mktemp('phrase-cjk') / 'libfts5_cjk.so'
++    subprocess.run(['gcc', '-shared', '-fPIC', '-O2', f'-I{vendor}', str(source), '-o', str(path)],
++                   check=True, capture_output=True)
++    probe = sqlite3.connect(':memory:')
++    try:
++        probe.enable_load_extension(True)
++        probe.load_extension(str(path))
++    finally:
++        probe.close()
++    return path
++
++
++@pytest.fixture
++def db(cjk_so, tmp_path, monkeypatch):
++    monkeypatch.setenv('HERMES_FTS5_CJK_SO', str(cjk_so))
++    store = SessionDB(tmp_path / 'state.db')
++    assert store._fts_cjk_available
++    store.create_session('s', source='cli')
++    yield store
++    store.close()
++
++
++@pytest.mark.parametrize('route', ['cjk', 'trigram'])
++@pytest.mark.parametrize('text', ['alpha字beta', '修改alpha other beta服务'])
++def test_fallback_preserves_quoted_phrase_instead_of_loose_and(db, route, text):
++    if route == 'trigram':
++        db._fts_cjk_available = False
++        assert db._trigram_available
++    db.append_message('s', role='user', content=text)
++    assert db.search_messages('"alpha beta"') == []
++    assert db.search_messages('alpha AND beta')
++
++
++def test_cjk_fallback_preserves_true_phrase(db):
++    mid = db.append_message('s', role='user', content='修改alpha beta服务')
++    assert mid in {row['id'] for row in db.search_messages('"alpha beta"')}
++
++
++def test_cjk_fallback_preserves_prefix_wildcard(db):
++    db._trigram_available = False
++    mid = db.append_message('s', role='user', content='修改alphabet服务')
++    assert mid in {row['id'] for row in db.search_messages('alph*')}
++
++
++@pytest.mark.parametrize('route', ['cjk', 'trigram'])
++def test_fallback_preserves_boolean_semantics(db, route):
++    if route == 'trigram':
++        db._fts_cjk_available = False
++    only_alpha = db.append_message('s', role='user', content='修改alpha服务')
++    both = db.append_message('s', role='user', content='修改alpha字beta服务')
++    assert {row['id'] for row in db.search_messages('alpha NOT beta')} == {only_alpha}
++    assert {row['id'] for row in db.search_messages('alpha OR beta')} == {only_alpha, both}
++
++
++@pytest.mark.parametrize('route', ['cjk', 'trigram'])
++def test_fallback_handles_sanitized_punctuation(db, route):
++    if route == 'trigram':
++        db._fts_cjk_available = False
++    mid = db.append_message('s', role='user', content='修改my-app.config服务')
++    assert mid in {row['id'] for row in db.search_messages('my-app.config')}
++
++
++@pytest.mark.parametrize('route', ['cjk', 'trigram'])
++@pytest.mark.parametrize('query', ['"alpha beta" AND 웅기야', '웅기야 AND "alpha beta"'])
++def test_cjk_route_preserves_quoted_phrase_with_and(db, query, route):
++    if route == 'trigram':
++        db._fts_cjk_available = False
++    exact = db.append_message('s', role='user', content='웅기야 alpha beta')
++    db.append_message('s', role='user', content='웅기야 alpha other beta')
++    assert {row['id'] for row in db.search_messages(query)} == {exact}
++
++
++def test_cjk_percent_token_remains_searchable(db):
++    mid = db.append_message('s', role='user', content='서비스 100%완료')
++    assert mid in {row['id'] for row in db.search_messages('100%완료')}

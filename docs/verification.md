@@ -1116,3 +1116,7 @@ Twenty-nine related test files passed 361 offline tests on the installed Linux s
 ## Search log privacy (v0.6.37)
 
 Eight related test files passed 138 offline tests on the installed Linux source. Synthetic successful, empty, and failed searches confirmed that slow-search logs retain diagnostic metadata without the search text. The gateway was reloaded using its native idle-only control. No model calls were made.
+
+## Search expression fallbacks (v0.6.38)
+
+A Linux offline regression suite checked exact phrases, mixed CJK text, boolean operators, punctuation, and Latin prefixes with native CJK and trigram indexes. Fifteen targeted cases passed on the installed source, with ten existing CJK-index cases. A separate ten-file search suite passed 186 tests on the candidate. The gateway reloaded through its idle-only control. No model calls were made. These tests do not establish production latency or usage savings.

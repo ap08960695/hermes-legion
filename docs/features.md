@@ -215,3 +215,7 @@ Scoped session search streams stored multimodal JSON and searches its text parts
 ## Search log privacy (v0.6.37)
 
 Slow-search telemetry records the search route, elapsed time, result count, and query length. It no longer records the query text. Existing logs and other logging paths are unchanged.
+
+## Search expression fallbacks (v0.6.38)
+
+When an indexed search retries using the CJK or trigram index, paired quoted phrases and boolean operators retain their meaning. Latin prefix searches retain their wildcard in the zero-result fallback. Existing CJK wildcard and LIKE fallback behavior is unchanged.
