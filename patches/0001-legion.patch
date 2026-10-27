@@ -45521,7 +45521,7 @@ new file mode 100644
 diff --git a/agent/estop.py b/agent/estop.py
 --- a/agent/estop.py
 +++ b/agent/estop.py
-@@ -1,7 +1,7 @@
+@@ -1,9 +1,9 @@
  """Global emergency stop (ESTOP) — a resumable pause for NEW work only.
  
 -``hermes pause`` writes a sentinel at ``$HERMES_HOME/ESTOP``; ``hermes resume``
@@ -45529,9 +45529,20 @@ diff --git a/agent/estop.py b/agent/estop.py
 +``hermes pause`` writes a sentinel at the fleet root; ``hermes resume`` removes it.
 +While it exists the cron scheduler, kanban dispatcher and new gateway
  turns skip work; in-flight work is never killed. The check is one or two uncached
- ``os.stat`` calls (process home + fleet root when they differ). The body is optional
+-``os.stat`` calls (process home + fleet root when they differ). The body is optional
++``os.lstat`` calls (process home + fleet root when they differ). The body is optional
  JSON ``{"reason", "engaged_at"}``; a corrupt/empty file still counts as engaged
-@@ -18,9 +18,6 @@
+ (fail safe, e.g. ``touch ~/.hermes/ESTOP``). Ported from gastownhall/gastown estop.go (MIT).
+ """
+@@ -12,15 +12,14 @@
+ 
+ import json
+ import logging
++import os
++import stat
+ import threading
+ from contextlib import suppress
+ from datetime import datetime, timezone, UTC
  from pathlib import Path
  from typing import Optional
  
@@ -45541,7 +45552,7 @@ diff --git a/agent/estop.py b/agent/estop.py
  SENTINEL_NAME = "ESTOP"
  
  # Per-component "logged already for this engagement" flags: log once per engagement, not per tick.
-@@ -28,19 +25,39 @@
+@@ -28,19 +27,39 @@
  _logged_components: set[str] = set()
  
  
@@ -45587,7 +45598,7 @@ diff --git a/agent/estop.py b/agent/estop.py
      try:
          distinct = root.resolve() != primary.resolve()
      except Exception:
-@@ -49,21 +66,30 @@
+@@ -49,29 +68,104 @@
      return [primary, root] if distinct else [primary]
  
  
@@ -45596,10 +45607,10 @@ diff --git a/agent/estop.py b/agent/estop.py
 +    if path is None:
 +        return None
 +    try:
-+        path.stat()
++        path.lstat()  # A dangling link is still an explicit stop.
 +    except FileNotFoundError:
 +        return False
-+    except OSError:
++    except (OSError, AttributeError):
 +        return None
 +    return True
 +
@@ -45614,11 +45625,6 @@ diff --git a/agent/estop.py b/agent/estop.py
 -        except OSError:
 -            saw_stat_error = True
 -    return saw_stat_error
--
--
--def engage(reason: Optional[str] = None) -> Path:
--    """Create the ESTOP sentinel. Idempotent; re-engaging updates the file."""
--    path = sentinel_path()
 +    """True if any sentinel exists or its state cannot be determined."""
 +    return any(_sentinel_exists(path) is not False for path in _candidate_sentinel_paths())
 +
@@ -45628,17 +45634,74 @@ diff --git a/agent/estop.py b/agent/estop.py
 +    return any(_sentinel_exists(path) is True for path in _candidate_sentinel_paths())
 +
 +
-+def _engage_at(path: Path, reason: Optional[str]) -> Path:
-     payload = {"engaged_at": datetime.now(UTC).isoformat(), "reason": reason or None}
-     try:
-         path.parent.mkdir(parents=True, exist_ok=True)
-@@ -72,6 +98,35 @@
-         with suppress(OSError):  # Best effort: an empty/partial sentinel still pauses (fail safe).
-             path.touch(exist_ok=True)
-     return path
++def _open_flags(access: int) -> int:
++    # NOFOLLOW stops a link swap on platforms that support it. On other
++    # platforms the descriptor is checked against the lstat identity below.
++    return (access | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
++            | getattr(os, "O_BINARY", 0) | getattr(os, "O_CLOEXEC", 0))
 +
 +
-+def engage(reason: Optional[str] = None) -> Path:
++def _same_regular_file(before, after) -> bool:
++    return (stat.S_ISREG(after.st_mode) and after.st_nlink == 1
++            and before.st_dev == after.st_dev and before.st_ino == after.st_ino
++            and (bool(getattr(os, "O_NOFOLLOW", 0)) or bool(after.st_ino)))
++
++
++def _engage_at(path: Path, reason: Optional[str], *, create_only: bool = False) -> Path:
++    """Write a sentinel without following or modifying links to unrelated data."""
++    payload = {"engaged_at": datetime.now(UTC).isoformat(), "reason": reason or None}
++    data = (json.dumps(payload, indent=2) + "\n").encode("utf-8")
++    try:
++        path.parent.mkdir(parents=True, exist_ok=True)
++        try:
++            before = path.lstat()
++        except FileNotFoundError:
++            before = None
++        if before is not None and (create_only or not stat.S_ISREG(before.st_mode)
++                                   or before.st_nlink != 1):
++            return path
++        flags = _open_flags(os.O_WRONLY)
++        if before is None:
++            flags |= os.O_CREAT | os.O_EXCL
++        try:
++            fd = os.open(path, flags, 0o666)
++        except FileExistsError:
++            # A concurrent pause won the create race; never overwrite it.
++            return path
++        try:
++            after = os.fstat(fd)
++            if before is None:
++                if not stat.S_ISREG(after.st_mode) or after.st_nlink != 1:
++                    return path
++            elif not _same_regular_file(before, after):
++                return path
++            os.ftruncate(fd, 0)
++            remaining = memoryview(data)
++            while remaining:
++                written = os.write(fd, remaining)
++                if written <= 0:
++                    raise OSError("Could not write the emergency stop")
++                remaining = remaining[written:]
++        finally:
++            os.close(fd)
++    except OSError:
++        # If creation succeeded, even an empty sentinel still pauses. Otherwise
++        # callers must verify presence instead of reporting a successful stop.
++        pass
++    return path
+ 
+ 
+ def engage(reason: Optional[str] = None) -> Path:
+-    """Create the ESTOP sentinel. Idempotent; re-engaging updates the file."""
+-    path = sentinel_path()
+-    payload = {"engaged_at": datetime.now(UTC).isoformat(), "reason": reason or None}
+-    try:
+-        path.parent.mkdir(parents=True, exist_ok=True)
+-        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+-    except OSError:
+-        with suppress(OSError):  # Best effort: an empty/partial sentinel still pauses (fail safe).
+-            path.touch(exist_ok=True)
+-    return path
 +    """Create this profile's independent sentinel; re-engaging updates it."""
 +    return _engage_at(sentinel_path(), reason)
 +
@@ -45650,16 +45713,7 @@ diff --git a/agent/estop.py b/agent/estop.py
 +    if existing is None:
 +        raise OSError("Unable to inspect the fleet emergency stop")
 +    if existing is False and reason is None:
-+        payload = {"engaged_at": datetime.now(UTC).isoformat(), "reason": None}
-+        try:
-+            path.parent.mkdir(parents=True, exist_ok=True)
-+            with path.open("x", encoding="utf-8") as f:
-+                f.write(json.dumps(payload, indent=2) + "\n")
-+        except FileExistsError:
-+            pass  # Another pause won the race; retain its reason.
-+        except OSError:
-+            with suppress(OSError):
-+                path.touch(exist_ok=True)
++        _engage_at(path, None, create_only=True)
 +    elif reason is not None:
 +        _engage_at(path, reason)
 +    if _sentinel_exists(path) is not True:
@@ -45668,7 +45722,7 @@ diff --git a/agent/estop.py b/agent/estop.py
  
  
  def disengage() -> bool:
-@@ -86,28 +141,43 @@
+@@ -86,28 +180,60 @@
      return lifted
  
  
@@ -45677,6 +45731,24 @@ diff --git a/agent/estop.py b/agent/estop.py
 -    body still reports engaged with both fields None."""
 -    if not is_engaged():
 -        return None
++def _read_sentinel_payload(path: Path):
++    """Read only the checked single-link regular file, never a link target."""
++    try:
++        before = path.lstat()
++        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
++            return None
++        fd = os.open(path, _open_flags(os.O_RDONLY))
++        try:
++            if not _same_regular_file(before, os.fstat(fd)):
++                return None
++            with open(fd, "r", encoding="utf-8-sig", closefd=False) as f:
++                return json.load(f)
++        finally:
++            os.close(fd)
++    except (OSError, ValueError, AttributeError):
++        return None
++
++
 +def _state_for_paths(paths) -> Optional[dict]:
      state = {"reason": None, "engaged_at": None}
      found = False
@@ -45692,13 +45764,17 @@ diff --git a/agent/estop.py b/agent/estop.py
 +        if exists is False:
              continue
          found = True
+-        with suppress(OSError, ValueError, AttributeError):
+-            raw = json.loads(path.read_text(encoding="utf-8-sig"))
+-            if isinstance(raw, dict):
+-                state = {"reason": raw.get("reason") or None, "engaged_at": raw.get("engaged_at") or None}
+-                break
 +        if exists is None:
 +            continue
-         with suppress(OSError, ValueError, AttributeError):
-             raw = json.loads(path.read_text(encoding="utf-8-sig"))
-             if isinstance(raw, dict):
-                 state = {"reason": raw.get("reason") or None, "engaged_at": raw.get("engaged_at") or None}
-                 break
++        raw = _read_sentinel_payload(path)
++        if isinstance(raw, dict):
++            state = {"reason": raw.get("reason") or None, "engaged_at": raw.get("engaged_at") or None}
++            break
      return state if found else None
 +
 +
@@ -45724,7 +45800,7 @@ diff --git a/agent/estop.py b/agent/estop.py
  
  
  def paused_reply() -> Optional[str]:
-@@ -131,8 +201,10 @@
+@@ -131,8 +257,10 @@
      if first:
          reason = (get_state() or {}).get("reason")
          suffix = f" (reason: {reason})" if reason else ""
@@ -45745,7 +45821,7 @@ diff --git a/tests/cron/test_estop.py b/tests/cron/test_estop.py
      corrupt-sentinel doctrine."""
      class _BoomPath:
 -        def exists(self):
-+        def stat(self):
++        def lstat(self):
              raise OSError("permission denied")
  
      monkeypatch.setattr(estop, "sentinel_path", lambda: _BoomPath())
@@ -45776,14 +45852,14 @@ new file mode 100644
 +
 +
 +def deny_stat(monkeypatch, path, error):
-+    original = os.stat
++    original = Path.lstat
 +
 +    def guarded(target, *args, **kwargs):
-+        if isinstance(target, (str, bytes, os.PathLike)) and os.fspath(target) == os.fspath(path):
++        if target == path:
 +            raise OSError(error, "simulated sentinel inspection failure")
 +        return original(target, *args, **kwargs)
 +
-+    monkeypatch.setattr(os, "stat", guarded)
++    monkeypatch.setattr(Path, "lstat", guarded)
 +
 +
 +@pytest.mark.parametrize("error", [errno.EACCES, errno.EIO, errno.ELOOP])
@@ -45808,18 +45884,18 @@ new file mode 100644
 +def test_state_remains_paused_when_inspection_fails(sentinel_pair, monkeypatch):
 +    profile, _ = sentinel_pair
 +    profile.touch()
-+    original = os.stat
++    original = Path.lstat
 +    calls = 0
 +
 +    def initially_accessible(target, *args, **kwargs):
 +        nonlocal calls
-+        if isinstance(target, (str, bytes, os.PathLike)) and os.fspath(target) == os.fspath(profile):
++        if target == profile:
 +            calls += 1
 +            if calls > 1:
 +                raise PermissionError(errno.EACCES, "sentinel became inaccessible")
 +        return original(target, *args, **kwargs)
 +
-+    monkeypatch.setattr(os, "stat", initially_accessible)
++    monkeypatch.setattr(Path, "lstat", initially_accessible)
 +    assert estop.is_engaged() is True
 +
 +    assert estop.get_state() == {"reason": None, "engaged_at": None}
@@ -45901,14 +45977,14 @@ new file mode 100644
 +def test_unreadable_content_remains_paused(sentinel_pair, monkeypatch):
 +    profile, _ = sentinel_pair
 +    profile.touch()
-+    original = Path.read_text
++    original = os.open
 +
-+    def guarded(path, *args, **kwargs):
-+        if path == profile:
++    def guarded(path, flags, *args, **kwargs):
++        if os.fspath(path) == os.fspath(profile) and flags & os.O_ACCMODE == os.O_RDONLY:
 +            raise PermissionError(errno.EACCES, "simulated unreadable sentinel")
-+        return original(path, *args, **kwargs)
++        return original(path, flags, *args, **kwargs)
 +
-+    monkeypatch.setattr(Path, "read_text", guarded)
++    monkeypatch.setattr(os, "open", guarded)
 +    assert estop.is_engaged() is True
 +    assert estop.get_state() == {"reason": None, "engaged_at": None}
 diff --git a/gateway/run_busy.py b/gateway/run_busy.py
@@ -46311,7 +46387,7 @@ diff --git a/tests/cron/test_estop_command_failures.py b/tests/cron/test_estop_c
 new file mode 100644
 --- /dev/null
 +++ b/tests/cron/test_estop_command_failures.py
-@@ -0,0 +1,212 @@
+@@ -0,0 +1,217 @@
 +"""Pause controls must not report success when sentinel I/O fails."""
 +
 +import argparse
@@ -46337,21 +46413,26 @@ new file mode 100644
 +
 +
 +def reject_creation(monkeypatch, path, *, reject_touch):
-+    original_write = Path.write_text
-+    original_touch = Path.touch
++    original_open = os.open
++    original_write = os.write
++    marker_fds = set()
 +
-+    def write(target, *args, **kwargs):
-+        if target == path:
-+            raise PermissionError(errno.EACCES, "simulated write denial")
-+        return original_write(target, *args, **kwargs)
++    def guarded_open(target, *args, **kwargs):
++        is_marker = os.fspath(target) == os.fspath(path)
++        if is_marker and reject_touch:
++            raise PermissionError(errno.EACCES, "simulated creation denial")
++        fd = original_open(target, *args, **kwargs)
++        if is_marker:
++            marker_fds.add(fd)
++        return fd
 +
-+    def touch(target, *args, **kwargs):
-+        if target == path and reject_touch:
-+            raise PermissionError(errno.EACCES, "simulated touch denial")
-+        return original_touch(target, *args, **kwargs)
++    def guarded_write(fd, data):
++        if fd in marker_fds and not reject_touch:
++            raise PermissionError(errno.EACCES, "simulated content write denial")
++        return original_write(fd, data)
 +
-+    monkeypatch.setattr(Path, "write_text", write)
-+    monkeypatch.setattr(Path, "touch", touch)
++    monkeypatch.setattr(os, "open", guarded_open)
++    monkeypatch.setattr(os, "write", guarded_write)
 +
 +
 +def reject_removal(monkeypatch, path):
@@ -46432,14 +46513,14 @@ new file mode 100644
 +
 +    _, root = sentinels
 +    reject_removal(monkeypatch, root)
-+    original = os.stat
++    original = Path.lstat
 +
-+    def stat(target, *args, **kwargs):
-+        if isinstance(target, (str, bytes, os.PathLike)) and os.fspath(target) == os.fspath(root):
++    def lstat(target, *args, **kwargs):
++        if target == root:
 +            raise PermissionError(errno.EACCES, "simulated inspection denial")
 +        return original(target, *args, **kwargs)
 +
-+    monkeypatch.setattr(os, "stat", stat)
++    monkeypatch.setattr(Path, "lstat", lstat)
 +    assert cmd_resume(argparse.Namespace()) != 0
 +    assert "unable to confirm" in capsys.readouterr().err.lower()
 +
@@ -46511,14 +46592,14 @@ new file mode 100644
 +    from gateway.run import GatewayRunner
 +
 +    local, root = sentinels
-+    original = os.stat
++    original = Path.lstat
 +
-+    def stat(target, *args, **kwargs):
-+        if isinstance(target, (str, bytes, os.PathLike)) and os.fspath(target) == os.fspath(root):
++    def lstat(target, *args, **kwargs):
++        if target == root:
 +            raise PermissionError(errno.EACCES, "simulated inspection denial")
 +        return original(target, *args, **kwargs)
 +
-+    monkeypatch.setattr(os, "stat", stat)
++    monkeypatch.setattr(Path, "lstat", lstat)
 +    runner = object.__new__(GatewayRunner)
 +    reply = await runner._handle_pause_command(PauseEvent(""))
 +
@@ -46528,12 +46609,13 @@ diff --git a/tests/cron/test_estop_fleet_scope.py b/tests/cron/test_estop_fleet_
 new file mode 100644
 --- /dev/null
 +++ b/tests/cron/test_estop_fleet_scope.py
-@@ -0,0 +1,330 @@
+@@ -0,0 +1,324 @@
 +"""Global pause controls must operate on the fleet root, even from a profile."""
 +
 +import argparse
 +import errno
 +import json
++import os
 +from pathlib import Path
 +
 +import pytest
@@ -46564,21 +46646,14 @@ new file mode 100644
 +
 +
 +def reject_root_creation(monkeypatch, path):
-+    write_text = Path.write_text
-+    touch = Path.touch
++    original = os.open
 +
-+    def denied_write(target, *args, **kwargs):
-+        if target == path:
-+            raise PermissionError(errno.EACCES, "simulated root write denial")
-+        return write_text(target, *args, **kwargs)
++    def denied_open(target, *args, **kwargs):
++        if os.fspath(target) == os.fspath(path):
++            raise PermissionError(errno.EACCES, "simulated root creation denial")
++        return original(target, *args, **kwargs)
 +
-+    def denied_touch(target, *args, **kwargs):
-+        if target == path:
-+            raise PermissionError(errno.EACCES, "simulated root touch denial")
-+        return touch(target, *args, **kwargs)
-+
-+    monkeypatch.setattr(Path, "write_text", denied_write)
-+    monkeypatch.setattr(Path, "touch", denied_touch)
++    monkeypatch.setattr(os, "open", denied_open)
 +
 +
 +def test_cli_pause_from_profile_is_visible_to_other_profile(fleet, monkeypatch, capsys):
@@ -46862,12 +46937,227 @@ new file mode 100644
 diff --git a/website/docs/user-guide/features/cron.md b/website/docs/user-guide/features/cron.md
 --- a/website/docs/user-guide/features/cron.md
 +++ b/website/docs/user-guide/features/cron.md
-@@ -273,6 +273,8 @@
+@@ -273,6 +273,10 @@
  ### Pausing everything: `hermes pause`
  
  `hermes pause [--reason ...]` is the global emergency stop (`hermes resume` lifts it). While it is engaged no scheduled cron fire starts, whichever door it arrives through: the built-in ticker skips its dispatch, the managed-cron (hosted scheduler) fire webhook answers `503` with `Retry-After: 60` so the scheduler redelivers the fire after you resume, and the [misfire catch-up](#misfire-catch-up) sweep stays idle instead of force-firing everything that was held back. Runs already in flight are never killed, and nothing is lost: due work catches up on the first tick or sweep after `hermes resume`. Explicit manual runs (`hermes cron run`, the dashboard's Trigger button) are an operator override and still execute while paused.
 +
 +From a profile, the global pause command writes the shared fleet-root sentinel so other profiles on that root observe it too. A profile can also have an independent local sentinel. Resume removes the fleet sentinel and the current profile's sentinel; independent pauses in other profiles remain. If the relevant home or root cannot be resolved or inspected, Hermes holds new work and reports that the operation could not be confirmed. Separate Hermes roots, older processes that have not loaded this behavior, and the explicit manual overrides described above are outside this guarantee.
++
++A symbolic link named `ESTOP` counts as a stop even if its target is missing. For symbolic or multiply linked sentinels, Hermes does not read or overwrite the linked file to report or update a reason. Remove the sentinel link itself to resume; deleting its target alone does not lift the stop.
  
  ### Creating a job paused (safe canary)
  
+diff --git a/tests/cron/test_estop_symlink_safety.py b/tests/cron/test_estop_symlink_safety.py
+new file mode 100644
+--- /dev/null
++++ b/tests/cron/test_estop_symlink_safety.py
+@@ -0,0 +1,208 @@
++"""ESTOP links remain a stop and must never overwrite unrelated target data."""
++
++import argparse
++import json
++import os
++from pathlib import Path
++
++import pytest
++
++from agent import estop
++
++
++@pytest.fixture
++def fleet(tmp_path, monkeypatch):
++    root = tmp_path / "fleet"
++    alpha = root / "profiles" / "alpha"
++    beta = root / "profiles" / "beta"
++    alpha.mkdir(parents=True)
++    beta.mkdir(parents=True)
++    monkeypatch.setenv("HOME", str(tmp_path))
++    monkeypatch.setenv("HERMES_HOME", str(alpha))
++    monkeypatch.setenv("HERMES_KANBAN_HOME", str(root))
++    monkeypatch.setattr(Path, "home", lambda: tmp_path)
++    return root, alpha, beta
++
++
++@pytest.mark.platforms("posix")
++@pytest.mark.parametrize("where", ["local", "fleet"])
++def test_dangling_link_is_a_pause_until_explicit_resume(fleet, monkeypatch, tmp_path, where):
++    from hermes_cli.subcommands.pause import cmd_resume
++
++    root, alpha, beta = fleet
++    marker = (alpha if where == "local" else root) / "ESTOP"
++    target = tmp_path / "missing-target"
++    marker.symlink_to(target)
++    if where == "fleet":
++        monkeypatch.setenv("HERMES_HOME", str(beta))
++    assert marker.is_symlink() and not target.exists()
++    assert estop.is_engaged() is True
++    assert estop.get_state() == {"reason": None, "engaged_at": None}
++    assert "paused" in estop.paused_reply().lower()
++    assert cmd_resume(argparse.Namespace()) == 0
++    assert not marker.is_symlink() and not target.exists()
++    assert estop.is_engaged() is False
++
++
++@pytest.mark.platforms("posix")
++@pytest.mark.parametrize("where", ["local", "fleet"])
++def test_engage_does_not_write_through_existing_link(fleet, tmp_path, where):
++    root, alpha, _ = fleet
++    marker = (alpha if where == "local" else root) / "ESTOP"
++    target = tmp_path / "unrelated.json"
++    original = b'{"reason":"unrelated data"}\n'
++    target.write_bytes(original)
++    marker.symlink_to(target)
++    if where == "local":
++        estop.engage("new reason")
++    else:
++        estop.engage_fleet("new reason")
++    assert marker.is_symlink()
++    assert target.read_bytes() == original
++    assert estop.is_engaged() is True
++    assert estop.get_state() == {"reason": None, "engaged_at": None}
++
++
++@pytest.mark.platforms("posix")
++def test_engage_does_not_create_a_dangling_links_target(fleet, tmp_path):
++    root, _, _ = fleet
++    target = tmp_path / "missing-target"
++    marker = root / "ESTOP"
++    marker.symlink_to(target)
++    estop.engage_fleet("new reason")
++    assert marker.is_symlink()
++    assert not target.exists()
++    assert estop.is_engaged() is True
++
++
++@pytest.mark.platforms("posix")
++def test_engage_does_not_modify_other_hardlink_to_sentinel(fleet, tmp_path):
++    root, _, _ = fleet
++    target = tmp_path / "unrelated.txt"
++    original = b'{"reason":"unrelated data"}\n'
++    target.write_bytes(original)
++    marker = root / "ESTOP"
++    os.link(target, marker)
++    estop.engage_fleet("new reason")
++    assert target.read_bytes() == original
++    assert estop.is_engaged() is True
++    assert estop.get_state() == {"reason": None, "engaged_at": None}
++
++
++def test_normal_fleet_pause_still_updates_reason_and_preserves_mode(fleet):
++    root, _, _ = fleet
++    marker = root / "ESTOP"
++    marker.write_text('{"reason":"old"}', encoding="utf-8")
++    marker.chmod(0o640)
++    estop.engage_fleet("new reason")
++    assert json.loads(marker.read_text(encoding="utf-8"))["reason"] == "new reason"
++    assert marker.stat().st_mode & 0o777 == 0o640
++
++
++@pytest.mark.platforms("posix")
++def test_dangling_fleet_link_prevents_cron_scan(fleet, tmp_path, monkeypatch):
++    from cron import scheduler
++
++    root, _, beta = fleet
++    (root / "ESTOP").symlink_to(tmp_path / "missing-target")
++    monkeypatch.setenv("HERMES_HOME", str(beta))
++    scans = []
++    monkeypatch.setattr(scheduler, "get_due_jobs", lambda: scans.append(True) or [])
++    assert scheduler.tick(verbose=False) == 0
++    assert scans == []
++
++
++@pytest.mark.platforms("posix")
++def test_dangling_fleet_link_prevents_kanban_dispatch(fleet, tmp_path, monkeypatch):
++    from hermes_cli import kanban_db as kb
++    from hermes_cli import kanban_db_connect as kbc
++    from hermes_cli import kanban_db_dispatch as kbd
++
++    root, _, beta = fleet
++    (root / "ESTOP").symlink_to(tmp_path / "missing-target")
++    monkeypatch.setenv("HERMES_HOME", str(beta))
++    monkeypatch.setattr(kbd, "_profile_exists_fn", lambda: lambda _name: True)
++    monkeypatch.setattr(kbd, "_system_memory_sample", dict)
++    monkeypatch.setattr(kbd, "review_dispatch_enabled", lambda: False)
++    kb.init_db()
++    with kbc.connect_closing() as conn:
++        tid = kb.create_task(conn, title="waiting", assignee="beta")
++        spawned = []
++        result = kbd.dispatch_once(conn, spawn_fn=lambda *args, **kwargs: spawned.append(args) or 999999)
++        assert result.skipped_paused is True
++        assert not spawned and kb.get_task(conn, tid).status == "ready"
++
++
++@pytest.mark.platforms("posix")
++@pytest.mark.parametrize("initial", ["regular", "missing"])
++@pytest.mark.parametrize("no_nofollow_flag", [False, True], ids=["native-nofollow", "identity-fallback"])
++def test_symlink_swap_before_write_does_not_modify_target(
++    fleet, tmp_path, monkeypatch, initial, no_nofollow_flag
++):
++    if no_nofollow_flag:
++        monkeypatch.setattr(os, "O_NOFOLLOW", 0, raising=False)
++    root, _, _ = fleet
++    marker = root / "ESTOP"
++    target = tmp_path / "unrelated.txt"
++    original_data = b"do not change this"
++    target.write_bytes(original_data)
++    if initial == "regular":
++        marker.write_text('{"reason":"old"}', encoding="utf-8")
++    original_open = os.open
++    swapped = []
++
++    def open_with_swap(path, flags, *args, **kwargs):
++        if os.fspath(path) == os.fspath(marker) and flags & os.O_ACCMODE == os.O_WRONLY and not swapped:
++            marker.unlink(missing_ok=True)
++            marker.symlink_to(target)
++            swapped.append(True)
++        return original_open(path, flags, *args, **kwargs)
++
++    monkeypatch.setattr(os, "open", open_with_swap)
++    estop.engage_fleet("new reason")
++    assert swapped and marker.is_symlink()
++    assert target.read_bytes() == original_data
++    assert estop.is_engaged() is True
++
++
++@pytest.mark.platforms("posix")
++@pytest.mark.parametrize("no_nofollow_flag", [False, True], ids=["native-nofollow", "identity-fallback"])
++def test_symlink_swap_before_state_read_does_not_expose_target_reason(
++    fleet, tmp_path, monkeypatch, no_nofollow_flag
++):
++    if no_nofollow_flag:
++        monkeypatch.setattr(os, "O_NOFOLLOW", 0, raising=False)
++    root, _, _ = fleet
++    marker = root / "ESTOP"
++    target = tmp_path / "unrelated.json"
++    marker.write_text('{"reason":"existing"}', encoding="utf-8")
++    target.write_text('{"reason":"unrelated data"}', encoding="utf-8")
++    original_open = os.open
++    swapped = []
++
++    def open_with_swap(path, flags, *args, **kwargs):
++        if os.fspath(path) == os.fspath(marker) and flags & os.O_ACCMODE == os.O_RDONLY and not swapped:
++            marker.unlink()
++            marker.symlink_to(target)
++            swapped.append(True)
++        return original_open(path, flags, *args, **kwargs)
++
++    monkeypatch.setattr(os, "open", open_with_swap)
++    assert estop.get_state() == {"reason": None, "engaged_at": None}
++    assert swapped and marker.is_symlink()
++    assert estop.is_engaged() is True
++
++
++def test_short_writes_store_a_complete_reason(fleet, monkeypatch):
++    root, _, _ = fleet
++    original_write = os.write
++    writes = []
++
++    def short_write(fd, data):
++        writes.append(True)
++        return original_write(fd, data[:3])
++
++    monkeypatch.setattr(os, "write", short_write)
++    estop.engage_fleet("maintenance")
++    assert len(writes) > 1
++    assert json.loads((root / "ESTOP").read_text(encoding="utf-8"))["reason"] == "maintenance"

@@ -1080,3 +1080,7 @@ Twenty-one related files passed 264 offline tests against installed Linux source
 ## Global pause across profiles (v0.6.28)
 
 Twenty-two related files passed 282 offline tests against installed Linux source; macOS-specific tests were skipped. Tests cover CLI and gateway controls, separate profiles and roots, cron and Kanban guards, existing work, failed root resolution, concurrent creation, reason preservation and localization parity. A separate isolated multi-process smoke used installed code and a real temporary process; no production model request was created.
+
+## Linked emergency-stop safety (v0.6.29)
+
+Eighteen related files passed 206 offline tests against installed Linux source. Tests cover dangling and valid symbolic links, hard links, link replacement between inspection and open, a no-NOFOLLOW capability fallback, short writes, ordinary sentinel mode preservation, cron and Kanban guards, and I/O failures. A separate isolated multi-process smoke used installed code and a real temporary process; no production model request was created and no production incident is asserted.

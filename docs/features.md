@@ -179,3 +179,7 @@ Pause controls confirm that an emergency-stop file is visible before claiming a 
 ## Global pause across profiles (v0.6.28)
 
 A global pause requested from a profile writes the fleet-root sentinel so other profiles on that root observe it. Existing local profile sentinels remain independent. Resume clears the fleet and current profile sentinels, while pauses belonging to other profiles remain. Unknown home or root resolution keeps automatic work paused and is reported as unconfirmed. Separate roots, unpatched processes and existing manual operator overrides are outside this behavior.
+
+## Linked emergency-stop safety (v0.6.29)
+
+A symbolic link named ESTOP remains a pause even if its target is missing. A symbolic or multiply linked sentinel is not read or overwritten when reporting or updating a reason. Explicit resume removes the sentinel link, not its target. Opened file identities are checked before reading or writing, and existing in-flight work is not terminated. This behavior requires upgraded cooperating processes; it does not change the existing manual override policy.
