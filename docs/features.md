@@ -159,3 +159,7 @@ Captain reassignment refuses running tasks rather than interrupting an active cl
 ## Passive intermediate task status (v0.6.23)
 
 For TUI and Desktop subscriptions, plain todo, ready, running and scheduled status changes remain visible as status updates without creating an assistant turn. Outcomes, review handoffs, invalidation events, changed routing and unknown or additional metadata retain their existing wake behavior. Task events and the subscription cursor remain durable; the passive status display is transient and may be missed across a process crash. Existing delivery receipts are not rewritten.
+
+## Concurrent task idempotency (v0.6.24)
+
+For a given board, concurrent creation requests using the same nonempty idempotency key resolve to the same existing non-archived task. The lookup is checked again under the database write transaction. Different keys remain independent. Keys are board-scoped, archived keys may be reused, and historical duplicates are not modified. This does not deduplicate requests without a shared key.

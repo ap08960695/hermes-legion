@@ -5008,7 +5008,33 @@ index 0000000000000000000000000000000000000000..cf0448b8d87a504bdb883bcda58dc488
 diff --git a/hermes_cli/kanban_db.py b/hermes_cli/kanban_db.py
 --- a/hermes_cli/kanban_db.py
 +++ b/hermes_cli/kanban_db.py
-@@ -1479,14 +1479,19 @@
+@@ -1249,8 +1249,8 @@
+     parents = tuple(p for p in parents if p)
+     skills_list = _normalize_task_skills(skills)
+ 
+-    # Idempotency check BEFORE the write txn (no lock held); a concurrent-create
+-    # race may insert twice, the next lookup stabilises on the newest.
++    # Fast path for an existing task; check again under the write lock below
++    # because another creator can insert the key after this lookup.
+     if idempotency_key:
+         row = conn.execute(
+             "SELECT id FROM tasks WHERE idempotency_key = ? "
+@@ -1276,6 +1276,14 @@
+             # allow_nested: graph builders compose create_task under one outer
+             # commit so the dispatcher never sees a half-built graph.
+             with write_txn(conn, allow_nested=True):
++                # Serialize the lookup with creation, including nested graph builds.
++                if idempotency_key:
++                    row = conn.execute(
++                        "SELECT id FROM tasks WHERE idempotency_key = ? "
++                        "AND status != 'archived' ORDER BY created_at DESC LIMIT 1", (idempotency_key,),
++                    ).fetchone()
++                    if row:
++                        return row["id"]
+                 task_status, tenant = initial_task_state(conn, parents, initial_status, triage, tenant)
+                 # Project worktree: fresh dir under the repo + deterministic
+                 # branch, instead of the random ``wt/<id>`` worker fallback.
+@@ -1479,14 +1487,19 @@
      return [Task.from_row(r) for r in rows]
  
  
@@ -5030,7 +5056,7 @@ diff --git a/hermes_cli/kanban_db.py b/hermes_cli/kanban_db.py
              return False
          if row["claim_lock"] is not None and row["status"] == "running":
              raise RuntimeError(
-@@ -1875,10 +1880,9 @@
+@@ -1875,10 +1888,9 @@
      run_id: Optional[int] = None,
  ) -> None:
      """Insert an event row inside the caller's txn; ``run_id`` groups it by attempt (NULL = task-scoped)."""
@@ -5044,7 +5070,7 @@ diff --git a/hermes_cli/kanban_db.py b/hermes_cli/kanban_db.py
  
  
  def _end_run(
-@@ -2148,53 +2152,6 @@
+@@ -2148,53 +2160,6 @@
      return [(row["id"], row["status"]) for row in rows]
  
  
@@ -5098,7 +5124,7 @@ diff --git a/hermes_cli/kanban_db.py b/hermes_cli/kanban_db.py
  def claim_task(
      conn: sqlite3.Connection, task_id: str, *, ttl_seconds: Optional[int] = None,
      claimer: Optional[str] = None,
-@@ -2222,7 +2179,8 @@
+@@ -2222,7 +2187,8 @@
          _reclaim_dangling_run(
              conn, task_id, statuses=("ready",), now=now, note="invariant recovery on re-claim",
          )
@@ -5108,7 +5134,7 @@ diff --git a/hermes_cli/kanban_db.py b/hermes_cli/kanban_db.py
          if run_id is None:
              return None
          claimed = get_task(conn, task_id)
-@@ -2252,7 +2210,8 @@
+@@ -2252,7 +2218,8 @@
                      {"reason": "parent_reopened", "source_status": "review"},
                  )
              return None
@@ -5118,7 +5144,7 @@ diff --git a/hermes_cli/kanban_db.py b/hermes_cli/kanban_db.py
              conn, task_id, "review", lock, expires, now, event_extra={"source_status": "review"},
          )
          if run_id is None:
-@@ -2530,16 +2489,18 @@
+@@ -2530,16 +2497,18 @@
  
  def reassign_task(
      conn: sqlite3.Connection, task_id: str, profile: Optional[str], *, reclaim_first: bool = False,
@@ -5139,7 +5165,7 @@ diff --git a/hermes_cli/kanban_db.py b/hermes_cli/kanban_db.py
      except RuntimeError:
          # Task is still running and reclaim_first was False; caller
          # needs to decide whether to retry with reclaim.
-@@ -2690,11 +2651,13 @@
+@@ -2690,11 +2659,13 @@
      metadata = _merge_completion_prose_artifacts(
          conn, task_id, metadata, summary=summary, result=result,
      )
@@ -5154,7 +5180,7 @@ diff --git a/hermes_cli/kanban_db.py b/hermes_cli/kanban_db.py
          # Hard invariant even for human review approval: a parent may have
          # reopened while this task waited.
          if not _parents_satisfied(conn, task_id):
-@@ -2862,11 +2825,6 @@
+@@ -2862,11 +2833,6 @@
      notifiers / dashboard WS render without a second round-trip; verified
      cards; and ``metadata["artifacts"]`` promoted so the notifier can upload
      them as native attachments without fetching the run row."""
@@ -5166,7 +5192,7 @@ diff --git a/hermes_cli/kanban_db.py b/hermes_cli/kanban_db.py
      payload: dict = {
          "result_len": len(result) if result else 0,
          "summary": _first_line(event_summary, 400) or None,
-@@ -2874,6 +2832,8 @@
+@@ -2874,6 +2840,8 @@
      if verified_cards:
          payload["verified_cards"] = verified_cards
      if isinstance(metadata, dict):
@@ -5175,7 +5201,7 @@ diff --git a/hermes_cli/kanban_db.py b/hermes_cli/kanban_db.py
          cleaned = _cleaned_artifact_paths(metadata)
          if cleaned:
              payload["artifacts"] = cleaned
-@@ -3145,6 +3105,7 @@
+@@ -3145,6 +3113,7 @@
  def block_task(
      conn: sqlite3.Connection, task_id: str, *, reason: Optional[str] = None,
      kind: Optional[str] = None, expected_run_id: Optional[int] = None,
@@ -5183,7 +5209,7 @@ diff --git a/hermes_cli/kanban_db.py b/hermes_cli/kanban_db.py
  ) -> bool:
      """``running``/``ready`` -> ``blocked`` (or ``todo`` / ``triage``, see
      :func:`_route_block`). ``kind='dependency'`` with no incomplete parent is
-@@ -3164,9 +3125,13 @@
+@@ -3164,9 +3133,13 @@
          raise ValueError(f"block kind must be one of {sorted(VALID_BLOCK_KINDS)} or None")
      with write_txn(conn):
          cur_row = conn.execute(
@@ -5198,7 +5224,7 @@ diff --git a/hermes_cli/kanban_db.py b/hermes_cli/kanban_db.py
              return False
          # The breaker (``_record_task_failure``) parks cards ``blocked`` with no
          # ``block_kind`` and no ``blocked`` event -- the policy is the
-@@ -3312,12 +3277,14 @@
+@@ -3312,12 +3285,14 @@
      # must be durable BEFORE anything can clean the scratch workspace up: for a
      # review-bound card the reviewer's completion is the cleanup trigger.
      metadata = _merge_completion_prose_artifacts(conn, task_id, metadata, summary=summary, result=None)
@@ -5214,7 +5240,7 @@ diff --git a/hermes_cli/kanban_db.py b/hermes_cli/kanban_db.py
              if not _parents_satisfied(conn, task_id):
                  return _ret(False, "parent dependencies are not satisfied")
              trow = conn.execute(
-@@ -3578,11 +3545,37 @@
+@@ -3578,11 +3553,37 @@
      return "ready" if _parents_satisfied(conn, task_id) else "todo"
  
  
@@ -5253,7 +5279,7 @@ diff --git a/hermes_cli/kanban_db.py b/hermes_cli/kanban_db.py
          resume_status = (
              _resume_status_from_events(conn, task_id)
              if _task_status(conn, task_id) == "blocked"
-@@ -3918,23 +3911,9 @@
+@@ -3918,23 +3919,9 @@
  # --- Worker context builder (what a spawned worker sees) ---
  
  def build_worker_context(conn: sqlite3.Connection, task_id: str) -> str:
@@ -5280,7 +5306,7 @@ diff --git a/hermes_cli/kanban_db.py b/hermes_cli/kanban_db.py
  
  
  def _ctx_cap(s: Optional[str], limit: int = _CTX_MAX_FIELD_BYTES) -> str:
-@@ -4039,46 +4018,6 @@
+@@ -4039,46 +4026,6 @@
          if run.error and run.error.strip():
              lines.append(f"_error_: {_ctx_cap(run.error)}")
          meta_line = _ctx_metadata_line(run.metadata)
@@ -44134,3 +44160,155 @@ new file mode 100644
 +        actual = conn.execute('SELECT state FROM kanban_tui_deliveries WHERE id=?',
 +                              (text.delivery_ref.id,)).fetchone()[0]
 +    assert actual == ('settled' if state == 'pending' else 'unknown')
+diff --git a/tests/hermes_cli/test_kanban_idempotency_concurrency.py b/tests/hermes_cli/test_kanban_idempotency_concurrency.py
+new file mode 100644
+--- /dev/null
++++ b/tests/hermes_cli/test_kanban_idempotency_concurrency.py
+@@ -0,0 +1,147 @@
++"""An idempotency key must not create duplicate tasks during parallel requests."""
++import multiprocessing
++import sqlite3
++from concurrent.futures import ThreadPoolExecutor
++from pathlib import Path
++import threading
++
++import pytest
++
++from hermes_cli import kanban_db as kb, kanban_db_connect as kbc
++
++
++@pytest.fixture
++def board(tmp_path, monkeypatch):
++    home = tmp_path / '.hermes'
++    home.mkdir()
++    monkeypatch.setenv('HERMES_HOME', str(home))
++    monkeypatch.setenv('HERMES_KANBAN_HOME', str(home))
++    monkeypatch.setenv('HOME', str(tmp_path))
++    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
++    for name in ('HERMES_KANBAN_DB', 'HERMES_KANBAN_BOARD'):
++        monkeypatch.delenv(name, raising=False)
++    kb.init_db()
++    return home
++
++
++def _create_in_process(barrier, queue):
++    original = kb._new_task_id
++    first = True
++
++    def synchronized_id():
++        nonlocal first
++        if first:
++            first = False
++            barrier.wait(timeout=10)
++        return original()
++
++    kb._new_task_id = synchronized_id
++    try:
++        with kbc.connect_closing() as conn:
++            tid = kb.create_task(conn, title='parallel process', idempotency_key='process-fixture')
++        queue.put(('ok', tid))
++    except Exception as exc:
++        queue.put(('error', type(exc).__name__))
++
++
++def _race(monkeypatch, keys):
++    barrier = threading.Barrier(len(keys), timeout=10)
++    original = kb._new_task_id
++    local = threading.local()
++
++    def synchronized_id():
++        if not getattr(local, 'started', False):
++            local.started = True
++            barrier.wait()
++        return original()
++
++    monkeypatch.setattr(kb, '_new_task_id', synchronized_id)
++
++    def create(key):
++        with kbc.connect_closing() as conn:
++            return kb.create_task(conn, title='parallel fixture', assignee='worker', idempotency_key=key)
++    with ThreadPoolExecutor(max_workers=len(keys)) as pool:
++        futures = [pool.submit(create, key) for key in keys]
++        return [f.result(timeout=20) for f in futures]
++
++
++def test_same_key_from_parallel_connections_creates_one_task(board, monkeypatch):
++    ids = _race(monkeypatch, ('same-fixture-key', 'same-fixture-key'))
++    assert ids[0] == ids[1]
++    with kbc.connect_closing() as conn:
++        rows = conn.execute("SELECT id FROM tasks WHERE idempotency_key=? AND status!='archived'",
++                            ('same-fixture-key',)).fetchall()
++        assert [row['id'] for row in rows] == [ids[0]]
++        assert conn.execute("SELECT COUNT(*) FROM task_events WHERE task_id=? AND kind='created'",
++                            (ids[0],)).fetchone()[0] == 1
++
++
++def test_same_key_from_separate_processes_creates_one_task(board):
++    context = multiprocessing.get_context('spawn')
++    barrier, queue = context.Barrier(2), context.Queue()
++    children = [context.Process(target=_create_in_process, args=(barrier, queue)) for _ in range(2)]
++    try:
++        for child in children:
++            child.start()
++        for child in children:
++            child.join(timeout=20)
++        assert all(not child.is_alive() and child.exitcode == 0 for child in children)
++        rows = [queue.get(timeout=2) for _ in children]
++        assert all(row[0] == 'ok' for row in rows), rows
++        assert rows[0][1] == rows[1][1]
++        with kbc.connect_closing() as conn:
++            assert conn.execute('SELECT COUNT(*) FROM tasks WHERE idempotency_key=?',
++                                ('process-fixture',)).fetchone()[0] == 1
++    finally:
++        for child in children:
++            if child.is_alive():
++                child.terminate()
++                child.join(timeout=5)
++        queue.close()
++
++
++def test_existing_key_uses_read_only_fast_path(board, monkeypatch):
++    with kbc.connect_closing() as conn:
++        existing = kb.create_task(conn, title='existing', idempotency_key='existing')
++
++    def no_new_id():
++        raise AssertionError('existing key should not allocate a new id')
++
++    monkeypatch.setattr(kb, '_new_task_id', no_new_id)
++    db_path = kb.kanban_db_path()
++    with sqlite3.connect(f'file:{db_path}?mode=ro', uri=True) as conn:
++        conn.row_factory = sqlite3.Row
++        assert kb.create_task(conn, title='repeated', idempotency_key='existing') == existing
++
++
++def test_different_keys_remain_independent_when_parallel(board, monkeypatch):
++    ids = _race(monkeypatch, ('fixture-a', 'fixture-b'))
++    assert len(set(ids)) == 2
++
++
++def test_archived_key_can_be_used_for_new_task(board):
++    with kbc.connect_closing() as conn:
++        old = kb.create_task(conn, title='old fixture', idempotency_key='reusable')
++        assert kb.archive_task(conn, old)
++        new = kb.create_task(conn, title='new fixture', idempotency_key='reusable')
++        assert new != old and kb.get_task(conn, old).status == 'archived'
++
++
++def test_nested_graph_transaction_reuses_the_created_key(board):
++    with kbc.connect_closing() as conn, kb.write_txn(conn):
++        first = kb.create_task(conn, title='first', idempotency_key='nested')
++        second = kb.create_task(conn, title='duplicate', idempotency_key='nested')
++        assert first == second
++    with kbc.connect_closing() as conn:
++        assert conn.execute('SELECT COUNT(*) FROM tasks WHERE idempotency_key=?', ('nested',)).fetchone()[0] == 1
++
++
++def test_rolled_back_creation_does_not_reserve_key(board):
++    with kbc.connect_closing() as conn:
++        with pytest.raises(RuntimeError, match='fixture rollback'):
++            with kb.write_txn(conn):
++                kb.create_task(conn, title='rolled back', idempotency_key='rollback')
++                raise RuntimeError('fixture rollback')
++        new = kb.create_task(conn, title='after rollback', idempotency_key='rollback')
++        assert kb.get_task(conn, new).title == 'after rollback'
++        assert conn.execute('SELECT COUNT(*) FROM tasks WHERE idempotency_key=?', ('rollback',)).fetchone()[0] == 1

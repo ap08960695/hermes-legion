@@ -8,7 +8,7 @@ The design is simple: give each bot a clear responsibility, dispatch independent
 
 ## What is included
 
-- **512 patched or added source/test files** against one explicitly pinned upstream revision, including 156 Python test files. See [patch inventory](patches/manifest.json) for the exact files and hashes.
+- **513 patched or added source/test files** against one explicitly pinned upstream revision, including 157 Python test files. See [patch inventory](patches/manifest.json) for the exact files and hashes.
 - Reuse a compatible, already published PM checker across launcher scopes without dependency preparation or changing the selected environment. See [startup cache behavior](docs/installation-and-rollback.md#startup-checker-cache).
 - Native current-work Kanban with separate bounded history, integrated sidebar ownership and corrected Models/Usage destinations.
 - Full native saved-chat/project managers, bot/group/section actions, an always-visible device/profile/status bar, and pane/status plugin discovery. See [feature parity](docs/desktop-feature-parity.md).
@@ -32,6 +32,7 @@ The design is simple: give each bot a clear responsibility, dispatch independent
 - Preserve older recovery snapshots when a critical file is skipped or cannot be captured.
 - Keep active task claims and explicit holds safe during autonomous reassignment.
 - Show routine task status without waking an assistant; retain actionable handoffs.
+- Prevent concurrent duplicate task creation for the same idempotency key.
 - Restore an older session outside the loaded sidebar page when its owner is verified, without discarding uncertain remembered navigation.
 - [Bounded conversation title recall](docs/session-recall.md) preserves orientation evidence while avoiding full-transcript reads and applying metadata exclusions before payload reads.
 - Reuse of unchanged bundled locale parses across profiles, with independent mutable catalogs and private overlays. Local counters make this reuse observable without reading translations.
@@ -52,13 +53,13 @@ Review the [optional external-memory pilot guide](docs/external-memory-pilot.md)
 Clone the release and run from its repository root; the same commands work after extracting the release archive and entering its top-level directory. Only Python and Git are needed for this companion-only walkthrough. Native profile setup has the additional upstream prerequisites documented separately.
 
 ```sh
-git clone --branch v0.6.23 --single-branch https://github.com/ap08960695/hermes-legion.git
+git clone --branch v0.6.24 --single-branch https://github.com/ap08960695/hermes-legion.git
 cd hermes-legion
 python3 scripts/verify_release.py
 python3 scripts/legion_plan.py --team examples/team.full.json --snapshot examples/snapshots/synthetic-ready.json --tasks examples/scenarios/parallel-production.json --now 1
 ```
 
-The walkthrough pins the immutable v0.6.23 release. Its native Desktop interface, session metadata reads, bot activity display, bundled locale/code reuse, local memory diagnostics and verification limits are described in the [verification record](docs/verification.md).
+The walkthrough pins the immutable v0.6.24 release. Its native Desktop interface, session metadata reads, bot activity display, bundled locale/code reuse, local memory diagnostics and verification limits are described in the [verification record](docs/verification.md).
 
 Use [on-demand memory diagnostics](docs/runtime-memory-diagnostics.md) to distinguish process memory from native cache counts without reading conversations or starting inference. Optional allocation tracing is disabled by default and belongs in an idle maintenance window.
 

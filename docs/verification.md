@@ -1060,3 +1060,7 @@ Thirteen related test files passed 235 offline cases with one skip on the candid
 ## Passive intermediate task status (v0.6.23)
 
 Seventeen related files passed 183 offline cases against installed source in an isolated Linux run. An earlier candidate suite passed 182 cases, followed by 18 focused cases including a real dashboard transition; these runs overlap and are not summed. Cases cover passive status visibility, actual completion and review delivery, parent invalidation, changed-lane and unknown metadata, busy sessions, renderer failure, and pre-existing pending or ambiguous receipts. No live task or provider call was used for verification. One read-only seven-day sample found no matching historical status receipts in the boards inspected, so runtime usage savings remain unmeasured.
+
+## Concurrent task idempotency (v0.6.24)
+
+The previous implementation produced two tasks in isolated simultaneous two-connection and two-process reproductions. After the fix, 16 related files passed 270 tests with one Windows-only skip against the installed source on Linux. Coverage includes existing-key read-only fast paths, distinct keys, archived reuse, nested graph transactions and rollback. No production task or model call was created for this verification; production usage savings were not measured.
