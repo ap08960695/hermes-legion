@@ -58,7 +58,7 @@ The design is simple: give each bot a clear responsibility, dispatch independent
 - Icon-led bot activity with bounded worker details, terminal/offline fences and compression-tip metadata that follows the displayed session. See [bot activity](docs/bot-activity.md).
 - Fifteen renamed role templates and eleven reusable English skills. They contain no account configuration, credentials, personal persona or production transcripts.
 
-Read the [feature catalog](docs/features.md), [role guide](docs/bot-roles.md), and [verification record](docs/verification.md). A feature's inclusion does not establish a live performance saving for your workload.
+Read the [feature catalog](docs/features.md), [role guide](docs/bot-roles.md), and [verification record](docs/verification.md). Use the [deployment acceptance checklist](docs/acceptance-checklist.md) to distinguish installed code, runtime adoption and measured workload results. A feature's inclusion does not establish a live performance saving for your workload.
 
 Use [native goals, skills and delegated decisions](docs/goals-and-delegated-decisions.md) to let a Captain carry an authorized objective through verification within current quotas and approval gates.
 
@@ -71,13 +71,13 @@ Review the [optional external-memory pilot guide](docs/external-memory-pilot.md)
 Clone the release and run from its repository root; the same commands work after extracting the release archive and entering its top-level directory. Only Python and Git are needed for this companion-only walkthrough. Native profile setup has the additional upstream prerequisites documented separately.
 
 ```sh
-git clone --branch v0.6.42 --single-branch https://github.com/ap08960695/hermes-legion.git
+git clone --branch v0.6.43 --single-branch https://github.com/ap08960695/hermes-legion.git
 cd hermes-legion
 python3 scripts/verify_release.py
 python3 scripts/legion_plan.py --team examples/team.full.json --snapshot examples/snapshots/synthetic-ready.json --tasks examples/scenarios/parallel-production.json --now 1
 ```
 
-The walkthrough pins the immutable v0.6.42 release. Its native Desktop interface, session metadata reads, bot activity display, bundled locale/code reuse, local memory diagnostics and verification limits are described in the [verification record](docs/verification.md).
+The walkthrough pins the immutable v0.6.43 release. Its native Desktop interface, session metadata reads, bot activity display, bundled locale/code reuse, local memory diagnostics and verification limits are described in the [verification record](docs/verification.md).
 
 Use [on-demand memory diagnostics](docs/runtime-memory-diagnostics.md) to distinguish process memory from native cache counts without reading conversations or starting inference. Optional allocation tracing is disabled by default and belongs in an idle maintenance window.
 

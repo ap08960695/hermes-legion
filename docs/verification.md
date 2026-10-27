@@ -1154,3 +1154,9 @@ On the verified Python 3.14.7 / SQLite 3.53.1 runtime, 20,000 closed native Blob
 A 24-file offline suite passed 468 tests on both candidate and installed source, including concurrent-writer snapshots, caller transactions/handlers, invalid bytes, two-megabyte fields and bounded page reads. The synthetic 460,000-row fixture passed all 15 trials. Peak process RSS was about 63.8 MiB instead of 134.3 MiB in the preceding fixture run; this is not a production memory measurement. CJK searches took 1.54–1.57 seconds versus about 1.03 seconds before this repair, a deliberate tradeoff for bounded retained memory. Frequent-word queries stayed near 1.17 seconds; the slower Latin case stayed near 2.78–2.79 seconds and has little margin under the unchanged three-second deadline.
 
 The gateway adopted installed source through native idle-only control. A permitted real-history subset was checked privately in transient RAM storage; this did not search an entire live profile or establish natural-workload usage savings. No extra model calls, provider probes or dependency changes were made.
+
+## Deployment acceptance checklist (v0.6.43)
+
+This documentation-only release separates exact installation, process adoption, interactive behavior and measured workload outcomes in an operator checklist. The v0.6.36 feature entry now identifies its global-search limitation as historical and links to the v0.6.41 correction. It does not change the cumulative native patch, model routing, quotas, provider settings or runtime defaults.
+
+The exact release inventory and local documentation links are verified. Existing native regression and workload evidence above remain historical; no native suite or model task is repeated for unchanged source. Offline CI and public file/history/archive privacy checks validate the new artifact separately. The checklist does not certify that any particular deployment has completed every row.

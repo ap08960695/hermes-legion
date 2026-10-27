@@ -210,7 +210,7 @@ Session discovery and scroll read visibility-filtered, size-bounded database pro
 
 ## Structured session recall (v0.6.36)
 
-Scoped session search streams stored multimodal JSON and searches its text parts without returning image payloads. Matching tool arguments include a field and offset suitable for bounded paging, including Unicode stored as JSON escapes. Text containing NUL or unpaired Unicode surrogates is exposed as bounded base64 bytes for lossless recovery. Existing visibility, profile, deadline and active-context fences still apply. Global discovery uses a separate index and does not yet fully support escaped Unicode in structured content or exclude image-data false positives.
+Scoped session search streams stored multimodal JSON and searches its text parts without returning image payloads. Matching tool arguments include a field and offset suitable for bounded paging, including Unicode stored as JSON escapes. Text containing NUL or unpaired Unicode surrogates is exposed as bounded base64 bytes for lossless recovery. Existing visibility, profile, deadline and active-context fences still apply. At v0.6.36, global discovery still had separate structured-content limitations; [v0.6.41](#structured-global-recall-v0641) added decoded-text validation and image-payload exclusion to that path. The versioned sections describe when changes arrived, rather than independent current limitations.
 
 ## Search log privacy (v0.6.37)
 
