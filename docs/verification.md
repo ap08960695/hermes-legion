@@ -1084,3 +1084,7 @@ Twenty-two related files passed 282 offline tests against installed Linux source
 ## Linked emergency-stop safety (v0.6.29)
 
 Eighteen related files passed 206 offline tests against installed Linux source. Tests cover dangling and valid symbolic links, hard links, link replacement between inspection and open, a no-NOFOLLOW capability fallback, short writes, ordinary sentinel mode preservation, cron and Kanban guards, and I/O failures. A separate isolated multi-process smoke used installed code and a real temporary process; no production model request was created and no production incident is asserted.
+
+## Scoped and fresh reassignment status (v0.6.30)
+
+Twenty-six related files passed 431 offline tests against installed Linux source; four Windows-specific cases were skipped. Regressions cover fleet isolation, context-local custom roles, stale and malformed snapshots, timestamp boundaries, unreadable or disappearing files, and blocked quota-failure behavior. A separate native registry/SQLite smoke used only temporary boards; no production card was reassigned or model request made.

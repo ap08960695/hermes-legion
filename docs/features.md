@@ -183,3 +183,7 @@ A global pause requested from a profile writes the fleet-root sentinel so other 
 ## Linked emergency-stop safety (v0.6.29)
 
 A symbolic link named ESTOP remains a pause even if its target is missing. A symbolic or multiply linked sentinel is not read or overwritten when reporting or updating a reason. Explicit resume removes the sentinel link, not its target. Opened file identities are checked before reading or writing, and existing in-flight work is not terminated. This behavior requires upgraded cooperating processes; it does not change the existing manual override policy.
+
+## Scoped and fresh reassignment status (v0.6.30)
+
+The orchestrator `kanban_reassign` tool reads the status snapshot and checks custom profile identity in the calling profile fleet, including context-local home overrides. A configured snapshot must have a valid timestamp no older than 15 minutes and mark the target active. An unreadable, invalid or stale snapshot is not treated as readiness. If the optional snapshot is absent, legacy reassignment remains available but reports `availability: not_checked` and does not auto-unblock a provider failure. This is a snapshot freshness check, not proof of live provider quota. Direct CLI/dashboard assignment and other dispatch paths retain their own contracts.
