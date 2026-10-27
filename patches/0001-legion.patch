@@ -48755,6 +48755,18 @@ diff --git a/hermes_state_search.py b/hermes_state_search.py
          # No route selects full content; the pop guards any future one that does.
          for match in matches:
              match.pop("content", None)
+@@ -1079,9 +1244,9 @@
+         finally:
+             elapsed_ms = (time.time() - started) * 1000.0
+             if elapsed_ms >= _search_slow_ms():
+-                logger.info("slow session search: path=%s elapsed=%.0fms rows=%s query=%r",
++                logger.info("slow session search: path=%s elapsed=%.0fms rows=%s query_chars=%d",
+                             self._describe_search_path(query), elapsed_ms, len(rows) if rows is not None else "err",
+-                            query[: 200])
++                            len(query) if isinstance(query, str) else 0)
+ 
+     def _search_messages_impl(
+         self, query: str, source_filter: list[str] | None = None, exclude_sources: list[str] | None = None,
 @@ -1109,11 +1274,11 @@
          # opt-in full-body path and scans canonical rows via LIKE.
          if role_filter and "tool" in role_filter:
@@ -51294,3 +51306,43 @@ new file mode 100644
 +    assert page["content"] == "x" * 512
 +    assert scans == [2_000_000]
 +    conn.close()
+diff --git a/tests/hermes_state/test_search_log_privacy.py b/tests/hermes_state/test_search_log_privacy.py
+new file mode 100644
+--- /dev/null
++++ b/tests/hermes_state/test_search_log_privacy.py
+@@ -0,0 +1,35 @@
++"""Slow search telemetry must not record the user's search text."""
++import logging
++
++import pytest
++
++import hermes_state_search
++from hermes_state import SessionDB
++
++
++@pytest.mark.parametrize('scenario', ['hit', 'miss', 'error'])
++def test_slow_search_logging_omits_the_query(tmp_path, caplog, monkeypatch, scenario):
++    store = SessionDB(tmp_path / 'state.db')
++    query = 'sensitive-example-needle'
++    try:
++        store.create_session('synthetic', source='cli')
++        expected = store.append_message('synthetic', role='user', content=query)
++        monkeypatch.setattr(hermes_state_search, '_search_slow_ms', lambda: 0)
++        caplog.set_level(logging.INFO, logger='hermes_state')
++        if scenario == 'error':
++            def fail(*args, **kwargs):
++                raise RuntimeError('synthetic search failure')
++            monkeypatch.setattr(type(store), '_search_messages_impl', fail)
++            with pytest.raises(RuntimeError, match='synthetic search failure'):
++                store.search_messages(query)
++        else:
++            rows = store.search_messages(query if scenario == 'hit' else query + '-missing')
++            if scenario == 'hit':
++                assert [row['id'] for row in rows] == [expected]
++        records = [record.getMessage() for record in caplog.records if 'slow session search:' in record.getMessage()]
++        assert len(records) == 1
++        assert 'sensitive-example-needle' not in records[0]
++        assert 'query_chars=' in records[0]
++        assert ('rows=err' in records[0]) == (scenario == 'error')
++    finally:
++        store.close()

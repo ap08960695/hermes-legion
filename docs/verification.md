@@ -1112,3 +1112,7 @@ Twenty-five related test files passed 283 offline tests against installed Linux 
 ## Structured session recall (v0.6.36)
 
 Twenty-nine related test files passed 361 offline tests on the installed Linux source. Isolated SQLite fixtures cover multilingual text, image payload exclusion, JSON-escaped tool arguments, byte offsets, unpaired surrogates, read-only and concurrent queries, deadlines, rewinds, and existing prompt-cache and profile boundaries. In three synthetic runs using 12 MB plain bodies, median scoped-search time changed from 19.36 to 28.27 ms; for a tool-argument hit with an unrelated 12 MB body it changed from 60.35 to 42.43 ms and peak RSS increase from 58,396 to 23,000 KiB. A separate 10 MB multimodal fixture was found after the change but not before. These are synthetic measurements, not live model usage or token savings. No model calls were made.
+
+## Search log privacy (v0.6.37)
+
+Eight related test files passed 138 offline tests on the installed Linux source. Synthetic successful, empty, and failed searches confirmed that slow-search logs retain diagnostic metadata without the search text. The gateway was reloaded using its native idle-only control. No model calls were made.
