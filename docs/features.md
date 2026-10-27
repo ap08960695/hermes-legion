@@ -235,3 +235,7 @@ Global session discovery verifies visible structured text and encoded tool argum
 ## Bounded history byte readers (v0.6.42)
 
 History search and paging read byte windows on the existing SQLite connection. An active anchor cursor keeps the same snapshot across windows; caller transactions and progress handlers stay intact. A prefix cache is capped at 64 KiB per reader and released when the view closes. This avoids repeated native Blob bookkeeping on long-lived connections while preserving binary, Unicode and paging behavior. It does not rotate connections, rewrite history or change model tools.
+
+## Answer cards in narrow chat tiles (v0.6.44)
+
+Answer cards respond to their own chat tile width. Single images and multi-image grids stay within narrow tiles, including beside an open artifact, and long supplied facts wrap. The change preserves the user's pane layout and literal card data.

@@ -25,3 +25,7 @@ Optional `images` is an array of supplied safe HTTP(S) image URLs or supported b
 The parser bounds input to 256,000 characters, 16 cards, 6 images, 12 facts and 8 sources per card, with per-field limits. File/javascript URLs and credentials in URL authority are refused. Malformed complete JSON falls back to the source block; partial streaming content shows a loading state without repeatedly throwing. Invalid source data does not become an invented citation. Existing long-code artifact detection leaves `cards` blocks inline.
 
 These are native display components, not an embedded ChatGPT page. Rendering does not add model requests, tools, paid providers or a background polling loop.
+
+## Narrow tiles
+
+Cards choose stacked or side-by-side content from the space available inside the chat tile, rather than the whole window. Images and supplied text stay inside that tile when a preview is also open. This does not change the pane layout or fetch additional images or metadata.
