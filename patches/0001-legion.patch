@@ -41738,7 +41738,43 @@ diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
                 **({"message": (f"Session has {total} messages; showing first {head} + last {tail}. "
                                 "Pass around_message_id (any id above) to scroll the middle.")} if truncated else {}))
  
-@@ -579,22 +646,37 @@
+@@ -475,6 +542,35 @@
+         return result
+     return tool_error(f"session_id not found in this profile: {sid}. If it belongs to another "
+                       "profile, pass profile=<name> (or the @session:<profile>/<id> link).", success=False)
++
++
++def _search_one_session(db, sid: str, query: str, profile: Optional[str], role_filter: Optional[str],
++                        limit: int, sort: Optional[str], detail: str, after_ts: Optional[int], before_ts: Optional[int],
++                        exclude_session_ids: Optional[list[str]]) -> str:
++    """Search one explicitly named session, including tool outputs needed for recovery."""
++    meta = _get_session_meta(db, sid)
++    if not meta:
++        return tool_error(f"session_id not found in this profile: {sid}", success=False)
++    excluded = _excluded_lineage_roots(db, _normalize_exclude_session_ids(exclude_session_ids))
++    in_scope = _in_time_window(_coerce_started_ts(meta.get("started_at")), after_ts, before_ts)
++    if (excluded and {sid, _resolve_lineage(db, sid)} & excluded) or not in_scope:
++        rows = []
++    else:
++        roles = ([part.strip() for part in role_filter.split(",") if part.strip()]
++                 if isinstance(role_filter, str) else []) or ["user", "assistant", "tool"]
++        rows, err = _loud(lambda: db.search_messages_in_session(
++            sid, query, role_filter=roles, limit=limit, sort=sort, excerpt_chars=4000 if detail == "full" else 512),
++            "Scoped session search failed: %s", "Scoped session search failed")
++        if err:
++            return err
++    results = [{"match_message_id": row["id"], "role": row.get("role"),
++                "snippet": row.get("snippet") or "", **({"tool_name": row["tool_name"]}
++                                                         if row.get("tool_name") else {})} for row in rows]
++    return _ok(mode="search_session", session_id=sid, link=_session_link(sid, profile), query=query, detail=detail,
++               results=results, count=len(results), message=(
++                   "Matches are bounded excerpts; a match may be in a tool name or arguments. "
++                   "Pass a match_message_id "
++                   "as around_message_id to scroll when that message is outside live context."))
+ 
+ 
+ def _list_recent_sessions(db, limit: int, current_session_id: str | None = None, link_profile: str | None = None) -> str:
+@@ -579,26 +675,52 @@
                after=None, before=None, exclude_session_ids=None) -> str:
      """Mode dispatch (see module docstring); scroll wins when an anchor is set.
      Profile DBs opened here are appended to *owned_dbs* for the caller to close."""
@@ -41787,6 +41823,123 @@ diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
          owned_dbs.append(profile_db)
      if isinstance(session_id, str) and session_id.strip():
          if around_message_id is not None:
+             return _scroll(db, session_id.strip(), around_message_id, window, current_session_id)
++        if isinstance(query, str) and query.strip():
++            try:
++                after_ts, before_ts = _parse_iso_bound(after), _parse_iso_bound(before)
++            except ValueError as e:
++                return tool_error(str(e), success=False)
++            sort_norm = sort.strip().lower() if isinstance(sort, str) else None
++            return _search_one_session(
++                db, session_id.strip(), query.strip(), profile, role_filter, _clamp_int(limit, 3, 1, 10),
++                sort_norm if sort_norm in ("newest", "oldest") else None,
++                "full" if isinstance(detail, str) and detail.strip().lower() == "full" else "adaptive", after_ts, before_ts,
++                exclude_session_ids)
+         return _read_scoped(db, session_id.strip(), profile)
+     limit = _clamp_int(limit, 3, 1, 10)
+     if not query or not isinstance(query, str) or not query.strip():
+@@ -652,9 +774,10 @@
+     "name": "session_search",
+     "description": (
+         "Recall past conversations: search or read old Hermes sessions (FTS5), or "
+-        "scroll inside one. Four shapes, picked by args: `query` = discovery "
++        "scroll inside one. Five shapes, picked by args: `query` = discovery "
+         "(top-N matching sessions, top result fully hydrated); `session_id` + "
+-        "`around_message_id` = scroll (window of messages around an anchor); "
++        "`query` = bounded search within that session including tool outputs; "
++        "`session_id` + `around_message_id` = scroll (window around an anchor); "
+         "`session_id` alone = read a whole session — how you resolve an "
+         "`@session:<profile>/<id>` link (split on '/' into profile + id); no "
+         "args = browse recent sessions. Results are actual DB messages, no LLM. "
+@@ -672,7 +795,8 @@
+                 "type": "string",
+                 "description": (
+                     "Search query (discovery shape). Keywords, phrases, or boolean "
+-                    "expressions to find in past sessions. Omit to browse recent "
++                    "expressions to find in past sessions. With session_id, search "
++                    "only that session and return bounded substring excerpts. Omit to browse recent "
+                     "sessions. Ignored when session_id + around_message_id are set "
+                     "(scroll shape)."
+                 ),
+@@ -680,7 +804,8 @@
+             "limit": {
+                 "type": "integer",
+                 "description": (
+-                    "Discovery shape only. Max sessions to return (default 3, max 10). "
++                    "Maximum sessions in discovery or matching messages in a scoped "
++                    "search (default 3, max 10). "
+                     "Bump to 5–10 when the topic likely spans several sessions and you "
+                     "want to pick the right one to scroll into."
+                 ),
+@@ -690,7 +815,8 @@
+                 "type": "string",
+                 "enum": ["newest", "oldest"],
+                 "description": (
+-                    "Discovery shape only. Temporal bias on top of FTS5 ranking: omit "
++                    "Temporal bias for discovery; scoped search orders matching "
++                    "messages newest first by default. For discovery omit "
+                     "for relevance-only (exploratory recall), 'newest' for "
+                     "\"where did we leave X\", 'oldest' for \"how did X start\"."
+                 ),
+@@ -699,7 +825,8 @@
+                 "type": "string",
+                 "enum": ["adaptive", "full"],
+                 "description": (
+-                    "Discovery shape only. 'adaptive' (default) fully hydrates the "
++                    "In scoped search, 'adaptive' (default) returns up to 512 characters "
++                    "per excerpt; 'full' returns up to 4000. In discovery, 'adaptive' fully hydrates the "
+                     "top-ranked result and returns only the exact anchor message for "
+                     "lower-ranked results. 'full' returns bookends and the complete "
+                     "anchored window for every result."
+@@ -709,7 +836,7 @@
+             "after": {
+                 "type": "string",
+                 "description": (
+-                    "Discovery shape only. Inclusive lower bound on session start "
++                    "Inclusive lower bound on session start "
+                     "time. ISO date/datetime (e.g. 2026-06-01) or relative duration "
+                     "(7d, 24h, 2w = within the last N). Use only when the user names "
+                     "a time frame. sort is a ranking bias, not a bound."
+@@ -718,7 +845,7 @@
+             "before": {
+                 "type": "string",
+                 "description": (
+-                    "Discovery shape only. Exclusive upper bound on session start "
++                    "Exclusive upper bound on session start "
+                     "time. ISO date/datetime (a date-only value is midnight UTC that "
+                     "day) or relative duration (7d = older than a week). Use only "
+                     "when the user names a time frame."
+@@ -728,7 +855,7 @@
+                 "type": "array",
+                 "items": {"type": "string"},
+                 "description": (
+-                    "Discovery shape only. Session ids already inspected this task. "
++                    "Session ids already inspected this task. "
+                     "Those sessions and their lineage are omitted so a later query "
+                     "explores instead of repeating the same hit. Cap 20."
+                 ),
+@@ -736,9 +863,8 @@
+             "session_id": {
+                 "type": "string",
+                 "description": (
+-                    "Scroll shape. Session to read inside. Use the session_id returned "
+-                    "from a prior discovery call. Must be paired with "
+-                    "around_message_id."
++                    "Session to read or search inside. Pair with query to search "
++                    "only this session, or around_message_id to scroll."
+                 ),
+             },
+             "around_message_id": {
+@@ -761,7 +887,8 @@
+                 "type": "string",
+                 "description": (
+                     "Optional. Comma-separated roles to include. Discovery defaults to "
+-                    "'user,assistant' (tool output is usually noise). Pass "
++                    "'user,assistant' (tool output is usually noise); session-scoped "
++                    "search defaults to 'user,assistant,tool' for recovery. Pass "
+                     "'user,assistant,tool' to include tool output (debugging tool "
+                     "behaviour) or 'tool' to search tool output only."
+                 ),
 diff --git a/tests/hermes_state/test_session_search_metadata.py b/tests/hermes_state/test_session_search_metadata.py
 new file mode 100644
 --- /dev/null
@@ -47873,3 +48026,314 @@ new file mode 100644
 +        assert _session_link("s_shared") == "@session:s_shared"
 +    finally:
 +        reset_hermes_home_override(token)
+diff --git a/hermes_state_search.py b/hermes_state_search.py
+--- a/hermes_state_search.py
++++ b/hermes_state_search.py
+@@ -968,7 +968,9 @@
+         return [dict(row) for row in self._read_all(sql, params)]
+ 
+     @staticmethod
+-    def _compile_like_boolean_query(query: str) -> tuple[str, list[Any], Optional[str]]:
++    def _compile_like_boolean_query(
++        query: str, *, positive_terms: Optional[list[str]] = None,
++    ) -> tuple[str, list[Any], Optional[str]]:
+         """Compile the supported FTS boolean subset into LIKE predicates: terms within an OR
+         group are ANDed (FTS5's implicit conjunction) and ``NOT`` negates the next term."""
+         groups: list[list[tuple[str, bool]]] = [[]]
+@@ -1002,6 +1004,8 @@
+                 params.extend(_like_params(term))
+                 if snippet_term is None and not negated:
+                     snippet_term = term
++                if positive_terms is not None and not negated and term not in positive_terms:
++                    positive_terms.append(term)
+             compiled_groups.append(f"({' AND '.join(clauses)})")
+         return " OR ".join(compiled_groups), params, snippet_term
+ 
+@@ -1016,6 +1020,60 @@
+         order = "ASC" if isinstance(sort, str) and sort.strip().lower() == "oldest" else "DESC"
+         return self._like_rows(where, [snippet_term, *params, limit, offset],
+                                order_by=f"ORDER BY m.timestamp {order}, m.id {order}", limit_sql="LIMIT ? OFFSET ?")
++
++    def search_messages_in_session(
++        self, session_id: str, query: str, *, role_filter: Optional[list[str]] = None,
++        limit: int = 3, sort: Optional[str] = None, excerpt_chars: int = 512,
++        timeout_seconds: float = 3.0,
++    ) -> list[dict[str, Any]]:
++        """Search canonical text in one session, including full tool-output bodies.
++
++        The session index bounds the scan before LIMIT, so unrelated sessions cannot
++        crowd out matches. Return bounded excerpts and IDs, never complete large rows.
++        A SQLite progress deadline fails loudly rather than returning a false empty hit.
++        """
++        if not isinstance(session_id, str) or not session_id.strip():
++            raise ValueError("session id is required")
++        if not isinstance(query, str) or not query.strip():
++            return []
++        if timeout_seconds <= 0:
++            raise TimeoutError("scoped session search timed out")
++        limit = max(1, min(int(limit), 10))
++        excerpt_chars = max(128, min(int(excerpt_chars), 4000))
++        sanitized = self._sanitize_fts5_query(query)
++        terms = [token for token in _LIKE_TOKEN_RE.findall(sanitized) if token.upper() not in _LIKE_SKIP_TOKENS]
++        if len(terms) > 32:
++            raise ValueError("scoped session search accepts at most 32 terms")
++        positive_terms: list[str] = []
++        predicate, match_params, snippet_term = self._compile_like_boolean_query(
++            sanitized, positive_terms=positive_terms)
++        if not predicate or snippet_term is None:
++            return []
++        where = ["m.session_id = ?", f"({predicate})"]
++        params = [session_id, *match_params]
++        _search_filter_clauses(where, params, include_inactive=False, source_filter=None,
++                               exclude_sources=None, role_filter=role_filter)
++        order = "ASC" if isinstance(sort, str) and sort.strip().lower() == "oldest" else "DESC"
++        exact_positions = ["NULLIF(instr(COALESCE(m.content, ''), ?), 0)" for _ in positive_terms]
++        folded_positions = ["NULLIF(instr(lower(COALESCE(m.content, '')), lower(?)), 0)" for _ in positive_terms]
++        position = "COALESCE(" + ", ".join([*exact_positions, *folded_positions, "0"]) + ")"
++        leading_chars = min(1000, excerpt_chars // 3)
++        snippet = (f"substr(COALESCE(m.content, ''), max(1, {position} - {leading_chars}), "
++                   f"{excerpt_chars}) AS snippet")
++        sql = _search_select_sql(snippet, "messages m INDEXED BY idx_messages_session", where,
++                                 f"ORDER BY m.timestamp {order}, m.id {order}", "LIMIT ?")
++        deadline = time.monotonic() + max(0.0, float(timeout_seconds))
++        with self._read_ctx() as conn:
++            conn.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
++            try:
++                rows = conn.execute(sql, [*positive_terms, *positive_terms, *params, limit]).fetchall()
++            except sqlite3.OperationalError as exc:
++                if "interrupted" in str(exc).lower() and time.monotonic() >= deadline:
++                    raise TimeoutError("scoped session search timed out") from exc
++                raise
++            finally:
++                conn.set_progress_handler(None, 0)
++        return [dict(row) for row in rows]
+ 
+     def _refresh_fts_stale_state(self) -> None:
+         """Observe fail-open initiated by another process sharing state.db."""
+diff --git a/tests/tools/test_session_search_scoped_query.py b/tests/tools/test_session_search_scoped_query.py
+new file mode 100644
+--- /dev/null
++++ b/tests/tools/test_session_search_scoped_query.py
+@@ -0,0 +1,222 @@
++"""Compaction recovery searches the requested session without model calls."""
++
++import json
++from concurrent.futures import ThreadPoolExecutor
++
++import pytest
++
++from hermes_constants import reset_hermes_home_override, set_hermes_home_override
++from hermes_state import SessionDB
++from tools.session_search_tool import session_search
++
++
++@pytest.fixture
++def conversations(tmp_path):
++    db = SessionDB(tmp_path / "state.db")
++    db.create_session("target", source="cli")
++    db.create_session("distractor", source="cli")
++    for index in range(45):
++        db.append_message("target", role="user", content=f"ordinary message {index}")
++    needle = db.append_message("target", role="tool", tool_name="terminal",
++                               content="prefix " + "x" * 5000 + " recoveryneedle " + "y" * 5000)
++    for index in range(45, 90):
++        db.append_message("target", role="assistant", content=f"ordinary answer {index}")
++    for index in range(350):
++        db.append_message("distractor", role="user", content=f"recoveryneedle unrelated {index}")
++    try:
++        yield db, needle
++    finally:
++        db.close()
++
++
++def _search(db, **kwargs):
++    return json.loads(session_search(db=db, **kwargs))
++
++
++def test_compaction_recovery_finds_middle_tool_output_in_only_the_target(conversations):
++    db, needle = conversations
++    result = _search(db, query="recoveryneedle", session_id="target", current_session_id="target")
++    assert result["success"] is True
++    assert result["mode"] == "search_session"
++    assert result["session_id"] == "target"
++    assert [row["match_message_id"] for row in result["results"]] == [needle]
++    assert "recoveryneedle" in result["results"][0]["snippet"]
++    assert len(result["results"][0]["snippet"]) <= 512
++
++
++def test_full_detail_requests_a_larger_but_still_bounded_excerpt(conversations):
++    db, needle = conversations
++    result = _search(db, query="recoveryneedle", session_id="target", detail="full")
++    assert result["results"][0]["match_message_id"] == needle
++    assert "recoveryneedle" in result["results"][0]["snippet"]
++    assert 512 < len(result["results"][0]["snippet"]) <= 4000
++
++
++def test_scoped_query_has_no_match_when_only_another_session_contains_it(conversations):
++    db, _ = conversations
++    result = _search(db, query="unrelated", session_id="target")
++    assert result["success"] is True
++    assert result["results"] == []
++
++
++def test_role_filter_is_honored_in_scoped_search(conversations):
++    db, needle = conversations
++    assert _search(db, query="recoveryneedle", session_id="target", role_filter="user,assistant")["results"] == []
++    assert _search(db, query="recoveryneedle", session_id="target", role_filter="tool")["results"][0]["match_message_id"] == needle
++
++
++def test_a_missing_session_is_an_error_not_a_global_search(conversations):
++    db, _ = conversations
++    result = _search(db, query="recoveryneedle", session_id="missing")
++    assert result["success"] is False
++    assert "results" not in result and "messages" not in result
++
++
++def test_bare_session_read_and_anchor_scroll_remain_compatible(conversations):
++    db, needle = conversations
++    assert _search(db, session_id="target")["mode"] == "read"
++    result = _search(db, query="ignored for scroll", session_id="target", around_message_id=needle)
++    assert result["success"] is True and result["mode"] == "scroll"
++
++
++def test_only_visible_live_or_compacted_rows_are_searchable(conversations):
++    db, _ = conversations
++    hidden = db.append_message("target", role="user", content="visibilityneedle hidden", display_kind="hidden")
++    rewound = db.append_message("target", role="user", content="visibilityneedle rewound")
++    compacted = db.append_message("target", role="user", content="visibilityneedle compacted")
++    db._conn.execute("UPDATE messages SET active=0, compacted=0 WHERE id=?", (rewound,))
++    db._conn.execute("UPDATE messages SET active=0, compacted=1 WHERE id=?", (compacted,))
++    db._conn.commit()
++    result = _search(db, query="visibilityneedle", session_id="target")
++    assert result["success"] is True
++    assert {row["match_message_id"] for row in result["results"]} == {compacted}
++    assert hidden != compacted
++
++
++def test_scoped_search_respects_sort_limit_and_time_filter(conversations):
++    db, _ = conversations
++    first = db.append_message("target", role="user", content="orderingneedle first", timestamp=1000)
++    db.append_message("target", role="user", content="orderingneedle second", timestamp=2000)
++    result = _search(db, query="orderingneedle", session_id="target", sort="oldest", limit=1)
++    assert [row["match_message_id"] for row in result["results"]] == [first]
++    assert _search(db, query="orderingneedle", session_id="target", after="2100-01-01")["results"] == []
++
++
++def test_scoped_search_supports_phrase_boolean_and_thai(conversations):
++    db, _ = conversations
++    message = db.append_message("target", role="user", content="กำหนดส่ง แผนงาน titanium sphere")
++    for query in ('"titanium sphere"', 'titanium AND sphere', 'กำหนดส่ง'):
++        result = _search(db, query=query, session_id="target")
++        assert [row["match_message_id"] for row in result["results"]] == [message]
++
++
++def test_or_match_excerpt_is_centered_on_the_term_that_actually_matched(conversations):
++    db, _ = conversations
++    message = db.append_message("target", role="tool", content="x" * 6000 + " secondneedle " + "y" * 1000)
++    result = _search(db, query="firstneedle OR secondneedle", session_id="target")
++    assert result["results"][0]["match_message_id"] == message
++    assert "secondneedle" in result["results"][0]["snippet"]
++
++
++def test_tool_name_matches_are_labeled_even_when_content_does_not_match(conversations):
++    db, _ = conversations
++    message = db.append_message("target", role="tool", tool_name="uniquetoolname", content="tool output")
++    result = _search(db, query="uniquetoolname", session_id="target")
++    assert result["results"][0]["match_message_id"] == message
++    assert result["results"][0]["tool_name"] == "uniquetoolname"
++
++
++def test_excessively_complex_query_returns_an_error(conversations):
++    db, _ = conversations
++    result = _search(db, query=" ".join(f"term{i}" for i in range(40)), session_id="target")
++    assert result["success"] is False
++
++
++def test_case_insensitive_match_is_visible_in_the_bounded_excerpt(conversations):
++    db, needle = conversations
++    result = _search(db, query="RECOVERYNEEDLE", session_id="target")
++    assert result["results"][0]["match_message_id"] == needle
++    assert "recoveryneedle" in result["results"][0]["snippet"]
++
++
++def test_timeout_is_reported_as_an_error_not_as_no_match(conversations, monkeypatch):
++    db, _ = conversations
++    def timed_out(*args, **kwargs):
++        raise TimeoutError("scoped search timed out")
++    monkeypatch.setattr(db, "search_messages_in_session", timed_out, raising=False)
++    result = _search(db, query="recoveryneedle", session_id="target")
++    assert result["success"] is False
++    assert "timed out" in result["error"]
++
++
++def test_deadline_failure_does_not_poison_a_later_search(conversations):
++    db, needle = conversations
++    with pytest.raises(TimeoutError):
++        db.search_messages_in_session("target", "recoveryneedle", timeout_seconds=0)
++    result = _search(db, query="recoveryneedle", session_id="target")
++    assert result["results"][0]["match_message_id"] == needle
++
++
++def test_sqlite_deadline_interrupts_scan_and_clears_the_handler(conversations, monkeypatch):
++    import hermes_state_search
++    db, needle = conversations
++    class ExpiringClock:
++        calls = 0
++        def monotonic(self):
++            self.calls += 1
++            return 0.0 if self.calls == 1 else 100.0
++    with monkeypatch.context() as scoped:
++        scoped.setattr(hermes_state_search, "time", ExpiringClock())
++        with pytest.raises(TimeoutError):
++            db.search_messages_in_session("target", "nonexistentneedle", timeout_seconds=3)
++    result = _search(db, query="recoveryneedle", session_id="target")
++    assert result["results"][0]["match_message_id"] == needle
++
++
++def test_parallel_scoped_queries_do_not_cross_session_boundaries(conversations):
++    db, needle = conversations
++    def read_target(_):
++        return _search(db, query="recoveryneedle", session_id="target")
++    with ThreadPoolExecutor(max_workers=4) as pool:
++        results = list(pool.map(read_target, range(8)))
++    assert all([row["match_message_id"] for row in result["results"]] == [needle] for result in results)
++
++
++def test_exclusions_and_invalid_time_bounds_are_not_silently_ignored(conversations):
++    db, _ = conversations
++    assert _search(db, query="recoveryneedle", session_id="target", exclude_session_ids=["target"])["results"] == []
++    assert _search(db, query="recoveryneedle", session_id="target", after="invalid-date")["success"] is False
++
++
++def test_compaction_footer_invocation_has_a_working_scoped_search(conversations):
++    from agent.context_compressor import _build_recovery_footer
++    db, needle = conversations
++    assert "session_search(query='<keywords>', session_id='target')" in _build_recovery_footer("target", 45)
++    result = _search(db, query="recoveryneedle", session_id="target", current_session_id="target")
++    assert result["results"][0]["match_message_id"] == needle
++
++
++def test_named_profile_search_uses_only_the_context_fleet(tmp_path, monkeypatch):
++    roots = [tmp_path / "fleet-a", tmp_path / "fleet-b"]
++    dbs = []
++    for root in roots:
++        root.mkdir()
++        (root / "config.yaml").write_text("model: {}\n", encoding="utf-8")
++        home = root / "profiles/work"
++        home.mkdir(parents=True)
++        (home / "config.yaml").write_text("model: {}\n", encoding="utf-8")
++        db = SessionDB(home / "state.db")
++        db.create_session("shared", source="cli")
++        db.append_message("shared", role="tool", content=f"targetword {root.name}")
++        dbs.append(db)
++    monkeypatch.setenv("HERMES_HOME", str(roots[0]))
++    token = set_hermes_home_override(roots[1] / "profiles/work")
++    try:
++        result = _search(dbs[1], query="targetword", session_id="@session:work/shared")
++        assert result["success"] is True
++        assert "fleet-b" in result["results"][0]["snippet"]
++        assert "fleet-a" not in json.dumps(result)
++    finally:
++        reset_hermes_home_override(token)
++        for db in dbs:
++            db.close()

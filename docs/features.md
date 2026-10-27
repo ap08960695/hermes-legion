@@ -195,3 +195,7 @@ Session recall accepts the returned `@session:` link directly for read or scroll
 ## Session link identity (v0.6.32)
 
 Session recall identifies the current context fleet when generating profile-qualified links. Those links preserve their originating profile if a caller switches to another profile in the same fleet. A profile alias is normalized; unresolvable reserved names stay unqualified. Links do not encode a globally unique fleet and should not be used as cross-fleet identifiers.
+
+## Session-scoped recovery (v0.6.33)
+
+A session ID combined with a query searches only that session, including canonical tool output, and returns bounded excerpts and message IDs. The substring/boolean subset is limited to 32 terms; a cooperative SQLite deadline reports interruption as an error. Default excerpts are at most 512 characters, with up to 4000 through full detail. Existing profile, visibility and scroll boundaries remain in effect. This is not a global FTS relevance search or a cross-lineage scan.
