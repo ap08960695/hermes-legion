@@ -4,6 +4,8 @@
 
 This kit supports the **exact** upstream Git revision in `patches/manifest.json`. Compatibility with later upstream releases, arbitrary local patches or another OS is not assumed. The verification helper reads files and Git metadata only; it does not import Hermes or run a model.
 
+For an existing Mac installation, see the [isolated macOS installation and update guide](macos-install-update.md). It distinguishes native CLI checks from Desktop packaging and activation.
+
 ## Apply to a separate clean checkout
 
 Keep your running installation untouched. Start in the Legion repository root, choose a **new, nonexistent** checkout directory and obtain the exact public base revision. The clone requires network access but does not authenticate a provider or call a model. These are ordinary shell variables, not credentials.

@@ -239,3 +239,7 @@ History search and paging read byte windows on the existing SQLite connection. A
 ## Answer cards in narrow chat tiles (v0.6.44)
 
 Answer cards respond to their own chat tile width. Single images and multi-image grids stay within narrow tiles, including beside an open artifact, and long supplied facts wrap. The change preserves the user's pane layout and literal card data.
+
+## Native backend startup on Python 3.13 (v0.6.45)
+
+The onboarding module imports `Path` before its type annotations are evaluated. This prevents the native Desktop backend from failing during startup on Python 3.13; resolving annotations before server binding is also covered on Python 3.14. The fix changes no onboarding, provider, quota or session policy. See the [Mac installation and update guide](macos-install-update.md).

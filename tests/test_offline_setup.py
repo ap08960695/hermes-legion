@@ -19,7 +19,9 @@ class SetupTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.base = Path(self.temp.name)
+        # macOS may spell its system temp directory through the /var alias.
+        # Canonicalize our fixture root; explicit linked destinations stay refused.
+        self.base = Path(self.temp.name).resolve()
         self.team = json.loads((ROOT / 'examples/team.small.json').read_text())
         self.models = {p['id']: ('chatgpt-web/example-model' if p['id'].endswith('web') else 'example-model')
                        for p in self.team['profiles']}

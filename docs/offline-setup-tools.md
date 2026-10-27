@@ -1,6 +1,6 @@
 # Offline doctor and setup bundles
 
-These tools prepare and inspect files; they do **not** install profiles, authenticate, run Hermes, dispatch work or call a model. Only Python's standard library is needed. Run the commands from the Legion repository root. The shell examples target POSIX/Linux.
+These tools prepare and inspect files; they do **not** install profiles, authenticate, run Hermes, dispatch work or call a model. Only Python's standard library is needed. Run the commands from the Legion repository root. The shell examples target POSIX shells; see the [macOS guide](macos-install-update.md) for the tested runtime prerequisites and physical-path caveat.
 
 ## 1. Inspect a team before setup
 
