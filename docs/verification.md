@@ -1,3 +1,16 @@
+# v0.7.2 compact bot settings
+
+Two Desktop presentation paths keep model/effort ahead of expanded role fields and
+place optional avatar controls in an Appearance disclosure. See the [editor guide](desktop-bot-settings.md).
+Native Linux/macOS typecheck and build, prepared offline packaging, local Mac signature
+verification, and rendered packaged-app interaction checks are recorded separately.
+The installed packages each passed the same 11 interaction checkpoints in isolated
+synthetic homes with zero inference requests. These overlapping host/candidate runs
+are not summed. The initial compact editor was checked after fonts settled; model
+and effort settings, Save/Cancel, navigation, Workflow, Hub and History were covered.
+This revision makes no Python runtime, dependency, account or quota changes. The
+v0.7.1 policy suite below is prior evidence; overlapping runs are never summed.
+
 # v0.7.1 optional reasoning effort ceilings
 
 The consolidated stable kit now contains 681 pinned paths. See the [effort-limit guide](reasoning-effort-limits.md) for policy, request boundaries and exact evidence limits. Current change: an 86-file Python selection has 645 passing cases by latest per-file results; 84 files passed the integrated run and two repaired child-environment harness files passed separately. Desktop: 3 files / 25 PASS, typecheck/build PASS, and 5 rendered source-mode checkpoints with an actual isolated backend, zero inference. Historical v0.7.0 broad-suite counts below are baseline evidence, not a rerun on this revision; do not sum overlapping scopes. A separate inherited raw-YAML source guard remains failing and is documented explicitly in the guide. Original-session, packaged-public-build and provider workload acceptance remain separate.
