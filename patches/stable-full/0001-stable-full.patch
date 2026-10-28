@@ -20876,6 +20876,40 @@ index 2867e3e0a531a5a42c921c7561dfe0b626c6646a..49fcbb072368f0ffabdb81a6ebb6a4ed
              return ""
          logger.info(
              "Gateway turn paused by global emergency stop (platform=%s chat=%s)",
+diff --git a/gateway/run_runtime.py b/gateway/run_runtime.py
+index 49f4233a..d55b2ed7 100644
+--- a/gateway/run_runtime.py
++++ b/gateway/run_runtime.py
+@@ -35,2 +35,24 @@ def reserved_profile_homes(runner):
+ 
++async def _open_profile_session_db(runner):
++    """Drain the owned writer before cancellation can release its profile reservation."""
++    from gateway.run import _gateway_session_db_inner
++    pending = asyncio.create_task(runner._run_in_executor_with_context(_gateway_session_db_inner, runner))
++    cancelled = None
++    while True:
++        try:
++            db = await asyncio.shield(pending)
++        except asyncio.CancelledError as exc:
++            if pending.cancelled():
++                raise
++            cancelled = exc
++        except Exception:
++            if cancelled is not None:
++                raise cancelled
++            raise
++        else:
++            if cancelled is not None:
++                raise cancelled
++            return db
++
++
+ async def _build_profile_authority(runner, name, home, *, register):
+@@ -44,3 +66,3 @@ async def _build_profile_authority(runner, name, home, *, register):
+     with _profile_runtime_scope(home, hydrate_secrets=False):
+-        db = getattr(runner._session_db, '_db', runner._session_db)
++        db = await _open_profile_session_db(runner)
+         if db is None:
 diff --git a/gateway/run_runtime_init.py b/gateway/run_runtime_init.py
 index 3e75e19c4b044dd08256963840da9ca016c7ff69..1817890fc2cda1023c33b2f4c35c5e394ef75eef 100644
 --- a/gateway/run_runtime_init.py
@@ -43209,6 +43243,207 @@ index 0000000000000000000000000000000000000000..d82c8ccc2426cd9059392e8a8677b63f
 +    assert built.get("api_mode") == wire
 +    assert built["api_key"] == (launch_key or "synthetic-route-key")
 +    assert built["base_url"] == "https://wire.example/api"
+diff --git a/tests/gateway/test_profile_authority_park_reason.py b/tests/gateway/test_profile_authority_park_reason.py
+index 37d0651b..11d5c723 100644
+--- a/tests/gateway/test_profile_authority_park_reason.py
++++ b/tests/gateway/test_profile_authority_park_reason.py
+@@ -8,4 +8,5 @@ failed open recorded; building it never opens (so never creates or migrates) the
+ """
++from contextlib import contextmanager
+ from pathlib import Path
+-from types import SimpleNamespace
++from types import MethodType, SimpleNamespace
+ 
+@@ -22,5 +23,13 @@ class _Registry:
+ 
++@contextmanager
+ def _runner(cache):
+-    return SimpleNamespace(_session_db=None, session_authorities=_Registry(), _session_db_handle_cache=cache,
+-                           session_runtime_descriptor={'instance_id': 'owner'})
++    from gateway.run import GatewayRunner
++    runner = SimpleNamespace(_session_db=None, session_authorities=_Registry(), _session_db_handle_cache=cache,
++                             session_runtime_descriptor={'instance_id': 'owner'})
++    runner._get_executor = MethodType(GatewayRunner._get_executor, runner)
++    runner._run_in_executor_with_context = MethodType(GatewayRunner._run_in_executor_with_context, runner)
++    try:
++        yield runner
++    finally:
++        GatewayRunner._shutdown_executor(runner, drain_timeout=5)
+ 
+@@ -37,4 +46,4 @@ async def test_an_unopenable_store_is_parked_under_its_open_failure(tmp_path, mo
+ 
+-    with pytest.raises(RuntimeError) as exc:
+-        await run_runtime._build_profile_authority(_runner(cache), 'worker', home, register=False)
++    with _runner(cache) as runner, pytest.raises(RuntimeError) as exc:
++        await run_runtime._build_profile_authority(runner, 'worker', home, register=False)
+     reason = str(exc.value)
+@@ -50,4 +59,4 @@ async def test_the_park_reason_never_creates_the_store(tmp_path, monkeypatch):
+ 
+-    with pytest.raises(RuntimeError) as exc:
+-        await run_runtime._build_profile_authority(_runner(RecoverableHandleCache()), 'worker', home, register=False)
++    with _runner(RecoverableHandleCache()) as runner, pytest.raises(RuntimeError) as exc:
++        await run_runtime._build_profile_authority(runner, 'worker', home, register=False)
+     assert 'is unavailable' in str(exc.value)
+diff --git a/tests/gateway/test_profile_runtime_io.py b/tests/gateway/test_profile_runtime_io.py
+new file mode 100644
+index 0000000..b0636be
+--- /dev/null
++++ b/tests/gateway/test_profile_runtime_io.py
+@@ -0,0 +1,154 @@
++"""New-profile disk I/O must not block served owners or outlive its custody."""
++import asyncio
++import threading
++from contextlib import contextmanager
++
++import pytest
++
++from tests.gateway.test_session_authorities_multiplex import _reserve_homes, _runner
++
++
++@contextmanager
++def _world(tmp_path, monkeypatch):
++    from gateway.runtime_ownership import process_ownership
++    root, homes = _reserve_homes(tmp_path, monkeypatch, names=('alpha',))
++    process_ownership.reserve([home for _, home in homes])
++    runner = _runner(root, homes[:1])
++    try:
++        yield runner, root, homes[1][1]
++    finally:
++        import hermes_state_registry
++        runner._shutdown_executor(drain_timeout=5)
++        runner.session_store._db_handle_cache.close_all(lambda db: db.close())
++        runner.close_all_session_db_handles()
++        hermes_state_registry.close_all_under(root)
++        for _, home in homes:
++            process_ownership.release(home)
++
++
++def _blocked_native_open(monkeypatch, target):
++    import hermes_state_registry
++    from gateway.runtime_ownership import process_ownership
++    from hermes_constants import get_hermes_home
++    native = hermes_state_registry.acquire
++    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
++    rows = []
++
++    def open_store(*args, **kwargs):
++        if get_hermes_home().resolve() == target and not entered.is_set():
++            rows.append({'home': get_hermes_home().resolve(), 'thread': threading.get_ident()})
++            entered.set()
++            assert release.wait(5), 'test observer must release the native open'
++            rows[-1]['owned_at_physical_open'] = process_ownership.owns(target)
++        try:
++            return native(*args, **kwargs)
++        finally:
++            if get_hermes_home().resolve() == target:
++                finished.set()
++
++    monkeypatch.setattr(hermes_state_registry, 'acquire', open_store)
++    return entered, release, finished, rows
++
++
++@pytest.mark.asyncio
++async def test_cold_profile_open_keeps_existing_owner_readable_on_the_loop(tmp_path, monkeypatch):
++    from gateway.run_runtime import initialize_gateway_runtime, _build_profile_authority
++    with _world(tmp_path, monkeypatch) as (runner, root, target):
++        await initialize_gateway_runtime(runner)
++        entered, release, finished, rows = _blocked_native_open(monkeypatch, target)
++        loop = asyncio.get_running_loop()
++        progressed = threading.Event()
++        observations = []
++        loop_thread = threading.get_ident()
++
++        def existing_owner_read():
++            db = runner.session_authority.db
++            observations.append(db._read_one('SELECT COUNT(*) FROM sessions')[0])
++            progressed.set()
++
++        def observer():
++            assert entered.wait(5)
++            loop.call_soon_threadsafe(existing_owner_read)
++            observations.append(progressed.wait(2))
++            release.set()
++
++        watcher = threading.Thread(target=observer)
++        watcher.start()
++        try:
++            authority = await _build_profile_authority(runner, 'alpha', target, register=False)
++            assert rows[0]['thread'] != loop_thread, 'native open must not monopolize the event loop'
++            assert observations == [0, True], 'served owner must answer before the cold open is released'
++            assert authority.db.db_path.resolve().parent == target
++            assert authority.db is not runner.session_authority.db
++            assert runner.session_authorities.for_home(target) is authority
++            assert rows[0]['owned_at_physical_open'] is True
++        finally:
++            release.set()
++            await asyncio.to_thread(watcher.join, 5)
++            assert not watcher.is_alive()
++            assert await asyncio.to_thread(finished.wait, 5)
++
++
++@pytest.mark.asyncio
++async def test_repeated_cancellation_keeps_reservation_until_physical_open_finishes(tmp_path, monkeypatch):
++    from gateway.run_runtime import initialize_gateway_runtime, _build_profile_authority
++    from gateway.runtime_ownership import process_ownership
++    with _world(tmp_path, monkeypatch) as (runner, root, target):
++        await initialize_gateway_runtime(runner)
++        entered, release, finished, rows = _blocked_native_open(monkeypatch, target)
++        loop = asyncio.get_running_loop()
++        cancelled, observed = threading.Event(), threading.Event()
++        checks = []
++
++        async def owning_call():
++            try:
++                return await _build_profile_authority(runner, 'alpha', target, register=False)
++            finally:
++                if runner.session_authorities.for_home(target) is None:
++                    process_ownership.release(target)
++
++        task = asyncio.create_task(owning_call())
++
++        def cancel_twice():
++            task.cancel()
++            loop.call_soon(task.cancel)
++            cancelled.set()
++
++        def check_custody():
++            checks.append((task.done(), process_ownership.owns(target)))
++            observed.set()
++
++        def observer():
++            assert entered.wait(5)
++            loop.call_soon_threadsafe(cancel_twice)
++            checks.append(cancelled.wait(2))
++            loop.call_soon_threadsafe(check_custody)
++            checks.append(observed.wait(2))
++            release.set()
++
++        watcher = threading.Thread(target=observer)
++        watcher.start()
++        try:
++            with pytest.raises(asyncio.CancelledError):
++                await task
++            assert checks == [True, (False, True), True], 'cancelled observer must not release a live opener'
++            assert rows[0]['owned_at_physical_open'] is True
++            assert runner.session_authorities.for_home(target) is None
++            assert not process_ownership.owns(target)
++        finally:
++            release.set()
++            await asyncio.to_thread(watcher.join, 5)
++            assert not watcher.is_alive()
++            assert await asyncio.to_thread(finished.wait, 5)
++
++
++@pytest.mark.asyncio
++async def test_shutdown_fence_refuses_a_new_profile_writer(tmp_path, monkeypatch):
++    from gateway.run_runtime import initialize_gateway_runtime, _build_profile_authority
++    with _world(tmp_path, monkeypatch) as (runner, root, target):
++        await initialize_gateway_runtime(runner)
++        runner._shutdown_executor()
++        with pytest.raises(RuntimeError, match='shutting down; executor unavailable'):
++            await _build_profile_authority(runner, 'alpha', target, register=False)
++        assert not (target / 'state.db').exists()
++        assert runner.session_authorities.for_home(target) is None
 diff --git a/tests/gateway/test_role_workflow_native.py b/tests/gateway/test_role_workflow_native.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..1711b87f08b76e66bac3c2ed0ba2ada0578b4631

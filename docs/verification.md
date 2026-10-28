@@ -1,3 +1,13 @@
+# v0.7.8: keep served profiles responsive during cold SQLite open
+
+699 pinned paths. Existing owned executor and scope-aware handle cache; cancellation
+drains physical opens and shutdown retains writer visibility. See [profile startup
+I/O](profile-startup-io.md) for measured scope and the pre-existing group-control
+failure reproduced on the before version. Focused regression: 16 files / 48 passed;
+wider selection: 159 passed / 3 existing failures; native Linux/macOS: 8 controls
+each, zero inference; native code-health clear. Historical counts below overlap.
+No universal startup, RAM, token or original-session adoption claim is made.
+
 # v0.7.7: reuse static plugin manifest metadata
 
 The consolidated stable kit contains 696 pinned paths. Manifest discovery reuses
