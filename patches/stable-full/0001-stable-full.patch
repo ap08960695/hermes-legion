@@ -28164,6 +28164,26 @@ index 0a9e8e50bbd803f37da25192628891008c8dce7e..87100e53975b7cb32866c39f0a817e33
          module = importlib.util.module_from_spec(spec)
          module.__package__ = module_name
          module.__path__ = [str(plugin_dir)]  # type: ignore[attr-defined]
+diff --git a/hermes_cli/plugins_manifest.py b/hermes_cli/plugins_manifest.py
+index 95419c36..f3e3aa90 100644
+--- a/hermes_cli/plugins_manifest.py
++++ b/hermes_cli/plugins_manifest.py
+@@ -12,2 +12,3 @@ import re
+ from contextlib import suppress
++from copy import deepcopy
+ from dataclasses import dataclass, field
+@@ -16,3 +17,3 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Tuple, Uni
+ 
+-from utils import fast_safe_load
++from utils import load_yaml_file_readonly
+ from hermes_cli.plugin_capabilities import parse_declared_capabilities as _parse_declared_capabilities
+@@ -538,3 +539,5 @@ def parse_manifest_file(
+             return None
+-        data = fast_safe_load(manifest_file.read_text(encoding="utf-8-sig")) or {}
++        # The native file reader invalidates on edits/replacement. Its shared value
++        # is read-only: each profile must own every mutable manifest field.
++        data = deepcopy(load_yaml_file_readonly(manifest_file)) or {}
+         if not isinstance(data, Mapping):
 diff --git a/hermes_cli/profiles.py b/hermes_cli/profiles.py
 index 08b7eb1057f21f91175dc19074a98c24bd515def..4c21edeeb96a70732e16ebfe77199161ef23d902 100644
 --- a/hermes_cli/profiles.py
@@ -48029,6 +48049,100 @@ index 0000000000000000000000000000000000000000..f5abe0a6806194ad1aaf10e43276183c
 +        "agy",
 +    ]
 +    assert path.read_bytes() == before
+diff --git a/tests/hermes_cli/test_plugin_manifest_cache.py b/tests/hermes_cli/test_plugin_manifest_cache.py
+new file mode 100644
+index 0000000..0dee928
+--- /dev/null
++++ b/tests/hermes_cli/test_plugin_manifest_cache.py
+@@ -0,0 +1,88 @@
++"""Native YAML reuse must keep mutable manifest state private to each caller."""
++import os
++
++import pytest
++
++from hermes_cli.plugins_manifest import parse_manifest_file
++from tests.waiting import wait_for_ctime_tick
++
++
++_BODY = '''\ufeffmanifest_version: 2
++name: fixture
++kind: backend
++version: '1.0'
++provides_tools: [fixture_tool]
++config_schema:
++  options:
++    type: dict
++    default:
++      items: [clean]
++  enabled:
++    type: bool
++    default: yes
++'''
++
++
++def _manifest(tmp_path):
++    plugin = tmp_path / 'fixture'
++    plugin.mkdir()
++    path = plugin / 'plugin.yaml'
++    path.write_text(_BODY, encoding='utf-8')
++    return path, plugin
++
++
++def test_shared_manifest_parses_once_but_caller_mutations_and_metadata_stay_private(tmp_path, monkeypatch):
++    import hermes_yaml
++    path, plugin = _manifest(tmp_path)
++    parses = []
++    native = hermes_yaml.safe_load
++
++    def observe(document):
++        parses.append(1)
++        return native(document)
++
++    monkeypatch.setattr(hermes_yaml, 'safe_load', observe)
++    first = parse_manifest_file(path, plugin, 'bundled', 'alpha')
++    assert first.config_schema['enabled']['default'] is True
++    first.provides_tools.append('private_only')
++    first.config_schema['options']['default']['items'].append('private_only')
++    second = parse_manifest_file(path, plugin, 'user', 'beta')
++    assert second.provides_tools == ['fixture_tool']
++    assert second.config_schema['options']['default']['items'] == ['clean']
++    assert (second.key, second.source, second.path) == ('beta/fixture', 'user', str(plugin))
++    assert first.key == 'alpha/fixture'
++    assert len(parses) == 1, 'unchanged shared YAML must not be parsed again for another profile'
++
++
++def test_manifest_edit_with_preserved_mtime_and_deletion_are_observed(tmp_path):
++    path, plugin = _manifest(tmp_path)
++    first = parse_manifest_file(path, plugin, 'bundled', '')
++    assert first.version == '1.0'
++    st = path.stat()
++    wait_for_ctime_tick(plugin, st.st_ctime_ns)
++    path.write_text(_BODY.replace("'1.0'", "'2.0'"), encoding='utf-8')
++    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
++    assert parse_manifest_file(path, plugin, 'bundled', '').version == '2.0'
++    path.unlink()
++    assert parse_manifest_file(path, plugin, 'bundled', '') is None
++
++
++def test_failed_manifest_parse_does_not_poison_a_repaired_file(tmp_path):
++    path, plugin = _manifest(tmp_path)
++    path.write_text('name: [broken\n')
++    assert parse_manifest_file(path, plugin, 'user', '') is None
++    path.write_text(_BODY, encoding='utf-8')
++    assert parse_manifest_file(path, plugin, 'user', '').name == 'fixture'
++
++
++@pytest.mark.platforms('posix')
++@pytest.mark.skipif(hasattr(os, 'geteuid') and os.geteuid() == 0, reason='root bypasses real file permissions')
++def test_warm_manifest_cannot_bypass_read_permission_revocation(tmp_path):
++    path, plugin = _manifest(tmp_path)
++    assert parse_manifest_file(path, plugin, 'user', '').name == 'fixture'
++    mode = path.stat().st_mode & 0o777
++    try:
++        path.chmod(0)
++        assert parse_manifest_file(path, plugin, 'user', '') is None
++    finally:
++        path.chmod(mode)
 diff --git a/tests/hermes_cli/test_profile_history_search.py b/tests/hermes_cli/test_profile_history_search.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..6256a6eafce2e41b60b5a0d8ed00d9b1d8eb234f

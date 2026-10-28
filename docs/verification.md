@@ -1,3 +1,15 @@
+# v0.7.7: reuse static plugin manifest metadata
+
+The consolidated stable kit contains 696 pinned paths. Manifest discovery reuses
+the existing YAML file cache, then copies metadata for each caller. Native reload,
+permission, profile and plugin execution gates stay in place. See [manifest metadata
+reuse](plugin-manifest-cache.md) for measured scope and limits.
+
+Current validation: 15 regression files / 203 passed, zero retries; 8 installed
+synthetic-home controls per Linux/macOS, zero inference; native code-health clear.
+Overlapping historical counts below are not summed. Whole-Gateway task/token/RAM
+savings and original-user model-backed adoption remain unproven.
+
 # v0.7.6: demand-start hosted room supervisors
 
 The consolidated stable kit contains 694 pinned paths. Empty canonical hosted
