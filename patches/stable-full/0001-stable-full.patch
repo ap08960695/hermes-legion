@@ -26675,6 +26675,44 @@ index 8a65d413467169d2e352c96e3284637c61180295..fcbb28712b0eaab864d0758c1761a6eb
      _cmd("notify-unsubscribe", [_TASK_ID, *_NOTIFY_TARGET], help="Remove a gateway subscription from a task"),
      _cmd("log", [_TASK_ID, _arg("--tail", type=int, help="Only print the last N bytes")],
           help="Print the worker log for a task (from <kanban-root>/kanban/logs/)"),
+diff --git a/hermes_cli/kanban_profile_config.py b/hermes_cli/kanban_profile_config.py
+new file mode 100644
+index 0000000..2c0576e
+--- /dev/null
++++ b/hermes_cli/kanban_profile_config.py
+@@ -0,0 +1,32 @@
++"""Native assignee config scope for Kanban capability and skill preflight."""
++from contextlib import contextmanager
++
++
++class FrozenAssigneeConfigUnavailable(ValueError):
++    """The native dispatcher must check another profile outside this frozen worker."""
++
++
++@contextmanager
++def assignee_config(assignee):
++    """Read merged target config; a frozen worker cannot stand in for another profile."""
++    from agent.safe_worker_policy import worker_config_snapshot
++    from hermes_cli.config import FailedConfigRead, load_config_readonly
++    from hermes_cli.profiles import get_profile_dir, profile_exists
++    from hermes_constants import get_hermes_home, get_routing_process_hermes_home, hermes_home_key
++
++    current = get_hermes_home()
++    home = get_profile_dir(assignee, home=current)
++    if worker_config_snapshot() is not None:
++        if hermes_home_key(home) != hermes_home_key(get_routing_process_hermes_home()):
++            raise FrozenAssigneeConfigUnavailable('another assignee config is unavailable in a frozen worker')
++        yield home, load_config_readonly()
++        return
++    if not profile_exists(assignee, home=current):
++        raise ValueError('assignee profile is unavailable')
++    from hermes_cli.kanban_db_dispatch import _worker_profile_scope
++
++    with _worker_profile_scope(str(home)):
++        config = load_config_readonly()
++        if isinstance(config, FailedConfigRead):
++            raise ValueError('assignee config is unreadable')
++        yield home, config
 diff --git a/hermes_cli/kanban_ready_order.py b/hermes_cli/kanban_ready_order.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..95b76e150233f1a76f394b0bc4bbe8d639e578dd
@@ -27348,10 +27386,10 @@ index eefb92046754534a19a9221f8a3f99272c41af7c..749e0baded464730bdcd939b1f475dc2
 +    return [t.id for t in tasks if t.block_recurrences < kb.BLOCK_RECURRENCE_LIMIT]
 diff --git a/hermes_cli/kanban_task_contract.py b/hermes_cli/kanban_task_contract.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..0f87aeb3c56264cc66f386a4df9d883b1891471d
+index 0000000..cf5d0e9
 --- /dev/null
 +++ b/hermes_cli/kanban_task_contract.py
-@@ -0,0 +1,271 @@
+@@ -0,0 +1,273 @@
 +"""Opt-in task requirements and bounded, deterministic handoff evidence checks.
 +
 +This checks declared bytes and recorded outcomes, never grants approval, executes
@@ -27522,14 +27560,10 @@ index 0000000000000000000000000000000000000000..0f87aeb3c56264cc66f386a4df9d883b
 +
 +def configured_tools(assignee):
 +    """Resolve the worker's own CLI selection; no service checks or credential/model probes."""
-+    from hermes_cli.profiles import resolve_profile_env
-+    from hermes_cli.kanban_db_dispatch import _worker_profile_scope
-+    from hermes_cli.config import load_config_readonly
++    from hermes_cli.kanban_profile_config import assignee_config
 +    from hermes_cli.tools_config import _get_platform_tools
 +    from toolsets import resolve_toolset, session_disabled_toolsets
-+    home = resolve_profile_env(assignee)
-+    with _worker_profile_scope(home):
-+        cfg = load_config_readonly()
++    with assignee_config(assignee) as (_, cfg):
 +        selected = _get_platform_tools(cfg, 'cli')
 +        if not selected:
 +            raise ValueError('worker tool selection is unknown')
@@ -27543,13 +27577,19 @@ index 0000000000000000000000000000000000000000..0f87aeb3c56264cc66f386a4df9d883b
 +        return names
 +
 +
-+def preflight_reason(body, assignee):
++def preflight_reason(body, assignee, *, defer_frozen=False):
++    from hermes_cli.kanban_profile_config import FrozenAssigneeConfigUnavailable
++
 +    try:
 +        contract = task_contract(body)
 +        if not contract or not contract.get('required_tools'):
 +            return None
 +        missing = set(contract['required_tools']) - configured_tools(assignee)
 +        return 'required tools not configured: ' + ', '.join(sorted(missing)) if missing else None
++    except FrozenAssigneeConfigUnavailable as exc:
++        # Creating a child does not spawn it. The dispatcher still checks the actual
++        # target before claiming; never borrow this worker's snapshot for that check.
++        return None if defer_frozen else 'task capability preflight unresolved: ' + type(exc).__name__
 +    except (OSError, ValueError, TypeError, KeyError) as exc:
 +        return 'task capability preflight unresolved: ' + type(exc).__name__
 +
@@ -55929,6 +55969,192 @@ index 0000000000000000000000000000000000000000..e108922367855455d669e180d48d1959
 +    s.output_buffer='a\nb\nc';reg._running[s.id]=s
 +    assert reg.read_log(s.id,limit=2)['output']=='b\nc'
 +    assert reg.read_log(s.id,offset=0,limit=1)['output']=='a'
+diff --git a/tests/tools/test_kanban_assignee_config.py b/tests/tools/test_kanban_assignee_config.py
+new file mode 100644
+index 0000000..5e2cf11
+--- /dev/null
++++ b/tests/tools/test_kanban_assignee_config.py
+@@ -0,0 +1,180 @@
++"""Assignee preflight must use native scoped config, not raw YAML or another worker's snapshot."""
++import json
++import os
++from pathlib import Path
++import subprocess
++import sys
++import textwrap
++from concurrent.futures import ThreadPoolExecutor
++
++import pytest
++import hermes_yaml as yaml
++
++
++@pytest.fixture
++def fleet(tmp_path, monkeypatch):
++    root = tmp_path / 'fleet'
++    root.mkdir()
++    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
++    monkeypatch.setenv('HERMES_HOME', str(root))
++    monkeypatch.setenv('HERMES_ROOT', str(root))
++    monkeypatch.setenv('HERMES_KANBAN_HOME', str(root))
++    for key in ('HERMES_KANBAN_TASK', 'HERMES_KANBAN_RUN_ID', 'HERMES_KANBAN_DB', 'HERMES_KANBAN_BOARD'):
++        monkeypatch.delenv(key, raising=False)
++    for name, tools in [('alpha', ['terminal']), ('beta', ['file'])]:
++        home = root / 'profiles' / name
++        home.mkdir(parents=True)
++        library = tmp_path / ('library-' + name)
++        for directory, skill in [(library, 'external-' + name), (home / 'skills', 'local-' + name)]:
++            path = directory / skill
++            path.mkdir(parents=True)
++            (path / 'SKILL.md').write_text('---\nname: ' + skill + '\ndescription: Synthetic fixture\n---\nFixture.\n')
++        (home / '.env').write_text('SKILL_LIBRARY=' + str(library) + '\n')
++        (home / 'config.yaml').write_text(yaml.safe_dump({
++            'model': {'default': 'synthetic-model'},
++            'platform_toolsets': {'cli': tools},
++            'skills': {'external_dirs': ['${SKILL_LIBRARY}']},
++        }))
++    from hermes_cli import config
++    config._LOAD_CONFIG_CACHE.clear()
++    yield root
++    config._LOAD_CONFIG_CACHE.clear()
++
++
++def test_toolsets_honor_managed_config(fleet, tmp_path, monkeypatch):
++    from tools import kanban_tools
++    managed = tmp_path / 'managed'
++    managed.mkdir()
++    (managed / 'config.yaml').write_text('platform_toolsets:\n  cli: [terminal]\n')
++    monkeypatch.setenv('HERMES_MANAGED_DIR', str(managed))
++    assert kanban_tools._profile_toolsets('beta') == {'terminal'}
++
++
++def test_skill_dirs_expand_only_the_assignee_environment(fleet, monkeypatch):
++    from tools import kanban_tools
++    monkeypatch.setenv('SKILL_LIBRARY', '/nonexistent-launch-library')
++    for name, other in [('alpha', 'beta'), ('beta', 'alpha')]:
++        wanted = ['external-' + name, 'local-' + name, 'external-' + other, 'missing']
++        assert kanban_tools._skills_available_for(name, wanted) == (wanted[:2], wanted[2:])
++
++
++def test_routed_turn_reads_its_own_fleet_and_restores_scope(fleet, tmp_path, monkeypatch):
++    from tools import kanban_tools
++    from hermes_constants import get_hermes_home, set_hermes_home_override, reset_hermes_home_override
++    decoy = tmp_path / 'launch'
++    decoy.mkdir()
++    monkeypatch.setenv('HERMES_HOME', str(decoy))
++    monkeypatch.setenv('HERMES_ROOT', str(decoy))
++    token = set_hermes_home_override(fleet / 'profiles' / 'alpha')
++    try:
++        assert kanban_tools._profile_toolsets('beta') == {'file'}
++        assert kanban_tools._skills_available_for('beta', ['external-beta']) == (['external-beta'], [])
++        assert get_hermes_home() == fleet / 'profiles' / 'alpha'
++    finally:
++        reset_hermes_home_override(token)
++
++
++def test_registry_create_preserves_a_valid_external_skill(fleet):
++    from tools import kanban_tools
++    from tools.registry import registry
++    from hermes_cli import kanban_db as kb
++    from hermes_cli.kanban_db_connect import connect_closing
++    result = json.loads(registry.dispatch('kanban_create', {
++        'title': 'Synthetic configured skill', 'assignee': 'alpha',
++        'body': 'BRIEF: synthetic acceptance', 'skills': ['external-alpha'],
++    }))
++    assert result.get('ok'), result
++    with connect_closing() as conn:
++        assert kb.get_task(conn, result['task_id']).skills == ['external-alpha']
++
++
++@pytest.mark.parametrize('mode', ['ordinary', 'safe', 'config'])
++def test_managed_worker_uses_its_frozen_config_without_profile_reads(fleet, tmp_path, mode):
++    source = Path(__file__).resolve().parents[2]
++    home = fleet / 'profiles' / 'alpha'
++    library = tmp_path / 'frozen-library'
++    skill = library / 'frozen-skill'
++    skill.mkdir(parents=True)
++    (skill / 'SKILL.md').write_text('---\nname: frozen-skill\ndescription: Fixture\n---\nFixture.\n')
++    snapshot = {'platform_toolsets': {'cli': ['file']}, 'skills': {'external_dirs': [str(library)]}}
++    script = tmp_path / 'frozen_probe.py'
++    script.write_text('import sys; sys.path.insert(0, ' + repr(str(source)) + ')\n' + textwrap.dedent(r'''
++        import json, os, sys
++        from agent.safe_worker_policy import _bind_worker_config, _bind_safe_worker_policy
++        cfg = json.loads(os.environ['SYNTHETIC_CONFIG'])
++        mode = os.environ['SYNTHETIC_MODE']
++        if mode == 'ordinary':
++            _bind_worker_config(cfg)
++        else:
++            _bind_safe_worker_policy(safe_mode=mode == 'safe', ignore_user_config=True, config=cfg)
++        reads = []
++        def audit(event, args):
++            if event == 'open' and str(args[0]).endswith('config.yaml'):
++                reads.append(str(args[0]))
++        sys.addaudithook(audit)
++        from tools import kanban_tools
++        assert kanban_tools._profile_toolsets('alpha') == {'file'}
++        assert kanban_tools._profile_toolsets('beta') is None
++        assert kanban_tools._skills_available_for('alpha', ['frozen-skill', 'external-alpha']) == (['frozen-skill'], ['external-alpha'])
++        assert kanban_tools._skills_available_for('beta', ['external-beta']) == (['external-beta'], [])
++        from hermes_cli.kanban_task_contract import configured_tools
++        try:
++            configured_tools('beta')
++        except ValueError:
++            pass
++        else:
++            raise AssertionError('another assignee borrowed the frozen worker config')
++        assert not reads, reads
++        preflight_reads = len(reads)
++        from tools.registry import registry
++        body = 'BRIEF: synthetic fanout\n```hermes-contract\n' + json.dumps({'version': 1, 'required_tools': ['terminal']}) + '\n```'
++        created = json.loads(registry.dispatch('kanban_create', {
++            'title': 'Synthetic frozen-worker fanout', 'assignee': 'beta', 'body': body,
++        }))
++        assert created.get('ok'), created
++        # Native role/ownership gates may inspect current fleet metadata at create;
++        # that must not replace this worker's execution configuration.
++        assert kanban_tools._profile_toolsets('alpha') == {'file'}
++        assert kanban_tools._profile_toolsets('beta') is None
++        print(json.dumps({'frozen': True, 'preflight_config_reads': preflight_reads, 'task_id': created['task_id']}))
++    '''))
++    env = {**os.environ, 'HOME': str(tmp_path), 'HERMES_HOME': str(home), 'HERMES_ROOT': str(fleet),
++           'HERMES_DISABLE_LAZY_INSTALLS': '1', 'SYNTHETIC_CONFIG': json.dumps(snapshot), 'SYNTHETIC_MODE': mode}
++    result = subprocess.run([sys.executable, str(script)], env=env, cwd=source,
++                            capture_output=True, text=True, timeout=45, check=False)
++    assert result.returncode == 0, result.stdout + result.stderr
++    observed = json.loads(result.stdout.splitlines()[-1])
++    assert observed.pop('task_id')
++    assert observed == {'frozen': True, 'preflight_config_reads': 0}
++    from hermes_cli.kanban_task_contract import preflight_reason
++    body = '```hermes-contract\n' + json.dumps({'version': 1, 'required_tools': ['terminal']}) + '\n```'
++    assert preflight_reason(body, 'beta') == 'required tools not configured: terminal'
++
++
++def test_unknown_profile_keeps_unknown_semantics(fleet):
++    from tools import kanban_tools
++    assert kanban_tools._profile_toolsets('missing-profile') is None
++    assert kanban_tools._skills_available_for('missing-profile', ['unknown']) == (['unknown'], [])
++
++
++def test_parallel_assignee_reads_do_not_cross_scopes_or_change_environment(fleet):
++    from tools import kanban_tools
++    from hermes_constants import get_hermes_home
++    before = dict(os.environ)
++    def read(name):
++        return (kanban_tools._profile_toolsets(name),
++                kanban_tools._skills_available_for(name, ['external-' + name]), get_hermes_home())
++    with ThreadPoolExecutor(max_workers=2) as pool:
++        results = list(pool.map(read, ['alpha', 'beta'] * 8))
++    for name, (tools, skills, restored) in zip(['alpha', 'beta'] * 8, results):
++        assert tools == ({'terminal'} if name == 'alpha' else {'file'})
++        assert skills == (['external-' + name], [])
++        assert restored == fleet
++    assert dict(os.environ) == before
++
++
++def test_unreadable_config_is_unknown_instead_of_a_defaults_based_rejection(fleet):
++    from tools import kanban_tools
++    (fleet / 'profiles/beta/config.yaml').write_text('[broken YAML')
++    assert kanban_tools._profile_toolsets('beta') is None
++    assert kanban_tools._skills_available_for('beta', ['external-beta']) == (['external-beta'], [])
 diff --git a/tests/tools/test_kanban_create_reasoning.py b/tests/tools/test_kanban_create_reasoning.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..ab07e1cda88e98ea254d9d0ad71db6ff196ffbab
@@ -62778,7 +63004,7 @@ index 0000000000000000000000000000000000000000..d2988273314317267910a4e11aaebeed
 +            if key[0] == home and key[2] == session_id:
 +                del _SEEN[key]
 diff --git a/tools/kanban_tools.py b/tools/kanban_tools.py
-index c8b64c095c30a5d8f599869cace132d47d05654e..5c6d4306b15c5884a7e0157e4a1605af261c07af 100644
+index c8b64c09..35b459ba 100644
 --- a/tools/kanban_tools.py
 +++ b/tools/kanban_tools.py
 @@ -10,6 +10,7 @@ from __future__ import annotations
@@ -62891,7 +63117,7 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..5c6d4306b15c5884a7e0157e4a1605af
      except Exception:
          logger.debug("kanban worker registration for %s failed", tid, exc_info=True)
          return True
-@@ -657,8 +701,163 @@ def inject_new_comments_from_env(agent: Any) -> bool:
+@@ -657,8 +701,158 @@ def inject_new_comments_from_env(agent: Any) -> bool:
          return False
  
  
@@ -62976,11 +63202,10 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..5c6d4306b15c5884a7e0157e4a1605af
 +def _profile_toolsets(assignee: str) -> Optional[set]:
 +    """CLI toolsets configured for *assignee* (None when unreadable: unknown never rejects)."""
 +    try:
-+        import hermes_yaml
-+        from hermes_constants import get_default_hermes_root
-+        cfg = hermes_yaml.safe_load((get_default_hermes_root() / "profiles" / assignee / "config.yaml").read_text()) or {}
-+        tools = (cfg.get("platform_toolsets") or {}).get("cli") or cfg.get("toolsets")
-+        return set(tools) if isinstance(tools, list) else None
++        from hermes_cli.kanban_profile_config import assignee_config
++        with assignee_config(assignee) as (_, cfg):
++            tools = (cfg.get("platform_toolsets") or {}).get("cli") or cfg.get("toolsets")
++            return set(tools) if isinstance(tools, list) else None
 +    except Exception:
 +        return None
 +
@@ -62988,7 +63213,7 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..5c6d4306b15c5884a7e0157e4a1605af
 +def _tool_fit_error(assignee: str, title: str, body: str, toolsets_of=_profile_toolsets) -> Optional[str]:
 +    """Reject cards whose body requires running claimctl on a bot without the terminal toolset."""
 +    from hermes_cli.kanban_task_contract import preflight_reason
-+    reason = preflight_reason(body, assignee)
++    reason = preflight_reason(body, assignee, defer_frozen=True)
 +    if reason:
 +        return reason
 +    if "claimctl claim" not in f"{title or ''} {body or ''}":
@@ -63032,17 +63257,13 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..5c6d4306b15c5884a7e0157e4a1605af
 +    if not skills or not profile:
 +        return skills, []
 +    from pathlib import Path
-+    root = Path(os.environ.get("HERMES_ROOT") or Path.home() / ".hermes")
-+    home = root / "profiles" / profile
-+    if not home.is_dir():
-+        return skills, []
-+    dirs = [home / "skills", Path(__file__).resolve().parent.parent / "skills"]
 +    try:
-+        import yaml as _yaml   # PyYAML is a core dependency
-+        cfg = _yaml.safe_load((home / "config.yaml").read_text()) or {}
-+        dirs += [Path(os.path.expanduser(str(d))) for d in ((cfg.get("skills") or {}).get("external_dirs") or [])]
++        from hermes_cli.kanban_profile_config import assignee_config
++        with assignee_config(profile) as (home, cfg):
++            dirs = [home / "skills", Path(__file__).resolve().parent.parent / "skills"]
++            dirs += [Path(os.path.expanduser(str(d))) for d in ((cfg.get("skills") or {}).get("external_dirs") or [])]
 +    except Exception:
-+        pass
++        return skills, []
 +    have = set()
 +    for d in dirs:
 +        for dirpath, _dirs, files in os.walk(d, followlinks=True):   # shared skill dirs are often symlinks
@@ -63055,7 +63276,7 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..5c6d4306b15c5884a7e0157e4a1605af
  @_kanban_handler("kanban_show")
  def _handle_show(args: dict, **kw) -> str:
      """Full task state: row, parents, children, comments, runs, last 50 events."""
-@@ -676,7 +875,7 @@ def _handle_show(args: dict, **kw) -> str:
+@@ -676,7 +870,7 @@ def _handle_show(args: dict, **kw) -> str:
          })
      with _board(args.get("board")) as (kb, conn):
          task = _existing_task(kb, conn, tid)
@@ -63064,7 +63285,7 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..5c6d4306b15c5884a7e0157e4a1605af
              "task": _fields(task, _TASK_FIELDS),
              "parents": kb.parent_ids(conn, tid),
              # Non-terminal parents; on a running card this means the dependency
-@@ -688,14 +887,21 @@ def _handle_show(args: dict, **kw) -> str:
+@@ -688,14 +882,21 @@ def _handle_show(args: dict, **kw) -> str:
              # Capped; full log via CLI.
              "events": [_fields(e, _EVENT_FIELDS) for e in kb.list_events(conn, tid)[-50:]],
              "runs": [_fields(r, _RUN_FIELDS) for r in kb.list_runs(conn, tid)],
@@ -63089,7 +63310,7 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..5c6d4306b15c5884a7e0157e4a1605af
      include_archived = _parse_bool_arg(args, "include_archived")
      limit = args.get("limit")
      try:
-@@ -897,7 +1103,13 @@ def _handle_request_review(args: dict, **kw) -> str:
+@@ -897,7 +1098,13 @@ def _handle_request_review(args: dict, **kw) -> str:
                 f"reviewer profile {reviewer!r} is not installed. "
                 f"Installed profiles: {', '.join(list_profile_names())}")
      with _board(args.get("board")) as (kb, conn):
@@ -63104,7 +63325,7 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..5c6d4306b15c5884a7e0157e4a1605af
          try:
              ok, fail_reason = kb.request_review(
                  conn, tid, summary=summary, metadata=metadata, reviewer=reviewer,
-@@ -1099,10 +1311,7 @@ def _handle_create(args: dict, **kw) -> str:
+@@ -1099,10 +1306,7 @@ def _handle_create(args: dict, **kw) -> str:
      assignee = args.get("assignee")
      _check(assignee, "assignee is required — name the profile that should execute this "
                       "task (the dispatcher will only spawn tasks with an assignee)")
@@ -63116,7 +63337,7 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..5c6d4306b15c5884a7e0157e4a1605af
      workspace_kind, workspace_path = args.get("workspace_kind"), args.get("workspace_path")
      # See #67567. ``project=""`` is an explicit "no project" (no ``or`` collapse, #106342).
      project_id = args["project"] if "project" in args else args.get("project_id")
-@@ -1110,9 +1319,15 @@ def _handle_create(args: dict, **kw) -> str:
+@@ -1110,9 +1314,15 @@ def _handle_create(args: dict, **kw) -> str:
      triage, skills, goal_mode = (
          _parse_bool_arg(args, "triage"), _coerce_str_list(args.get("skills"), "skills", "skill names"),
          _parse_bool_arg(args, "goal_mode"))
@@ -63132,7 +63353,7 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..5c6d4306b15c5884a7e0157e4a1605af
      with _board(args.get("board")) as (kb, conn):
          from gateway.session_context import get_session_env
          from tools.async_delegation import _current_origin_session_id
-@@ -1127,11 +1342,24 @@ def _handle_create(args: dict, **kw) -> str:
+@@ -1127,11 +1337,24 @@ def _handle_create(args: dict, **kw) -> str:
                        or (self_task.session_id if self_task else None)
                        or _persisted_session_id(_current_origin_session_id())
                        or _persisted_session_id(get_session_env("HERMES_SESSION_ID", "")))
@@ -63159,7 +63380,7 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..5c6d4306b15c5884a7e0157e4a1605af
              parents=tuple(parents), tenant=args.get("tenant") or os.environ.get("HERMES_TENANT"),
              priority=_opt_int(args.get("priority"), 0),
              workspace_kind=workspace_kind, workspace_path=workspace_path, project_id=project_id,
-@@ -1141,8 +1369,9 @@ def _handle_create(args: dict, **kw) -> str:
+@@ -1141,8 +1364,9 @@ def _handle_create(args: dict, **kw) -> str:
              project_source_task_id=project_source_task_id, triage=triage,
              creator_task_id=self_tid,
              idempotency_key=args.get("idempotency_key"),
@@ -63170,7 +63391,7 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..5c6d4306b15c5884a7e0157e4a1605af
              goal_mode=goal_mode, goal_max_turns=_opt_int(args.get("goal_max_turns")),
              completion_contract=args.get("completion_contract"),
              initial_status=str(args.get("initial_status") or "running"),
-@@ -1150,7 +1379,14 @@ def _handle_create(args: dict, **kw) -> str:
+@@ -1150,7 +1374,14 @@ def _handle_create(args: dict, **kw) -> str:
          landed = _fields(kb.get_task(conn, new_tid), _CREATED_FIELDS)
          wait = [e for e in kb.list_events(conn, new_tid) if e.kind == "dependency_wait"]
          gate = {"gated": True, "gated_by": wait[-1].payload["parent"]} if wait else {"gated": False}
@@ -63185,7 +63406,7 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..5c6d4306b15c5884a7e0157e4a1605af
                     subscribed=_maybe_auto_subscribe(conn, new_tid))
  
  
-@@ -1271,6 +1507,24 @@ def _handle_unblock(args: dict, **kw) -> str:
+@@ -1271,6 +1502,24 @@ def _handle_unblock(args: dict, **kw) -> str:
          return _ok(task_id=tid, **_fields(kb.get_task(conn, tid), ("status",)))
  
  
@@ -63210,7 +63431,7 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..5c6d4306b15c5884a7e0157e4a1605af
  @_kanban_handler("kanban_link")
  def _handle_link(args: dict, **kw) -> str:
      """Add a parent→child dependency edge after the fact (cycles/self-links/running
-@@ -1288,10 +1542,222 @@ def _handle_link(args: dict, **kw) -> str:
+@@ -1288,10 +1537,222 @@ def _handle_link(args: dict, **kw) -> str:
                     **({"gated_by": parent_id} if gated else {}))
  
  
@@ -63434,7 +63655,7 @@ index c8b64c095c30a5d8f599869cace132d47d05654e..5c6d4306b15c5884a7e0157e4a1605af
  _TOOLS = (
      ("kanban_show", KANBAN_SHOW_SCHEMA, _handle_show, "📋"),
      ("kanban_list", KANBAN_LIST_SCHEMA, _handle_list, "📋"),
-@@ -1307,7 +1773,12 @@ _TOOLS = (
+@@ -1307,7 +1768,12 @@ _TOOLS = (
      ("kanban_attachments", KANBAN_ATTACHMENTS_SCHEMA, _handle_attachments, "📎"),
      ("kanban_create", KANBAN_CREATE_SCHEMA, _handle_create, "➕"),
      ("kanban_unblock", KANBAN_UNBLOCK_SCHEMA, _handle_unblock, "▶"),

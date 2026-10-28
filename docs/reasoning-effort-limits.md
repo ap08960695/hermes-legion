@@ -72,8 +72,8 @@ native typecheck and build passing. Five source-mode Electron interaction checkp
 used the actual backend and synthetic profiles, with zero inference requests.
 
 These checks are not original-session adoption, a downloaded packaged application
-check, provider-backed end-to-end proof or measured workload savings. One independent
-inherited guard remains known: two unchanged raw YAML reads in `tools/kanban_tools.py`
-fail `tests/hermes_cli/test_config_read_guard.py`. It is not suppressed or included
-in the passing selection. Cross-profile and frozen-worker behavior must be preserved
-when repairing those separate reads.
+check, provider-backed end-to-end proof or measured workload savings. At v0.7.1, a separate inherited guard still reported two raw YAML reads in
+`tools/kanban_tools.py`; that historical passing selection excluded it without
+suppression. Those reads are repaired and the guard passes in v0.7.3. See the
+[assignee-preflight record](assignee-preflight.md) for target-profile, frozen-worker
+and native dispatcher acceptance. Historical counts above are not rerun or summed.

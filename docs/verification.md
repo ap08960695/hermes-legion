@@ -1,3 +1,17 @@
+# v0.7.3 assignee-scoped preflight
+
+The consolidated stable kit contains 683 pinned paths. Native config resolution replaces
+two raw YAML behavior reads and preserves configured external skills at card creation.
+Frozen workers keep their own snapshot; cross-profile creation defers unavailable
+capability inspection to the native dispatcher, which still checks before claim/spawn.
+Existing role/ownership metadata gates remain in place. See the [guide](assignee-preflight.md).
+
+The relevant Python selection has 18 files / 208 passing cases by latest per-file
+results, zero retries. The source guard passes. Native installed Linux/macOS tool,
+config and SQLite acceptance each passed eight controls using synthetic files with
+zero inference requests. Candidate runs and repeated hosts are not summed. Earlier
+policy/UI suites below are historical baseline, not newly rerun for this change.
+
 # v0.7.2 compact bot settings
 
 Two Desktop presentation paths keep model/effort ahead of expanded role fields and
