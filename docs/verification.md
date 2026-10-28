@@ -1357,3 +1357,9 @@ for the scope and retained original-session/provider limits. The custom host's
 private configuration, account material, logs, screenshots, backups and source
 manifest are not published here. This release does not ship a Mac binary or
 claim a new production usage, cache, latency or RAM saving.
+
+## Cache miss evidence (v0.6.52)
+
+The optional [four-path cache unit](cache-miss-evidence.md) corrects an unsupported causal inference: a 300-second idle gap was labelled confirmed expiry for all routes. It now records an unexplained provider-reported miss; known Hermes changes and historical metric vocabulary remain intact. Requests, prompt/cache policy, effort, account routes and telemetry consent are unchanged.
+
+The two route regressions and the relay-storage integration failed before repair. Four native files passed 172 tests with zero retries, and the same scoped suite passed on the pinned clean public base. These overlapping checks are not summed. Native production-interpreter readback passed on Linux and ARM64 macOS, with only the idle Linux Gateway reloaded. No original Mac session/Gateway was started, no provider was called, and no usage or cache-hit improvement is claimed. Public apply/reverse/reapply and inventory, history, archive and privacy verification are separate release checks. Older cumulative/runtime/role patch bytes are unchanged.

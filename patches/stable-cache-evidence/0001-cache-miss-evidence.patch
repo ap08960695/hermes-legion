@@ -1,0 +1,109 @@
+diff --git a/hermes_cli/observability/shared_metrics_efficiency.py b/hermes_cli/observability/shared_metrics_efficiency.py
+index 5426a665..8950fe92 100644
+--- a/hermes_cli/observability/shared_metrics_efficiency.py
++++ b/hermes_cli/observability/shared_metrics_efficiency.py
+@@ -36,8 +36,6 @@ _SCHEMA_TOKEN_THRESHOLDS = (
+     (40_000, "20k_to_40k"),
+ )
+ _TASK_COST_OUTCOMES = {"success": "completed", "cancelled": "interrupted"}
+-# Anthropic's default prompt-cache TTL: a cold read after this idle gap is expiry, not a bug.
+-CACHE_TTL_S = 300.0
+ # Per-session memory of spent turns an /undo or /retry can still reach.
+ _SPENT_TURNS_KEPT = 64
+ _PENDING_OUTPUTS_ATTR = "_shared_metrics_tool_outputs"
+@@ -211,17 +209,19 @@ class SessionEfficiency:
+     def observe_cache(
+         self, route: dict[str, str], usage: Any, started_ns: int, ended_ns: int, *, expected: bool,
+     ) -> str | None:
+-        """A cold primary read after a warm one on the same route is a break Hermes did not announce
+-        (``expected``: Hermes already counted the cause); a gap past the cache TTL is plain expiry."""
++        """Record an unexplained warm-to-cold transition on the same route.
++
++        An idle interval alone cannot establish provider expiry: retention and eviction
++        vary by provider and request. ``expected`` means Hermes already counted a cause.
++        """
+         read = _int(usage.get("cache_read_tokens")) if isinstance(usage, dict) else None
+         if read is None:
+             return None
+-        prev_read, prev_route, prev_ended = self.cache_read, self.cache_route, self.cache_ended_ns
++        prev_read, prev_route = self.cache_read, self.cache_route
+         self.cache_read, self.cache_route, self.cache_ended_ns = read, route, ended_ns
+         if expected or read or not prev_read or prev_route != route:
+             return None
+-        idle_s = (started_ns - prev_ended) / 1e9
+-        return "cache_expired" if idle_s >= CACHE_TTL_S else "provider_reported_miss"
++        return "provider_reported_miss"
+ 
+ 
+ def cache_break_row(cause: str, route: dict[str, str] | None) -> tuple[str, dict[str, str]]:
+diff --git a/tests/hermes_cli/test_cache_miss_evidence.py b/tests/hermes_cli/test_cache_miss_evidence.py
+new file mode 100644
+index 00000000..a082fb2a
+--- /dev/null
++++ b/tests/hermes_cli/test_cache_miss_evidence.py
+@@ -0,0 +1,24 @@
++"""An idle interval cannot establish why a provider stopped reporting cache reads."""
++
++import pytest
++
++from hermes_cli.observability.shared_metrics_efficiency import SessionEfficiency
++
++
++@pytest.mark.parametrize(
++    ("provider", "idle_seconds"),
++    [("openai-codex", 600), ("anthropic", 7_200)],
++)
++def test_long_idle_cache_miss_keeps_cause_unproven(provider, idle_seconds):
++    route = {"provider": provider, "model": "example-model"}
++    efficiency = SessionEfficiency()
++    assert efficiency.observe_cache(
++        route, {"cache_read_tokens": 8_192}, 1_000_000_000, 2_000_000_000, expected=False,
++    ) is None
++
++    started = 2_000_000_000 + idle_seconds * 1_000_000_000
++    cause = efficiency.observe_cache(
++        route, {"cache_read_tokens": 0}, started, started + 1_000_000_000, expected=False,
++    )
++
++    assert cause == "provider_reported_miss"
+diff --git a/tests/hermes_cli/test_shared_metrics_efficiency.py b/tests/hermes_cli/test_shared_metrics_efficiency.py
+index 1f30ad5a..7c5f8558 100644
+--- a/tests/hermes_cli/test_shared_metrics_efficiency.py
++++ b/tests/hermes_cli/test_shared_metrics_efficiency.py
+@@ -182,10 +182,10 @@ def test_cache_breaks_count_known_causes_once_and_unannounced_cold_reads_as_miss
+     _turn("s1", "t3", {"completed": True}, calls=[_usage(9_000, cache_read=8_000), _usage(9_000, cache_read=0)])
+     # A different route's first read is cold by nature, not a break.
+     _turn("s1", "t4", {"completed": True}, calls=[_usage(9_000, cache_read=0)], model="model-b")
+-    # Idle past the TTL: expiry.
++    # A long idle gap alone cannot prove provider cache expiry.
+     _turn("s1", "t5", {"completed": True}, calls=[_usage(9_000, cache_read=8_000)])
+     rt = relay_shared_metrics._get_runtime(retry_failed=True)
+-    rt._sessions["s1"].efficiency.cache_ended_ns -= int(eff.CACHE_TTL_S * 1e9) + 1
++    rt._sessions["s1"].efficiency.cache_ended_ns -= 600_000_000_000
+     _turn("s1", "t6", {"completed": True}, calls=[_usage(9_000, cache_read=0)])
+     # The tool array changing mid-conversation.
+     monkeypatch.setattr("model_tools.get_toolset_for_tool", lambda name: None)
+@@ -196,8 +196,8 @@ def test_cache_breaks_count_known_causes_once_and_unannounced_cold_reads_as_miss
+     eff.record_cache_break(SimpleNamespace(**vars(_agent()), _persist_disabled=True), "compression")
+ 
+     assert _rows(tmp_path, "hermes.cache_break.count") == sorted([
+-        (_dims(**ROUTE, cause="compression"), 1), (_dims(**ROUTE, cause="provider_reported_miss"), 1),
+-        (_dims(**ROUTE, cause="cache_expired"), 1), (_dims(**ROUTE, cause="toolset_change"), 1)])
++        (_dims(**ROUTE, cause="compression"), 1), (_dims(**ROUTE, cause="provider_reported_miss"), 2),
++        (_dims(**ROUTE, cause="toolset_change"), 1)])
+ 
+ 
+ def test_prompt_rebuild_names_a_model_switch_apart_from_other_rebuilds(monkeypatch):
+diff --git a/website/docs/developer-guide/relay-shared-metrics.md b/website/docs/developer-guide/relay-shared-metrics.md
+index 147cc683..fe13d913 100644
+--- a/website/docs/developer-guide/relay-shared-metrics.md
++++ b/website/docs/developer-guide/relay-shared-metrics.md
+@@ -589,7 +589,7 @@ subagents count there; background review and the curator never do.
+ | `hermes.tool_output_truncation.count` | tool (shipped tool name, else `mcp` / `plugin`), truncated (`yes`/`no`), original size bucket (characters: `lt_1k` … `gte_500k`) | Which tools produce output too large to keep inline. One row per tool result; `yes` when the tool cut its own output (terminal, `execute_code` and MCP head/tail truncation; the size is then the original) or the per-result cap or per-turn budget spilled it to disk. |
+ | `hermes.tool_overhead.count` | enabled tool count bucket, tool schema tokens bucket (`0`, `lt_2k` … `gte_40k`), execution surface | What carrying tool definitions costs. One row per closed interactive conversation: the tools it had enabled and Hermes's own estimate of the tokens their definitions add to each request. |
+ | `hermes.tool_enabled_unused.count` | toolset (a toolset Hermes ships; MCP servers, plugins and user toolsets read `custom`), used (`yes`/`no`) | Which default toolsets are paid for but never used. One row per enabled toolset per closed interactive conversation (bounded by the shipped toolsets). |
+-| `hermes.cache_break.count` | provider, model, cause (`compression`, `model_switch`, `toolset_change`, `system_prompt_rebuild`, `provider_reported_miss`, `cache_expired`) | How often Hermes throws away a warm prompt cache, and why. `compression` is expected; `model_switch`, `toolset_change` (the tool array changed mid-conversation) and `system_prompt_rebuild` (a continuing conversation rebuilt its system prompt instead of replaying the stored bytes) are Hermes-known causes; `provider_reported_miss` is a primary call reading zero cached tokens right after a warm read on the same model with no Hermes-known cause, `cache_expired` the same after at least five idle minutes. A known cause is not counted again as a miss. |
++| `hermes.cache_break.count` | provider, model, cause (`compression`, `model_switch`, `toolset_change`, `system_prompt_rebuild`, `provider_reported_miss`, `cache_expired`) | How often Hermes throws away a warm prompt cache, and why. `compression` is expected; `model_switch`, `toolset_change` (the tool array changed mid-conversation) and `system_prompt_rebuild` (a continuing conversation rebuilt its system prompt instead of replaying the stored bytes) are Hermes-known causes; `provider_reported_miss` is a primary call reading zero cached tokens after a warm read on the same route with no Hermes-known cause, regardless of the idle interval. An idle interval alone cannot prove expiry: retention and eviction vary by provider and request. `cache_expired` remains accepted for historical records but is not inferred from elapsed time. A known cause is not counted again as a miss. |
+ <!-- ---- end v5 efficiency ---- -->
+ 
+ <!-- ---- v5 engagement ---- -->
