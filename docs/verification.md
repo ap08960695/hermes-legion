@@ -1,3 +1,17 @@
+# v0.7.5 native skill aliases on Kanban cards
+
+The consolidated stable kit contains 689 pinned paths. Preflight keeps declared
+names accepted by the native loader and reuses the existing catalog cache for
+unresolved names. Canonical same-file symlink aliases agree across catalog/loader;
+different-file ambiguity and owner/frozen-worker gates remain native.
+See [skill discovery](skill-discovery.md) for cold/warm measurements and limits.
+
+The current selection passed 26 files / 472 cases, zero retries. Installed native
+Linux/macOS acceptance each passed 17 controls with zero inference. Scoped native
+code-health comparison reported no findings, and strict Ruff found no new issues.
+Earlier records below are historical; overlapping counts are not summed. This is a
+backend-only change; the previously verified Desktop package is unchanged.
+
 # v0.7.4 cycle-safe skill discovery
 
 The consolidated stable kit contains 687 pinned paths. One physical-identity,

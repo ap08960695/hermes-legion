@@ -3953,10 +3953,15 @@ index 0000000000000000000000000000000000000000..208e4ce395a842ff04a89721fe2f9c94
 +
 +
 diff --git a/agent/skill_utils.py b/agent/skill_utils.py
-index e885a530..841d306f 100644
+index e885a530..2b63eec3 100644
 --- a/agent/skill_utils.py
 +++ b/agent/skill_utils.py
-@@ -858,9 +858,45 @@ def is_skill_description_truncated_for_prompt(frontmatter: dict[str, Any]) -> bo
+@@ -453,2 +453,4 @@ def pick_skill_candidate(candidates) -> tuple[Optional[int], list[int]]:
+     contenders = [i for i, c in enumerate(candidates) if c[0] == top]
++    if len(contenders) > 1 and len({os.path.realpath(candidates[i][3]) for i in contenders}) == 1:
++        return contenders[0], contenders
+     if len(contenders) > 1 and len({candidates[i][1] for i in contenders}) == 1 and provably_same_skill(
+@@ -858,9 +860,45 @@ def is_skill_description_truncated_for_prompt(frontmatter: dict[str, Any]) -> bo
  
 +def iter_skill_index_directories(skills_dir: Path, *, max_depth: Optional[int] = None):
 +    """Native skill traversal: prune support/dependencies and ancestor symlink cycles.
@@ -57519,6 +57524,133 @@ index 0000000000000000000000000000000000000000..19761e537c69e317b8eba80bfff597c6
 +    assert 'unchanged_since_last_show' in show_once('t',{},'original' * 100)
 +    invalidate_system_prompt(SimpleNamespace(session_id='compression-fixture',_memory_store=None))
 +    assert show_once('t',{},'original' * 100)=='original' * 100
+diff --git a/tests/tools/test_kanban_skill_aliases.py b/tests/tools/test_kanban_skill_aliases.py
+new file mode 100644
+index 0000000..60b8b67
+--- /dev/null
++++ b/tests/tools/test_kanban_skill_aliases.py
+@@ -0,0 +1,121 @@
++"""Kanban must retain loadable frontmatter aliases without eager metadata reads."""
++import json
++from pathlib import Path
++
++import pytest
++
++
++@pytest.fixture
++def fleet(tmp_path, monkeypatch):
++    root = tmp_path / 'fleet'
++    for name in ['alpha', 'beta']:
++        profile = root / 'profiles' / name
++        (profile / 'skills').mkdir(parents=True)
++        (profile / 'config.yaml').write_text('platform_toolsets:\n  cli: [file]\n')
++    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
++    monkeypatch.setenv('HERMES_HOME', str(root))
++    monkeypatch.setenv('HERMES_ROOT', str(root))
++    return root
++
++
++def _skill(fleet, profile, folder, name):
++    path = fleet / 'profiles' / profile / 'skills' / folder / 'SKILL.md'
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text('---\nname: ' + name + '\ndescription: Synthetic fixture\n---\nFixture.\n')
++    return path
++
++
++@pytest.mark.parametrize('alias', ['published-name', 'category/published-name'])
++def test_preflight_retains_alias_accepted_by_native_loader(fleet, alias):
++    from agent.skill_utils import TIER_LOCAL
++    from tools.skills_tool import locate_skill
++    from tools.kanban_tools import _skills_available_for
++    path = _skill(fleet, 'alpha', 'folder-name', alias)
++    error, _directory, resolved = locate_skill(alias, None, [(TIER_LOCAL, path.parent.parent)])
++    assert error is None and resolved == path
++    wanted = [alias, 'folder-name', 'missing']
++    assert _skills_available_for('alpha', wanted) == (wanted[:2], wanted[2:])
++
++
++def test_preflight_rejects_ambiguous_alias_like_native_loader(fleet):
++    from agent.skill_utils import TIER_LOCAL
++    from tools.skills_tool import locate_skill
++    from tools.kanban_tools import _skills_available_for
++    path = _skill(fleet, 'alpha', 'one', 'same-alias')
++    _skill(fleet, 'alpha', 'two', 'same-alias')
++    error, _directory, resolved = locate_skill('same-alias', None, [(TIER_LOCAL, path.parent.parent)])
++    assert error and resolved is None
++    assert _skills_available_for('alpha', ['same-alias']) == ([], ['same-alias'])
++
++
++def test_multiple_aliases_read_each_candidate_once(fleet, monkeypatch):
++    from tools.kanban_tools import _skills_available_for
++    paths = [_skill(fleet, 'alpha', 'folder-' + str(i), 'alias-' + str(i)) for i in range(4)]
++    reads = []
++    original = Path.read_text
++    def read(path, *args, **kwargs):
++        if path in paths:
++            reads.append(path)
++        return original(path, *args, **kwargs)
++    monkeypatch.setattr(Path, 'read_text', read)
++    wanted = ['alias-0', 'alias-1', 'alias-2', 'alias-3', 'missing']
++    assert _skills_available_for('alpha', wanted) == (wanted[:4], wanted[4:])
++    assert _skills_available_for('alpha', wanted) == (wanted[:4], wanted[4:])
++    assert len(reads) == len(set(reads)) == 4
++
++
++def test_ordinary_directory_names_do_not_read_skill_bodies(fleet, monkeypatch):
++    from tools.kanban_tools import _skills_available_for
++    path = _skill(fleet, 'alpha', 'plain', 'different-name')
++    original = Path.read_text
++    def read(candidate, *args, **kwargs):
++        assert candidate != path, 'ordinary preflight eagerly read the skill body'
++        return original(candidate, *args, **kwargs)
++    monkeypatch.setattr(Path, 'read_text', read)
++    assert _skills_available_for('alpha', ['plain']) == (['plain'], [])
++
++
++def test_aliases_do_not_leak_between_assignee_profiles(fleet):
++    from tools.kanban_tools import _skills_available_for
++    _skill(fleet, 'alpha', 'same-folder', 'alpha-only')
++    _skill(fleet, 'beta', 'same-folder', 'beta-only')
++    for profile, own, foreign in [('alpha', 'alpha-only', 'beta-only'), ('beta', 'beta-only', 'alpha-only')]:
++        assert _skills_available_for(profile, [own, foreign]) == ([own], [foreign])
++
++
++def test_registry_create_preserves_the_requested_alias(fleet):
++    from tools import kanban_tools
++    from hermes_cli.kanban_db_connect import connect_closing
++    from hermes_cli import kanban_db as kb
++    _skill(fleet, 'alpha', 'folder-name', 'published-name')
++    created = json.loads(kanban_tools.registry.dispatch('kanban_create', {
++        'title': 'Synthetic alias preservation', 'assignee': 'alpha',
++        'body': 'BRIEF: synthetic preflight acceptance', 'skills': ['published-name'],
++    }))
++    assert created.get('ok'), created
++    with connect_closing() as conn:
++        assert kb.get_task(conn, created['task_id']).skills == ['published-name']
++
++
++def test_alias_metadata_edits_are_not_hidden_by_another_cache(fleet):
++    from tools.kanban_tools import _skills_available_for
++    from tools.skills_tool import clear_skills_cache
++    _skill(fleet, 'alpha', 'folder-name', 'before-name')
++    assert _skills_available_for('alpha', ['before-name']) == (['before-name'], [])
++    _skill(fleet, 'alpha', 'folder-name', 'after-name')
++    clear_skills_cache()
++    assert _skills_available_for('alpha', ['before-name', 'after-name']) == (['after-name'], ['before-name'])
++
++
++@pytest.mark.require_symlinks
++def test_repeated_symlink_views_do_not_make_one_alias_ambiguous(fleet):
++    from tools.kanban_tools import _skills_available_for
++    from tools.skills_tool import _skill_catalog
++    from hermes_cli.kanban_profile_config import assignee_config
++    path = _skill(fleet, 'alpha', 'real-folder', 'published-name')
++    for name in ['view-a', 'view-b']:
++        (path.parent.parent / name).symlink_to(path.parent, target_is_directory=True)
++    with assignee_config('alpha'):
++        catalog = _skill_catalog(skip_disabled=True, include_hidden=True)
++    assert 'published-name' in {row['load_name'] for row in catalog}
++    assert _skills_available_for('alpha', ['published-name']) == (['published-name'], [])
 diff --git a/tests/tools/test_kanban_skill_discovery.py b/tests/tools/test_kanban_skill_discovery.py
 new file mode 100644
 index 0000000..9594414
@@ -63212,8 +63344,40 @@ index 0000000000000000000000000000000000000000..d2988273314317267910a4e11aaebeed
 +        for key in list(_SEEN):
 +            if key[0] == home and key[2] == session_id:
 +                del _SEEN[key]
+diff --git a/tools/kanban_skill_preflight.py b/tools/kanban_skill_preflight.py
+new file mode 100644
+index 0000000..148acf3
+--- /dev/null
++++ b/tools/kanban_skill_preflight.py
+@@ -0,0 +1,26 @@
++"""Lazy skill-name preflight using native traversal and the existing catalog cache."""
++import os
++from pathlib import Path
++
++
++def skills_available_in(directories, skills):
++    """Keep ordinary names without reading bodies; resolve other names in one batch."""
++    from agent.skill_utils import (
++        TIER_EXTERNAL, TIER_LOCAL, iter_skill_index_directories,
++    )
++
++    roots = [(TIER_LOCAL if index == 0 else TIER_EXTERNAL, Path(directory))
++             for index, directory in enumerate(directories)]
++    have = set()
++    for _tier, root in roots:
++        for path, _dirs, files, _info in iter_skill_index_directories(root):
++            if "SKILL.md" in files:
++                have.add(os.path.basename(path))
++    if any(str(name).rstrip("/").split("/")[-1] not in have for name in skills):
++        from tools.skills_tool import _skill_catalog
++
++        have.update(row["load_name"] for row in _skill_catalog(
++            skip_disabled=True, include_hidden=True, roots=roots) if row["load_name"])
++    kept = [name for name in skills if str(name).rstrip("/") in have
++            or str(name).rstrip("/").split("/")[-1] in have]
++    return kept, [name for name in skills if name not in kept]
 diff --git a/tools/kanban_tools.py b/tools/kanban_tools.py
-index c8b64c09..ce8fd5df 100644
+index c8b64c09..8d988d0a 100644
 --- a/tools/kanban_tools.py
 +++ b/tools/kanban_tools.py
 @@ -12,2 +12,3 @@ import json
@@ -63294,7 +63458,7 @@ index c8b64c09..ce8fd5df 100644
 +                register(conn, tid, run_id)
 +            return adopted
      except Exception:
-@@ -659,4 +703,152 @@ def inject_new_comments_from_env(agent: Any) -> bool:
+@@ -659,4 +703,149 @@ def inject_new_comments_from_env(agent: Any) -> bool:
  
 +# local patch 05: an orchestrator calling kanban_show on a long-lived card used to receive 25-140k chars
 +# (all comments, all runs, worker_context). Orchestrators now get a compact view unless full=true.
@@ -63427,8 +63591,8 @@ index c8b64c09..ce8fd5df 100644
 +# Local patch 28: a card naming a skill the assignee does not have makes every worker spawn die with
 +# "Unknown skill(s)" until the card blocks (6 crashed runs on 2026-10-08/09). Drop such names at create time.
 +def _skills_available_for(profile: str, skills):
-+    """(kept, dropped). A skill counts as installed when <name>/SKILL.md exists under the assignee's skills dir,
-+    its configured external_dirs, or the bundled skills tree. Unknown profile -> keep everything (fail open)."""
++    """(kept, dropped). Check installed directories and native declared-name aliases under
++    the assignee's skills dir, external_dirs or bundled tree. Unknown profile keeps hints."""
 +    if not skills or not profile:
 +        return skills, []
 +    from pathlib import Path
@@ -63439,20 +63603,17 @@ index c8b64c09..ce8fd5df 100644
 +            dirs += [Path(os.path.expanduser(str(d))) for d in ((cfg.get("skills") or {}).get("external_dirs") or [])]
 +    except Exception:
 +        return skills, []
-+    from agent.skill_utils import iter_skill_index_directories
-+    have = {os.path.basename(root) for d in dirs for root, _, files, _info in iter_skill_index_directories(d)
-+            if "SKILL.md" in files}
-+    kept = [s for s in skills if str(s).rstrip("/").split("/")[-1] in have]
-+    return kept, [s for s in skills if s not in kept]
++    from tools.kanban_skill_preflight import skills_available_in
++    return skills_available_in(dirs, skills)
 +
 +
  @_kanban_handler("kanban_show")
-@@ -678,3 +870,3 @@ def _handle_show(args: dict, **kw) -> str:
+@@ -678,3 +867,3 @@ def _handle_show(args: dict, **kw) -> str:
          task = _existing_task(kb, conn, tid)
 -        return json.dumps({
 +        payload = {
              "task": _fields(task, _TASK_FIELDS),
-@@ -690,4 +882,11 @@ def _handle_show(args: dict, **kw) -> str:
+@@ -690,4 +879,11 @@ def _handle_show(args: dict, **kw) -> str:
              "runs": [_fields(r, _RUN_FIELDS) for r in kb.list_runs(conn, tid)],
 -            # Same string build_worker_context hands the dispatcher at spawn time.
 -            "worker_context": kb.build_worker_context(conn, tid)})
@@ -63466,12 +63627,12 @@ index c8b64c09..ce8fd5df 100644
 +                       else _compact_show_payload(payload))
 +        return _show_once(tid, args, json.dumps(payload))
  
-@@ -697,3 +896,3 @@ def _handle_list(args: dict, **kw) -> str:
+@@ -697,3 +893,3 @@ def _handle_list(args: dict, **kw) -> str:
      """Task summaries with the same core filters as the CLI."""
 -    _require_orchestrator_tool("kanban_list")
 +    # local patch 05: kanban_list is read-only, workers may call it (duplicate checks); unblock stays orchestrator-only.
      include_archived = _parse_bool_arg(args, "include_archived")
-@@ -899,3 +1098,9 @@ def _handle_request_review(args: dict, **kw) -> str:
+@@ -899,3 +1095,9 @@ def _handle_request_review(args: dict, **kw) -> str:
      with _board(args.get("board")) as (kb, conn):
 -        _goal_gate("kanban_request_review", kb.get_task(conn, tid), tid, summary)
 +        task = kb.get_task(conn, tid)
@@ -63482,7 +63643,7 @@ index c8b64c09..ce8fd5df 100644
 +        if reviewer and reviewer in ("orchestra-captain", getattr(task, "assignee", None)):
 +            reviewer = "reviewer-gpt"
          try:
-@@ -1101,6 +1306,3 @@ def _handle_create(args: dict, **kw) -> str:
+@@ -1101,6 +1303,3 @@ def _handle_create(args: dict, **kw) -> str:
                       "task (the dispatcher will only spawn tasks with an assignee)")
 -    # Workspace sharing is always explicit: omitted fields mean a fresh scratch workspace
 -    # even for a dispatcher-spawned creator (reusing the parent's path would let a child
@@ -63490,11 +63651,11 @@ index c8b64c09..ce8fd5df 100644
 -    # to inherit implicitly (the DB turns it into a fresh per-task worktree).
 +    # Omitted workspace means fresh scratch; only project identity may be inherited.
      workspace_kind, workspace_path = args.get("workspace_kind"), args.get("workspace_path")
-@@ -1112,2 +1314,3 @@ def _handle_create(args: dict, **kw) -> str:
+@@ -1112,2 +1311,3 @@ def _handle_create(args: dict, **kw) -> str:
          _parse_bool_arg(args, "goal_mode"))
 +    skills, _dropped_skills = _skills_available_for(str(assignee or ""), skills)
      model_override, provider_override = args.get("model"), args.get("provider")
-@@ -1115,2 +1318,7 @@ def _handle_create(args: dict, **kw) -> str:
+@@ -1115,2 +1315,7 @@ def _handle_create(args: dict, **kw) -> str:
      parents = _coerce_str_list(args.get("parents") or [], "parents", "task ids")
 +    _fit = _tool_fit_error(str(assignee), str(title), str(args.get("body") or ""))
 +    _check(_fit is None, _fit or "")
@@ -63502,7 +63663,7 @@ index c8b64c09..ce8fd5df 100644
 +                          or _default_runtime_seconds(str(assignee), str(title), str(args.get("body") or "")))
 +    _runtime = max(_requested_runtime, _runtime_floor(str(assignee)))
      with _board(args.get("board")) as (kb, conn):
-@@ -1129,2 +1337,14 @@ def _handle_create(args: dict, **kw) -> str:
+@@ -1129,2 +1334,14 @@ def _handle_create(args: dict, **kw) -> str:
                        or _persisted_session_id(get_session_env("HERMES_SESSION_ID", "")))
 +        # local patch 23: the Captain is not dispatchable, so a worker card assigned to it sits in todo
 +        # indefinitely. Keep the note as a comment on the worker's own card instead.
@@ -63517,7 +63678,7 @@ index c8b64c09..ce8fd5df 100644
 +                f"saved as a comment on your task {self_tid}. Mention it under 'ต่อไป:' in your completion "
 +                "summary; the Captain decides follow-up cards."))
          if project_id is None and workspace_kind is None and workspace_path is None:
-@@ -1132,4 +1352,5 @@ def _handle_create(args: dict, **kw) -> str:
+@@ -1132,4 +1349,5 @@ def _handle_create(args: dict, **kw) -> str:
                  project_id, project_source_task_id = self_task.project_id, self_task.id
 -        new_tid = kb.create_task(
 -            conn, title=str(title).strip(), body=args.get("body"), assignee=str(assignee),
@@ -63525,14 +63686,14 @@ index c8b64c09..ce8fd5df 100644
 +        new_tid = create_planned_task(
 +            conn, plan_task=args.get("plan_task"), plan_step=args.get("plan_step"), replan_of=args.get("replan_of"), title=str(title).strip(), body=args.get("body"), assignee=str(assignee),
              parents=tuple(parents), tenant=args.get("tenant") or os.environ.get("HERMES_TENANT"),
-@@ -1143,4 +1364,5 @@ def _handle_create(args: dict, **kw) -> str:
+@@ -1143,4 +1361,5 @@ def _handle_create(args: dict, **kw) -> str:
              idempotency_key=args.get("idempotency_key"),
 -            max_runtime_seconds=_opt_int(args.get("max_runtime_seconds")), skills=skills,
 +            max_runtime_seconds=_runtime, skills=skills,
              model_override=model_override, provider_override=provider_override,
 +            reasoning_effort=args.get("reasoning_effort"),
              goal_mode=goal_mode, goal_max_turns=_opt_int(args.get("goal_max_turns")),
-@@ -1152,3 +1374,10 @@ def _handle_create(args: dict, **kw) -> str:
+@@ -1152,3 +1371,10 @@ def _handle_create(args: dict, **kw) -> str:
          gate = {"gated": True, "gated_by": wait[-1].payload["parent"]} if wait else {"gated": False}
 +        _warns = _oversize_warnings(str(args.get("body") or ""))
 +        if _dropped_skills:
@@ -63543,7 +63704,7 @@ index c8b64c09..ce8fd5df 100644
 +                   **({"warnings": _warns} if _warns else {}),
 +                   **({"runtime_raised_from": _requested_runtime} if _runtime != _requested_runtime else {}),
                     subscribed=_maybe_auto_subscribe(conn, new_tid))
-@@ -1273,2 +1502,20 @@ def _handle_unblock(args: dict, **kw) -> str:
+@@ -1273,2 +1499,20 @@ def _handle_unblock(args: dict, **kw) -> str:
  
 +@_kanban_handler("kanban_archive")
 +def _handle_archive(args: dict, **kw) -> str:
@@ -63564,7 +63725,7 @@ index c8b64c09..ce8fd5df 100644
 +
 +
  @_kanban_handler("kanban_link")
-@@ -1290,2 +1537,213 @@ def _handle_link(args: dict, **kw) -> str:
+@@ -1290,2 +1534,213 @@ def _handle_link(args: dict, **kw) -> str:
  
 +# --- local patch 06: orchestrator board management (reassign / unlink / extend / continue) ---
 +
@@ -63778,13 +63939,13 @@ index c8b64c09..ce8fd5df 100644
 +
 +
  # --- Registration (order preserved: it is the order tools appear in the schema) ---
-@@ -1293,3 +1751,4 @@ def _handle_link(args: dict, **kw) -> str:
+@@ -1293,3 +1748,4 @@ def _handle_link(args: dict, **kw) -> str:
  # kanban_list / kanban_unblock route the board and are hidden from task workers.
 -_ORCHESTRATOR_TOOLS = frozenset({"kanban_list", "kanban_unblock"})
 +_ORCHESTRATOR_TOOLS = frozenset({"kanban_unblock", "kanban_reassign", "kanban_unlink", "kanban_extend_runtime", "kanban_continue",
 +                                 "kanban_archive"})
  _TOOLS = (
-@@ -1309,3 +1768,8 @@ _TOOLS = (
+@@ -1309,3 +1765,8 @@ _TOOLS = (
      ("kanban_unblock", KANBAN_UNBLOCK_SCHEMA, _handle_unblock, "▶"),
 -    ("kanban_link", KANBAN_LINK_SCHEMA, _handle_link, "🔗"))
 +    ("kanban_link", KANBAN_LINK_SCHEMA, _handle_link, "🔗"),
@@ -65296,7 +65457,7 @@ index 0000000000000000000000000000000000000000..1401abe9bfe48d1d71832393e366836f
 +            return result
 +        return convert(data,path)
 diff --git a/tools/skills_tool.py b/tools/skills_tool.py
-index a6f8d186..4b26257f 100644
+index a6f8d186..36dfab9d 100644
 --- a/tools/skills_tool.py
 +++ b/tools/skills_tool.py
 @@ -53,23 +53,5 @@ def _dir_tree_signature(root, sig, depth=_SIGNATURE_MAX_DEPTH) -> None:
@@ -65326,6 +65487,26 @@ index a6f8d186..4b26257f 100644
 +    for directory, names, _files, info in iter_skill_index_directories(Path(root), max_depth=depth):
 +        sig.append((directory, info.st_mtime_ns, names))
  
+@@ -228,3 +210,4 @@ def skill_search_dirs() -> tuple[list[tuple[int, Path]], Path]:
+ 
+-def _skill_catalog(*, skip_disabled: bool = False, include_hidden: bool = False) -> list[dict[str, Any]]:
++def _skill_catalog(*, skip_disabled: bool = False, include_hidden: bool = False,
++                   roots: Optional[list[tuple[int, Path]]] = None) -> list[dict[str, Any]]:
+     """Every scanned skill resolved by ``agent.skill_utils.resolve_skill_catalog`` (status /
+@@ -237,3 +220,4 @@ def _skill_catalog(*, skip_disabled: bool = False, include_hidden: bool = False)
+     disabled = set() if skip_disabled else _get_disabled_skill_names()
+-    roots, _ = skill_search_dirs()
++    if roots is None:
++        roots, _ = skill_search_dirs()
+     signature = _skills_scan_signature([d for _t, d in roots], disabled)
+@@ -261,5 +245,5 @@ def _skill_catalog(*, skip_disabled: bool = False, include_hidden: bool = False)
+                     "category": _get_category_from_path(skill_md), "tier": tier, "root": scan_dir,
+-                    "path": skill_md, "visible": bool(skill_matches_platform(frontmatter)
++                    "path": skill_md, "visible": bool(include_hidden or (skill_matches_platform(frontmatter)
+                                                       and skill_matches_environment(frontmatter)
+-                                                      and skill_matches_apps(frontmatter))})
++                                                      and skill_matches_apps(frontmatter)))})
+             except (UnicodeDecodeError, PermissionError) as e:
 diff --git a/tools/tool_search.py b/tools/tool_search.py
 index 90631843bcf5edebf9bd5ab322f9ee6eba900c2f..16108989c54e00712aed1bd952cdf5da504cfe29 100644
 --- a/tools/tool_search.py
