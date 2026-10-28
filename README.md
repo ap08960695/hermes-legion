@@ -10,7 +10,8 @@ Historical source comments and release payloads received [privacy maintenance](d
 
 ## What is included
 
-- **582 patched or added source/test files** in the cumulative kit, including 188 Python test files. See [patch inventory](patches/manifest.json) for its exact base and hashes.
+- A consolidated [667-path source and Desktop kit for upstream v0.22.5](docs/stable-full-kit.md), with pinned hashes and a reproducible test selection. It includes the interface, workflow, search, memory/cache, usage, waiting and update-preservation changes as one complete alternative.
+- The historical **582-path cumulative kit** remains available for its different pinned base. See [its inventory](patches/manifest.json); do not stack it over the consolidated stable kit.
 - An optional [cache-miss evidence repair for v0.22.5](docs/cache-miss-evidence.md) stops attributing misses to expiry from idle time alone; it preserves historical metrics and request/cache policy.
 - A [role-specific THINK/ACTION extension for upstream v0.22.5](docs/stable-role-workflows.md) adds native bounded plans, pinned ACTION steps, independent review, re-planning and per-bot model/effort editing. It includes the runtime repairs as one alternative full patch; family labels do not prove provider readiness.
 - A separate [nine-path runtime repair for upstream v0.22.5](docs/stable-runtime-repair.md) preserves rotating Codex account headers and managed-worker wire modes, and keeps routine confirmations from blocking dialogs. Its base differs from the cumulative kit. An exact upgrade from the earlier seven-path transport unit is included; do not stack full patches.
@@ -78,13 +79,13 @@ Review the [optional external-memory pilot guide](docs/external-memory-pilot.md)
 Clone the release and run from its repository root; the same commands work after extracting the release archive and entering its top-level directory. Only Python and Git are needed for this companion-only walkthrough. Native profile setup has the additional upstream prerequisites documented separately.
 
 ```sh
-git clone --branch v0.6.53 --single-branch https://github.com/ap08960695/hermes-legion.git
+git clone --branch v0.7.0 --single-branch https://github.com/ap08960695/hermes-legion.git
 cd hermes-legion
 python3 scripts/verify_release.py
 python3 scripts/legion_plan.py --team examples/team.full.json --snapshot examples/snapshots/synthetic-ready.json --tasks examples/scenarios/parallel-production.json --now 1
 ```
 
-The walkthrough pins the immutable v0.6.51 release. Its native Desktop interface, session metadata reads, bot activity display, bundled locale/code reuse, local memory diagnostics and verification limits are described in the [verification record](docs/verification.md). This documentation release clarifies the two Mac patch bases and records the scope of later installed-application checks; it changes no patch or dependency lock.
+The walkthrough pins v0.7.0. The consolidated stable kit is an alternative to the historical cumulative patch and the smaller stable units; select exactly one matching manifest. Source application, a running application, original-session adoption and measured workload improvements remain separate evidence. See the [verification record](docs/verification.md).
 
 For an existing Mac, follow the [isolated source installation and update guide](docs/macos-install-update.md). It keeps native CLI, Desktop packaging and production activation evidence separate.
 

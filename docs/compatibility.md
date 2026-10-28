@@ -15,3 +15,7 @@ The expanded [stable runtime repair](stable-runtime-repair.md) supersedes the se
 The [stable role workflow extension](stable-role-workflows.md) is a separately pinned 68-path unit on the v0.22.5 base. It includes the runtime repairs and native role/settings integration. Apply its full patch to a fresh matching checkout, not on top of another full kit.
 
 The [cache-miss evidence unit](cache-miss-evidence.md) is a separate four-path repair on the exact v0.22.5 base. Its standalone verifier requires a clean matching checkout; it is not an updater or a cumulative feature pack.
+
+## Consolidated stable alternative
+
+The [v0.22.5 full kit](stable-full-kit.md) supplies 667 pinned source/test/UI paths as one alternative to the historical cumulative and smaller stable patches. Choose one exact manifest; do not stack full patches. Native clean-base apply/reverse/reapply was verified on Linux and macOS. Provider/session adoption and full platform test coverage are separate.

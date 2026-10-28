@@ -1,3 +1,7 @@
+# v0.7.0 consolidated stable kit
+
+See the [complete stable guide](stable-full-kit.md) and [667-path inventory](../patches/stable-full/manifest.json). Broad offline Python: 218 files, 2737 PASS, 13 SKIP, zero failures; UI: 60 files, 383 PASS; typecheck/build PASS. Later two synthetic-only fixture edits: 33 PASS, overlapping the broad scope, not additional unique cases. Native apply/reverse/reapply passed on Linux and macOS. Linux rendered source-mode checks passed 11 interaction checkpoints, including explicit Kanban opt-in, upstream-card navigation, a native Hub page save, and retained-message reopening. They use the actual backend and a separate synthetic home, with no inference; original-session and packaged-public-build adoption remain separate acceptance.
+
 # Verification record
 
 ## Initial cumulative patch acceptance (v0.1.0)
