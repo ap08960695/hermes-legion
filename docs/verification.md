@@ -1334,3 +1334,7 @@ The public release verifier also checks incremental-patch digests and inventory
 membership. Two negative upgrade cases first failed; the repaired verifier passes
 the scoped cases. No production token/RAM/cache/latency savings, full-fleet
 THINK/ACTION adoption or new Mac parity is claimed by this release.
+
+## Native role workflow integration (v0.6.50)
+
+See [stable role workflows](stable-role-workflows.md#verification-boundary) for the clean-base Python/UI scope, one real Captain/developer loop, retained failures and explicit provider/Mac/usage limits. These results do not replace the historical cumulative-kit verification above.

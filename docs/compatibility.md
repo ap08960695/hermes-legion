@@ -11,3 +11,5 @@ This release does not claim general compatibility with the latest upstream, a pr
 The optional [stable transport repair](stable-transport-repair.md) targets a different exact upstream base using `patches/stable-transport/manifest.json`. It is not an update layer for the historical cumulative patch. It repairs request identity and worker transport resolution only; it does not install the cumulative UI, memory features or THINK/ACTION orchestration.
 
 The expanded [stable runtime repair](stable-runtime-repair.md) supersedes the seven-path transport unit for new v0.22.5 checkouts. It includes an exact incremental upgrade and rollback for an unchanged seven-path installation; its full patch must not be stacked over the old full patch.
+
+The [stable role workflow extension](stable-role-workflows.md) is a separately pinned 68-path unit on the v0.22.5 base. It includes the runtime repairs and native role/settings integration. Apply its full patch to a fresh matching checkout, not on top of another full kit.
