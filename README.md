@@ -6,6 +6,8 @@ Hermes Legion is an independent companion kit for [Hermes Agent](https://github.
 
 The design is simple: give each bot a clear responsibility, dispatch independent ready work within existing limits, preserve a stable prompt prefix, and stop a worker when its verified native completion is already durable.
 
+Historical source comments and release payloads received [privacy maintenance](docs/privacy-maintenance.md). Version names remain available, but corrected commit and archive hashes differ from older downloads.
+
 ## What is included
 
 - **582 patched or added source/test files** in the cumulative kit, including 188 Python test files. See [patch inventory](patches/manifest.json) for its exact base and hashes.
@@ -76,7 +78,7 @@ Review the [optional external-memory pilot guide](docs/external-memory-pilot.md)
 Clone the release and run from its repository root; the same commands work after extracting the release archive and entering its top-level directory. Only Python and Git are needed for this companion-only walkthrough. Native profile setup has the additional upstream prerequisites documented separately.
 
 ```sh
-git clone --branch v0.6.52 --single-branch https://github.com/ap08960695/hermes-legion.git
+git clone --branch v0.6.53 --single-branch https://github.com/ap08960695/hermes-legion.git
 cd hermes-legion
 python3 scripts/verify_release.py
 python3 scripts/legion_plan.py --team examples/team.full.json --snapshot examples/snapshots/synthetic-ready.json --tasks examples/scenarios/parallel-production.json --now 1
