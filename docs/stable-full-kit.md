@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **667-path** Legion source, interface and optimization alternative
+This is the complete **681-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -20,6 +20,7 @@ Python and Desktop selection. No dependency or lockfile change is included.
   recovery, prompt-prefix reuse, cache cohorts and privacy-preserving usage attribution.
 - Profile/account-scoped metadata caches, process/cache diagnostics, derived-cache
   retention, protected active scratch work and update-preservation recovery.
+- Optional per-model reasoning effort ceilings after explicit overrides, including owner-bound frozen sessions and auxiliary requests. See the [effort-limit guide](reasoning-effort-limits.md).
 - Existing transport, owner/claim, review, data-clearance, quota and emergency-stop gates.
 
 No account grants, conversations, live boards, operator profiles or production data
