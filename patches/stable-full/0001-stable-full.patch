@@ -21276,6 +21276,94 @@ index 65887575dec12b3ddb9f859ebe56156264ea120e..d321c3ec28f00bdc9e4ba5f89a5557d8
          return handlers
  
      async def dispatch(self, request):
+diff --git a/gateway/session_hosted_service.py b/gateway/session_hosted_service.py
+index 30c6ef5d..599c6164 100644
+--- a/gateway/session_hosted_service.py
++++ b/gateway/session_hosted_service.py
+@@ -3,2 +3,4 @@ import asyncio
+ import hashlib
++import logging
++import sqlite3
+ from contextlib import nullcontext
+@@ -6,2 +8,3 @@ from pathlib import Path
+ 
++from agent.memory_provider import ctx_bound
+ from gateway.session_contract import Principal
+@@ -10,3 +13,3 @@ from gateway.session_hosted_controls import HostedControls
+ from hermes_state_runtime import RuntimeStoreError, _epoch
+-from tui_gateway.hosted_room_service import HostedRoomService
++from tui_gateway.hosted_room_service import HostedRoomService, _HOSTED_ROOM_IDLE_FALLBACK_SECONDS
+ 
+@@ -92,2 +95,13 @@ class CanonicalHostedRoomService(HostedControls, HostedRoomService):
+ 
++    def has_owned_rooms(self):
++        """Read-only standby hint; full bindings and admission still own all execution gates."""
++        from gateway.hosted_rooms import local_authority_gateway_id
++        if getattr(self.authority, 'retiring', False):
++            return False
++        with self.authority.db._read_ctx(reopen=False) as conn:
++            return conn.execute(
++                'SELECT 1 FROM hosted_rooms AS r JOIN state_meta AS m ON m.key=? || r.room_id '
++                'WHERE r.disbanded_at IS NULL AND r.authority_gateway_id=? LIMIT 1',
++                (_OWNER, local_authority_gateway_id())).fetchone() is not None
++
+     def _turn_lock(self, profile):
+@@ -244,3 +258,14 @@ async def ensure_hosted_service(runner):
+         await _ensure_hosted_service(runner, authority)
+-    start_ready_hosted_services(runner)
++    if start_ready_hosted_services(runner):
++        loop = asyncio.get_running_loop()
++        pending = getattr(runner, '_hosted_room_probe', None)
++        if ((pending is None or pending.done())
++                and loop.time() >= getattr(runner, '_hosted_room_next_probe', 0)):
++            # The existing gateway watcher owns discovery; no per-profile timer or task.
++            runner._hosted_room_next_probe = loop.time() + _HOSTED_ROOM_IDLE_FALLBACK_SECONDS
++            pending = runner._hosted_room_probe = loop.run_in_executor(
++                None, ctx_bound(_wake_standby_hosted_services), runner)
++            # Cancelling an observer must not launch a second scan while the first
++            # executor still holds a read. Stop/drain disarms every possible wake.
++            await asyncio.shield(pending)
+     return active.hosted_room_service
+@@ -263,12 +288,32 @@ async def _ensure_hosted_service(runner, authority):
+ def start_ready_hosted_services(runner):
+-    """Start only a fully prepared served set behind the published ready gate."""
++    """Arm only a fully prepared served set behind the published ready gate."""
+     if (getattr(runner, 'session_runtime_descriptor', {}).get('state') != 'ready'
+             or getattr(runner, '_draining', False)):
+-        return
+-    services = [getattr(authority, 'hosted_room_service', None) for authority in serving_authorities(runner)]
++        return False
++    authorities = serving_authorities(runner)
++    services = [getattr(authority, 'hosted_room_service', None) for authority in authorities]
+     if any(service is None or not getattr(service, '_transport_installed', False) for service in services):
+-        return
+-    for service in services:
+-        # start() only releases its thread; preparation and disk access happened above.
+-        service.start()
++        return False
++    for authority, service in zip(authorities, services):
++        with owner_scope(authority):
++            service.runtime.arm()
++    return True
++
++
++def _wake_standby_hosted_services(runner):
++    for authority in serving_authorities(runner):
++        if (getattr(runner, '_draining', False)
++                or getattr(runner, 'session_runtime_descriptor', {}).get('state') != 'ready'):
++            return
++        service = authority.hosted_room_service
++        status = service.runtime.status()
++        if status['running'] or status['stopping']:
++            continue
++        try:
++            with owner_scope(authority):
++                if service.has_owned_rooms():
++                    service.runtime.wakeup()
++        except (sqlite3.Error, OSError, ValueError) as exc:
++            # One unavailable profile must not prevent persisted-room recovery elsewhere.
++            logging.getLogger(__name__).warning('Hosted room standby read failed (%s)', type(exc).__name__)
+ 
 diff --git a/gateway/session_local.py b/gateway/session_local.py
 index 2cff15e5964167865e128981d820f32464e517c8..4372f7fcc873204ea0f8f79ab35fbd6b82788c77 100644
 --- a/gateway/session_local.py
@@ -42659,6 +42747,139 @@ index 6a535ff7bfa70f7bf9743d3c3ff2f12c469e7cf9..ca02e10a7e404d810dbb9911d92cb68d
 +    assert estop.is_engaged()
 +    assert runner._hm_estop_gate(MessageEvent(text='hello',source=source),source,False) == (estop.paused_reply() if system_status else '')
 +    assert runner._hm_estop_gate(MessageEvent(text='/status',source=source),source,False) is None
+diff --git a/tests/gateway/test_hosted_mux_runtime.py b/tests/gateway/test_hosted_mux_runtime.py
+index c7389b59..5c3a4790 100644
+--- a/tests/gateway/test_hosted_mux_runtime.py
++++ b/tests/gateway/test_hosted_mux_runtime.py
+@@ -71,3 +71,4 @@ def test_hosted_lifecycle_serves_and_stops_every_authority(mux):
+     assert len({id(s) for s in services.values()}) == len(homes)
+-    assert all(s.runtime.status()['running'] for s in services.values())
++    assert all(not s.runtime.status()['running'] for s in services.values()), (
++        'empty authorities stay ready without allocating idle supervisors')
+     assert call(runner._ensure_hosted_room_worker()) is runner.session_authority.hosted_room_service
+diff --git a/tests/gateway/test_hosted_standby.py b/tests/gateway/test_hosted_standby.py
+new file mode 100644
+index 0000000..4423d79
+--- /dev/null
++++ b/tests/gateway/test_hosted_standby.py
+@@ -0,0 +1,117 @@
++"""Real canonical stores must not allocate supervisors for empty profiles."""
++from contextlib import ExitStack
++from types import SimpleNamespace
++
++import pytest
++
++from gateway.hosted_rooms import create_room, disband_room, local_authority_gateway_id
++from gateway.session_hosted_service import CanonicalHostedRoomService, start_ready_hosted_services
++from hermes_state import SessionDB
++from hermes_state_runtime import begin_runtime_epoch
++
++
++def _service(stack, root, name):
++    home = root / name
++    home.mkdir()
++    db = stack.enter_context(SessionDB(home / 'state.db'))
++    authority = SimpleNamespace(db=db, profile_id=str(home),
++                               epoch=begin_runtime_epoch(db, instance_id='fixture'))
++    service = authority.hosted_room_service = CanonicalHostedRoomService(authority, None)
++    service._transport_installed = True
++    stack.callback(lambda: service.stop(timeout=5))
++    return authority
++
++
++def _runner(authorities, state='ready'):
++    from gateway.session_authorities import SessionAuthorities
++    registry = SessionAuthorities(authorities[0].profile_id)
++    for authority in authorities:
++        registry.add(authority.profile_id, authority)
++    return SimpleNamespace(session_authorities=registry,
++        session_authority=authorities[0], session_runtime_descriptor={'state': state}, _draining=False)
++
++
++
++def _room(service, name='room', *, owned=True, gateway=None):
++    if owned:
++        service.authorize_room('fixture-owner', name, create=True)
++    create_room(service.db_path, room_id=name, name='Room',
++        authority_gateway_id=gateway or local_authority_gateway_id(),
++        members=[{'member_id': 'one', 'profile': 'default', 'handle': 'one'}])
++
++
++def test_ready_empty_profiles_allocate_no_supervisors_and_respect_ready_gate(tmp_path):
++    with ExitStack() as stack:
++        authorities = [_service(stack, tmp_path, str(i)) for i in range(8)]
++        runner = _runner(authorities, 'starting')
++        start_ready_hosted_services(runner)
++        assert all(not a.hosted_room_service.runtime.status()['running'] for a in authorities)
++        runner.session_runtime_descriptor['state'] = 'ready'
++        start_ready_hosted_services(runner)
++        assert all(not a.hosted_room_service.runtime.status()['running'] for a in authorities), (
++            'empty served profiles must remain available without per-profile supervisor threads')
++
++
++@pytest.mark.asyncio
++async def test_standby_probe_finds_persisted_rooms_without_reviving_closed_or_retiring_owners(tmp_path):
++    from gateway.session_hosted_service import ensure_hosted_service
++    with ExitStack() as stack:
++        authorities = [_service(stack, tmp_path, str(i)) for i in range(6)]
++        runner = _runner(authorities)
++        # No API wake: persisted/external room discovery must remain supported.
++        _room(authorities[1].hosted_room_service)
++        _room(authorities[2].hosted_room_service, owned=False)
++        _room(authorities[3].hosted_room_service, gateway='another-install')
++        _room(authorities[4].hosted_room_service)
++        authorities[4].retiring = True
++        archived = authorities[5].hosted_room_service
++        _room(archived)
++        disband_room(archived.db_path, room_id='room', expected_gateway_id=local_authority_gateway_id(), expected_epoch=1)
++        await ensure_hosted_service(runner)
++        assert [a.hosted_room_service.runtime.status()['running'] for a in authorities] == [
++            False, True, False, False, False, False]
++        # Bounded discovery must not reopen the writer once ownership is released.
++        closed = authorities[0]
++        closed.db.close()
++        runner._hosted_room_next_probe = 0
++        await ensure_hosted_service(runner)
++        assert closed.db._conn is None
++        assert not closed.hosted_room_service.runtime.status()['running']
++        assert authorities[1].hosted_room_service.runtime.status()['running']
++
++
++@pytest.mark.asyncio
++async def test_cancelled_probe_cannot_overlap_the_same_profile_read(tmp_path, monkeypatch):
++    import asyncio
++    import threading
++    from gateway.session_hosted_service import ensure_hosted_service
++
++    with ExitStack() as stack:
++        authority = _service(stack, tmp_path, 'owner')
++        runner = _runner([authority])
++        entered, release = threading.Event(), threading.Event()
++        reads = []
++
++        def blocked_read():
++            reads.append(1)
++            entered.set()
++            assert release.wait(5)
++            return False
++
++        monkeypatch.setattr(authority.hosted_room_service, 'has_owned_rooms', blocked_read)
++        first = asyncio.create_task(ensure_hosted_service(runner))
++        try:
++            assert await asyncio.to_thread(entered.wait, 5)
++            first.cancel()
++            with pytest.raises(asyncio.CancelledError):
++                await first
++            runner._hosted_room_next_probe = 0
++            await ensure_hosted_service(runner)
++            assert len(reads) == 1, 'cancelled observer must not duplicate an in-flight read'
++        finally:
++            release.set()
++            if not first.done():
++                await first
++            pending = getattr(runner, "_hosted_room_probe", None)
++            if pending is not None:
++                await asyncio.shield(pending)
 diff --git a/tests/gateway/test_hygiene_compaction_keeps_seeded_prompt.py b/tests/gateway/test_hygiene_compaction_keeps_seeded_prompt.py
 index b55b18f3613f0077edff29c4b20d3c08ea9e8236..3908ee37b02a26c6bc95a5a412a37d99153b787e 100644
 --- a/tests/gateway/test_hygiene_compaction_keeps_seeded_prompt.py
@@ -60746,6 +60967,73 @@ index 0000000000000000000000000000000000000000..e6de764c5dfcf879bc66fd671b0b6903
 +    assert mtime['result']['mtime'] == 200
 +    launch_location = server._methods['config.get']('launch', {'key':'profile'})
 +    assert launch_location['result']['home'] == str(launch)
+diff --git a/tests/tui_gateway/test_hosted_runtime_arming.py b/tests/tui_gateway/test_hosted_runtime_arming.py
+new file mode 100644
+index 0000000..573f02a
+--- /dev/null
++++ b/tests/tui_gateway/test_hosted_runtime_arming.py
+@@ -0,0 +1,61 @@
++"""Ready-gated demand start keeps empty hosted profiles thread-free."""
++import contextvars
++import threading
++from concurrent.futures import ThreadPoolExecutor
++
++from tui_gateway.hosted_room_driver import HostedRoomRuntime
++
++
++def test_armed_runtime_waits_for_work_and_concurrent_wakes_start_one_owner(tmp_path):
++    entered, release = threading.Event(), threading.Event()
++    marker = contextvars.ContextVar('hosted_test_owner', default='wrong')
++    observed = []
++
++    def rooms():
++        observed.append(marker.get())
++        entered.set()
++        assert release.wait(5), 'test must release discovery'
++        return ()
++
++    runtime = HostedRoomRuntime(db_path=tmp_path / 'state.db', rooms=rooms,
++                                turn_lock=lambda _: None, rpc=object())
++    try:
++        runtime.arm()
++        assert not runtime.status()['running'], 'arming an empty profile must allocate no supervisor'
++        token = marker.set('owning-profile')
++        try:
++            # Copy a distinct caller context for each real concurrent producer.
++            contexts = [contextvars.copy_context() for _ in range(16)]
++            with ThreadPoolExecutor(max_workers=4) as pool:
++                list(pool.map(lambda ctx: ctx.run(runtime.wakeup), contexts))
++        finally:
++            marker.reset(token)
++        assert entered.wait(5)
++        assert runtime.status()['running']
++        assert observed == ['owning-profile']
++    finally:
++        release.set()
++        assert runtime.stop(timeout=5)
++    runtime.wakeup()
++    runtime.arm()  # A stale ready snapshot cannot revive a stopped generation.
++    assert not runtime.status()['running']
++    assert runtime.status()['stopping']
++
++
++def test_pre_ready_wake_is_retained_and_explicit_restart_still_works(tmp_path):
++    entered = threading.Event()
++    runtime = HostedRoomRuntime(db_path=tmp_path / 'state.db',
++        rooms=lambda: entered.set() or (), turn_lock=lambda _: None, rpc=object())
++    runtime.wakeup()
++    assert not runtime.status()['running']
++    try:
++        runtime.arm()
++        assert entered.wait(5), 'queued pre-ready wake must be released at readiness'
++    finally:
++        assert runtime.stop(timeout=5)
++    entered.clear()
++    try:
++        runtime.start()
++        assert entered.wait(5), 'explicit TUI restart contract remains supported'
++    finally:
++        assert runtime.stop(timeout=5)
 diff --git a/tests/tui_gateway/test_kanban_compression_delivery.py b/tests/tui_gateway/test_kanban_compression_delivery.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..15731de6895e811431c2abd1be26f4f9f6f5ad07
@@ -66487,6 +66775,73 @@ index 79519693dd5fba61c15cb2f19cfef03bd64f647f..943d1c91aa79338bf630d11058c0169e
 +           doc="Role-specific THINK/ACTION configuration; linkage is not dispatch readiness.")
 +    canonical_method(_name, params=_params, result=ProfileWorkflowResult,
 +                     doc="Profile-scoped bot workflow configuration with an expected-revision fence.")
+diff --git a/tui_gateway/hosted_room_driver.py b/tui_gateway/hosted_room_driver.py
+index 2d14741a..8c4eeafd 100644
+--- a/tui_gateway/hosted_room_driver.py
++++ b/tui_gateway/hosted_room_driver.py
+@@ -21,2 +21,3 @@ from typing import Any, ContextManager, Protocol, cast
+ 
++from agent.memory_provider import spawn_context_thread
+ from gateway import hosted_room_driver as state
+@@ -151,2 +152,3 @@ class HostedRoomRuntime:
+         self._thread = self._last_error = None
++        self._armed = False
+         self._room_threads: dict[str, threading.Thread] = {}
+@@ -163,12 +165,25 @@ class HostedRoomRuntime:
+     # ------------------------------------------------------------------ lifecycle
++    def _start_locked(self) -> None:
++        if self._thread is not None and self._thread.is_alive():
++            return
++        self._stop.clear()
++        self._wake.set()
++        self._thread = spawn_context_thread(
++            target=self._worker_loop, name="hosted-room-driver-supervisor", daemon=True)
++        self._thread.start()
++
++    def arm(self) -> None:
++        """Release the ready gate without allocating a supervisor until a producer wakes it."""
++        with self._status_lock:
++            if self._stop.is_set():
++                return  # A stale ready callback cannot resurrect a stopped owner.
++            self._armed = True
++            if self._wake.is_set():
++                self._start_locked()
++
+     def start(self) -> None:
+-        """Start the bounded room-worker supervisor idempotently."""
++        """Start the bounded room-worker supervisor idempotently (including explicit restart)."""
+         with self._status_lock:
+-            if self._thread is not None and self._thread.is_alive():
+-                return
+-            self._stop.clear()
+-            self._wake.set()
+-            self._thread = threading.Thread(
+-                target=self._worker_loop, name="hosted-room-driver-supervisor", daemon=True)
+-            self._thread.start()
++            self._armed = True
++            self._start_locked()
+ 
+@@ -176,5 +191,6 @@ class HostedRoomRuntime:
+         """Request a bounded clean stop without interrupting accepted turns."""
+-        self._stop.set()
+-        self._wake.set()
+         with self._status_lock:
++            self._armed = False
++            self._stop.set()
++            self._wake.set()
+             thread = self._thread
+@@ -196,3 +212,5 @@ class HostedRoomRuntime:
+             self._rooms_needing_reschedule.update(self._room_threads)
+-        self._wake.set()
++            self._wake.set()
++            if self._armed and not self._stop.is_set():
++                self._start_locked()
+ 
+@@ -480,3 +498,3 @@ class HostedRoomRuntime:
+                 continue
+-            room_thread = threading.Thread(
++            room_thread = spawn_context_thread(
+                 target=self._run_room_once, args=(binding,),
 diff --git a/tui_gateway/methods_complete.py b/tui_gateway/methods_complete.py
 index ea2b069c6eec82d36e1a30f0e524faf1c98e0b6b..fb6d824e249e73e2845eff9712f060674abcc893 100644
 --- a/tui_gateway/methods_complete.py

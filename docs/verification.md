@@ -1,3 +1,15 @@
+# v0.7.6: demand-start hosted room supervisors
+
+The consolidated stable kit contains 694 pinned paths. Empty canonical hosted
+profiles remain ready without a supervisor thread. Existing producers wake
+immediately; persisted-room fallback uses the existing watcher. Stop and profile
+ownership fences are preserved. See [hosted standby](hosted-room-idle.md) for scope.
+
+Current validation: 9 native test files / 102 passed, zero retries; 6 installed
+synthetic-home controls on Linux and 6 on macOS, zero inference. Native code-health
+reported no findings. These counts overlap earlier evidence and must not be summed.
+Original-user task savings and model-backed adoption remain unproven.
+
 # v0.7.5 native skill aliases on Kanban cards
 
 The consolidated stable kit contains 689 pinned paths. Preflight keeps declared
