@@ -1,3 +1,16 @@
+# v0.7.4 cycle-safe skill discovery
+
+The consolidated stable kit contains 687 pinned paths. One physical-identity,
+branch-local traversal is shared by skill indexing, catalog signature checks and
+Kanban preflight. It bounds symlink cycles without dropping independent aliases
+or deeply nested valid skills, and retains native dependency/support exclusions.
+See [skill discovery](skill-discovery.md) for measurements and evidence limits.
+
+The relevant selection passed 25 files / 463 cases, zero retries. Native installed
+Linux/macOS checks each passed 11 controls in isolated homes with zero inference.
+No new strict scoped lint findings were introduced; an existing Kanban finding
+remains. Earlier test/UI records below are historical and were not rerun or summed.
+
 # v0.7.3 assignee-scoped preflight
 
 The consolidated stable kit contains 683 pinned paths. Native config resolution replaces

@@ -3952,6 +3952,61 @@ index 0000000000000000000000000000000000000000..208e4ce395a842ff04a89721fe2f9c94
 +    )
 +
 +
+diff --git a/agent/skill_utils.py b/agent/skill_utils.py
+index e885a530..841d306f 100644
+--- a/agent/skill_utils.py
++++ b/agent/skill_utils.py
+@@ -858,9 +858,45 @@ def is_skill_description_truncated_for_prompt(frontmatter: dict[str, Any]) -> bo
+ 
++def iter_skill_index_directories(skills_dir: Path, *, max_depth: Optional[int] = None):
++    """Native skill traversal: prune support/dependencies and ancestor symlink cycles.
++
++    DirEntry metadata is shared with signature readers instead of statting twice.
++    Physical ancestors are branch-local so independent aliases remain visible.
++    """
++    pending = [(Path(skills_dir), (), 0)]
++    while pending:
++        directory, ancestors, depth = pending.pop()
++        try:
++            info = directory.stat()
++            identity = (info.st_dev, info.st_ino) if info.st_ino else os.path.realpath(directory)
++            if identity in ancestors:
++                continue
++            root = os.fspath(directory)
++            with os.scandir(root) as entries:
++                dirs, files = [], []
++                for entry in entries:
++                    try:
++                        if entry.is_dir():
++                            dirs.append(entry)
++                        else:
++                            files.append(entry.name)
++                    except OSError:
++                        continue
++        except OSError:
++            continue
++        dirs.sort(key=lambda entry: entry.name)
++        yield root, tuple(entry.name for entry in dirs), tuple(files), info
++        if max_depth is not None and depth >= max_depth:
++            continue
++        has_skill_md = "SKILL.md" in files
++        child_ancestors = (*ancestors, identity)
++        for entry in reversed(dirs):
++            if entry.name in EXCLUDED_SKILL_DIRS or (has_skill_md and entry.name in SKILL_SUPPORT_DIRS):
++                continue
++            pending.append((entry, child_ancestors, depth + 1))
++
++
+ def iter_skill_index_files(skills_dir: Path, filename: str):
+-    """Walk skills_dir yielding sorted paths matching *filename*; prunes
+-    EXCLUDED_SKILL_DIRS and support dirs of skill roots."""
++    """Sorted file paths from the shared native skill directory traversal."""
+     matches: list[str] = []
+-    for root, dirs, files in os.walk(str(skills_dir), followlinks=True):
+-        has_skill_md = "SKILL.md" in files
+-        dirs[:] = [d for d in dirs if d not in EXCLUDED_SKILL_DIRS and not (has_skill_md and d in SKILL_SUPPORT_DIRS)]
++    for root, _dirs, files, _info in iter_skill_index_directories(skills_dir):
+         if filename in files:
 diff --git a/agent/system_prompt.py b/agent/system_prompt.py
 index 03ede0060d239d9ecca197ed29d039d205fc230e..09964a101987f8021aaf2f64088220f0fd50fe63 100644
 --- a/agent/system_prompt.py
@@ -40490,6 +40545,83 @@ index 0000000000000000000000000000000000000000..ac3d1cc508995905c2787229562a41a6
 +    assert 'BODY_SENTINEL' not in first
 +    assert len(first)<1000
 +    assert first==pb.build_skills_system_prompt(skills_dir_override=skills, available_tools={'skill_view'})
+diff --git a/tests/agent/test_skill_directory_cycles.py b/tests/agent/test_skill_directory_cycles.py
+new file mode 100644
+index 0000000..e68e901
+--- /dev/null
++++ b/tests/agent/test_skill_directory_cycles.py
+@@ -0,0 +1,71 @@
++"""Skill discovery must terminate on ancestor links without losing legitimate alias views."""
++import os
++from pathlib import Path
++
++import pytest
++
++pytestmark = pytest.mark.require_symlinks
++
++
++def _skill(path):
++    path.mkdir(parents=True)
++    file = path / 'SKILL.md'
++    file.write_text('---\nname: fixture\ndescription: Synthetic fixture\n---\nFixture.\n')
++    return file
++
++
++def _budget_scans(monkeypatch, root, limit=64):
++    real = os.scandir
++    visited = []
++    def scan(path):
++        if isinstance(path, (str, os.PathLike)) and Path(path).is_relative_to(root):
++            visited.append(str(path))
++            assert len(visited) <= limit, 'skill discovery repeatedly followed an ancestor cycle'
++        return real(path)
++    monkeypatch.setattr(os, 'scandir', scan)
++    return visited
++
++
++def test_index_skips_ancestor_cycle_but_keeps_independent_aliases(tmp_path, monkeypatch):
++    from agent.skill_utils import iter_skill_index_files
++    root = tmp_path / 'skills'
++    local = _skill(root / 'local')
++    external = tmp_path / 'external'
++    _skill(external / 'shared')
++    (root / 'again').symlink_to(root, target_is_directory=True)
++    for name in ['alias-a', 'alias-b']:
++        (root / name).symlink_to(external, target_is_directory=True)
++    visits = _budget_scans(monkeypatch, root)
++    assert list(iter_skill_index_files(root, 'SKILL.md')) == sorted([
++        local, root / 'alias-a/shared/SKILL.md', root / 'alias-b/shared/SKILL.md',
++    ])
++    assert visits
++
++
++def test_index_terminates_on_branching_cycles(tmp_path, monkeypatch):
++    from agent.skill_utils import iter_skill_index_files
++    root = tmp_path / 'skills'
++    real = _skill(root / 'real')
++    for name in ['again-a', 'again-b']:
++        (root / name).symlink_to(root, target_is_directory=True)
++    _budget_scans(monkeypatch, root)
++    assert list(iter_skill_index_files(root, 'SKILL.md')) == [real]
++
++
++def test_catalog_cache_signature_is_bounded_and_still_detects_install(tmp_path, monkeypatch):
++    from tools.skills_tool import _skills_scan_signature
++    root = tmp_path / 'skills'
++    _skill(root / 'category/real')
++    for name in ['again-a', 'again-b']:
++        (root / name).symlink_to(root, target_is_directory=True)
++    _budget_scans(monkeypatch, root)
++    first = _skills_scan_signature([root], set())
++    _skill(root / 'category/new')
++    assert _skills_scan_signature([root], set()) != first
++
++
++def test_deep_acyclic_skill_is_not_cut_off(tmp_path):
++    from agent.skill_utils import iter_skill_index_files
++    root = tmp_path / 'skills'
++    real = _skill(root.joinpath(*['category'] * 12, 'deep'))
++    assert list(iter_skill_index_files(root, 'SKILL.md')) == [real]
 diff --git a/tests/agent/test_system_prompt.py b/tests/agent/test_system_prompt.py
 index 38f3d739bb70ebfe0388d84ce00d57e7f1b5fda6..f898e730afc9b10e716a7bc9ae7303fa06bf7fb8 100644
 --- a/tests/agent/test_system_prompt.py
@@ -57387,6 +57519,83 @@ index 0000000000000000000000000000000000000000..19761e537c69e317b8eba80bfff597c6
 +    assert 'unchanged_since_last_show' in show_once('t',{},'original' * 100)
 +    invalidate_system_prompt(SimpleNamespace(session_id='compression-fixture',_memory_store=None))
 +    assert show_once('t',{},'original' * 100)=='original' * 100
+diff --git a/tests/tools/test_kanban_skill_discovery.py b/tests/tools/test_kanban_skill_discovery.py
+new file mode 100644
+index 0000000..9594414
+--- /dev/null
++++ b/tests/tools/test_kanban_skill_discovery.py
+@@ -0,0 +1,71 @@
++"""Kanban skill hints must match the native index and avoid irrelevant dependency trees."""
++import os
++from pathlib import Path
++
++import pytest
++
++
++@pytest.fixture
++def skill_fleet(tmp_path, monkeypatch):
++    root = tmp_path / 'fleet'
++    profile = root / 'profiles' / 'worker'
++    profile.mkdir(parents=True)
++    (profile / 'config.yaml').write_text('platform_toolsets:\n  cli: [file]\n')
++    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
++    monkeypatch.setenv('HERMES_HOME', str(root))
++    monkeypatch.setenv('HERMES_ROOT', str(root))
++    return profile / 'skills'
++
++
++def _skill(path):
++    path.mkdir(parents=True)
++    (path / 'SKILL.md').write_text('---\nname: ' + path.name + '\ndescription: Fixture\n---\nFixture.\n')
++
++
++def test_preflight_rejects_archives_inside_skill_support_or_dependencies(skill_fleet):
++    from tools.kanban_tools import _skills_available_for
++    root = skill_fleet
++    for path in [root / 'fixture-live', root / 'fixture-live/references/fixture-archive',
++                 root / 'node_modules/fixture-dependency']:
++        _skill(path)
++    wanted = ['fixture-live', 'fixture-archive', 'fixture-dependency']
++    assert _skills_available_for('worker', wanted) == (wanted[:1], wanted[1:])
++
++
++def test_preflight_does_not_read_dependency_tree_on_repeated_requests(skill_fleet, monkeypatch):
++    from tools.kanban_tools import _skills_available_for
++    root = skill_fleet
++    _skill(root / 'fixture-live')
++    _skill(root / 'node_modules/irrelevant/nested/dependency')
++    scans = []
++    real = os.scandir
++    def scan(path):
++        if isinstance(path, (str, os.PathLike)) and Path(path).is_relative_to(root / 'node_modules'):
++            scans.append(str(path))
++        return real(path)
++    monkeypatch.setattr(os, 'scandir', scan)
++    for _ in range(3):
++        assert _skills_available_for('worker', ['fixture-live']) == (['fixture-live'], [])
++    assert not scans, 'preflight walked unrelated dependency files'
++
++
++@pytest.mark.require_symlinks
++def test_preflight_uses_cycle_safe_discovery_and_preserves_shared_links(skill_fleet, tmp_path, monkeypatch):
++    from tools.kanban_tools import _skills_available_for
++    root = skill_fleet
++    _skill(root / 'fixture-live')
++    outside = tmp_path / 'shared'
++    _skill(outside / 'fixture-shared')
++    (root / 'shared').symlink_to(outside, target_is_directory=True)
++    (root / 'again-a').symlink_to(root, target_is_directory=True)
++    (root / 'again-b').symlink_to(root, target_is_directory=True)
++    visits = []
++    real = os.scandir
++    def scan(path):
++        if isinstance(path, (str, os.PathLike)) and Path(path).is_relative_to(root):
++            visits.append(str(path))
++            assert len(visits) <= 64, 'preflight repeatedly followed an ancestor cycle'
++        return real(path)
++    monkeypatch.setattr(os, 'scandir', scan)
++    wanted = ['fixture-live', 'fixture-shared']
++    assert _skills_available_for('worker', wanted) == (wanted, [])
 diff --git a/tests/tools/test_kanban_tools.py b/tests/tools/test_kanban_tools.py
 index 2d5a50f58492bff46949b5521d649d2c22ca5edb..58acab18e5c1e326ca5e1a150fdd2b54161f821c 100644
 --- a/tests/tools/test_kanban_tools.py
@@ -63004,31 +63213,21 @@ index 0000000000000000000000000000000000000000..d2988273314317267910a4e11aaebeed
 +            if key[0] == home and key[2] == session_id:
 +                del _SEEN[key]
 diff --git a/tools/kanban_tools.py b/tools/kanban_tools.py
-index c8b64c09..35b459ba 100644
+index c8b64c09..ce8fd5df 100644
 --- a/tools/kanban_tools.py
 +++ b/tools/kanban_tools.py
-@@ -10,6 +10,7 @@ from __future__ import annotations
- import functools
- import json
+@@ -12,2 +12,3 @@ import json
  import logging
 +import math
  import os
- import time
- from contextlib import contextmanager
-@@ -24,7 +25,9 @@ from tools.kanban_tools_schemas import (
-     KANBAN_ATTACH_URL_SCHEMA, KANBAN_ATTACHMENTS_SCHEMA, KANBAN_BLOCK_SCHEMA, KANBAN_COMMENT_SCHEMA,
-     KANBAN_COMPLETE_SCHEMA, KANBAN_CREATE_SCHEMA, KANBAN_HEARTBEAT_SCHEMA, KANBAN_LINK_SCHEMA,
+@@ -26,3 +27,5 @@ from tools.kanban_tools_schemas import (
      KANBAN_LIST_SCHEMA, KANBAN_REQUEST_CHANGES_SCHEMA, KANBAN_REQUEST_REVIEW_SCHEMA,
 -    KANBAN_SCHEDULE_SCHEMA, KANBAN_SHOW_SCHEMA, KANBAN_UNBLOCK_SCHEMA)
 +    KANBAN_SCHEDULE_SCHEMA, KANBAN_SHOW_SCHEMA, KANBAN_UNBLOCK_SCHEMA,
 +    KANBAN_REASSIGN_SCHEMA, KANBAN_UNLINK_SCHEMA, KANBAN_EXTEND_RUNTIME_SCHEMA, KANBAN_CONTINUE_SCHEMA,
 +    KANBAN_ARCHIVE_SCHEMA)
  
- logger = logging.getLogger(__name__)
- 
-@@ -150,6 +153,19 @@ def _persisted_identity() -> str:
-     return current_profile_name("worker") or "worker"
- 
+@@ -152,2 +155,15 @@ def _persisted_identity() -> str:
  
 +def _unescape_json(out):
 +    """Local patch 18: re-emit handler JSON with ensure_ascii=False. Thai card text escaped as \\uXXXX costs
@@ -63044,22 +63243,14 @@ index c8b64c09..35b459ba 100644
 +
 +
  def _kanban_handler(tool_name: str) -> Callable:
-     """Wrap a handler so every failure is a structured tool error. ``ValueError``
-     (invalid board slug, DB validation such as cycle/self-link, ``AttachmentTooLarge``)
-@@ -165,7 +181,9 @@ def _kanban_handler(tool_name: str) -> Callable:
-                 _check(not unknown,
-                        f"{tool_name}: unknown parameter(s): {', '.join(unknown)}. "
+@@ -167,3 +183,5 @@ def _kanban_handler(tool_name: str) -> Callable:
                         f"Valid parameters: {', '.join(sorted(properties))}. Nothing changed.")
 -                return fn(args, **kw)
 +                from hermes_cli.kanban_event_origin import event_origin
 +                with event_origin(args.get("task_id"), _self_notification_target(tool_name)):
 +                    return _unescape_json(fn(args, **kw))
              except _Reject as e:
-                 return e.args[0]
-             except Exception as e:
-@@ -176,6 +194,27 @@ def _kanban_handler(tool_name: str) -> Callable:
-     return deco
- 
+@@ -178,2 +196,23 @@ def _kanban_handler(tool_name: str) -> Callable:
  
 +def _self_notification_target(tool_name: str) -> Optional[dict]:
 +    """Attribute explicit interactive lifecycle commands, never worker outcomes."""
@@ -63083,30 +63274,18 @@ index c8b64c09..35b459ba 100644
 +
 +
  def _reject_delegated_child_mutation(tool_name: str) -> None:
-     """A delegate_task child shares the parent's process, so inherited HERMES_KANBAN_*
-     env is not proof of ownership: it may report findings but must not mutate."""
-@@ -421,7 +460,7 @@ def _opt_int(value: Any, default: Optional[int] = None) -> Optional[int]:
- _TASK_FIELDS = tuple(
-     "id title body assignee status tenant priority workspace_kind workspace_path created_by "
+@@ -423,3 +462,3 @@ _TASK_FIELDS = tuple(
      "created_at started_at completed_at result current_run_id model_override "
 -    "provider_override completion_contract last_failure_error".split())
 +    "provider_override reasoning_effort completion_contract last_failure_error".split())
  _TASK_SUMMARY_FIELDS = tuple(
-     "id title assignee status priority tenant workspace_kind workspace_path project_id created_by "
-     "created_at started_at completed_at current_run_id model_override provider_override".split())
-@@ -430,7 +469,8 @@ _COMMENT_FIELDS = ("author", "body", "created_at")
- _EVENT_FIELDS = ("kind", "payload", "created_at", "run_id")
- _ATTACHMENT_FIELDS = tuple(
+@@ -432,3 +471,4 @@ _ATTACHMENT_FIELDS = tuple(
      "id filename content_type size uploaded_by stored_path created_at".split())
 -_CREATED_FIELDS = ("status", "workspace_kind", "workspace_path", "project_id")
 +_CREATED_FIELDS = ("status", "workspace_kind", "workspace_path", "project_id",
 +                   "model_override", "provider_override", "reasoning_effort")
  
- 
- def _fields(obj: Any, names: tuple[str, ...]) -> dict[str, Any]:
-@@ -553,7 +593,11 @@ def register_current_worker_from_env() -> bool:
-     try:
-         from hermes_cli import kanban_db_dispatch as kbd
+@@ -555,3 +595,7 @@ def register_current_worker_from_env() -> bool:
          with _board(None, quiet_close=True) as (_kb, conn):
 -            return kbd.adopt_worker_pid(conn, tid, run_id, os.getpid())
 +            adopted = kbd.adopt_worker_pid(conn, tid, run_id, os.getpid())
@@ -63115,11 +63294,7 @@ index c8b64c09..35b459ba 100644
 +                register(conn, tid, run_id)
 +            return adopted
      except Exception:
-         logger.debug("kanban worker registration for %s failed", tid, exc_info=True)
-         return True
-@@ -657,8 +701,158 @@ def inject_new_comments_from_env(agent: Any) -> bool:
-         return False
- 
+@@ -659,4 +703,152 @@ def inject_new_comments_from_env(agent: Any) -> bool:
  
 +# local patch 05: an orchestrator calling kanban_show on a long-lived card used to receive 25-140k chars
 +# (all comments, all runs, worker_context). Orchestrators now get a compact view unless full=true.
@@ -63264,30 +63439,20 @@ index c8b64c09..35b459ba 100644
 +            dirs += [Path(os.path.expanduser(str(d))) for d in ((cfg.get("skills") or {}).get("external_dirs") or [])]
 +    except Exception:
 +        return skills, []
-+    have = set()
-+    for d in dirs:
-+        for dirpath, _dirs, files in os.walk(d, followlinks=True):   # shared skill dirs are often symlinks
-+            if "SKILL.md" in files:
-+                have.add(os.path.basename(dirpath))
++    from agent.skill_utils import iter_skill_index_directories
++    have = {os.path.basename(root) for d in dirs for root, _, files, _info in iter_skill_index_directories(d)
++            if "SKILL.md" in files}
 +    kept = [s for s in skills if str(s).rstrip("/").split("/")[-1] in have]
 +    return kept, [s for s in skills if s not in kept]
 +
 +
  @_kanban_handler("kanban_show")
- def _handle_show(args: dict, **kw) -> str:
-     """Full task state: row, parents, children, comments, runs, last 50 events."""
-@@ -676,7 +870,7 @@ def _handle_show(args: dict, **kw) -> str:
-         })
-     with _board(args.get("board")) as (kb, conn):
+@@ -678,3 +870,3 @@ def _handle_show(args: dict, **kw) -> str:
          task = _existing_task(kb, conn, tid)
 -        return json.dumps({
 +        payload = {
              "task": _fields(task, _TASK_FIELDS),
-             "parents": kb.parent_ids(conn, tid),
-             # Non-terminal parents; on a running card this means the dependency
-@@ -688,14 +882,21 @@ def _handle_show(args: dict, **kw) -> str:
-             # Capped; full log via CLI.
-             "events": [_fields(e, _EVENT_FIELDS) for e in kb.list_events(conn, tid)[-50:]],
+@@ -690,4 +882,11 @@ def _handle_show(args: dict, **kw) -> str:
              "runs": [_fields(r, _RUN_FIELDS) for r in kb.list_runs(conn, tid)],
 -            # Same string build_worker_context hands the dispatcher at spawn time.
 -            "worker_context": kb.build_worker_context(conn, tid)})
@@ -63301,18 +63466,12 @@ index c8b64c09..35b459ba 100644
 +                       else _compact_show_payload(payload))
 +        return _show_once(tid, args, json.dumps(payload))
  
- 
- @_kanban_handler("kanban_list")
- def _handle_list(args: dict, **kw) -> str:
+@@ -697,3 +896,3 @@ def _handle_list(args: dict, **kw) -> str:
      """Task summaries with the same core filters as the CLI."""
 -    _require_orchestrator_tool("kanban_list")
 +    # local patch 05: kanban_list is read-only, workers may call it (duplicate checks); unblock stays orchestrator-only.
      include_archived = _parse_bool_arg(args, "include_archived")
-     limit = args.get("limit")
-     try:
-@@ -897,7 +1098,13 @@ def _handle_request_review(args: dict, **kw) -> str:
-                f"reviewer profile {reviewer!r} is not installed. "
-                f"Installed profiles: {', '.join(list_profile_names())}")
+@@ -899,3 +1098,9 @@ def _handle_request_review(args: dict, **kw) -> str:
      with _board(args.get("board")) as (kb, conn):
 -        _goal_gate("kanban_request_review", kb.get_task(conn, tid), tid, summary)
 +        task = kb.get_task(conn, tid)
@@ -63323,11 +63482,7 @@ index c8b64c09..35b459ba 100644
 +        if reviewer and reviewer in ("orchestra-captain", getattr(task, "assignee", None)):
 +            reviewer = "reviewer-gpt"
          try:
-             ok, fail_reason = kb.request_review(
-                 conn, tid, summary=summary, metadata=metadata, reviewer=reviewer,
-@@ -1099,10 +1306,7 @@ def _handle_create(args: dict, **kw) -> str:
-     assignee = args.get("assignee")
-     _check(assignee, "assignee is required — name the profile that should execute this "
+@@ -1101,6 +1306,3 @@ def _handle_create(args: dict, **kw) -> str:
                       "task (the dispatcher will only spawn tasks with an assignee)")
 -    # Workspace sharing is always explicit: omitted fields mean a fresh scratch workspace
 -    # even for a dispatcher-spawned creator (reusing the parent's path would let a child
@@ -63335,15 +63490,11 @@ index c8b64c09..35b459ba 100644
 -    # to inherit implicitly (the DB turns it into a fresh per-task worktree).
 +    # Omitted workspace means fresh scratch; only project identity may be inherited.
      workspace_kind, workspace_path = args.get("workspace_kind"), args.get("workspace_path")
-     # See #67567. ``project=""`` is an explicit "no project" (no ``or`` collapse, #106342).
-     project_id = args["project"] if "project" in args else args.get("project_id")
-@@ -1110,9 +1314,15 @@ def _handle_create(args: dict, **kw) -> str:
-     triage, skills, goal_mode = (
-         _parse_bool_arg(args, "triage"), _coerce_str_list(args.get("skills"), "skills", "skill names"),
+@@ -1112,2 +1314,3 @@ def _handle_create(args: dict, **kw) -> str:
          _parse_bool_arg(args, "goal_mode"))
 +    skills, _dropped_skills = _skills_available_for(str(assignee or ""), skills)
      model_override, provider_override = args.get("model"), args.get("provider")
-     _check(model_override or not provider_override, "'provider' requires 'model' to be set as well")
+@@ -1115,2 +1318,7 @@ def _handle_create(args: dict, **kw) -> str:
      parents = _coerce_str_list(args.get("parents") or [], "parents", "task ids")
 +    _fit = _tool_fit_error(str(assignee), str(title), str(args.get("body") or ""))
 +    _check(_fit is None, _fit or "")
@@ -63351,11 +63502,7 @@ index c8b64c09..35b459ba 100644
 +                          or _default_runtime_seconds(str(assignee), str(title), str(args.get("body") or "")))
 +    _runtime = max(_requested_runtime, _runtime_floor(str(assignee)))
      with _board(args.get("board")) as (kb, conn):
-         from gateway.session_context import get_session_env
-         from tools.async_delegation import _current_origin_session_id
-@@ -1127,11 +1337,24 @@ def _handle_create(args: dict, **kw) -> str:
-                       or (self_task.session_id if self_task else None)
-                       or _persisted_session_id(_current_origin_session_id())
+@@ -1129,2 +1337,14 @@ def _handle_create(args: dict, **kw) -> str:
                        or _persisted_session_id(get_session_env("HERMES_SESSION_ID", "")))
 +        # local patch 23: the Captain is not dispatchable, so a worker card assigned to it sits in todo
 +        # indefinitely. Keep the note as a comment on the worker's own card instead.
@@ -63370,7 +63517,7 @@ index c8b64c09..35b459ba 100644
 +                f"saved as a comment on your task {self_tid}. Mention it under 'ต่อไป:' in your completion "
 +                "summary; the Captain decides follow-up cards."))
          if project_id is None and workspace_kind is None and workspace_path is None:
-             if self_task is not None and self_task.project_id:
+@@ -1132,4 +1352,5 @@ def _handle_create(args: dict, **kw) -> str:
                  project_id, project_source_task_id = self_task.project_id, self_task.id
 -        new_tid = kb.create_task(
 -            conn, title=str(title).strip(), body=args.get("body"), assignee=str(assignee),
@@ -63378,22 +63525,14 @@ index c8b64c09..35b459ba 100644
 +        new_tid = create_planned_task(
 +            conn, plan_task=args.get("plan_task"), plan_step=args.get("plan_step"), replan_of=args.get("replan_of"), title=str(title).strip(), body=args.get("body"), assignee=str(assignee),
              parents=tuple(parents), tenant=args.get("tenant") or os.environ.get("HERMES_TENANT"),
-             priority=_opt_int(args.get("priority"), 0),
-             workspace_kind=workspace_kind, workspace_path=workspace_path, project_id=project_id,
-@@ -1141,8 +1364,9 @@ def _handle_create(args: dict, **kw) -> str:
-             project_source_task_id=project_source_task_id, triage=triage,
-             creator_task_id=self_tid,
+@@ -1143,4 +1364,5 @@ def _handle_create(args: dict, **kw) -> str:
              idempotency_key=args.get("idempotency_key"),
 -            max_runtime_seconds=_opt_int(args.get("max_runtime_seconds")), skills=skills,
 +            max_runtime_seconds=_runtime, skills=skills,
              model_override=model_override, provider_override=provider_override,
 +            reasoning_effort=args.get("reasoning_effort"),
              goal_mode=goal_mode, goal_max_turns=_opt_int(args.get("goal_max_turns")),
-             completion_contract=args.get("completion_contract"),
-             initial_status=str(args.get("initial_status") or "running"),
-@@ -1150,7 +1374,14 @@ def _handle_create(args: dict, **kw) -> str:
-         landed = _fields(kb.get_task(conn, new_tid), _CREATED_FIELDS)
-         wait = [e for e in kb.list_events(conn, new_tid) if e.kind == "dependency_wait"]
+@@ -1152,3 +1374,10 @@ def _handle_create(args: dict, **kw) -> str:
          gate = {"gated": True, "gated_by": wait[-1].payload["parent"]} if wait else {"gated": False}
 +        _warns = _oversize_warnings(str(args.get("body") or ""))
 +        if _dropped_skills:
@@ -63404,11 +63543,7 @@ index c8b64c09..35b459ba 100644
 +                   **({"warnings": _warns} if _warns else {}),
 +                   **({"runtime_raised_from": _requested_runtime} if _runtime != _requested_runtime else {}),
                     subscribed=_maybe_auto_subscribe(conn, new_tid))
- 
- 
-@@ -1271,6 +1502,24 @@ def _handle_unblock(args: dict, **kw) -> str:
-         return _ok(task_id=tid, **_fields(kb.get_task(conn, tid), ("status",)))
- 
+@@ -1273,2 +1502,20 @@ def _handle_unblock(args: dict, **kw) -> str:
  
 +@_kanban_handler("kanban_archive")
 +def _handle_archive(args: dict, **kw) -> str:
@@ -63429,11 +63564,7 @@ index c8b64c09..35b459ba 100644
 +
 +
  @_kanban_handler("kanban_link")
- def _handle_link(args: dict, **kw) -> str:
-     """Add a parent→child dependency edge after the fact (cycles/self-links/running
-@@ -1288,10 +1537,222 @@ def _handle_link(args: dict, **kw) -> str:
-                    **({"gated_by": parent_id} if gated else {}))
- 
+@@ -1290,2 +1537,213 @@ def _handle_link(args: dict, **kw) -> str:
  
 +# --- local patch 06: orchestrator board management (reassign / unlink / extend / continue) ---
 +
@@ -63647,17 +63778,13 @@ index c8b64c09..35b459ba 100644
 +
 +
  # --- Registration (order preserved: it is the order tools appear in the schema) ---
- 
+@@ -1293,3 +1751,4 @@ def _handle_link(args: dict, **kw) -> str:
  # kanban_list / kanban_unblock route the board and are hidden from task workers.
 -_ORCHESTRATOR_TOOLS = frozenset({"kanban_list", "kanban_unblock"})
 +_ORCHESTRATOR_TOOLS = frozenset({"kanban_unblock", "kanban_reassign", "kanban_unlink", "kanban_extend_runtime", "kanban_continue",
 +                                 "kanban_archive"})
  _TOOLS = (
-     ("kanban_show", KANBAN_SHOW_SCHEMA, _handle_show, "📋"),
-     ("kanban_list", KANBAN_LIST_SCHEMA, _handle_list, "📋"),
-@@ -1307,7 +1768,12 @@ _TOOLS = (
-     ("kanban_attachments", KANBAN_ATTACHMENTS_SCHEMA, _handle_attachments, "📎"),
-     ("kanban_create", KANBAN_CREATE_SCHEMA, _handle_create, "➕"),
+@@ -1309,3 +1768,8 @@ _TOOLS = (
      ("kanban_unblock", KANBAN_UNBLOCK_SCHEMA, _handle_unblock, "▶"),
 -    ("kanban_link", KANBAN_LINK_SCHEMA, _handle_link, "🔗"))
 +    ("kanban_link", KANBAN_LINK_SCHEMA, _handle_link, "🔗"),
@@ -63667,8 +63794,6 @@ index c8b64c09..35b459ba 100644
 +    ("kanban_continue", KANBAN_CONTINUE_SCHEMA, _handle_continue, "➡"),
 +    ("kanban_archive", KANBAN_ARCHIVE_SCHEMA, _handle_archive, "🗄"))
  
- for _name, _sch, _handler, _emoji in _TOOLS:
-     _gate = _check_kanban_orchestrator_mode if _name in _ORCHESTRATOR_TOOLS else _check_kanban_mode
 diff --git a/tools/kanban_tools_schemas.py b/tools/kanban_tools_schemas.py
 index ec5a72610e075f300d5493c9e1f71d18f21d83de..d38195358a49647edcc75530f62aef3d1693add0 100644
 --- a/tools/kanban_tools_schemas.py
@@ -65170,6 +65295,37 @@ index 0000000000000000000000000000000000000000..1401abe9bfe48d1d71832393e366836f
 +                raise
 +            return result
 +        return convert(data,path)
+diff --git a/tools/skills_tool.py b/tools/skills_tool.py
+index a6f8d186..4b26257f 100644
+--- a/tools/skills_tool.py
++++ b/tools/skills_tool.py
+@@ -53,23 +53,5 @@ def _dir_tree_signature(root, sig, depth=_SIGNATURE_MAX_DEPTH) -> None:
+     filesystems) leave every mtime equal, and the change must still show. ~1 ms for 170 dirs."""
+-    from agent.skill_utils import EXCLUDED_SKILL_DIRS, SKILL_SUPPORT_DIRS
+-    try:
+-        mtime = os.stat(root).st_mtime_ns
+-        with os.scandir(root) as it:
+-            entries = list(it)
+-    except OSError:
+-        return
+-    names, is_skill = [], False
+-    for entry in entries:
+-        with suppress(OSError):
+-            if entry.is_dir():
+-                names.append(entry.name)
+-            elif entry.name == "SKILL.md":
+-                is_skill = True
+-    names.sort()
+-    sig.append((str(root), mtime, tuple(names)))
+-    if depth <= 0:
+-        return
+-    for name in names:
+-        if name not in EXCLUDED_SKILL_DIRS and not (is_skill and name in SKILL_SUPPORT_DIRS):
+-            _dir_tree_signature(os.path.join(root, name), sig, depth - 1)
++    from agent.skill_utils import iter_skill_index_directories
++    for directory, names, _files, info in iter_skill_index_directories(Path(root), max_depth=depth):
++        sig.append((directory, info.st_mtime_ns, names))
+ 
 diff --git a/tools/tool_search.py b/tools/tool_search.py
 index 90631843bcf5edebf9bd5ab322f9ee6eba900c2f..16108989c54e00712aed1bd952cdf5da504cfe29 100644
 --- a/tools/tool_search.py
