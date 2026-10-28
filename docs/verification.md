@@ -1338,3 +1338,22 @@ THINK/ACTION adoption or new Mac parity is claimed by this release.
 ## Native role workflow integration (v0.6.50)
 
 See [stable role workflows](stable-role-workflows.md#verification-boundary) for the clean-base Python/UI scope, one real Captain/developer loop, retained failures and explicit provider/Mac/usage limits. These results do not replace the historical cumulative-kit verification above.
+
+## ARM64 installation and evidence boundaries (v0.6.51)
+
+The [Mac guide](macos-install-update.md#choose-the-patch-base-first) now separates
+the cumulative v0.22.2 walkthrough from the alternative v0.22.5 role unit, avoiding
+an incompatible full-patch stack or an assumed interpreter upgrade. Patch bytes,
+native runtime behavior and dependency locks are unchanged by this documentation
+release.
+
+In a separate custom native ARM64 installation, matching PM preparation, Desktop
+typecheck/build/packaging, normal CLI source/runtime readback and strict ad-hoc
+signature verification passed. The installed application then passed the
+role/model/effort, reciprocal-pair, compact-button and navigation journeys using
+isolated user data with zero inference requests. See the
+[deployment checkpoint](macos-install-update.md#later-arm64-deployment-checkpoint)
+for the scope and retained original-session/provider limits. The custom host's
+private configuration, account material, logs, screenshots, backups and source
+manifest are not published here. This release does not ship a Mac binary or
+claim a new production usage, cache, latency or RAM saving.

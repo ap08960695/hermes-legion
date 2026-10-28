@@ -2,6 +2,23 @@
 
 This guide starts from an **existing, working native Hermes installation**. It is not a bootstrap installer for a blank Mac. The companion tools need Python 3.9 or newer and Git; native Hermes needs its own upstream-managed interpreter and dependencies. The accepted pilot used Apple Silicon, macOS 27, the system Python 3.9 for companion tools, and an existing Python 3.13 for Hermes. No provider authentication, quota change or model request was used.
 
+## Choose the patch base first
+
+The numbered source-apply walkthrough below uses the historical cumulative
+patch. The optional role-workflow unit uses a different upstream base:
+
+| Patch | Required upstream | Preparation instructions |
+| --- | --- | --- |
+| Cumulative kit | v0.22.2, pinned in `patches/manifest.json` | Sections 1–4 below |
+| Role-specific THINK/ACTION | v0.22.5, pinned in `patches/stable-role-workflows/manifest.json` | [Fresh role-workflow checkout](stable-role-workflows.md#apply-to-a-fresh-isolated-checkout) |
+
+Choose one full patch for a fresh matching checkout. Do not apply the cumulative
+patch to v0.22.5, stack it with the role unit, or reuse the old Python 3.13 pilot
+interpreter as evidence that a new upstream environment is compatible. Prepare
+the matching frozen environment through native Hermes PM, preserving the
+installation's existing extras and plugin selection. CLI, Desktop and adoption
+checks below remain separate requirements for either route.
+
 The pilot applied public releases **v0.6.43 and v0.6.44** to separate clean checkouts, launched each CLI, and reopened the same synthetic session/search database after switching versions. That proves source installation and fixture continuity. It does not prove authentication, a real bot loop or production migration. **Use v0.6.45 or newer for the repaired Python 3.13 Desktop startup:** the subsequent native Desktop test found a missing `Path` import in the earlier backend. Read the [verification record](verification.md) for the repair and Desktop acceptance limits.
 
 ## 1. Select an existing runtime and a fresh trial directory
@@ -142,3 +159,32 @@ After the backend import repair, two native Electron interaction tests passed on
 Adopt only after the [deployment acceptance checklist](acceptance-checklist.md) passes in the intended environment. Keep the exact previous source/package until the new version has been accepted, then retire only explicitly owned trial outputs. See [storage and backups](storage-and-backups.md) for retention boundaries.
 
 For template-only preparation on macOS, the [offline setup recipe](offline-setup-tools.md) was also exercised: the bundle was written to a fresh physical path and doctor returned `offline_ready: true`, with `runtime_ready: unknown`. It generated no native credentials or live profile configuration.
+
+## Later ARM64 deployment checkpoint
+
+A later native deployment used the v0.22.5 base and its own PM-selected Python
+3.14.9 environment, retaining the existing extras. The source and application
+were switched while idle; the previous source and application were retained by
+rename, and only small launcher/control files needed additional backup copies.
+No live database was restored. The normal CLI then reported the new source and
+interpreter.
+
+The installed `.app` passed strict recursive signature verification after
+local ad-hoc signing with the existing entitlement files. That same installed
+application, using isolated user data and a loopback mock catalog, passed role,
+model and effort Save/reopen; reciprocal THINK/ACTION linking; compact-window
+Save hit testing and Cancel; and Work/Bots/Hub/Chat navigation. No inference
+request was made. Two intentionally blocked external resources, an optional
+font and the plugin catalog, were recorded explicitly.
+
+This deployment also carried local customizations outside the public role unit.
+It is not a clean-base Mac certification of every public patch, a complete UI
+audit, provider/account acceptance, notarization, or proof that the owner's
+original sessions adopted new rules. The original data-home Gateway was not
+started for the test. Do not start a held fleet, resume a conversation or send a
+model request merely to turn an installed-code check into an adoption claim.
+
+For production adoption, use an independent source checkout. A shared clone from
+section 2 still depends on the old object-store path; renaming or pruning that
+store can break it. Retire trial environments only after checking that current
+interpreters, launchers, prepared inputs and live processes do not borrow them.

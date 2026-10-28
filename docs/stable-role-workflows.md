@@ -16,6 +16,13 @@ planner/executor and no forced premium model. The Bots editor saves native model
 provider, effort and reciprocal pairing with a configuration-revision check.
 Existing chats and workers retain their current bindings.
 
+Choose effort deliberately. A profile default such as `high` is not a hard
+ceiling on saved-chat or per-task overrides. Supporting `xhigh` or `max` does not
+enable automatic escalation, establish an account's allowance, or imply a fixed
+cost multiplier. Higher effort can use more reasoning tokens; inspect effective
+settings and existing usage rather than spending a model call to probe them.
+See [OpenAI's reasoning guidance](https://developers.openai.com/api/docs/guides/reasoning).
+
 THINK completes with a validated plan on its own native task run. Captain creates
 ACTION steps using `plan_task` and `plan_step`; the native run/hash/step binding is
 checked at creation, claim, dispatch, execution context and terminal handoff.
@@ -50,13 +57,17 @@ legion_manifest="$LEGION_ROOT/patches/stable-role-workflows/manifest.json"
 legion_patch="$LEGION_ROOT/patches/stable-role-workflows/0001-stable-role-workflows.patch"
 legion_base_commit="$(python3 -c 'import json; print(json.load(open("patches/stable-role-workflows/manifest.json"))["upstream_commit"])')"
 test ! -e "$HERMES_CHECKOUT"
-git clone --no-checkout https://github.com/NousResearch/hermes-agent.git "$HERMES_CHECKOUT"
+git clone --depth 1 --branch v0.22.5 --no-checkout https://github.com/NousResearch/hermes-agent.git "$HERMES_CHECKOUT"
 git -C "$HERMES_CHECKOUT" checkout --detach "$legion_base_commit"
 python3 "$LEGION_ROOT/scripts/verify_checkout.py" "$HERMES_CHECKOUT" --phase base --manifest "$legion_manifest"
 git -C "$HERMES_CHECKOUT" apply --check "$legion_patch"
 git -C "$HERMES_CHECKOUT" apply "$legion_patch"
 python3 "$LEGION_ROOT/scripts/verify_checkout.py" "$HERMES_CHECKOUT" --phase installed --manifest "$legion_manifest"
 ```
+
+The shallow release checkout avoids downloading the entire upstream history.
+The exact commit and file guards still apply; a moved or mismatched tag must
+stop preparation. It is independent of an existing installation's object store.
 
 There is no in-place upgrader from the nine-path runtime unit in this release.
 For an existing modified installation, prepare this separate checkout and use
@@ -110,5 +121,9 @@ handoff, and no duplicate tasks. This is a bounded synthetic workload, not a
 before/after usage saving, universal billing count, cross-bot cache guarantee or
 proof for every role/provider. Earlier capability and finalizer failures were
 retained, not relabelled successful. No private logs, account bindings, prompts or
-operational fixtures are distributed here. macOS application adoption remains
-separate; offline Linux tests do not establish Mac runtime/UI parity.
+operational fixtures are distributed here. See the later
+[ARM64 deployment checkpoint](macos-install-update.md#later-arm64-deployment-checkpoint)
+for installed-application checks in an isolated home. That host also carried
+other local customizations: it is not clean-base Mac certification of this whole
+public unit or adoption by the owner's original sessions. Offline Linux tests
+alone do not establish Mac runtime/UI parity.
