@@ -1,0 +1,357 @@
+diff --git a/agent/codex_headers.py b/agent/codex_headers.py
+index 84cbe955..4c55f6a3 100644
+--- a/agent/codex_headers.py
++++ b/agent/codex_headers.py
+@@ -115,6 +115,40 @@ def codex_request_compression_hooks(base_url: str, *, async_mode: bool = False)
+     return {"request": [compress_async]}
+ 
+ 
++def codex_request_hooks(base_url: str, *, async_mode: bool = False) -> dict[str, list] | None:
++    """Bind workspace identity to the SDK's current bearer, then optionally compress.
++
++    A ``key_cmd`` bearer is materialized by the SDK after client construction. Reading
++    Authorization here also follows token rotation without minting a second token.
++    Check the actual request origin so another URL on this client is left untouched.
++    """
++    if not is_official_codex_base_url(base_url):
++        return None
++    compression = (codex_request_compression_hooks(base_url, async_mode=async_mode) or {}).get("request", [])
++
++    def identify(request: Any) -> None:
++        scheme, _, bearer = request.headers.get("Authorization", "").partition(" ")
++        current = codex_account_headers(bearer) if scheme.lower() == "bearer" else {}
++        if current:
++            for name in ("ChatGPT-Account-ID", "x-openai-internal-codex-residency"):
++                request.headers.pop(name, None)
++            request.headers.update(current)
++
++    def prepare(request: Any) -> None:
++        if is_official_codex_base_url(str(request.url)):
++            identify(request)
++            for hook in compression:
++                hook(request)
++
++    async def prepare_async(request: Any) -> None:
++        if is_official_codex_base_url(str(request.url)):
++            identify(request)
++            for hook in compression:
++                await hook(request)
++
++    return {"request": [prepare_async if async_mode else prepare]}
++
++
+ def apply_required_codex_headers(client_kwargs: dict[str, Any], *, access_token: str, base_url: str) -> None:
+     """Keep required Codex identity after user/provider header overrides."""
+     if not is_official_codex_base_url(base_url):
+diff --git a/agent/managed_worker.py b/agent/managed_worker.py
+index a20db791..4562a1ce 100644
+--- a/agent/managed_worker.py
++++ b/agent/managed_worker.py
+@@ -431,9 +431,14 @@ def _construct_agent(frame, factory, policy, **kwargs):
+     """Agent construction resolves the provider credentials; a Kanban attempt that fails here
+     still books the one-shot exit mapping (quota wall 75, re-login 78) before the crash."""
+     try:
+-        if kwargs['api_key'] is None:
+-            from gateway.session_worker_construct import worker_api_key
+-            kwargs['api_key'] = worker_api_key(policy, kwargs)
++        from gateway.session_worker_construct import worker_agent_runtime
++        runtime = worker_agent_runtime(policy, kwargs, kwargs['api_key'])
++        # Session picks (for example /fast) keep precedence over provider defaults.
++        overrides = {**(runtime.pop('request_overrides', None) or {}),
++                     **(kwargs.get('request_overrides') or {})}
++        kwargs.update(runtime)
++        if overrides:
++            kwargs['request_overrides'] = overrides
+         return factory(**kwargs)
+     except Exception as exc:
+         from gateway.session_kanban import record_start_failure
+diff --git a/agent/process_bootstrap.py b/agent/process_bootstrap.py
+index 85dccfc7..2c5ceb2e 100644
+--- a/agent/process_bootstrap.py
++++ b/agent/process_bootstrap.py
+@@ -293,9 +293,9 @@ def build_keepalive_http_client(base_url: str = "", *, async_mode: bool = False,
+         transport_cls = httpx.AsyncHTTPTransport if async_mode else httpx.HTTPTransport
+         client_cls = httpx.AsyncClient if async_mode else httpx.Client
+         mounts = None
+-        # Official Codex backend only: zstd request bodies when the stdlib codec exists (None otherwise).
+-        from agent.codex_headers import codex_request_compression_hooks
+-        hooks = codex_request_compression_hooks(base_url, async_mode=async_mode)
++        # Official Codex only: current bearer identity and optional stdlib zstd compression.
++        from agent.codex_headers import codex_request_hooks
++        hooks = codex_request_hooks(base_url, async_mode=async_mode)
+         if hooks:
+             client_cls = functools.partial(client_cls, event_hooks=hooks)
+         if proxy is None:
+diff --git a/apps/desktop/src/components/notifications.test.tsx b/apps/desktop/src/components/notifications.test.tsx
+index 23f07b1f..c4733a30 100644
+--- a/apps/desktop/src/components/notifications.test.tsx
++++ b/apps/desktop/src/components/notifications.test.tsx
+@@ -1,5 +1,5 @@
+ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
++import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+ 
+ import { clearNotifications, notify } from '@/store/notifications'
+ import { stubResizeObserver } from '@/test/jsdom'
+@@ -18,6 +18,25 @@ describe('toast titles', () => {
+     clearNotifications()
+   })
+ 
++  it.each(['action', 'secondaryAction'] as const)(
++    'keeps a bottom-right %s usable and dismisses after activation',
++    async key => {
++      const onClick = vi.fn()
++      notify({
++        id: 'recovery',
++        kind: 'warning',
++        message: 'A recovery needs attention',
++        placement: 'bottom-right',
++        durationMs: 0,
++        [key]: { label: 'Recover', onClick }
++      })
++      render(<NotificationStack />)
++      fireEvent.click(screen.getByRole('button', { name: 'Recover' }))
++      await waitFor(() => expect(onClick).toHaveBeenCalledTimes(1))
++      await waitFor(() => expect(screen.queryByText('A recovery needs attention')).toBeNull())
++    }
++  )
++
+   it.each(['default', 'bottom-right'] as const)(
+     'caps the %s toast stack at one back edge and keeps older notifications reachable',
+     async placement => {
+diff --git a/apps/desktop/src/components/notifications.tsx b/apps/desktop/src/components/notifications.tsx
+index 8971db9d..906a2827 100644
+--- a/apps/desktop/src/components/notifications.tsx
++++ b/apps/desktop/src/components/notifications.tsx
+@@ -103,8 +103,8 @@ export function NotificationStack() {
+   )
+ }
+ 
+-// Portaled to <body> on the over-modal rung so a toast clears an open dialog —
+-// see the top-center variant below for why.
++// Portaled to <body>; interruptions clear dialogs, while ambient confirmations
++// stay below the modal backdrop so they cannot cover form controls.
+ const REGION_BASE = 'pointer-events-none fixed z-(--z-over-modal) flex gap-2'
+ 
+ // Primary stack: top-center, collapsed to the latest toast with a "+N more"
+@@ -171,6 +171,14 @@ function BottomRightStack({
+   const [expanded, setExpanded] = useState(false)
+   const older = notifications.slice(1)
+ 
++  const interrupts = notifications.some(
++    notification =>
++      notification.kind === 'error' ||
++      notification.kind === 'warning' ||
++      notification.action ||
++      notification.secondaryAction
++  )
++
+   useEffect(() => {
+     if (!older.length) {
+       setExpanded(false)
+@@ -183,6 +191,9 @@ function BottomRightStack({
+       className={cn(
+         REGION_BASE,
+         'right-4 bottom-4 w-[min(24rem,calc(100%-2rem))] flex-col-reverse p-1',
++        // Routine confirmations must not intercept a reopened dialog's Save button.
++        // Errors and explicit actions retain the existing over-modal surface.
++        !interrupts && 'z-[calc(var(--z-modal-backdrop)-1)]',
+         expanded && 'max-h-[70vh] overflow-y-auto overscroll-contain'
+       )}
+       role="region"
+diff --git a/gateway/session_worker_construct.py b/gateway/session_worker_construct.py
+index efff49a7..7c92903d 100644
+--- a/gateway/session_worker_construct.py
++++ b/gateway/session_worker_construct.py
+@@ -189,8 +189,8 @@ def route_runtime(policy, frozen, model, key, *, fallback=True):
+             explicit_api_key=key, explicit_base_url=launch_url, target_model=model)
+ 
+ 
+-def worker_api_key(policy, construct):
+-    """Child side, for a worker launched without a key (every Kanban run): the route's own credential,
++def worker_agent_runtime(policy, construct, key=None):
++    """Child side: retain the frozen route's transport as well as its credential,
+     resolved as the in-process turn resolves it, from this process's profile home (its HERMES_HOME and
+     ``.env``). A fallback entry's key belongs to another provider and model, so the primary never
+     carries it; the agent's own fallback chain switches all three together (#139155).
+@@ -201,8 +201,16 @@ def worker_api_key(policy, construct):
+     frozen, model = policy.effective()
+     if 'fallback_model' in construct:
+         frozen = {**frozen, 'fallback_providers': construct['fallback_model'] or [], 'fallback_model': None}
+-    runtime, fallback_entry = route_runtime(policy, frozen, model, None)
+-    return runtime.get('api_key') if fallback_entry is None else None
++    runtime, fallback_entry = route_runtime(policy, frozen, model, key)
++    if fallback_entry is not None:
++        return {}  # the agent's fallback chain switches model, provider and credential together
++    from gateway.run import _runtime_agent_kwargs
++    return _runtime_agent_kwargs(runtime)
++
++
++def worker_api_key(policy, construct):
++    """Compatibility reader for callers that only need the primary credential."""
++    return worker_agent_runtime(policy, construct).get('api_key')
+ 
+ 
+ def checkpoint_agent_kwargs(config):
+diff --git a/tests/agent/test_codex_command_token_headers.py b/tests/agent/test_codex_command_token_headers.py
+new file mode 100644
+index 00000000..ea69832f
+--- /dev/null
++++ b/tests/agent/test_codex_command_token_headers.py
+@@ -0,0 +1,108 @@
++"""A callable bearer must identify its current Codex workspace on every request."""
++import base64
++import json
++
++import httpx
++from openai import AsyncOpenAI, OpenAI
++import pytest
++
++from agent import process_bootstrap as bootstrap
++
++BASE = "https://chatgpt.com/backend-api/codex"
++
++
++def token(account, residency):
++    claims = {"https://api.openai.com/auth": {
++        "chatgpt_account_id": account, "chatgpt_data_residency": residency}}
++    payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
++    return f"synthetic.{payload}.signature"
++
++
++def response(request):
++    return httpx.Response(200, request=request, json={
++        "id": "resp_synthetic", "object": "response", "created_at": 0,
++        "model": "synthetic", "status": "completed", "output": []})
++
++
++@pytest.fixture
++def wire(monkeypatch):
++    seen = []
++
++    def handler(request):
++        seen.append(dict(request.headers))
++        return response(request)
++
++    transport = httpx.MockTransport(handler)
++    monkeypatch.setattr(bootstrap, "_get_proxy_for_base_url", lambda _url: None)
++    monkeypatch.setattr(bootstrap, "_get_shared_transport", lambda _key, _build: transport)
++    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_kw: httpx.MockTransport(handler))
++    return seen
++
++
++def test_callable_bearer_workspace_headers_follow_rotation(wire):
++    tokens = iter([token("workspace-one", "eu"), token("workspace-two", "us")])
++    client = OpenAI(api_key=lambda: next(tokens), base_url=BASE,
++                    http_client=bootstrap.build_keepalive_http_client(BASE), max_retries=0)
++    try:
++        for _ in range(2):
++            client.responses.create(model="synthetic", input="offline fixture")
++    finally:
++        client.close()
++    assert [r.get("chatgpt-account-id") for r in wire] == ["workspace-one", "workspace-two"]
++    assert [r.get("x-openai-internal-codex-residency") for r in wire] == ["eu", "us"]
++
++
++@pytest.mark.asyncio
++async def test_async_callable_bearer_workspace_headers_follow_rotation(wire):
++    tokens = iter([token("workspace-one", "eu"), token("workspace-two", "us")])
++
++    async def mint():
++        return next(tokens)
++
++    client = AsyncOpenAI(api_key=mint, base_url=BASE,
++                         http_client=bootstrap.build_keepalive_http_client(BASE, async_mode=True),
++                         max_retries=0)
++    try:
++        for _ in range(2):
++            await client.responses.create(model="synthetic", input="offline fixture")
++    finally:
++        await client.close()
++    assert [r.get("chatgpt-account-id") for r in wire] == ["workspace-one", "workspace-two"]
++    assert [r.get("x-openai-internal-codex-residency") for r in wire] == ["eu", "us"]
++
++
++def test_bearer_identity_is_not_added_to_other_origins(wire):
++    client = bootstrap.build_keepalive_http_client(BASE)
++    try:
++        client.post("https://proxy.example/responses", headers={
++            "Authorization": "Bearer " + token("workspace-one", "eu")}, json={"input": "offline"})
++    finally:
++        client.close()
++    assert wire[0].get("chatgpt-account-id") is None
++    assert wire[0].get("x-openai-internal-codex-residency") is None
++
++
++def test_identity_still_applies_without_optional_compression(wire, monkeypatch):
++    from agent import codex_headers
++
++    monkeypatch.setattr(codex_headers, "codex_request_compression_hooks", lambda *_a, **_kw: None)
++    client = OpenAI(api_key=lambda: token("workspace-one", "eu"), base_url=BASE,
++                    http_client=bootstrap.build_keepalive_http_client(BASE), max_retries=0)
++    try:
++        client.responses.create(model="synthetic", input="offline fixture")
++    finally:
++        client.close()
++    assert wire[0].get("chatgpt-account-id") == "workspace-one"
++    assert "content-encoding" not in wire[0]
++
++
++def test_current_bearer_replaces_stale_workspace_and_residency(wire):
++    client = OpenAI(api_key=lambda: token("workspace-two", None), base_url=BASE,
++                    http_client=bootstrap.build_keepalive_http_client(BASE), max_retries=0,
++                    default_headers={"ChatGPT-Account-ID": "stale", "x-openai-internal-codex-residency": "eu"})
++    try:
++        client.responses.create(model="synthetic", input="offline fixture")
++    finally:
++        client.close()
++    assert wire[0].get("chatgpt-account-id") == "workspace-two"
++    assert "x-openai-internal-codex-residency" not in wire[0]
+diff --git a/tests/gateway/test_managed_worker_route_key.py b/tests/gateway/test_managed_worker_route_key.py
+index ee7c47f1..4ee61e2f 100644
+--- a/tests/gateway/test_managed_worker_route_key.py
++++ b/tests/gateway/test_managed_worker_route_key.py
+@@ -73,7 +73,8 @@ def test_keyless_worker_resolves_its_custom_provider_key(tmp_path, monkeypatch):
+     key = 'fake-' + secrets.token_hex(8)
+     monkeypatch.setenv(KEY_ENV, key)
+     built = _execute(_minimax_frame(tmp_path, monkeypatch), monkeypatch)
+-    assert built['provider'] == 'custom:minimax' and built['base_url'] == BASE_URL
++    assert built['provider'] == 'custom' and built['base_url'] == BASE_URL
++    assert built['api_mode'] == 'anthropic_messages'  # normalized exactly as the in-process route
+     assert built['api_key'] == key
+ 
+ 
+diff --git a/tests/gateway/test_managed_worker_wire_mode.py b/tests/gateway/test_managed_worker_wire_mode.py
+new file mode 100644
+index 00000000..d82c8ccc
+--- /dev/null
++++ b/tests/gateway/test_managed_worker_wire_mode.py
+@@ -0,0 +1,28 @@
++"""Managed workers must retain their named provider's explicit wire dialect."""
++import json
++
++import pytest
++
++from tests.gateway.test_managed_turn_contract import assignment
++from tests.gateway.test_managed_worker_route_key import _execute
++
++
++@pytest.mark.parametrize("wire", ["codex_responses", "anthropic_messages", "chat_completions"])
++@pytest.mark.parametrize("launch_key", [None, "synthetic-launch-key"])
++def test_worker_uses_frozen_provider_wire_with_or_without_launch_key(tmp_path, monkeypatch, wire, launch_key):
++    frame, _ = assignment(tmp_path, monkeypatch)
++    config = json.loads(frame["policy"]["config_json"])
++    config["model"] = {"provider": "custom:wire-fixture", "default": "synthetic-model"}
++    config["providers"] = {"wire-fixture": {
++        "base_url": "https://wire.example/api", "api_mode": wire, "api_key": "synthetic-route-key"}}
++    request = {k: v for k, v in json.loads(frame["policy"]["request_json"]).items()
++               if k not in ("base_url", "provider")}
++    frame = {**frame, "api_key": launch_key, "policy": {
++        **frame["policy"], "model": "synthetic-model", "config_json": json.dumps(config),
++        "request_json": json.dumps(request)}}
++
++    built = _execute(frame, monkeypatch)
++
++    assert built.get("api_mode") == wire
++    assert built["api_key"] == (launch_key or "synthetic-route-key")
++    assert built["base_url"] == "https://wire.example/api"

@@ -59,12 +59,16 @@ def verify(root, *, history=False):
         raise ValueError("duplicate patch manifest")
     for name in manifests:
         patch_manifest = json.loads((root / name).read_text())
-        patch_file = patch_manifest["patch_file"]
-        if not isinstance(patch_file, str) or patch_file not in expected:
-            raise ValueError("patch is outside the release inventory")
-        patch = root / patch_file
-        if hashlib.sha256(patch.read_bytes()).hexdigest() != patch_manifest["patch_sha256"]:
-            raise ValueError("patch hash differs")
+        checks = [("patch_file", "patch_sha256")]
+        if "upgrade_patch_file" in patch_manifest or "upgrade_patch_sha256" in patch_manifest:
+            checks.append(("upgrade_patch_file", "upgrade_patch_sha256"))
+        for path_key, hash_key in checks:
+            patch_file = patch_manifest.get(path_key)
+            if not isinstance(patch_file, str) or patch_file not in expected:
+                raise ValueError("patch is outside the release inventory")
+            patch = root / patch_file
+            if hashlib.sha256(patch.read_bytes()).hexdigest() != patch_manifest.get(hash_key):
+                raise ValueError("patch hash differs")
     if history:
         result = subprocess.run(
             ["git", "--no-optional-locks", "-C", str(root), "log", "--all",

@@ -1285,3 +1285,52 @@ additional patch unit. Two new negative cases reproduced its previous omission;
 all fifteen focused release-tool cases passed after repair. Separate companion tests,
 privacy review, archive verification and GitHub CI are required before publication.
 There is no new whole-service RAM, usage, cache-hit, throughput or macOS adoption claim.
+
+## Ambient confirmations and stable upgrade (v0.6.49)
+
+The installed Linux package reproduced a compact-window defect: after Save and
+immediate reopen, the success toast covered the dialog's Save button. A loose
+in-viewport assertion had passed; an actual center hit test failed because the
+toast received the pointer. Ambient confirmations now use the layer below the
+modal backdrop, while warnings, errors and actionable notices retain the existing
+over-modal layer.
+
+Seventeen notification component/store cases passed, including primary and
+secondary recovery callbacks and bounded-stack dismissal. Full Desktop TypeScript
+checks passed. The native health ratchet reported no new blockers or measurement
+errors for the two paths. A test-only locator option rejected by TypeScript was
+corrected; it was not a runtime defect. Existing packager/native dependencies were
+consumed with external networking denied; no dependency install was performed.
+
+The candidate and the installed packaged application both passed the real native
+settings journey: open Bots, edit role/model/effort, save, reopen and verify retained
+values; shrink from 1440×1000 to 1000×760, scroll, verify the full Save rectangle and
+its pointer target, and operate Cancel. The fixed installed package returned Save
+as the hit target at the same point where the original package returned the toast.
+The backend ran in an isolated home using the unmanaged source with the relevant
+installed settings/workflow paths matched. Original chats, projects and accounts
+were not used. External networking was denied; the only observed resource error
+was a blocked optional Google Fonts stylesheet. No model inference was requested.
+This is installed-package acceptance in isolation, not the owner's original-window
+session adoption, a complete UI audit or Mac deployment proof.
+
+Exact two-source publication and an atomic Desktop image swap used native custody
+while the owner application was closed. Gateway identity, profile/auth/config
+hashes, modes and ownership were preserved; no Gateway restart occurred. The
+rollback image shares 1,170 unchanged files with the active image and keeps the
+changed bytes separately, avoiding another complete binary copy.
+
+The nine-path public unit contains the unchanged seven-path v0.6.48 transport
+repair plus these two frontend paths. Its native notification cases passed again
+on the clean pinned public base using existing matching workspace dependencies.
+An initial isolated run lacked the workspace-specific dependency link and failed
+before tests; no dependency was installed to correct that fixture. Clean full
+apply/reverse/reapply, exact seven-to-nine-path upgrade, and incremental rollback
+that retains the transport changes all passed. The inherited 88 transport tests
+were not rerun or added to the 17 UI cases as a new combined suite. Earlier full
+THINK/ACTION developer acceptance remains limited to its documented scope.
+
+The public release verifier also checks incremental-patch digests and inventory
+membership. Two negative upgrade cases first failed; the repaired verifier passes
+the scoped cases. No production token/RAM/cache/latency savings, full-fleet
+THINK/ACTION adoption or new Mac parity is claimed by this release.

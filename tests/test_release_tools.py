@@ -138,6 +138,37 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             release.verify(self.root)
 
+    def add_upgrade(self, *, path="patches/change.patch", checksum=None):
+        self.add_additional_patch()
+        target = self.root / "patches/extra-manifest.json"
+        data = json.loads(target.read_text())
+        data.update(upgrade_patch_file=path,
+                    upgrade_patch_sha256=checksum or self.sha(b"synthetic patch\n"))
+        target.write_text(json.dumps(data))
+        inventory = json.loads((self.root / release.MANIFEST).read_text())
+        for row in inventory["files"]:
+            if row["path"] == "patches/extra-manifest.json":
+                row["sha256"] = self.sha(target.read_bytes())
+        (self.root / release.MANIFEST).write_text(json.dumps(inventory))
+
+    @staticmethod
+    def sha(data):
+        return hashlib.sha256(data).hexdigest()
+
+    def test_exact_upgrade_patch(self):
+        self.add_upgrade()
+        self.assertEqual(release.verify(self.root), 5)
+
+    def test_upgrade_checksum_mismatch_refused(self):
+        self.add_upgrade(checksum="0" * 64)
+        with self.assertRaises(ValueError):
+            release.verify(self.root)
+
+    def test_upgrade_cannot_point_outside_release(self):
+        self.add_upgrade(path="../not-packaged.patch")
+        with self.assertRaises(ValueError):
+            release.verify(self.root)
+
     def test_changed_file_refused(self):
         (self.root / "README.md").write_text("Changed\n")
         with self.assertRaises(ValueError):
