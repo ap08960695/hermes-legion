@@ -49,10 +49,22 @@ def verify(root, *, history=False):
             raise ValueError("unlisted or changed release file")
     if observed != set(expected):
         raise ValueError("release inventory differs")
-    patch_manifest = json.loads((root / "patches/manifest.json").read_text())
-    patch = root / patch_manifest["patch_file"]
-    if hashlib.sha256(patch.read_bytes()).hexdigest() != patch_manifest["patch_sha256"]:
-        raise ValueError("patch hash differs")
+    additional = manifest.get("additional_patch_manifests", [])
+    if not isinstance(additional, list):
+        raise ValueError("additional patch manifests must be a list")
+    manifests = ["patches/manifest.json", *additional]
+    if any(not isinstance(name, str) or name not in expected for name in manifests):
+        raise ValueError("patch manifest is outside the release inventory")
+    if len(set(manifests)) != len(manifests):
+        raise ValueError("duplicate patch manifest")
+    for name in manifests:
+        patch_manifest = json.loads((root / name).read_text())
+        patch_file = patch_manifest["patch_file"]
+        if not isinstance(patch_file, str) or patch_file not in expected:
+            raise ValueError("patch is outside the release inventory")
+        patch = root / patch_file
+        if hashlib.sha256(patch.read_bytes()).hexdigest() != patch_manifest["patch_sha256"]:
+            raise ValueError("patch hash differs")
     if history:
         result = subprocess.run(
             ["git", "--no-optional-locks", "-C", str(root), "log", "--all",

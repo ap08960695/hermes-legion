@@ -1250,3 +1250,38 @@ No renderer rebuild was needed; the owner Desktop remained closed. Production
 before/after token, latency, quality and whole-service RAM savings are not established
 by these tests. Official upstream version migration is a separate acceptance task;
 this release preserves its pinned upstream base and does not claim that migration done.
+
+## Stable transport repair (v0.6.48)
+
+The separate seven-path unit was extracted against clean upstream v0.22.5, commit
+`bf0203a794a07aac3ff764972ab9087baa4e4f4e`. The original cumulative patch and manifest
+remain unchanged. The two new offline files first reproduced ten failures and one
+passing origin-isolation control on that public base. After applying only the public
+patch, eleven native files passed **88 tests**, zero failures and zero retries in
+19.9 seconds. This is one scoped run, not a full upstream suite or an extra 88 tests
+on top of overlapping installed-source results. Apply, exact before/after hash
+verification, reverse-apply and reapply all passed in the separate checkout.
+
+Native Linux installation had already preserved target ownership and modes under
+update-lock custody. The Gateway adopted the files only after native idle admission;
+existing profiles, auth stores, quotas, emergency stop and disabled Dashboard stayed
+unchanged. A bounded real-provider synthetic developer loop then completed planning,
+action, separate review and native terminal handoffs in about 50 seconds. Repeating
+creation of the same pinned action returned the same task, and logs showed no further
+model call after each terminal tool. The fixture used the same existing account via
+native `key_cmd`, without copying OAuth refresh grants or writing bearer credentials
+into the fixture. The isolated provider alias is an acceptance boundary, not proof of
+production Captain adoption or every role and family. Raw logs, account metadata,
+private paths and operational identifiers are not part of this release.
+
+An initial loop exposed the worker wire-mode bug and failed at the planner. A later
+loop produced and verified the artifact but hit its private four-turn ceiling before
+review handoff. Increasing that fixture-only ceiling to six allowed the final loop;
+production quota and bot turn settings were not changed. Failed attempts were retained
+privately rather than reported as successful. No new paid fallback was used.
+
+The release verifier now validates the digest and inventory membership of each
+additional patch unit. Two new negative cases reproduced its previous omission;
+all fifteen focused release-tool cases passed after repair. Separate companion tests,
+privacy review, archive verification and GitHub CI are required before publication.
+There is no new whole-service RAM, usage, cache-hit, throughput or macOS adoption claim.

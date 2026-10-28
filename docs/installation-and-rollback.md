@@ -2,7 +2,7 @@
 
 ## Supported target
 
-This kit supports the **exact** upstream Git revision in `patches/manifest.json`. Compatibility with later upstream releases, arbitrary local patches or another OS is not assumed. The verification helper reads files and Git metadata only; it does not import Hermes or run a model.
+The cumulative kit supports the **exact** upstream Git revision in `patches/manifest.json`. The separate [stable transport repair](stable-transport-repair.md) has its own pinned base and manifest; use its instructions instead for upstream v0.22.5. Compatibility with later upstream releases, arbitrary local patches or another OS is not assumed. The verification helper reads files and Git metadata only; it does not import Hermes or run a model.
 
 For an existing Mac installation, see the [isolated macOS installation and update guide](macos-install-update.md). It distinguishes native CLI checks from Desktop packaging and activation.
 

@@ -111,6 +111,33 @@ class ReleaseTests(unittest.TestCase):
     def test_exact_inventory(self):
         self.assertEqual(release.verify(self.root), 3)
 
+    def add_additional_patch(self, *, patch_file="patches/extra.patch", checksum=None):
+        payload = b"additional synthetic patch\n"
+        (self.root / "patches/extra.patch").write_bytes(payload)
+        (self.root / "patches/extra-manifest.json").write_text(json.dumps({
+            "patch_file": patch_file,
+            "patch_sha256": checksum or hashlib.sha256(payload).hexdigest(),
+        }))
+        rows = [{"path": p.relative_to(self.root).as_posix(),
+                 "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
+                for p in self.root.rglob("*") if p.is_file() and p.name != release.MANIFEST]
+        (self.root / release.MANIFEST).write_text(json.dumps({
+            "files": rows, "additional_patch_manifests": ["patches/extra-manifest.json"]}))
+
+    def test_additional_patch_inventory(self):
+        self.add_additional_patch()
+        self.assertEqual(release.verify(self.root), 5)
+
+    def test_additional_patch_checksum_mismatch_refused(self):
+        self.add_additional_patch(checksum="0" * 64)
+        with self.assertRaises(ValueError):
+            release.verify(self.root)
+
+    def test_additional_patch_cannot_point_outside_release(self):
+        self.add_additional_patch(patch_file="../not-packaged.patch")
+        with self.assertRaises(ValueError):
+            release.verify(self.root)
+
     def test_changed_file_refused(self):
         (self.root / "README.md").write_text("Changed\n")
         with self.assertRaises(ValueError):
