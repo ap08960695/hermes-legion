@@ -23114,8 +23114,28 @@ index 0000000000000000000000000000000000000000..0f6d65d5b1700bffb60085b1e3c54e9d
 +
 +if __name__ == '__main__':
 +    main()
+diff --git a/hermes_cli/config.py b/hermes_cli/config.py
+index e0699597..377efd47 100644
+--- a/hermes_cli/config.py
++++ b/hermes_cli/config.py
+@@ -2361,3 +2361,4 @@ def _load_config_impl(*, want_deepcopy: bool) -> dict[str, Any]:
+             try:
+-                with open(config_path, encoding="utf-8-sig") as f:
++                from hermes_cli.config_backups import config_snapshot
++                with open(config_path, "rb") as file, config_snapshot(file) as (f, source):
+                     user_config = fast_safe_load(f) or {}
+@@ -2375,7 +2376,5 @@ def _load_config_impl(*, want_deepcopy: bool) -> dict[str, Any]:
+                 apply_user_moa_presets(config, user_config)
+-                # A copy of the file that just parsed is what a FRESH process falls back to when the
+-                # next edit breaks the YAML (see _last_known_good_fallback). backup_config() skips
+-                # byte-identical repeats and keeps a bounded count, so steady-state loads cost one stat.
++                # A fresh process must recover the bytes that parsed, never a later concurrent edit.
+                 from hermes_cli.config_backups import backup_config
+-                backup_config(config_path, "good")
++                backup_config(config_path, "good", snapshot=source)
+             except Exception as e:
 diff --git a/hermes_cli/config_backups.py b/hermes_cli/config_backups.py
-index cc90cbb2..1f0c0fa0 100644
+index cc90cbb2..6255d188 100644
 --- a/hermes_cli/config_backups.py
 +++ b/hermes_cli/config_backups.py
 @@ -5,3 +5,3 @@ snapshot, model migrations) goes through :func:`backup_config`. Copies live in
@@ -23123,28 +23143,69 @@ index cc90cbb2..1f0c0fa0 100644
 -never nest — as ``config.yaml.<reason>.<YYYYMMDD-HHMMSS>``. A copy identical to the newest one
 +never nest — as ``config.yaml.<reason>.<YYYYMMDD-HHMMSS>-<unique>``. A copy identical to the newest one
  for the same reason is skipped, and only the newest ``keep`` per reason survive, so repeated
-@@ -13,4 +13,6 @@ from __future__ import annotations
+@@ -12,5 +12,10 @@ from __future__ import annotations
+ 
++from contextlib import contextmanager
++import io
  import logging
 +import os
  import shutil
++import stat
  import time
 +import tempfile
  from pathlib import Path
-@@ -60,7 +62,6 @@ def backup_config(config_path: Path, reason: str, *, keep: int = DEFAULT_KEEP) -
+@@ -29,2 +34,11 @@ _LEGACY_SIBLING_GLOBS = ("config.yaml.bak.[0-9]*", "config.yaml.corrupt.*.bak",
+ 
++@contextmanager
++def config_snapshot(source):
++    """Keep the parser's named text-stream contract while retaining its exact source bytes."""
++    snapshot = (source.read(), os.fstat(source.fileno()))
++    with io.StringIO(snapshot[0].decode('utf-8-sig')) as stream:
++        stream.name = source.name
++        yield stream, snapshot
++
++
+ def backups_dir(config_path: Path) -> Path:
+@@ -43,3 +57,4 @@ def list_config_backups(config_path: Path, reason: Optional[str] = None) -> list
+ 
+-def backup_config(config_path: Path, reason: str, *, keep: int = DEFAULT_KEEP) -> Optional[Path]:
++def backup_config(config_path: Path, reason: str, *, keep: int = DEFAULT_KEEP,
++                  snapshot: Optional[tuple[bytes, os.stat_result]] = None) -> Optional[Path]:
+     """Copy *config_path* to the backups dir; return the new path, or None when skipped/failed.
+@@ -47,6 +62,9 @@ def backup_config(config_path: Path, reason: str, *, keep: int = DEFAULT_KEEP) -
+     Skips when the file is missing/empty, or when the newest backup for *reason* already holds
+-    identical bytes. Never raises: a failed backup must not block the write it precedes.
++    identical bytes. A reader may supply its parsed bytes and descriptor metadata so a later
++    edit cannot be mislabeled as good. A failed backup must not block the write it precedes.
+     """
+     try:
+-        if not config_path.is_file() or config_path.stat().st_size == 0:
++        if snapshot is None and (not config_path.is_file() or config_path.stat().st_size == 0):
++            return None
++        if snapshot is not None and not snapshot[0]:
              return None
+@@ -58,9 +76,10 @@ def backup_config(config_path: Path, reason: str, *, keep: int = DEFAULT_KEEP) -
+         # within one mtime tick of an earlier comparison is reported identical and never backed up.
+-        if existing and config_path.read_bytes() == existing[0].read_bytes():
+-            return None
 -        dest = root / f"{config_path.name}.{reason}.{time.strftime('%Y%m%d-%H%M%S')}"
 -        if dest.is_symlink() or dest.exists():  # never write through a planted link
 -            return None
 -        shutil.copy2(config_path, dest)
 -        for stale in [dest, *existing][keep:]:
-+        dest = _publish_completed_copy(config_path, root, reason)
++        if existing:
++            content = snapshot[0] if snapshot is not None else config_path.read_bytes()
++            if content == existing[0].read_bytes():
++                return None
++        dest = _publish_completed_copy(config_path, root, reason, snapshot)
 +        # Another process may have published while this copy was staged. Rotation must
 +        # include those completed files too, not only the list from before the copy.
 +        for stale in list_config_backups(config_path, reason)[keep:]:
              stale.unlink(missing_ok=True)
-@@ -72,2 +73,26 @@ def backup_config(config_path: Path, reason: str, *, keep: int = DEFAULT_KEEP) -
+@@ -72,2 +91,33 @@ def backup_config(config_path: Path, reason: str, *, keep: int = DEFAULT_KEEP) -
  
-+def _publish_completed_copy(config_path: Path, root: Path, reason: str) -> Path:
++def _publish_completed_copy(config_path: Path, root: Path, reason: str,
++                            snapshot: Optional[tuple[bytes, os.stat_result]]) -> Path:
 +    """Keep partial/failed copies out of recovery's namespace; publish on the same filesystem."""
 +    fd, name = tempfile.mkstemp(dir=root, prefix='.config-backup-')
 +    os.close(fd)
@@ -23153,7 +23214,13 @@ index cc90cbb2..1f0c0fa0 100644
 +    unique = f'{time.time_ns():020d}-{staged.name.removeprefix(".config-backup-")}'
 +    dest = root / f'{config_path.name}.{reason}.{stamp}-{unique}'
 +    try:
-+        shutil.copy2(config_path, staged)
++        if snapshot is None:
++            shutil.copy2(config_path, staged)
++        else:
++            content, metadata = snapshot
++            staged.write_bytes(content)
++            staged.chmod(stat.S_IMODE(metadata.st_mode))
++            os.utime(staged, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
 +        with staged.open('rb') as handle:
 +            os.fsync(handle.fileno())
 +        # Plain replace: the config writer's symlink-preserving helper must not
@@ -23288,7 +23355,7 @@ index 63ff490ee732eca4f4d604c29d221f4704b5969c..4f73d46a465d612640ff072375ffa36c
          # in 'running' at once — counted across every active board and across both the ready and review
          # dispatch lanes (workers are OS processes sharing one machine's memory, so the cap bounds the
 diff --git a/hermes_cli/config_effective.py b/hermes_cli/config_effective.py
-index ac32724b..9f35c270 100644
+index ac32724b..5aaa13bb 100644
 --- a/hermes_cli/config_effective.py
 +++ b/hermes_cli/config_effective.py
 @@ -73,3 +73,11 @@ def load_user_config_effective(config_path: Optional[Path] = None, *, fail_close
@@ -23304,6 +23371,17 @@ index ac32724b..9f35c270 100644
 +            _EFFECTIVE_CACHE.pop(path_key, None)
 +            return _effective(_recover_user_raw(config_path, path_key, exc))
          cached = _EFFECTIVE_CACHE.get(path_key)
+@@ -87,3 +95,4 @@ def load_user_config_effective(config_path: Optional[Path] = None, *, fail_close
+             try:
+-                with open(config_path, encoding="utf-8-sig") as f:
++                from hermes_cli.config_backups import config_snapshot
++                with open(config_path, "rb") as file, config_snapshot(file) as (f, source):
+                     loaded = fast_safe_load(f)
+@@ -102,3 +111,3 @@ def load_user_config_effective(config_path: Optional[Path] = None, *, fail_close
+                     from hermes_cli.config_backups import backup_config
+-                    backup_config(config_path, "good")
++                    backup_config(config_path, "good", snapshot=source)
+ 
 diff --git a/hermes_cli/console_engine.py b/hermes_cli/console_engine.py
 index d456f6408d43d54b3b0b27c7efac935f3efaf8ec..f8731582d165862a680c012868e2049b2efe7876 100644
 --- a/hermes_cli/console_engine.py
@@ -45275,6 +45353,56 @@ index 0000000..2b7bfe9
 +    assert len(kept) == 2
 +    assert all(p.read_text() == 'model: latest\n' for p in kept)
 +    assert set(backups.backups_dir(path).iterdir()) == set(kept)
+diff --git a/tests/hermes_cli/test_config_backup_snapshot.py b/tests/hermes_cli/test_config_backup_snapshot.py
+new file mode 100644
+index 00000000..64977025
+--- /dev/null
++++ b/tests/hermes_cli/test_config_backup_snapshot.py
+@@ -0,0 +1,44 @@
++"""A good config backup must contain the generation the native reader actually parsed."""
++import os
++import stat
++
++import pytest
++
++from hermes_cli import config, config_backups, config_effective
++
++
++@pytest.mark.parametrize('reader', ['defaults', 'effective'])
++@pytest.mark.parametrize('replacement', ['agent: [', 'agent: {}\n'])
++def test_backup_is_the_parsed_generation_not_a_later_edit(tmp_path, monkeypatch, reader, replacement):
++    home = tmp_path / 'home'
++    home.mkdir()
++    managed = tmp_path / 'managed'
++    managed.mkdir()
++    monkeypatch.setenv('HERMES_HOME', str(home))
++    monkeypatch.setenv('HERMES_MANAGED_DIR', str(managed))
++    path = home / 'config.yaml'
++    original = b'\xef\xbb\xbf# retained source bytes\r\nagent:\r\n  reasoning_effort_limits:\r\n    gpt-6.1-terra: high\r\n'
++    path.write_bytes(original)
++    path.chmod(0o640)
++    before = path.stat()
++    module = config if reader == 'defaults' else config_effective
++    parse = module.fast_safe_load
++    reached = []
++
++    def edit_after_parsing(value):
++        parsed = parse(value)
++        if not reached:
++            reached.append(True)
++            path.write_text(replacement)
++            path.chmod(0o644)
++            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 10_000_000))
++        return parsed
++
++    monkeypatch.setattr(module, 'fast_safe_load', edit_after_parsing)
++    loaded = config.load_config() if reader == 'defaults' else config_effective.load_user_config_effective(path)
++    assert reached and loaded['agent']['reasoning_effort_limits']['gpt-6.1-terra'] == 'high'
++    saved = config_backups.list_config_backups(path, 'good')
++    assert len(saved) == 1 and saved[0].read_bytes() == original
++    assert stat.S_IMODE(saved[0].stat().st_mode) == 0o640
++    assert saved[0].stat().st_mtime_ns == before.st_mtime_ns
++    assert config_backups.load_newest_good_backup(path)['agent']['reasoning_effort_limits']['gpt-6.1-terra'] == 'high'
 diff --git a/tests/hermes_cli/test_config_effective_read_failure.py b/tests/hermes_cli/test_config_effective_read_failure.py
 new file mode 100644
 index 0000000..a2526d0

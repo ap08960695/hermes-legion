@@ -1,3 +1,13 @@
+# v0.7.15: preserve the validated config generation
+
+731 pinned paths. Both native readers now back up their parsed bytes and
+descriptor metadata instead of reopening the source path after validation.
+Native regression: 174 files / 1,234 passed / 0 failed /
+4 existing platform skips, zero retries. Installed Linux/macOS:
+eleven production-interpreter controls each, network denied. Code-health clear.
+See [validated config snapshots](config-backup-snapshot.md). No original-user
+conversation adoption or measured savings claimed. Historical counts overlap.
+
 # v0.7.14: complete, ordered config backup publication
 
 729 pinned paths. Rapid same-second saves no longer collide; readers do not
