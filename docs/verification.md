@@ -1,3 +1,11 @@
+# v0.7.21: compact saved profile routing
+
+748 pinned paths. Broader profile/workflow selection: 84 files / 738 pass / six
+existing platform skips / zero failures and retries. Seven installed native CLI
+checks each on Linux/macOS pass with network denied. See [routing snapshot](profile-routing-snapshot.md).
+Final integrated selection: 88 files / 835 pass / eleven existing skips / zero failures and retries. Actual-owner tool-shell CLI checks pass on both hosts. The real coordinator correctly blocked on the pre-repair stale CLI after seven requests; no parallel completion or usage reduction is proven. No global-green
+or original-user adoption claim.
+
 # v0.7.20: managed-worker source pinning
 
 742 pinned paths. Full managed-worker selection: 40 files / 124 pass / 0 fail,

@@ -22846,7 +22846,7 @@ index 0000000000000000000000000000000000000000..30957fcccc4d2e77fb51c9d7214592af
 +        return settings_snapshot(profile_dir)
 diff --git a/hermes_cli/bot_workflow.py b/hermes_cli/bot_workflow.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..d8d83c1d28a11b4ffccd16f3aa7407451cef478a
+index 00000000..4697f543
 --- /dev/null
 +++ b/hermes_cli/bot_workflow.py
 @@ -0,0 +1,115 @@
@@ -22912,7 +22912,7 @@ index 0000000000000000000000000000000000000000..d8d83c1d28a11b4ffccd16f3aa740745
 +    return config, hashlib.sha256(raw).hexdigest()
 +
 +
-+def _pair_status(profile_dir: Path, workflow: dict | None) -> str:
++def _pair_status(profile_dir: Path, workflow: dict | None, *, read_config=None) -> str:
 +    if workflow is None:
 +        return 'unassigned'
 +    name = workflow['counterpart']
@@ -22924,7 +22924,7 @@ index 0000000000000000000000000000000000000000..d8d83c1d28a11b4ffccd16f3aa740745
 +    if not other.is_dir():
 +        return 'missing'
 +    try:
-+        config, _ = _editor_config(other)
++        config, _ = (read_config or _editor_config)(other)
 +        peer = normalize_workflow(config.get('bot_workflow', {}), _profile_name(other))
 +    except (OSError, ValueError):
 +        return 'invalid'
@@ -22937,15 +22937,15 @@ index 0000000000000000000000000000000000000000..d8d83c1d28a11b4ffccd16f3aa740745
 +    return 'linked'
 +
 +
-+def workflow_snapshot(profile_dir: Path) -> dict:
++def workflow_snapshot(profile_dir: Path, *, read_config=None) -> dict:
 +    """The saved role and reciprocal-link state, without loading a model or a session."""
-+    config, revision = _editor_config(profile_dir)
++    config, revision = (read_config or _editor_config)(profile_dir)
 +    try:
 +        workflow = normalize_workflow(config.get('bot_workflow', {}), _profile_name(profile_dir))
 +    except ValueError:
 +        return {'workflow': None, 'revision': revision, 'pair_status': 'invalid'}
 +    return {'workflow': workflow, 'revision': revision,
-+            'pair_status': _pair_status(profile_dir, workflow)}
++            'pair_status': _pair_status(profile_dir, workflow, read_config=read_config)}
 +
 +
 +def configure_workflow(profile_dir: Path, workflow: dict, expected_revision: str) -> dict:
@@ -28543,6 +28543,89 @@ index 95419c36..f3e3aa90 100644
 +        # is read-only: each profile must own every mutable manifest field.
 +        data = deepcopy(load_yaml_file_readonly(manifest_file)) or {}
          if not isinstance(data, Mapping):
+diff --git a/hermes_cli/profile_cmd.py b/hermes_cli/profile_cmd.py
+index dfde72ad..ce736da7 100644
+--- a/hermes_cli/profile_cmd.py
++++ b/hermes_cli/profile_cmd.py
+@@ -108,2 +108,7 @@ def _profile_status(args):
+ def _profile_list(args):
++    if getattr(args, "routing_json", False):
++        import json
++        from hermes_cli.profile_routing import routing_snapshot
++        print(json.dumps(routing_snapshot(), ensure_ascii=False))
++        return
+     from hermes_cli.profiles import format_profile_label, get_active_profile_name, list_profiles
+diff --git a/hermes_cli/profile_routing.py b/hermes_cli/profile_routing.py
+new file mode 100644
+index 00000000..c493e366
+--- /dev/null
++++ b/hermes_cli/profile_routing.py
+@@ -0,0 +1,65 @@
++"""Bounded saved routing metadata for the existing profile CLI, never a readiness probe."""
++from __future__ import annotations
++
++_LIMIT = 64
++
++
++def _saved_config(directory):
++    # Saved-file diagnostics deliberately omit overlays and secret expansion.
++    from hermes_cli.config import read_user_config_raw
++    from hermes_yaml import YAMLError
++    try:
++        return read_user_config_raw(directory / "config.yaml"), ""
++    except YAMLError:
++        raise ValueError("saved profile config is unreadable") from None
++
++
++def _entry(name, root, allowed):
++    from hermes_cli.bot_settings import _model_snapshot
++    from hermes_cli.bot_workflow import normalize_workflow, workflow_snapshot
++    from hermes_cli.profiles import get_profile_dir
++
++    row = {'name': name, 'workflow': None, 'pair_status': 'unreadable',
++           'dispatch_admitted': False, 'model': {}}
++    try:
++        directory = get_profile_dir(name, home=root)
++        config, _ = _saved_config(directory)
++        workflow = normalize_workflow(config.get('bot_workflow', {}), name)
++        if workflow and allowed is not None and workflow['counterpart'] not in allowed:
++            status = 'not_admitted'
++        else:
++            status = workflow_snapshot(directory, read_config=_saved_config)['pair_status']
++        admitted = allowed is None or name in allowed
++        if workflow:
++            admitted = admitted and status == 'linked' and (
++                allowed is None or workflow['counterpart'] in allowed)
++        row.update(workflow=workflow, pair_status=status, dispatch_admitted=admitted,
++                   model=_model_snapshot(config))
++    except (OSError, ValueError, TypeError, KeyError):
++        pass  # No exception text or raw config enters the result.
++    return row
++
++
++def routing_snapshot():
++    """Native fleet admission and reciprocal links; no skills, auth or provider requests.
++
++    The saved route is descriptive, not a live account/model binding. The dispatcher
++    still checks current permissions, claims, stop states, quotas and resource caps.
++    """
++    from hermes_cli.kanban_db_dispatch import _dispatch_profile_allowlist
++    from hermes_cli.profiles import list_profile_names, normalize_profile_name
++    from hermes_constants import (get_default_hermes_root, get_hermes_home,
++                                  reset_hermes_home_override, set_hermes_home_override)
++
++    root = get_default_hermes_root(home=get_hermes_home())
++    token = set_hermes_home_override(root)
++    try:
++        allowed = _dispatch_profile_allowlist(normalize_profile_name)
++        names = sorted(set(list_profile_names()))
++        names = [name for name in names if allowed is None or name in allowed]
++        return {'version': 1, 'profiles': [_entry(name, root, allowed) for name in names[:_LIMIT]],
++                'total_profiles': len(names), 'truncated': len(names) > _LIMIT,
++                'readiness': 'not_probed',
++                'authority': 'Saved routing metadata only; current dispatch, quota, stop, review and resource gates still apply.'}
++    finally:
++        reset_hermes_home_override(token)
 diff --git a/hermes_cli/profiles.py b/hermes_cli/profiles.py
 index 08b7eb10..bec750fe 100644
 --- a/hermes_cli/profiles.py
@@ -29630,6 +29713,17 @@ index 6416df092b283f9d38dc4318e440f96da3c6052d..818832c6ffaeb019ab0407b0eff82cab
      else:
          print(f"Hermes is not paused (no sentinel at {sentinel_path()}).")
      return 0
+diff --git a/hermes_cli/subcommands/profile.py b/hermes_cli/subcommands/profile.py
+index a67300f9..6f6a406a 100644
+--- a/hermes_cli/subcommands/profile.py
++++ b/hermes_cli/subcommands/profile.py
+@@ -13,3 +13,5 @@ def build_profile_parser(subparsers, *, cmd_profile: Callable) -> None:
+ 
+-    profile_subparsers.add_parser("list", help="List all profiles")
++    profile_list = profile_subparsers.add_parser("list", help="List all profiles")
++    profile_list.add_argument("--routing-json", action="store_true",
++        help="Compact saved role/model and fleet dispatch metadata; no readiness or quota probe")
+     profile_use = profile_subparsers.add_parser("use", help="Set sticky default profile")
 diff --git a/hermes_cli/subcommands/sessions.py b/hermes_cli/subcommands/sessions.py
 index e47a3bbf7bab0e6df78e7bf95731fd62c482f2d9..8073504e74c29ab9a363c4745c2a43054cac49c7 100644
 --- a/hermes_cli/subcommands/sessions.py
@@ -49802,6 +49896,121 @@ index 0000000000000000000000000000000000000000..6256a6eafce2e41b60b5a0d8ed00d9b1
 +        assert response.status_code==200
 +        rows=response.json()['sessions'];assert len(rows)==1 and rows[0]['id']=='older-needle-chat'
 +        assert rows[0]['profile']=='writer' and 'system_prompt' not in rows[0]
+diff --git a/tests/hermes_cli/test_profile_routing_snapshot.py b/tests/hermes_cli/test_profile_routing_snapshot.py
+new file mode 100644
+index 00000000..f6ff9720
+--- /dev/null
++++ b/tests/hermes_cli/test_profile_routing_snapshot.py
+@@ -0,0 +1,109 @@
++"""Compact routing metadata uses native profile/dispatch rules without provider work."""
++import argparse
++import json
++from pathlib import Path
++from types import SimpleNamespace
++
++import pytest
++
++from hermes_cli.config import atomic_config_write, atomic_config_replace
++
++
++@pytest.fixture
++def fleet(tmp_path, monkeypatch):
++    root=tmp_path/'state';root.mkdir()
++    monkeypatch.setenv('HERMES_HOME',str(root))
++    monkeypatch.setattr(Path,'home',lambda:tmp_path)
++    atomic_config_write(root/'config.yaml',{'kanban':{'dispatch_profiles':['think','action','analyst']}})
++    for name,model,workflow in [
++        ('think','gpt-6.1-sol',{'role':'developer','mode':'think','family':'gpt','counterpart':'action'}),
++        ('action','gpt-6.1-terra',{'role':'developer','mode':'action','family':'gpt','counterpart':'think'}),
++        ('analyst','gpt-6.1-terra',None),('held','gpt-6-astra',None)]:
++        p=root/'profiles'/name;p.mkdir(parents=True)
++        cfg={'model':{'default':model,'provider':'openai-codex','api_key':'synthetic-private-sentinel'},
++             'agent':{'reasoning_effort':'max','reasoning_effort_limits':{'gpt-6.1-terra':'high'}}}
++        if workflow:cfg['bot_workflow']=workflow
++        atomic_config_write(p/'config.yaml',cfg)
++    return root
++
++
++def test_existing_profile_list_parser_accepts_opt_in_snapshot():
++    from hermes_cli.subcommands.profile import build_profile_parser
++    parser=argparse.ArgumentParser();build_profile_parser(parser.add_subparsers(),cmd_profile=lambda args:None)
++    args=parser.parse_args(['profile','list','--routing-json'])
++    assert args.routing_json is True
++
++
++def test_cli_returns_only_safe_native_routing_fields_without_full_profile_walk(fleet,monkeypatch,capsys):
++    from hermes_cli import profiles,profile_cmd
++    monkeypatch.setattr(profiles,'list_profiles',lambda **kw:pytest.fail('No gateway or skill-count inventory'))
++    before={p:p.read_bytes() for p in fleet.rglob('config.yaml')}
++    profile_cmd._profile_list(SimpleNamespace(routing_json=True))
++    result=json.loads(capsys.readouterr().out)
++    assert result['readiness']=='not_probed' and result['truncated'] is False
++    rows={x['name']:x for x in result['profiles']}
++    assert set(rows)=={'think','action','analyst'}
++    assert rows['think']['workflow']['counterpart']=='action'
++    assert rows['think']['pair_status']=='linked' and rows['think']['dispatch_admitted'] is True
++    assert rows['action']['model']['effort']=='high' and rows['action']['model']['effort_limit']=='high'
++    assert rows['analyst']['workflow'] is None
++    assert 'synthetic-private-sentinel' not in json.dumps(result)
++    assert {p:p.read_bytes() for p in fleet.rglob('config.yaml')}==before
++
++
++def test_pair_requires_both_admissions_even_from_a_routed_caller(fleet):
++    from hermes_cli.profile_routing import routing_snapshot
++    from hermes_constants import set_hermes_home_override,reset_hermes_home_override
++    atomic_config_replace(fleet/'config.yaml',{'kanban':{'dispatch_profiles':['think','analyst']}})
++    atomic_config_replace(fleet/'profiles/analyst/config.yaml',{'kanban':{'dispatch_profiles':['think','action','held']}})
++    token=set_hermes_home_override(fleet/'profiles/analyst')
++    try:result=routing_snapshot()
++    finally:reset_hermes_home_override(token)
++    rows={x['name']:x for x in result['profiles']}
++    assert set(rows)=={'think','analyst'}
++    assert rows['think']['dispatch_admitted'] is False
++    assert rows['think']['pair_status']=='not_admitted'
++
++
++def test_invalid_counterpart_fails_closed_without_error_content(fleet):
++    from hermes_cli.profile_routing import routing_snapshot
++    atomic_config_replace(fleet/'profiles/action/config.yaml',{'bot_workflow':{}})
++    rows={x['name']:x for x in routing_snapshot()['profiles']}
++    assert rows['think']['pair_status']=='one_way' and rows['think']['dispatch_admitted'] is False
++    (fleet/'profiles/analyst/config.yaml').write_text('model: [bad yaml synthetic-private-sentinel')
++    result=routing_snapshot();row=next(x for x in result['profiles'] if x['name']=='analyst')
++    assert row['pair_status']=='unreadable' and row['dispatch_admitted'] is False
++    assert 'synthetic-private-sentinel' not in json.dumps(result)
++    assert not list(fleet.rglob('*.corrupt.*'))
++
++
++def test_empty_allowlist_reads_no_foreign_profile_configuration(fleet,monkeypatch):
++    from hermes_cli import profile_routing
++    atomic_config_replace(fleet/'config.yaml',{'kanban':{'dispatch_profiles':[]}})
++    monkeypatch.setattr(profile_routing,'_entry',lambda *args:pytest.fail('Empty allowlist must not inspect profiles'))
++    assert profile_routing.routing_snapshot()['profiles']==[]
++
++
++def test_roster_is_bounded_before_reading_extra_profile_configs(fleet,monkeypatch):
++    from hermes_cli import profile_routing,profiles
++    atomic_config_replace(fleet/'config.yaml',{'kanban':{}})
++    monkeypatch.setattr(profiles,'list_profile_names',lambda:[f'bot-{i:03}' for i in range(90)])
++    observed=[]
++    def entry(name,*args):
++        observed.append(name)
++        return {'name':name}
++    monkeypatch.setattr(profile_routing,'_entry',entry)
++    result=profile_routing.routing_snapshot()
++    assert len(observed)==len(result['profiles'])==64
++    assert result['total_profiles']==90 and result['truncated'] is True
++
++
++def test_corrupt_peer_is_unavailable_without_backup_or_yaml_content(fleet):
++    from hermes_cli.profile_routing import routing_snapshot
++    (fleet/'profiles/action/config.yaml').write_text('bot_workflow: [private-invalid-sentinel')
++    result=routing_snapshot()
++    rows={x['name']:x for x in result['profiles']}
++    assert rows['think']['pair_status']=='invalid' and rows['think']['dispatch_admitted'] is False
++    assert rows['action']['pair_status']=='unreadable'
++    assert not list(fleet.rglob('*.corrupt.*'))
++    assert 'private-invalid-sentinel' not in json.dumps(result)
 diff --git a/tests/hermes_cli/test_prompt_suggestion_context.py b/tests/hermes_cli/test_prompt_suggestion_context.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..702570ec97c5286c5b0ae8ca2dbcd1e40ab4053c
@@ -56931,6 +57140,53 @@ index 1de9596fbb4666e366a05daec7e8f9a202f59348..b5428c4bcb9e1b17e6585d13b4e31c84
      real_lstat, real_scandir = os.lstat, os.scandir
      with monkeypatch.context() as probe:
          if failed_probe == "root-stat":
+diff --git a/tests/tools/environments/test_local_owned_cli_path.py b/tests/tools/environments/test_local_owned_cli_path.py
+new file mode 100644
+index 00000000..93210c42
+--- /dev/null
++++ b/tests/tools/environments/test_local_owned_cli_path.py
+@@ -0,0 +1,41 @@
++"""Bare Hermes in a tool shell must use its owning checkout, not a stale PM venv CLI."""
++import os
++from pathlib import Path
++import subprocess
++
++import pytest
++
++from tools.environments import local
++
++pytestmark=pytest.mark.platforms('posix')
++
++
++@pytest.mark.parametrize('already_present',[False,True])
++def test_owned_source_launcher_wins_without_changing_other_toolchain(tmp_path,monkeypatch,already_present):
++    root=tmp_path/'source';module=root/'tools/environments/local.py';module.parent.mkdir(parents=True)
++    own=root/'.hermes/bin';own.mkdir(parents=True)
++    stale=tmp_path/'old-venv/bin';stale.mkdir(parents=True)
++    for directory,answer in [(own,'OWNING_SOURCE'),(stale,'STALE_RUNTIME')]:
++        script=directory/'hermes';script.write_text("#!/bin/sh\nprintf '%s\\n' "+answer+"\n");script.chmod(0o755)
++    other=stale/'other-tool';other.write_text("#!/bin/sh\nprintf '%s\\n' ORIGINAL_TOOLCHAIN\n");other.chmod(0o755)
++    monkeypatch.setattr(local,'__file__',str(module))
++    monkeypatch.setattr(local,'_HERMES_BIN_DIR',local._SENTINEL)
++    monkeypatch.setenv('PATH',os.pathsep.join([str(stale),*([str(own)] if already_present else []),'/usr/bin','/bin']))
++    from pm import environments
++    monkeypatch.setattr(environments,'payload_command_dir',lambda source:None)
++    child={**os.environ,'PATH':local._prepend_hermes_bin_dir(os.environ['PATH'])}
++    result=subprocess.run(['sh','-c','hermes; other-tool'],env=child,text=True,capture_output=True,timeout=10)
++    assert result.returncode==0 and result.stdout.splitlines()==['OWNING_SOURCE','ORIGINAL_TOOLCHAIN']
++    assert child['PATH'].split(os.pathsep).count(str(own))==1
++    assert local._prepend_hermes_bin_dir(child['PATH'])==child['PATH']
++
++
++def test_missing_owner_launcher_keeps_operator_cli_precedence(tmp_path,monkeypatch):
++    root=tmp_path/'source';module=root/'tools/environments/local.py';module.parent.mkdir(parents=True)
++    (root/'.hermes/bin').mkdir(parents=True)
++    chosen=tmp_path/'operator/bin';chosen.mkdir(parents=True);script=chosen/'hermes';script.write_text('');script.chmod(0o755)
++    monkeypatch.setattr(local,'__file__',str(module));monkeypatch.setattr(local,'_HERMES_BIN_DIR',local._SENTINEL)
++    monkeypatch.setenv('PATH',str(chosen))
++    from pm import environments
++    monkeypatch.setattr(environments,'payload_command_dir',lambda source:None)
++    assert local._resolve_hermes_bin_dir()==str(chosen)
 diff --git a/tests/tools/test_agent_tool_profile_contention.py b/tests/tools/test_agent_tool_profile_contention.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..0371bda90a182e27f3b49cbbc78b4ef7bdf0fbd1
@@ -65003,6 +65259,71 @@ index 0000000000000000000000000000000000000000..9a1017bdbc5e0a56b8721a2647e9f3f4
 +        finally:
 +            tmp.unlink(missing_ok=True)
 +
+diff --git a/tools/environments/local.py b/tools/environments/local.py
+index 8272bb91..4892d543 100644
+--- a/tools/environments/local.py
++++ b/tools/environments/local.py
+@@ -634,4 +634,17 @@ _SENTINEL = object()
+ _HERMES_BIN_DIR: str | None | object = _SENTINEL
+-# True when the cached dir is a sealed payload's own launcher dir (see below).
+-_HERMES_BIN_DIR_IS_PAYLOAD = False
++# True when the cached dir is this source/payload's own launcher directory.
++_HERMES_BIN_DIR_IS_OWNED = False
++
++
++def _owned_hermes_bin_dir(root: Path) -> str | None:
++    from pm.environments import payload_command_dir
++
++    payload = payload_command_dir(root)
++    if payload is not None and payload.is_dir():
++        return str(payload)
++    source = root / ".hermes" / "bin"
++    names = ("hermes.exe", "hermes.cmd") if _IS_WINDOWS else ("hermes",)
++    if any((source / name).is_file() and os.access(source / name, os.X_OK) for name in names):
++        return str(source)
++    return None
+ 
+@@ -641,16 +654,14 @@ def _resolve_hermes_bin_dir() -> str | None:
+     launched by systemd/cron/a desktop launcher lacks the install dir on PATH and bare
+-    ``hermes`` exits 127. Order: a sealed payload's own launcher dir; ``which``; absolute
++    ``hermes`` exits 127. Order: owning source/payload launcher; ``which``; absolute
+     ``sys.argv[0]`` naming a real hermes executable; ``sys.executable``'s dir if it holds
+     the shim."""
+-    global _HERMES_BIN_DIR, _HERMES_BIN_DIR_IS_PAYLOAD
++    global _HERMES_BIN_DIR, _HERMES_BIN_DIR_IS_OWNED
+     if _HERMES_BIN_DIR is not _SENTINEL:
+         return _HERMES_BIN_DIR  # type: ignore[return-value]
+-    from pm.environments import payload_command_dir
+-
+-    # A payload's venv also holds a `hermes`, but on Windows its redirector names the
+-    # build machine's interpreter, so PATH order must not decide which copy children get.
+-    payload_dir = payload_command_dir(Path(__file__).resolve().parents[2])
+-    if payload_dir is not None and payload_dir.is_dir():
+-        _HERMES_BIN_DIR, _HERMES_BIN_DIR_IS_PAYLOAD = str(payload_dir), True
+-        return _HERMES_BIN_DIR
++    # PM's console scripts bind the dependency-build snapshot. The owning source
++    # launcher, like a sealed payload's launcher, must beat that stale venv CLI.
++    owned = _owned_hermes_bin_dir(Path(__file__).resolve().parents[2])
++    if owned is not None:
++        _HERMES_BIN_DIR, _HERMES_BIN_DIR_IS_OWNED = owned, True
++        return owned
+     which = shutil.which("hermes")
+@@ -668,3 +679,3 @@ def _resolve_hermes_bin_dir() -> str | None:
+     _HERMES_BIN_DIR = candidate if candidate and os.path.isdir(candidate) else None
+-    _HERMES_BIN_DIR_IS_PAYLOAD = False
++    _HERMES_BIN_DIR_IS_OWNED = False
+     return _HERMES_BIN_DIR
+@@ -673,7 +684,6 @@ def _resolve_hermes_bin_dir() -> str | None:
+ def _prepend_hermes_bin_dir(existing_path: str) -> str:
+-    """Prepend the hermes install dir to ``existing_path`` if missing. A sealed payload's
+-    launcher dir moves to the front even when already listed: a login PATH can list
+-    another install's ``hermes`` ahead of it."""
++    """Prepend the hermes install dir to ``existing_path`` if missing. The owning source
++    or payload launcher moves first even when listed behind another install."""
+     bin_dir = _resolve_hermes_bin_dir()
+-    if bin_dir and _HERMES_BIN_DIR_IS_PAYLOAD:
++    if bin_dir and _HERMES_BIN_DIR_IS_OWNED:
+         rest = [entry for entry in existing_path.split(os.pathsep) if entry and entry != bin_dir]
 diff --git a/tools/file_operations.py b/tools/file_operations.py
 index efc2aa07e60ccfe344b8e8f5c17a1a6951781a8d..be0e36b0d9c391b48deef629a10253c0e138309a 100644
 --- a/tools/file_operations.py
