@@ -1,3 +1,11 @@
+# v0.7.19: known native auxiliary reasoning floor
+
+740 pinned paths. Four focused files / 24 pass; broad 74-file selection / 848 pass
+and 15 inherited failures, zero retries and no new failures. Five native installed
+smart-approval serialization controls each on Linux/macOS pass offline.
+See [native floor and actual Captain acceptance](native-auxiliary-reasoning-floor.md)
+for the result and its limits. No global-green or production savings claim.
+
 # v0.7.18: auxiliary Codex effort fidelity
 
 738 pinned paths. The final Responses request retains top-level chat effort,
