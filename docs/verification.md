@@ -1,3 +1,14 @@
+# v0.7.14: complete, ordered config backup publication
+
+729 pinned paths. Rapid same-second saves no longer collide; readers do not
+see partial copies; failed copies preserve the previous good backup; rotation
+uses a fresh completed-file listing. Default retention five and unchanged-content
+deduplication remain. Native regression: 173 files / 1,230
+passed / 0 failed / 4 skips, zero retries. Installed Linux/macOS:
+seven production-interpreter controls each, zero providers. Code-health clear.
+See [config backup publication](config-backup-publication.md). No measured disk,
+RAM, usage or cache saving claimed. Historical counts overlap.
+
 # v0.7.13: preserve last-good config through metadata failures
 
 727 pinned paths. Signature I/O failures now reuse native last-good raw config/

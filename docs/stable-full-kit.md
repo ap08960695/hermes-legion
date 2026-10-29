@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **727-path** Legion source, interface and optimization alternative
+This is the complete **729-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
