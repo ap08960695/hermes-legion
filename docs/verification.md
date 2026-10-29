@@ -1,3 +1,44 @@
+# v0.7.33: reliable and bounded session discovery
+
+Discovery previously capped raw matching messages at 300 before excluding current
+context, inspected lineages or duplicate sessions. One busy session could hide
+older conversations, an in-place compacted message, or an interactive conversation
+behind scheduled-task chatter. Six native SQLite scenarios reproduce the failure
+on the parent, through the actual tool registry. A separate review caught and
+fixed two candidate-only regressions: a refill must not broaden an AND query when
+an exact hit already exists, including an exact scheduled-task hit.
+
+The repair applies lineage and live-context eligibility in every native search
+route before row pagination. It refills by excluding selected lineage roots, asks
+for at most the remaining output slots per query, and prioritizes interactive
+sessions before scheduled ones at each matching tier. Exact, substring and relaxed
+matching tiers are exhausted globally in that order, preserving fallback precision.
+The requested output cap remains ten. Recursive lineage membership terminates on
+cycles. Hidden/rewound rows, active delegation context, profile ownership, temporal
+bounds and bounded excerpt hydration retain their guards. Older adapters retain
+their bounded compatibility path. No tool schema or prompt-prefix change is made.
+
+The final related selection passes 239 files / 2297 tests,
+zero failures and 16 existing skips, with zero file retries and four
+workers. Scoped code health and Ruff pass. Overlapping runs are not summed.
+Linux and macOS production Python each pass eighteen installed native controls:
+six saturation conditions in Latin, Thai and CJK, using readonly fixture databases.
+No model/provider requests are made. The full consolidated patch is checked for
+apply, reverse and reapply on both hosts, with scoped rollback and exact modes.
+Linux activation is native and idle-only; the original Mac Gateway remains off.
+No renderer rebuild, dependency, model, quota or resource-gate change is needed.
+
+An additional synthetic 301-message fixture returns the same top-one message
+before and after. Four ABBA samples reduce candidate rows crossing into Python
+from 300 to one per query. Traced peak allocations were 458,145 and 334,362 bytes
+before, versus 45,938 and 45,642 after; elapsed observations were 14.36/10.29 ms
+before and 3.30/2.95 ms after. These component observations were taken alongside
+offline tests, not a controlled original-workload latency or whole-process RAM
+benchmark. They establish no model-token savings, provider cache hits or original
+session adoption. The broader improvement objective remains active.
+
+---
+
 # v0.7.32: leaner plugin cleanup and accurate review-block metadata
 
 Every registration previously allocated a fresh cleanup closure that captured its

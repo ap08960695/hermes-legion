@@ -33641,22 +33641,21 @@ index c83e6b21..89e49539 100644
 +        self._initialize_deferred_schema(cursor, fresh=fresh)  # same ordering constraint (``active``)
  
 diff --git a/hermes_state_search.py b/hermes_state_search.py
-index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ababe2b8f7 100644
+index a7993f49..4d28df50 100644
 --- a/hermes_state_search.py
 +++ b/hermes_state_search.py
-@@ -5,14 +5,22 @@ Must never import hermes_state (cycle); shared constants live in hermes_state_co
- """
- 
+@@ -7,4 +7,6 @@ Must never import hermes_state (cycle); shared constants live in hermes_state_co
  import contextlib
 +import json
  import logging
  import re
 +import secrets
  import sqlite3
- import time
- from typing import Any, Callable, Collection, Dict, List, Optional, Tuple
- 
+@@ -14,3 +16,12 @@ from typing import Any, Callable, Collection, Dict, List, Optional, Tuple
  from agent.skill_commands import describe_skill_invocation
++from hermes_state_search_filters import (
++    RecallScope, allows_relaxed_miss, allows_substring_miss, append_search_filters,
++)
  from hermes_state_errors import is_malformed_db_error
 +from hermes_state_global_recall import GlobalSearch as _GlobalRecallSearch
 +from hermes_state_global_recall import _uses_substring as _global_uses_substring
@@ -33665,16 +33664,12 @@ index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ab
 +from hermes_state_stream_recall import UnsupportedJSON
 +from hermes_state_unicode61_folds import FOLD_ALIASES
  from hermes_state_common import (
-     FTS_CJK_STALE_KEY, FTS_SQL, FTS_STALE_KEY, FTS_STORAGE_VERSION, FTS_TOOL_CONTENT_PREFIX_CHARS,
-     FTS_TRIGRAM_EXCLUDED_SOURCES, FTS_TRIGRAM_SQL,
-@@ -57,18 +65,29 @@ _LIKE_COALESCED_COLUMN_SQL = (
- )
- # ``sort`` -> ORDER BY for the FTS routes; unknown values are rank-only (user input passes through).
+@@ -59,2 +70,4 @@ _LIKE_COALESCED_COLUMN_SQL = (
  _FTS_ORDER_BY = {"newest": "ORDER BY m.timestamp DESC, rank", "oldest": "ORDER BY m.timestamp ASC, rank"}
 +_SEARCH_SNIPPET_MAX_CHARS = 1000
 +_GLOBAL_SEARCH_TIMEOUT_S = 3.0
  # Indexed neighbor seeks avoid scanning whole sessions for a sparse set of hits.
- _CONTEXT_WINDOW_SQL = """WITH target AS (
+@@ -62,4 +75,11 @@ _CONTEXT_WINDOW_SQL = """WITH target AS (
      SELECT session_id, timestamp, id FROM messages WHERE id IN ({ids})
 +      AND (active = 1 OR compacted = 1) AND COALESCE(display_kind, '') <> 'hidden'
  )
@@ -33687,7 +33682,7 @@ index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ab
 +              THEN '[structured or binary content]'
 +         ELSE substr(m.content, 1, 1200) END AS content
  FROM target t JOIN messages m ON m.id IN (
-     t.id,
+@@ -67,6 +87,8 @@ FROM target t JOIN messages m ON m.id IN (
      (SELECT p.id FROM messages p
 -     WHERE p.session_id = t.session_id AND (p.timestamp, p.id) < (t.timestamp, t.id)
 +     WHERE p.session_id = t.session_id AND (p.active = 1 OR p.compacted = 1)
@@ -33698,11 +33693,7 @@ index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ab
 +     WHERE n.session_id = t.session_id AND (n.active = 1 OR n.compacted = 1)
 +       AND COALESCE(n.display_kind, '') <> 'hidden' AND (n.timestamp, n.id) > (t.timestamp, t.id)
       ORDER BY n.timestamp, n.id LIMIT 1)
- )
- ORDER BY t.id, m.timestamp, m.id"""
-@@ -108,6 +127,122 @@ def _like_params(term: str) -> list[str]:
-     return [f"%{_escape_like(term)}%"] * 3
- 
+@@ -110,2 +132,118 @@ def _like_params(term: str) -> list[str]:
  
 +def _structured_fts_query(query: str, table: str) -> Optional[str]:
 +    """Widen a query enough to find JSON-escaped text, without scanning the DB.
@@ -33821,12 +33812,36 @@ index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ab
 +
 +
  def _strip_cjk_wildcards(raw_query: str) -> str:
-     """Drop the trailing prefix wildcard callers append for ASCII ("nimb" -> "nimb*").
+@@ -163,30 +301,36 @@ def _search_select_sql(snippet_sql: str, from_sql: str, where: list[str], order_
  
-@@ -161,6 +296,36 @@ def _search_select_sql(snippet_sql: str, from_sql: str, where: list[str], order_
-         """
- 
- 
+-def _search_filter_clauses(
+-    where: list[str], params: list, *, include_inactive: bool, source_filter: Optional[list[str]],
+-    exclude_sources: Optional[list[str]], role_filter: Optional[list[str]],
+-    after_ts: Optional[int] = None, before_ts: Optional[int] = None) -> None:
+-    """Append the visibility/source/role/session-start predicates every search route shares. Live
+-    rows (active=1) AND compaction-archived rows (compacted=1) are discoverable; only
+-    rewind/undo rows (active=0, compacted=0) are hidden. ``after_ts``/``before_ts`` bound
+-    ``sessions.started_at`` (inclusive / exclusive) inside the query so LIMIT cannot be
+-    filled by out-of-window hits."""
+-    if not include_inactive:
+-        where.append("(m.active = 1 OR m.compacted = 1)")
+-    # display_kind="hidden" rows are model-facing scaffolding the person never saw; a hit would confuse.
+-    where.append("COALESCE(m.display_kind, '') <> 'hidden'")
+-    if source_filter is not None:
+-        where.append(f"s.source IN ({','.join('?' for _ in source_filter)})")
+-        params.extend(source_filter)
+-    if exclude_sources is not None:
+-        where.append(f"s.source NOT IN ({','.join('?' for _ in exclude_sources)})")
+-        params.extend(exclude_sources)
+-    if role_filter:
+-        where.append(f"m.role IN ({','.join('?' for _ in role_filter)})")
+-        params.extend(role_filter)
+-    if after_ts is not None:
+-        where.append("s.started_at >= ?")
+-        params.append(int(after_ts))
+-    if before_ts is not None:
+-        where.append("s.started_at < ?")
+-        params.append(int(before_ts))
 +def _bounded_fts_snippet(raw, open_marker: str, close_marker: str) -> Any:
 +    """Keep one genuine FTS highlight and bounded surrounding text."""
 +    if not isinstance(raw, str):
@@ -33857,30 +33872,18 @@ index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ab
 +    return prefix + before + ">>>" + highlight + "<<<" + raw[after_start:after_end] + suffix
 +
 +
- def _search_filter_clauses(
-     where: list[str], params: list, *, include_inactive: bool, source_filter: Optional[list[str]],
-     exclude_sources: Optional[list[str]], role_filter: Optional[list[str]],
-@@ -191,11 +356,16 @@ def _search_filter_clauses(
-         params.append(int(before_ts))
- 
- 
++
++
 +class _ReadOnlyCJKStale(Exception):
 +    """A read-only CJK snapshot is stale and needs canonical search."""
-+
-+
- class SessionSearchMixin:
-     """See module docstring — mixin for SessionDB (Search cluster)."""
  
+@@ -197,3 +341,4 @@ class SessionSearchMixin:
      _SEARCH_MESSAGE_RESULT_FIELDS = (
 -        "id", "session_id", "role", "snippet", "timestamp", "tool_name", "source", "model", "session_started", "context"
 +        "id", "session_id", "role", "snippet", "snippet_field", "snippet_offset", "snippet_encoding", "offset_unit",
 +        "timestamp", "tool_name", "source", "model", "session_started", "context"
      )
- 
-     @classmethod
-@@ -782,6 +952,15 @@ class SessionSearchMixin:
-             "bookend_end": [_hydrate(r) for r in bookend_end_rows],
-         }
+@@ -784,2 +929,11 @@ class SessionSearchMixin:
  
 +    def get_recall_anchored_view(
 +        self, session_id: str, around_message_id: int, window: int = 5, bookend: int = 3,
@@ -33892,18 +33895,15 @@ index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ab
 +                                    keep_roles, include_window_bookends)
 +
      def list_recent_user_messages(
-         self, session_id: str, limit: int = 20, include_inactive: bool = False) -> list[dict[str, Any]]:
-         """The *limit* most-recent real user turns, newest first, as ``{id, timestamp, preview}``
-@@ -935,17 +1114,583 @@ class SessionSearchMixin:
- 
-     @staticmethod
+@@ -937,3 +1091,3 @@ class SessionSearchMixin:
      def _fts_match_sql(table: str, match_query: str, order_by_sql: str, *, limit: int, offset: int,
 -                       **filters) -> tuple[str, list]:
 +                       snippet_markers: tuple[str, str] = (">>>", "<<<"), **filters) -> tuple[str, list]:
          """MATCH query + params against one FTS5 index joined to messages/sessions."""
-         where = [f"{table} MATCH ?"]
+@@ -941,9 +1095,575 @@ class SessionSearchMixin:
          params: list = [match_query]
-         _search_filter_clauses(where, params, **filters)
+-        _search_filter_clauses(where, params, **filters)
++        append_search_filters(where, params, **filters)
          params.extend([limit, offset])
          sql = _search_select_sql(
 -            f"snippet({table}, -1, '>>>', '<<<', '...', 40) AS snippet",
@@ -33977,7 +33977,7 @@ index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ab
 +        if status != "stale":
 +            return status, rows
 +        filters = {k: route[k] for k in ("include_inactive", "source_filter", "exclude_sources", "role_filter",
-+                                         "after_ts", "before_ts")}
++                                         "after_ts", "before_ts", "recall_scope")}
 +        sort = "oldest" if route["order_by_sql"] == _FTS_ORDER_BY["oldest"] else "newest"
 +        rows = self._search_messages_like_fallback(fallback_query, limit=route["limit"], offset=route["offset"],
 +                                                   sort=sort, **filters)
@@ -34276,7 +34276,7 @@ index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ab
 +            params = [match, *bound]
 +            snippet_case, snippet_params = '', []
 +        where = [f'{table} MATCH ?', guard]
-+        _search_filter_clauses(where, params, **filters)
++        append_search_filters(where, params, **filters)
 +        params.extend([limit, offset])
 +        snippet = (f"CASE WHEN {structured} THEN NULL {snippet_case}ELSE snippet({table}, -1, '>>>', '<<<', '...', 40) END AS snippet, "
 +                   f"{structured} AS _structured")
@@ -34356,7 +34356,7 @@ index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ab
 +                 f'THEN 1 ELSE ({logical}) END)')
 +        where = [guard]
 +        params.extend(bound)
-+        _search_filter_clauses(where, params, **filters)
++        append_search_filters(where, params, **filters)
 +        params.extend([limit, offset])
 +        snippet = (f'NULL AS snippet, {structured} AS _structured, '
 +                   'candidates.original AS _native_candidate, candidates.cjk AS _cjk_candidate')
@@ -34449,7 +34449,7 @@ index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ab
 +                params.extend([char, char])
 +            scan_filters: list[str] = []
 +            scan_params: list[Any] = []
-+            _search_filter_clauses(scan_filters, scan_params, **filters)
++            append_search_filters(scan_filters, scan_params, **filters)
 +            scan_filters = [re.sub(r'\bs\.', 'es.', re.sub(r'\bm\.', 'em.', item)) for item in scan_filters]
 +            branches.append(f'''SELECT em.id AS id, 0.0 AS score, 0 AS original FROM messages em
 +                JOIN sessions es ON es.id=em.session_id WHERE em.role <> 'tool'
@@ -34466,7 +34466,7 @@ index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ab
 +        # still need logical-field verification before paging.
 +        where = [f'(CASE WHEN candidates.original AND NOT {structured} THEN 1 ELSE ({logical}) END)']
 +        params.extend(bound)
-+        _search_filter_clauses(where, params, **filters)
++        append_search_filters(where, params, **filters)
 +        params.extend([limit, offset])
 +        sql = _search_select_sql(
 +                                 f'NULL AS snippet, {structured} AS _structured, '
@@ -34479,11 +34479,7 @@ index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ab
 +                                              global_specs=global_specs,
 +                                              global_fts_fields=('messages_fts', columns), connection=connection)
  
-     def _match_rows(self, table: str, match_query: str, order_by_sql: str, *, fail_open: Optional[str] = None,
-                     operational_debug: Optional[str] = None, **kwargs) -> Optional[list[dict[str, Any]]]:
-@@ -954,9 +1699,9 @@ class SessionSearchMixin:
-         substring-capable routes: a corruption-class ``DatabaseError`` there detaches the
-         derived indexes (``_enter_fts_fail_open``) and answers from canonical rows — a live
+@@ -956,5 +1676,5 @@ class SessionSearchMixin:
          search never runs the unbounded rebuild. Other ``DatabaseError``s propagate."""
 -        sql, params = self._fts_match_sql(table, match_query, order_by_sql, **kwargs)
          try:
@@ -34491,11 +34487,7 @@ index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ab
 +            runner = self._guarded_fts_rows if table == 'messages_fts' else self._guarded_cjk_fts_rows
 +            return runner(table, match_query, order_by_sql, **kwargs)
          except sqlite3.OperationalError:
-             if operational_debug:
-                 logger.debug(operational_debug, exc_info=True)
-@@ -975,12 +1720,23 @@ class SessionSearchMixin:
-         return [dict(row) for row in self._read_all(sql, params)]
- 
+@@ -977,8 +1697,19 @@ class SessionSearchMixin:
      @staticmethod
 -    def _compile_like_boolean_query(query: str) -> tuple[str, list[Any], Optional[str]]:
 +    def _compile_like_boolean_query(
@@ -34518,11 +34510,7 @@ index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ab
 +        tokens = re.findall(r'"[^"]+"\*?|\S+', query) if global_specs is not None else _LIKE_TOKEN_RE.findall(query)
 +        for raw_token in tokens:
              operator = raw_token.upper()
-             if operator == "OR":
-                 if groups[-1]:
-@@ -994,35 +1750,298 @@ class SessionSearchMixin:
-                 continue
-             term = raw_token.strip('"').strip("*").strip()
+@@ -996,3 +1727,6 @@ class SessionSearchMixin:
              if term:
 -                groups[-1].append((term, negate_next))
 +                prefix = raw_token.endswith('*')
@@ -34530,10 +34518,7 @@ index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ab
 +                    term = term[:-1]
 +                groups[-1].append((term, negate_next, prefix))
                  negate_next = False
- 
-         compiled_groups: list[str] = []
-         params: list[Any] = []
-         snippet_term: Optional[str] = None
+@@ -1003,11 +1737,156 @@ class SessionSearchMixin:
          for group in groups:
 -            if not group or not any(not negated for _, negated in group):
 +            if not group or not any(not negated for _, negated, _ in group):
@@ -34695,9 +34680,7 @@ index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ab
 +                    pieces.append(('NOT ' if negated else ('AND ' if pieces else '')) + atom)
 +                native_match_groups.append(' '.join(pieces) if not group[0][1] else '')
          return " OR ".join(compiled_groups), params, snippet_term
- 
-     def _search_messages_like_fallback(
-         self, query: str, *, limit: int, offset: int, sort: Optional[str], **filters) -> list[dict[str, Any]]:
+@@ -1017,3 +1896,12 @@ class SessionSearchMixin:
          """Search canonical messages while derived FTS state is stale."""
 -        predicate, params, snippet_term = self._compile_like_boolean_query(query)
 +        order = "ASC" if isinstance(sort, str) and sort.strip().lower() == "oldest" else "DESC"
@@ -34711,12 +34694,13 @@ index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ab
 +        predicate, params, snippet_term = self._compile_like_boolean_query(
 +            query, stream_structured=True, match_groups=groups, stream_terms=terms)
          if not predicate or snippet_term is None:
-             return []
+@@ -1021,6 +1909,112 @@ class SessionSearchMixin:
          where = [f"({predicate})"]
+-        _search_filter_clauses(where, params, **filters)
 +        if id_range is not None:
 +            where.extend(('m.id > ?', 'm.id <= ?'))
 +            params.extend(id_range)
-         _search_filter_clauses(where, params, **filters)
++        append_search_filters(where, params, **filters)
 +        structured = "(typeof(m.content)='text' AND substr(m.content,1,1)='')"
 +        snippet = (f"CASE WHEN {structured} THEN NULL ELSE substr(m.content, max(1, instr(m.content, ?) - 40), 120) "
 +                   f"END AS snippet, {structured} AS _structured")
@@ -34755,7 +34739,7 @@ index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ab
 +            return []
 +        where = ["m.session_id = ?", f"({predicate})"]
 +        params = [session_id, *match_params]
-+        _search_filter_clauses(where, params, include_inactive=False, source_filter=None,
++        append_search_filters(where, params, include_inactive=False, source_filter=None,
 +                               exclude_sources=None, role_filter=role_filter)
          order = "ASC" if isinstance(sort, str) and sort.strip().lower() == "oldest" else "DESC"
 -        return self._like_rows(where, [snippet_term, *params, limit, offset],
@@ -34826,11 +34810,7 @@ index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ab
 +                conn.create_function("_hermes_stream_contains", 2, None)
 +        return results
  
-     def _refresh_fts_stale_state(self) -> None:
-         """Observe fail-open initiated by another process sharing state.db."""
-@@ -1035,10 +2054,25 @@ class SessionSearchMixin:
-         if stale is not None:
-             self._fts_stale = True
+@@ -1037,6 +2031,21 @@ class SessionSearchMixin:
              self._fts_enabled = self._trigram_available = self._fts_cjk_available = False
 +            return
 +        if self._fts_cjk_available:
@@ -34854,11 +34834,7 @@ index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ab
 +        *, include_inactive: bool = False) -> list[dict[str, Any]]:
 +        """Attach bounded context and discard hits no longer eligible for recall."""
          if result_fields is None or "context" in result_fields:
-             for start in range(0, len(matches), 500):
-                 batch = matches[start:start + 500]
-@@ -1058,6 +2092,18 @@ class SessionSearchMixin:
-                             for row in contexts.get(match["id"], [])]
-                     except Exception:
+@@ -1060,2 +2069,14 @@ class SessionSearchMixin:
                          match["context"] = []
 +        # The row may have been rewound between the search and hydration queries.
 +        # Recheck after hydration rather than returning its stale search snippet.
@@ -34873,11 +34849,16 @@ index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ab
 +            visible_ids.update(row["id"] for row in rows)
 +        matches = [match for match in matches if match["id"] in visible_ids]
          # No route selects full content; the pop guards any future one that does.
-         for match in matches:
-             match.pop("content", None)
-@@ -1086,9 +2132,9 @@ class SessionSearchMixin:
-         finally:
-             elapsed_ms = (time.time() - started) * 1000.0
+@@ -1074,2 +2095,3 @@ class SessionSearchMixin:
+         after_ts: Optional[int] = None, before_ts: Optional[int] = None,
++        recall_scope: RecallScope | None = None,
+     ) -> list[dict[str, Any]]:
+@@ -1083,3 +2105,3 @@ class SessionSearchMixin:
+                 limit=limit, offset=offset, sort=sort, include_inactive=include_inactive, fields=fields,
+-                after_ts=after_ts, before_ts=before_ts)
++                after_ts=after_ts, before_ts=before_ts, recall_scope=recall_scope)
+             return rows
+@@ -1088,5 +2110,5 @@ class SessionSearchMixin:
              if elapsed_ms >= _search_slow_ms():
 -                logger.info("slow session search: path=%s elapsed=%.0fms rows=%s query=%r",
 +                logger.info("slow session search: path=%s elapsed=%.0fms rows=%s query_chars=%d",
@@ -34885,25 +34866,26 @@ index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ab
 -                            query[: 200])
 +                            len(query) if isinstance(query, str) else 0)
  
-     def _search_messages_impl(
-         self, query: str, source_filter: list[str] | None = None, exclude_sources: list[str] | None = None,
-@@ -1116,11 +2162,11 @@ class SessionSearchMixin:
-         # opt-in full-body path and scans canonical rows via LIKE.
-         if role_filter and "tool" in role_filter:
+@@ -1097,2 +2119,3 @@ class SessionSearchMixin:
+         after_ts: Optional[int] = None, before_ts: Optional[int] = None,
++        recall_scope: RecallScope | None = None,
+     ) -> list[dict[str, Any]]:
+@@ -1113,3 +2136,3 @@ class SessionSearchMixin:
+                        exclude_sources=exclude_sources, role_filter=role_filter,
+-                       after_ts=after_ts, before_ts=before_ts)
++                       after_ts=after_ts, before_ts=before_ts, recall_scope=recall_scope)
+         # New oversized tool results index only a bounded prefix; an explicit tool-role search is the
+@@ -1118,3 +2141,3 @@ class SessionSearchMixin:
              matches = self._search_messages_like_fallback(query, limit=limit, offset=offset, sort=sort, **filters)
 -            return self._finalize_search_matches(matches, result_fields=result_fields)
 +            return self._finalize_search_matches(matches, result_fields=result_fields, include_inactive=include_inactive)
          self._refresh_fts_stale_state()
-         if self._fts_stale:
+@@ -1122,3 +2145,3 @@ class SessionSearchMixin:
              matches = self._search_messages_like_fallback(query, limit=limit, offset=offset, sort=sort, **filters)
 -            return self._finalize_search_matches(matches, result_fields=result_fields)
 +            return self._finalize_search_matches(matches, result_fields=result_fields, include_inactive=include_inactive)
          if not self._fts_enabled:
-             return []
- 
-@@ -1134,11 +2180,24 @@ class SessionSearchMixin:
-         if is_cjk:
-             matches = self._search_cjk(query, wants_unindexed_rows, route)
+@@ -1136,7 +2159,20 @@ class SessionSearchMixin:
          else:
 -            sql, params = self._fts_match_sql("messages_fts", query, **route)
              try:
@@ -34928,22 +34910,16 @@ index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ab
 +                else:
 +                    return []  # FTS5 syntax error despite sanitization
              except sqlite3.DatabaseError as exc:
-                 # Corruption parent class: detach the derived indexes and answer from
-                 # canonical rows; repair paths own the rebuild.
-@@ -1167,7 +2226,9 @@ class SessionSearchMixin:
-         # tokens). Gated on a miss so hits keep their ranking ("cat" may then match
+@@ -1168,4 +2204,6 @@ class SessionSearchMixin:
          # "concatenate"). Skipped for role='tool' (both indexes exclude tool rows).
-         if not matches and not is_cjk and not (bool(role_filter) and "tool" in role_filter):
+-        if not matches and not is_cjk and not (bool(role_filter) and "tool" in role_filter):
 -            fb_query = _quote_fts_tokens(query.strip('"').strip())
++        if allows_substring_miss(matches, is_cjk, role_filter, recall_scope):
 +            # `query` is already sanitized for FTS5. Re-quoting its words
 +            # separately would turn an explicit phrase into a loose AND.
 +            fb_query = query
              # ── CJK-bigram route (messages_fts_cjk, cjk_unicode61) ────── When the bigram index is
-             # available it serves EVERY CJK query shape the legacy code split between trigram (>=3
-             # chars/token) and LIKE full scans (1-2 char tokens) — the whole point of the index (PR #65544).
-@@ -1175,7 +2236,14 @@ class SessionSearchMixin:
-             # cjk index, same exclusion as trigram), - queries containing a LONE 1-char CJK run: the index
-             # stores bigrams for runs >=2, so a single-char term can only match isolated chars — LIKE
+@@ -1177,3 +2215,10 @@ class SessionSearchMixin:
              # substring semantics are broader.
 -            if self._fts_cjk_available:
 +            if self.read_only and self._try_load_read_only_cjk():
@@ -34955,20 +34931,17 @@ index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ab
 +                    matches = cjk_matches or matches
 +            elif not self.read_only and self._fts_cjk_available:
                  matches = self._match_rows("messages_fts_cjk", fb_query, **route) or matches
-             if not matches and self._trigram_available and self._trigram_eligible_tokens(query):
-                 matches = self._match_rows("messages_fts_trigram", fb_query, **route) or matches
-@@ -1194,7 +2262,7 @@ class SessionSearchMixin:
-                 matches = self._match_rows("messages_fts", relaxed, fail_open="OR-relaxed",
-                                            operational_debug="OR-relaxed FTS retry failed; keeping empty result",
+@@ -1190,3 +2235,3 @@ class SessionSearchMixin:
+         # CJK-routed queries are left alone.
+-        if not matches and not is_cjk and not self._fts_stale:
++        if allows_relaxed_miss(matches, is_cjk, self._fts_stale, recall_scope):
+             relaxed = self._or_relaxed_query(query)
+@@ -1196,3 +2241,3 @@ class SessionSearchMixin:
                                             **route) or matches
 -        return self._finalize_search_matches(matches, result_fields=result_fields)
 +        return self._finalize_search_matches(matches, result_fields=result_fields, include_inactive=include_inactive)
  
-     def _search_cjk(self, query: str, wants_unindexed_rows: bool, route: dict[str, Any]) -> list[dict[str, Any]]:
-         """CJK routing: the unicode61 table splits CJK into single characters (false positives,
-@@ -1203,9 +2271,22 @@ class SessionSearchMixin:
-         1-char CJK runs (bigrams only exist for runs >=2 — LIKE is broader); then trigram
-         (>=3 CJK chars per token); then a LIKE substring scan with one clause per
+@@ -1205,5 +2250,18 @@ class SessionSearchMixin:
          non-operator token so "广西 OR 桂林 OR 漓江" matches each term."""
 -        raw_query = _strip_cjk_wildcards(query).strip('"').strip()
 -        match_query = _quote_fts_tokens(raw_query)
@@ -34990,30 +34963,23 @@ index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ab
 +        if (not self.read_only and self._fts_cjk_available and not wants_unindexed_rows
 +                and not self._has_lone_cjk_run(raw_query)):
              matches = self._match_rows(
-                 "messages_fts_cjk", match_query, fail_open="CJK-bigram",
-                 operational_debug="messages_fts_cjk query failed; falling back to trigram/LIKE", **route)
-@@ -1216,14 +2297,12 @@ class SessionSearchMixin:
-             if matches is not None:
-                 return matches
+@@ -1218,10 +2276,8 @@ class SessionSearchMixin:
          non_op_tokens = _non_operator_tokens(raw_query) or [raw_query]
 -        like_params: list = [p for tok in non_op_tokens for p in _like_params(tok)]
 -        like_where = [f"({' OR '.join([_LIKE_ANY_COLUMN_SQL] * len(non_op_tokens))})"]
          filters = {k: route[k] for k in ("include_inactive", "source_filter", "exclude_sources", "role_filter",
-                                          "after_ts", "before_ts")}
+-                                         "after_ts", "before_ts")}
 -        _search_filter_clauses(like_where, like_params, **filters)
 -        # instr() for the snippet uses the first search token.
 -        return self._like_rows(like_where, [non_op_tokens[0], *like_params, route["limit"], route["offset"]],
 -                               order_by="ORDER BY m.timestamp DESC", limit_sql="LIMIT ? OFFSET ?")
++                                         "after_ts", "before_ts", "recall_scope")}
 +        # Keep this route's existing any-token semantics for short CJK queries.
 +        any_query = ' OR '.join('"' + token.strip('"') + '"' for token in non_op_tokens)
 +        return self._guarded_like_rows(any_query, limit=route['limit'], offset=route['offset'],
 +                                       order_by='ORDER BY m.timestamp DESC', **filters)
  
-     def _search_unindexed_gap(self, fts_query: str, limit: int, **filters) -> list[dict[str, Any]]:
-         """LIKE-scan ids in (fts_rebuild_progress, fts_rebuild_high_water] — rows the deferred
-@@ -1236,11 +2315,9 @@ class SessionSearchMixin:
-                  if tok and tok.upper() not in _LIKE_SKIP_TOKENS]
-         if not terms:
+@@ -1238,7 +2294,5 @@ class SessionSearchMixin:
              return []
 -        where = ["m.id > ? AND m.id <= ?", *([_LIKE_ANY_COLUMN_SQL] * len(terms))]
 -        params: list = [status["indexed"], status["total"], *(p for term in terms for p in _like_params(term))]
@@ -35024,8 +34990,96 @@ index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ab
 +        return self._guarded_like_rows(all_query, limit=limit, offset=0, order_by='ORDER BY m.timestamp DESC',
 +                                       id_range=(status['indexed'], status['total']), **filters)
  
-     def search_sessions_by_id(
-         self, query: str, limit: int = 20, include_archived: bool = True, source: str | None = None,
+diff --git a/hermes_state_search_filters.py b/hermes_state_search_filters.py
+new file mode 100644
+index 00000000..cca47337
+--- /dev/null
++++ b/hermes_state_search_filters.py
+@@ -0,0 +1,84 @@
++"""Shared SQL visibility and recall eligibility before search pagination."""
++
++from dataclasses import dataclass
++from typing import Optional
++
++from hermes_state_common import _BOUNDARY_END_REASONS
++
++
++@dataclass(frozen=True)
++class RecallScope:
++    """Discovery-only lineage guards; never a profile or authorization override."""
++
++    excluded_roots: tuple[str, ...] = ()
++    current_session_id: str | None = None
++    current_lineage_root: str | None = None
++    match_tier: str = "automatic"
++
++
++def allows_substring_miss(matches, is_cjk, role_filter, scope: RecallScope | None) -> bool:
++    return (not matches and not is_cjk and not (role_filter and "tool" in role_filter)
++            and (scope is None or scope.match_tier in ("automatic", "substring")))
++
++
++def allows_relaxed_miss(matches, is_cjk, fts_stale, scope: RecallScope | None) -> bool:
++    return (not matches and not is_cjk and not fts_stale
++            and (scope is None or scope.match_tier in ("automatic", "relaxed")))
++
++
++def _lineage_members(roots: tuple[str, ...]) -> str:
++    # UNION terminates even if an imported session graph contains a parent cycle.
++    return ("WITH RECURSIVE recall_members(id) AS ("
++            f"SELECT id FROM sessions WHERE id IN ({','.join('?' for _ in roots)}) "
++            "UNION SELECT child.id FROM sessions child "
++            "JOIN recall_members parent ON child.parent_session_id=parent.id) "
++            "SELECT id FROM recall_members")
++
++
++def _append_recall_scope(where: list[str], params: list, scope: RecallScope) -> None:
++    if scope.excluded_roots:
++        where.append(f"m.session_id NOT IN ({_lineage_members(scope.excluded_roots)})")
++        params.extend(scope.excluded_roots)
++    compacted = "(m.active=0 AND m.compacted=1)"
++    if scope.current_lineage_root:
++        ended = tuple(sorted(_BOUNDARY_END_REASONS | {"compression"}))
++        where.append(f"(m.session_id NOT IN ({_lineage_members((scope.current_lineage_root,))}) "
++                     f"OR s.end_reason IN ({','.join('?' for _ in ended)}) OR {compacted})")
++        params.extend((scope.current_lineage_root, *ended))
++    if scope.current_session_id:
++        where.append(f"(m.session_id<>? OR {compacted})")
++        params.append(scope.current_session_id)
++
++
++def append_search_filters(
++    where: list[str], params: list, *, include_inactive: bool, source_filter: Optional[list[str]],
++    exclude_sources: Optional[list[str]], role_filter: Optional[list[str]],
++    after_ts: Optional[int] = None, before_ts: Optional[int] = None,
++    recall_scope: RecallScope | None = None) -> None:
++    """Append the visibility/source/role/session-start predicates every search route shares. Live
++    rows (active=1) AND compaction-archived rows (compacted=1) are discoverable; only
++    rewind/undo rows (active=0, compacted=0) are hidden. ``after_ts``/``before_ts`` bound
++    ``sessions.started_at`` (inclusive / exclusive) inside the query so LIMIT cannot be
++    filled by out-of-window hits."""
++    if not include_inactive:
++        where.append("(m.active = 1 OR m.compacted = 1)")
++    # display_kind="hidden" rows are model-facing scaffolding the person never saw; a hit would confuse.
++    where.append("COALESCE(m.display_kind, '') <> 'hidden'")
++    if source_filter is not None:
++        where.append(f"s.source IN ({','.join('?' for _ in source_filter)})")
++        params.extend(source_filter)
++    if exclude_sources is not None:
++        where.append(f"s.source NOT IN ({','.join('?' for _ in exclude_sources)})")
++        params.extend(exclude_sources)
++    if role_filter:
++        where.append(f"m.role IN ({','.join('?' for _ in role_filter)})")
++        params.extend(role_filter)
++    if after_ts is not None:
++        where.append("s.started_at >= ?")
++        params.append(int(after_ts))
++    if before_ts is not None:
++        where.append("s.started_at < ?")
++        params.append(int(before_ts))
++
++    if recall_scope is not None:
++        _append_recall_scope(where, params, recall_scope)
 diff --git a/hermes_state_sessions.py b/hermes_state_sessions.py
 index a072ea5eec5bb9c74491052676e004c16eb2451a..416cbfa3dc8c41985d7a293c93bdbe218f19dbc7 100644
 --- a/hermes_state_sessions.py
@@ -62149,6 +62203,113 @@ index e0feece7315cb2e2017e2bd51e20a5738d1da9f8..856f7dad74ad53e1ef9573fdd27b5f21
  
      def test_bare_id_never_reads_another_profiles_store(self, db, tmp_path, monkeypatch):
          # #106761: profiles are isolated islands. A bare id that misses the caller's
+diff --git a/tests/tools/test_session_search_candidate_starvation.py b/tests/tools/test_session_search_candidate_starvation.py
+new file mode 100644
+index 00000000..7b703ea5
+--- /dev/null
++++ b/tests/tools/test_session_search_candidate_starvation.py
+@@ -0,0 +1,101 @@
++"""High-volume sessions must not hide other eligible recall candidates."""
++
++import json
++
++import pytest
++
++from hermes_state import SessionDB
++from tools.session_search_tool import _DISCOVER_SCAN_LIMIT
++from tools.registry import registry
++
++
++@pytest.mark.parametrize("case", ["excluded_root", "excluded_child", "duplicates", "current", "compacted", "cron"])
++@pytest.mark.parametrize("query, storage", [("recallfixture", "fts"), ("记忆", "readonly"), ("ความจำ", "like")])
++def test_recall_survives_raw_candidate_saturation(tmp_path, monkeypatch, case, query, storage):
++    db = SessionDB(tmp_path / "state.db")
++    try:
++        db.create_session("old", source="cli")
++        wanted_session = "flood" if case == "compacted" else "old"
++        db.create_session("flood-root", source="cli")
++        db.create_session("flood", source="cron" if case == "cron" else "cli", parent_session_id="flood-root")
++        wanted = db.append_message(wanted_session, role="user",
++                                   content=f"{query} saved checksum decision", timestamp=1_600_000_000)
++        if case == "compacted":
++            db._conn.execute("UPDATE messages SET active=0, compacted=1 WHERE id=?", (wanted,))
++            db._conn.commit()
++        for i in range(_DISCOVER_SCAN_LIMIT + 1):
++            db.append_message("flood", role="user", content=f"{query} recent chatter",
++                              timestamp=1_700_000_000 + i)
++        if storage == "readonly":
++            db.close()
++            db = SessionDB(tmp_path / "state.db", read_only=True)
++        if storage == "like":
++            db._fts_stale = True
++            monkeypatch.setattr(db, "_refresh_fts_stale_state", lambda: None)
++        args = {"query": query, "limit": 2, "sort": "newest"}
++        if case.startswith("excluded_"):
++            args["exclude_session_ids"] = ["flood-root" if case == "excluded_root" else "flood"]
++        current = "flood" if case in ("current", "compacted") else None
++        payload = json.loads(registry.dispatch("session_search", args, db=db, current_session_id=current))
++        assert payload["success"]
++        entries = payload["results"]
++        assert any(entry["match_message_id"] == wanted for entry in entries)
++        if case.startswith("excluded_") or case == "current":
++            assert all(entry["session_id"] == "old" for entry in entries)
++        if case == "cron":
++            assert entries[0]["session_id"] == "old"
++        if case == "compacted":
++            assert entries[0]["match_message_id"] == wanted
++    finally:
++        db.close()
++
++
++@pytest.mark.parametrize("source", ["cli", "cron"])
++def test_refill_does_not_relax_a_query_that_already_has_an_exact_hit(tmp_path, source):
++    with SessionDB(tmp_path / "state.db") as db:
++        db.create_session("exact", source=source)
++        exact = db.append_message("exact", role="user", content="amber violet", timestamp=1000)
++        db.create_session("partial", source="cli")
++        db.append_message("partial", role="user", content="amber unrelated", timestamp=2000)
++        result = json.loads(registry.dispatch("session_search", {"query": "amber violet", "limit": 3}, db=db))
++        assert result["success"]
++        assert [entry["match_message_id"] for entry in result["results"]] == [exact]
++
++
++def test_refill_is_bounded_by_requested_lineages_not_message_volume(tmp_path, monkeypatch):
++    with SessionDB(tmp_path / "state.db") as db:
++        for index in range(12):
++            sid = f"archive-{index}"
++            db.create_session(sid, source="cli")
++            for message in range(30):
++                db.append_message(sid, role="user", content="boundedfixture decision", timestamp=index * 100 + message)
++        read = db.search_messages
++        calls, returned = [], []
++
++        def observe(*args, **kwargs):
++            rows = read(*args, **kwargs)
++            calls.append(kwargs["limit"])
++            returned.append(len(rows))
++            return rows
++
++        monkeypatch.setattr(db, "search_messages", observe)
++        result = json.loads(registry.dispatch("session_search", {"query": "boundedfixture", "limit": 5}, db=db))
++        assert result["success"] and len(result["results"]) == 5
++        assert len({entry["session_id"] for entry in result["results"]}) == 5
++        assert len(calls) <= 5 and sum(returned) <= 15
++        assert max(calls) <= 5
++
++
++def test_parent_cycle_cannot_loop_or_escape_an_excluded_lineage(tmp_path):
++    with SessionDB(tmp_path / "state.db") as db:
++        db.create_session("cycle-a", source="cli")
++        db.create_session("cycle-b", source="cli", parent_session_id="cycle-a")
++        db._conn.execute("UPDATE sessions SET parent_session_id='cycle-b' WHERE id='cycle-a'")
++        db._conn.commit()
++        db.append_message("cycle-b", role="user", content="cyclefixture chatter")
++        db.create_session("archive", source="cli")
++        wanted = db.append_message("archive", role="user", content="cyclefixture decision")
++        result = json.loads(registry.dispatch("session_search", {
++            "query": "cyclefixture", "exclude_session_ids": ["cycle-a"]}, db=db))
++        assert result["success"]
++        assert [entry["match_message_id"] for entry in result["results"]] == [wanted]
 diff --git a/tests/tools/test_session_search_link_scope.py b/tests/tools/test_session_search_link_scope.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..445ce662475553240426b877f7d81943b39380d6
@@ -68706,32 +68867,22 @@ index c6f442809329b97ad43019e5451a3fe807c56187..e3c6777a565fc3113367ceb52e600880
  
  
 diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
-index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..124a757e7f5d3a9863f6569ceb614d3bb99b905f 100644
+index de6b29e9..323c80a5 100644
 --- a/tools/session_search_tool.py
 +++ b/tools/session_search_tool.py
-@@ -10,7 +10,9 @@ No LLM calls — every shape returns actual DB messages.
- 
- import json
+@@ -12,3 +12,5 @@ import json
  import logging
 +import os
  import re
 +import sqlite3
  import time
- from datetime import datetime, timezone, UTC
- from typing import Any, Dict, List, Optional, Union
-@@ -47,7 +49,8 @@ _EXCLUDE_SESSION_IDS_CAP = 20
- _RELATIVE_BOUND_RE = re.compile(r"^(\d+)\s*(h|d|w)$", re.IGNORECASE)
- _RELATIVE_UNIT_SECONDS = {"h": 3600, "d": 86400, "w": 604800}
+@@ -49,3 +51,4 @@ _RELATIVE_UNIT_SECONDS = {"h": 3600, "d": 86400, "w": 604800}
  # Raw FTS rows are only a plan input; the response hydrates its own window/bookends.
 -_DISCOVER_SEARCH_FIELDS = ("id", "session_id", "role", "snippet", "source", "model", "session_started")
 +_DISCOVER_SEARCH_FIELDS = ("id", "session_id", "role", "snippet", "snippet_field", "snippet_offset",
 +                           "snippet_encoding", "offset_unit", "source", "model", "session_started")
  # Compaction handoff summaries (agent/context_compressor.py); excluded from bookends.
- _COMPACTION_PREFIXES = ("[CONTEXT COMPACTION", "[CONTEXT SUMMARY]:")
- # /new, /reset, idle/daily expiry and CLI /new ("new_session") end the predecessor WITHOUT
-@@ -86,9 +89,12 @@ def _format_timestamp(ts: float | str | None) -> str:
- 
- 
+@@ -88,5 +91,8 @@ def _format_timestamp(ts: float | str | None) -> str:
  def _get_session_meta(db, session_id: str) -> dict:
 -    """``db.get_session`` that degrades to ``{}`` on error."""
 -    return _quiet(lambda: db.get_session(session_id), None,
@@ -68743,20 +68894,12 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..124a757e7f5d3a9863f6569ceb614d3b
 +    return _quiet(lambda: reader(session_id), None,
 +                  "get_session metadata failed for %s: %s", session_id, with_exc=True) or {}
  
- 
- def _session_meta_block(meta: dict[str, Any]) -> dict[str, Any]:
-@@ -101,7 +107,7 @@ def _ok(**payload) -> str:
- 
- 
+@@ -103,3 +109,3 @@ def _ok(**payload) -> str:
  def _is_compaction_summary(content: str) -> bool:
 -    return bool(content) and content.lstrip().startswith(_COMPACTION_PREFIXES)
 +    return isinstance(content, str) and bool(content) and content.lstrip().startswith(_COMPACTION_PREFIXES)
  
- 
- def _resolve_to_parent(db, session_id: str) -> tuple[str, bool]:
-@@ -234,6 +240,22 @@ def _is_compacted_message(db, message_id) -> bool:
-     return _is_compacted_state(_get_message_storage_state(db, message_id))
- 
+@@ -236,2 +242,18 @@ def _is_compacted_message(db, message_id) -> bool:
  
 +def _has_unpaired_surrogate(value: Any) -> bool:
 +    """Keep malformed legacy Unicode out of UTF-8 payloads; original bytes remain pageable."""
@@ -68775,11 +68918,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..124a757e7f5d3a9863f6569ceb614d3b
 +
 +
  def _shape_message(m: dict[str, Any], anchor_id: Optional[int] = None,
-                    max_content_len: Optional[int] = None) -> dict[str, Any]:
-     """Slim a message row; keeps ``content`` even when empty (tool-call-only turns)."""
-@@ -243,22 +265,49 @@ def _shape_message(m: dict[str, Any], anchor_id: Optional[int] = None,
-         content = strip_ansi(content)
-     entry = {"id": m.get("id"), "role": m.get("role"), "content": content, "timestamp": m.get("timestamp")}
+@@ -245,7 +267,16 @@ def _shape_message(m: dict[str, Any], anchor_id: Optional[int] = None,
      entry.update({k: m.get(k) for k in ("tool_name", "tool_calls", "tool_call_id") if m.get(k)})
 +    entry.update({k: m[k] for k in ("content_truncated", "original_content_chars", "original_content_bytes",
 +                                    "content_encoding", "tool_calls_truncated", "original_tool_calls_bytes") if k in m})
@@ -68799,10 +68938,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..124a757e7f5d3a9863f6569ceb614d3b
 +        entry.update(content=displayed[:max_content_len] + "…", content_truncated=True,
 +                     original_content_chars=m.get("original_content_chars", len(displayed)))
      return {k: v for k, v in entry.items() if v is not None or k == "content"}
- 
- 
- def _session_link(session_id: str, profile: str | None = None) -> str:
-     """The reference the agent writes for a session — same value the desktop composer
+@@ -256,7 +287,25 @@ def _session_link(session_id: str, profile: str | None = None) -> str:
      emits, so it renders as a titled link. The profile segment is omitted when it
 -    can't be named confidently (a bare id still resolves, just not across profiles)."""
 +    can't be named confidently (a bare id still resolves, just not across profiles).
@@ -68831,11 +68967,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..124a757e7f5d3a9863f6569ceb614d3b
 +            return candidate
 +        return ""
      name = (profile or "").strip() or _quiet(_active, "", "get_active_profile_name failed for session link")
-     return f"@session:{name}/{session_id}" if name else f"@session:{session_id}"
- 
-@@ -273,7 +322,17 @@ def _discovery_entry(lineage_root: Optional[str], **fields) -> dict[str, Any]:
-     return entry
- 
+@@ -275,3 +324,13 @@ def _discovery_entry(lineage_root: Optional[str], **fields) -> dict[str, Any]:
  
 -def _title_match_result(db, query: str, current_lineage_root: Optional[str]) -> Optional[dict[str, Any]]:
 +def _title_message_sample(db, session_id: str) -> tuple[list[dict[str, Any]], int]:
@@ -68850,11 +68982,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..124a757e7f5d3a9863f6569ceb614d3b
 +                        after_ts: Optional[int] = None, before_ts: Optional[int] = None,
 +                        excluded_roots: Optional[set[str]] = None) -> Optional[dict[str, Any]]:
      """Discovery-shaped result when the query matches a session title, else None."""
-     title_query = query.strip().strip("`'\"")  # models often quote a remembered title
-     session_id = title_query and _quiet(lambda: db.resolve_session_by_title(title_query), None,
-@@ -285,21 +344,36 @@ def _title_match_result(db, query: str, current_lineage_root: Optional[str]) ->
-     # /new-reset and compression-ended parents are not.
-     if current_lineage_root and lineage_root == current_lineage_root and not _session_left_live_context(db, session_id):
+@@ -287,11 +346,26 @@ def _title_match_result(db, query: str, current_lineage_root: Optional[str]) ->
          return None
 -    session_meta = _quiet(lambda: db.get_session(lineage_root) or db.get_session(session_id), None,
 -                          "get_session failed for title match %s", session_id) or {}
@@ -68886,19 +69014,14 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..124a757e7f5d3a9863f6569ceb614d3b
 +        anchor_id = messages[0].get("id") if messages else None
 +        view = {}
      title = session_meta.get("title") or title_query
-     # Same caps as FTS hits (_bookend / _hydrate_hit): a title match is a discovery entry too.
-     def shape(key, fallback, anchor=None, max_content_len=1200):
+@@ -300,4 +374,4 @@ def _title_match_result(db, query: str, current_lineage_root: Optional[str]) ->
          return [_shape_message(m, anchor_id=anchor, max_content_len=max_content_len)
 -                for m in (view.get(key) or fallback)]
 -    return {**_discovery_entry(
 +                for m in (view.get(key, []) if view_available else fallback)]
 +    entry = {**_discovery_entry(
          lineage_root, session_id=session_id, when=_format_timestamp(session_meta.get("started_at")),
-         source=session_meta.get("source", "unknown"), model=session_meta.get("model") or "unknown",
-         title=title, matched_role="session_title", match_message_id=anchor_id,
-@@ -307,8 +381,12 @@ def _title_match_result(db, query: str, current_lineage_root: Optional[str]) ->
-         bookend_start=shape("bookend_start", messages[:3]),
-         messages=shape("window", messages[:5], anchor_id, max_content_len=4000),
+@@ -309,4 +383,8 @@ def _title_match_result(db, query: str, current_lineage_root: Optional[str]) ->
          bookend_end=shape("bookend_end", messages[-3:]), messages_before=view.get("messages_before", 0),
 -        messages_after=view.get("messages_after", max(len(messages) - 5, 0)), detail="full"),
 +        messages_after=view.get("messages_after", max(total - 5, 0)), detail="full"),
@@ -68908,11 +69031,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..124a757e7f5d3a9863f6569ceb614d3b
 +                     warning="Session title matched, but loading its messages failed. History is unavailable, not empty.")
 +    return entry
  
- 
- def _discover_payload(db, query: str, detail: str, results: list, **extra) -> str:
-@@ -331,12 +409,14 @@ def _hydrate_hit(db, lineage_root: str, match_info: dict[str, Any], result_detai
-     """Discovery result from a surviving FTS row; None (dropped) if the view can't load."""
-     hit_sid, msg_id = match_info.get("session_id") or lineage_root, match_info.get("id")
+@@ -333,8 +411,10 @@ def _hydrate_hit(db, lineage_root: str, match_info: dict[str, Any], result_detai
      try:
 -        view = db.get_anchored_view(hit_sid, msg_id, window=5, bookend=3)
 +        view = db.get_recall_anchored_view(hit_sid, msg_id, window=5, bookend=3)
@@ -68926,21 +69045,95 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..124a757e7f5d3a9863f6569ceb614d3b
 -    return _discovery_entry(
 +    entry = _discovery_entry(
          lineage_root, session_id=hit_sid,
-         when=_format_timestamp(session_meta.get("started_at") or match_info.get("session_started")),
-         source=session_meta.get("source") or match_info.get("source", "unknown"),
-@@ -349,6 +429,9 @@ def _hydrate_hit(db, lineage_root: str, match_info: dict[str, Any], result_detai
-         bookend_end=_bookend(view, "bookend_end") if full else [],
-         messages_before=view.get("messages_before", 0), messages_after=view.get("messages_after", 0),
+@@ -351,2 +431,87 @@ def _hydrate_hit(db, lineage_root: str, match_info: dict[str, Any], result_detai
          detail=result_detail)
 +    entry.update({key: match_info[key] for key in ('snippet_field', 'snippet_offset', 'snippet_encoding', 'offset_unit')
 +                  if key in match_info})
 +    return entry
++
++
++def _discovery_batches(db, query, role_filter, limit, sort, after_ts, before_ts,
++                      excluded_roots, current_session_id, current_lineage_root, selected):
++    """Refill by lineage, with eligibility applied before the native row limit."""
++    import inspect
++
++    parameters = inspect.signature(db.search_messages).parameters
++    scoped = "recall_scope" in parameters or any(
++        p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values())
++    common = dict(query=query, role_filter=role_filter or ["user", "assistant"],
++                  offset=0, sort=sort, fields=_DISCOVER_SEARCH_FIELDS,
++                  after_ts=after_ts, before_ts=before_ts)
++    if not scoped:
++        # Older adapters retain their bounded search and the caller's post-filters.
++        rows = db.search_messages(**common, exclude_sources=list(_HIDDEN_SESSION_SOURCES),
++                                  limit=_DISCOVER_SCAN_LIMIT)
++        yield sorted(rows, key=lambda r: (r.get("source") or "") in _DEMOTED_SESSION_SOURCES)
++        return
++    for tier in ("exact", "substring", "relaxed"):
++        previous_count = len(selected)
++        yield from _discovery_tier_batches(db, common, limit, excluded_roots, current_session_id,
++                                           current_lineage_root, selected, tier)
++        if len(selected) > previous_count:
++            return
++
++
++def _discovery_tier_batches(db, common, limit, excluded_roots, current_session_id,
++                            current_lineage_root, selected, tier):
++    from hermes_state_search_filters import RecallScope
++
++    for cron in (False, True):
++        for _ in range(limit):
++            remaining = limit - len(selected)
++            if remaining <= 0:
++                return
++            previous = set(selected)
++            scope = RecallScope(tuple(sorted(excluded_roots | previous)), current_session_id, current_lineage_root, tier)
++            rows = db.search_messages(
++                **common, recall_scope=scope, limit=min(_DISCOVER_SCAN_LIMIT, remaining),
++                exclude_sources=list(_HIDDEN_SESSION_SOURCES if cron else
++                                     (*_HIDDEN_SESSION_SOURCES, *_DEMOTED_SESSION_SOURCES)),
++                source_filter=list(_DEMOTED_SESSION_SOURCES) if cron else None)
++            if not rows:
++                break
++            yield rows
++            # Concurrent edits or a non-native adapter must never cause an endless refill.
++            if previous == set(selected):
++                break
++
++
++def _discovery_lineage(db, row, excluded_roots, current_session_id, current_lineage_root,
++                       lineage_cache, left_context_cache):
++    """Recheck SQL eligibility after a read, including compacted current-session hits."""
++    raw_sid = row["session_id"]
++    if raw_sid not in lineage_cache:
++        lineage_cache[raw_sid] = _resolve_lineage(db, raw_sid)
++    root = lineage_cache[raw_sid]
++    if raw_sid in excluded_roots or root in excluded_roots:
++        return None
++    same_live_lineage = bool(current_lineage_root and root == current_lineage_root)
++    compacted = _is_compacted_message(db, row.get("id")) if same_live_lineage or raw_sid == current_session_id else False
++    if same_live_lineage:
++        if raw_sid not in left_context_cache:
++            left_context_cache[raw_sid] = _session_left_live_context(db, raw_sid)
++        if not (left_context_cache[raw_sid] or compacted):
++            return None
++    if current_session_id and raw_sid == current_session_id and not compacted:
++        return None
++    return root
++
++
++def _select_discovery_hits(db, batches, selected, excluded_roots, current_session_id, current_lineage_root, limit):
++    lineage_cache, left_context_cache = {}, {}
++    for rows in batches:
++        for row in rows:
++            if len(selected) >= limit:
++                return
++            root = _discovery_lineage(db, row, excluded_roots, current_session_id,
++                                      current_lineage_root, lineage_cache, left_context_cache)
++            if root is not None:
++                selected.setdefault(root, {**row, "_lineage_root": root})
  
- 
- def _discover(db, query: str, role_filter: Optional[list[str]], limit: int, sort: Optional[str],
-@@ -358,14 +441,8 @@ def _discover(db, query: str, role_filter: Optional[list[str]], limit: int, sort
-     """Discovery shape: FTS5 plus adaptive or full result hydration."""
-     current_lineage_root = _resolve_lineage(db, current_session_id) if current_session_id else None
+@@ -360,22 +525,16 @@ def _discover(db, query: str, role_filter: Optional[list[str]], limit: int, sort
      excluded_roots = _excluded_lineage_roots(db, exclude_session_ids or [])
 -    title_result = _title_match_result(db, query, current_lineage_root)
 -    # FTS rows are time-bounded in SQL (_search_filter_clauses); the title match bypasses that
@@ -68950,52 +69143,71 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..124a757e7f5d3a9863f6569ceb614d3b
 -        title_started = _coerce_started_ts((_get_session_meta(db, title_root) or _get_session_meta(db, title_sid)).get("started_at"))
 -        if {title_sid, title_root} & excluded_roots or not _in_time_window(title_started, after_ts, before_ts):
 -            title_result = None
+-    raw_results, err = _loud(lambda: db.search_messages(
+-        query=query, role_filter=role_filter or ["user", "assistant"],
+-        exclude_sources=list(_HIDDEN_SESSION_SOURCES), limit=_DISCOVER_SCAN_LIMIT, offset=0, sort=sort,
+-        fields=_DISCOVER_SEARCH_FIELDS, after_ts=after_ts, before_ts=before_ts), "FTS5 search failed: %s", "Search failed")
 +    title_result = _title_match_result(db, query, current_lineage_root, after_ts=after_ts,
 +                                       before_ts=before_ts, excluded_roots=excluded_roots)
-     raw_results, err = _loud(lambda: db.search_messages(
-         query=query, role_filter=role_filter or ["user", "assistant"],
-         exclude_sources=list(_HIDDEN_SESSION_SOURCES), limit=_DISCOVER_SCAN_LIMIT, offset=0, sort=sort,
-@@ -391,10 +468,16 @@ def _discover(db, query: str, role_filter: Optional[list[str]], limit: int, sort
-     # Current-lineage hits are skipped UNLESS the transcript left live context
-     # (compression-ended, /new-reset predecessor, or an in-place compacted row on the
-     # SAME session); a live delegation child (end_reason=None) stays excluded.
-+    lineage_cache, left_context_cache = {}, {}
-     for r in raw_results:
-         if len(seen_sessions) >= limit:
-             break
++    seen_sessions: dict[str, dict[str, Any]] = {}
++    results = [title_result] if title_result else []
++    if title_result and (title_lineage := title_result.pop("_lineage_root", None)):
++        seen_sessions[title_lineage] = {"_title_only": True}
++    batches = _discovery_batches(db, query, role_filter, limit, sort, after_ts, before_ts,
++                                 excluded_roots, current_session_id, current_lineage_root, seen_sessions)
++    _, err = _loud(lambda: _select_discovery_hits(
++        db, batches, seen_sessions, excluded_roots, current_session_id, current_lineage_root, limit),
++        "FTS5 search failed: %s", "Search failed")
+     if err:
+         return err
+-    # Demote cron rows below interactive ones BEFORE dedup so a high-volume cron corpus
+-    # can't starve the user's own sessions out of the top `limit`; stable sort keeps BM25
+-    # order within each class.
+-    raw_results = sorted(raw_results, key=lambda r: (r.get("source") or "") in _DEMOTED_SESSION_SOURCES)
+-    # See #19434.
+-    if not raw_results and not title_result:
++    if not seen_sessions:
+         return _discover_payload(db, query, detail, [], message=(
+@@ -384,34 +543,2 @@ def _discover(db, query: str, role_filter: Optional[list[str]], limit: int, sort
+             "phrases, exclude with NOT, or prefix-match with `deploy*`."))
+-    seen_sessions: dict[str, dict[str, Any]] = {}
+-    results = [title_result] if title_result else []
+-    if title_result and (title_lineage := title_result.pop("_lineage_root", None)):
+-        seen_sessions[title_lineage] = {"_title_only": True}
+-    # Dedupe by lineage (lineage_root -> first surviving FTS row) up to `limit`. The raw
+-    # owning session_id stays on the row — only it pairs validly with the FTS match id.
+-    # Current-lineage hits are skipped UNLESS the transcript left live context
+-    # (compression-ended, /new-reset predecessor, or an in-place compacted row on the
+-    # SAME session); a live delegation child (end_reason=None) stays excluded.
+-    for r in raw_results:
+-        if len(seen_sessions) >= limit:
+-            break
 -        raw_sid, resolved_sid = r["session_id"], _resolve_lineage(db, r["session_id"])
-+        raw_sid = r["session_id"]
-+        if raw_sid not in lineage_cache:
-+            lineage_cache[raw_sid] = _resolve_lineage(db, raw_sid)
-+        resolved_sid = lineage_cache[raw_sid]
-+        if resolved_sid in seen_sessions:
-+            continue
-         if raw_sid in excluded_roots or resolved_sid in excluded_roots:
-             continue
-         # Skip the current session lineage — UNLESS the hit's transcript has left live context. Three
-@@ -407,9 +490,12 @@ def _discover(db, query: str, role_filter: Optional[list[str]], limit: int, sort
-         # compaction: the FTS hit lives on the SAME session_id as the current session, but the matched
-         # message row is an archived (active=0, compacted=1) row. The live-context load filters active=1, so
-         # that content is no longer in context — let it through.
+-        if raw_sid in excluded_roots or resolved_sid in excluded_roots:
+-            continue
+-        # Skip the current session lineage — UNLESS the hit's transcript has left live context. Three
+-        # sub-cases: Legacy compression rotation: the FTS hit lives in a session that itself ended with
+-        # end_reason='compression'. That session's content has been replaced by a summary in the
+-        # continuation child, so it must stay discoverable. /new-reset (and idle/daily/CLI new_session): the
+-        # predecessor was ended without carrying any transcript into the child. Same lineage root, but the
+-        # prior conversation is NOT in the active context — hiding it made gateway recall go blind after
+-        # every /new (#85756). A live delegation child has end_reason=None, so it stays excluded. In-place
+-        # compaction: the FTS hit lives on the SAME session_id as the current session, but the matched
+-        # message row is an archived (active=0, compacted=1) row. The live-context load filters active=1, so
+-        # that content is no longer in context — let it through.
 -        is_compacted_hit = _is_compacted_message(db, r.get("id"))
-+        same_live_lineage = bool(current_lineage_root and resolved_sid == current_lineage_root)
-+        is_compacted_hit = _is_compacted_message(db, r.get("id")) if same_live_lineage or raw_sid == current_session_id else False
-+        if same_live_lineage and raw_sid not in left_context_cache:
-+            left_context_cache[raw_sid] = _session_left_live_context(db, raw_sid)
-         if current_lineage_root and resolved_sid == current_lineage_root and not (
+-        if current_lineage_root and resolved_sid == current_lineage_root and not (
 -                _session_left_live_context(db, raw_sid) or is_compacted_hit):
-+                left_context_cache[raw_sid] or is_compacted_hit):
-             continue
-         if current_session_id and raw_sid == current_session_id and not is_compacted_hit:
-             continue
-@@ -435,13 +521,27 @@ def _resolve_profile_db(profile: str):
-     """Another profile's ``state.db`` opened read-only (safe on a live DB); None = current."""
-     if profile is None or not str(profile).strip():
+-            continue
+-        if current_session_id and raw_sid == current_session_id and not is_compacted_hit:
+-            continue
+-        seen_sessions.setdefault(resolved_sid, {**r, "_lineage_root": resolved_sid})
+     for lineage_root, match_info in seen_sessions.items():
+@@ -437,2 +564,3 @@ def _resolve_profile_db(profile: str):
          return None
 +    from hermes_constants import get_hermes_home
      from hermes_cli import profiles as profiles_mod
-     from hermes_state import SessionDB
-     canon = profiles_mod.normalize_profile_name(profile)
+@@ -441,5 +569,18 @@ def _resolve_profile_db(profile: str):
      profiles_mod.validate_profile_name(canon)
 -    if not profiles_mod.profile_exists(canon):
 +    home = get_hermes_home()
@@ -69016,11 +69228,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..124a757e7f5d3a9863f6569ceb614d3b
 +    except (OSError, TypeError, ValueError):
 +        return False
  
- 
- def _read_session(db, session_id: str, head: int = 20, tail: int = 10, link_profile: str | None = None) -> str:
-@@ -449,15 +549,21 @@ def _read_session(db, session_id: str, head: int = 20, tail: int = 10, link_prof
-     meta = _get_session_meta(db, session_id)
-     if not meta:
+@@ -451,11 +592,17 @@ def _read_session(db, session_id: str, head: int = 20, tail: int = 10, link_prof
          return tool_error(f"session_id not found: {session_id}", success=False)
 -    rows, err = _loud(lambda: db.get_messages(session_id), "get_messages failed for %s: %s", "failed to load session",
 -                      session_id)
@@ -69043,19 +69251,13 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..124a757e7f5d3a9863f6569ceb614d3b
 -               messages=shaped[:head] + shaped[-tail:] if truncated else shaped,
 +               messages=shaped,
                 **({"message": (f"Session has {total} messages; showing first {head} + last {tail}. "
-                                "Pass around_message_id (any id above) to scroll the middle.")} if truncated else {}))
- 
-@@ -471,12 +577,47 @@ def _read_scoped(db, sid: str, profile: Optional[str]) -> str:
-     ask properly: ``@session:<profile>/<id>`` or ``profile=``.
-     """
+@@ -473,3 +620,4 @@ def _read_scoped(db, sid: str, profile: Optional[str]) -> str:
      result = _read_session(db, sid, link_profile=profile)
 -    if json.loads(result).get("success") is not False or profile:
 +    payload = json.loads(result)
 +    if profile or payload.get("error") != f"session_id not found: {sid}":
          return result
-     return tool_error(f"session_id not found in this profile: {sid}. If it belongs to another "
-                       "profile, pass profile=<name> (or the @session:<profile>/<id> link).", success=False)
- 
+@@ -479,2 +627,36 @@ def _read_scoped(db, sid: str, profile: Optional[str]) -> str:
  
 +def _search_one_session(db, sid: str, query: str, profile: Optional[str], role_filter: Optional[str],
 +                        limit: int, sort: Optional[str], detail: str, after_ts: Optional[int], before_ts: Optional[int],
@@ -69092,39 +69294,23 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..124a757e7f5d3a9863f6569ceb614d3b
 +
 +
  def _list_recent_sessions(db, limit: int, current_session_id: str | None = None, link_profile: str | None = None) -> str:
-     """Browse shape: metadata for the most recent sessions (no LLM, no FTS5)."""
-     def _browse():
-@@ -544,7 +685,7 @@ def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
-     session_meta = _get_session_meta(db, session_id)
-     if not session_meta:
+@@ -546,3 +728,3 @@ def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
          return tool_error(f"session_id not found: {session_id}", success=False)
 -    view, err = _loud(lambda: db.get_messages_around(session_id, around_message_id, window=window),
 +    view, err = _loud(lambda: db.get_recall_window(session_id, around_message_id, window=window),
                        "get_messages_around failed: %s", "failed to load messages")
-     if err:
-         return err
-@@ -554,7 +695,7 @@ def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
-         # Lineage rebind: the caller paired a parent session_id with a message id
-         # living in a descendant — serve the owner's window transparently.
+@@ -556,3 +738,3 @@ def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
          rebind_view = _same_lineage(db, session_id, owning) and _quiet(
 -            lambda: db.get_messages_around(owning, around_message_id, window=window),
 +            lambda: db.get_recall_window(owning, around_message_id, window=window),
              None, "rebind get_messages_around failed: %s", with_exc=True)
-         if rebind_view and rebind_view.get("window"):
-             extra["warning"] = (f"around_message_id {around_message_id} lives in {owning} "
-@@ -563,6 +704,9 @@ def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
-             session_meta = _get_session_meta(db, owning) or session_meta
-     if not messages:
+@@ -565,2 +747,5 @@ def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
          return tool_error(f"around_message_id {around_message_id} not in session_id {session_id}", success=False)
 +    actual_anchor = next((m for m in messages if m.get("id") == around_message_id), None)
 +    if current_session_id and _anchor_in_live_context(db, actual_anchor, session_id, current_session_id):
 +        return tool_error("scroll rejected: anchor lives in the current session lineage (already in your active context)", success=False)
      return _ok(
-         mode="scroll", session_id=session_id, around_message_id=around_message_id,
-         session_meta=_session_meta_block(session_meta), window=window,
-@@ -571,16 +715,89 @@ def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
-         hint=("Scroll forward: re-call with around_message_id = the LAST message's "
-               "id; backward: the FIRST message's id (the boundary message repeats "
+@@ -573,3 +758,55 @@ def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
                "as an orientation marker). messages_before/messages_after < window "
 -              "means you've hit that end of the session."), **extra)
 +              "means you've hit that end of the session. For truncated content, use the message id "
@@ -69181,7 +69367,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..124a757e7f5d3a9863f6569ceb614d3b
 +    return _ok(mode="message_page", session_id=session_id, link=_session_link(session_id, profile),
 +               message_id=message_id, content_field=field, **page)
  
- 
+@@ -577,8 +814,29 @@ def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
  def _dispatch(query, role_filter, limit, db, current_session_id, session_id,
 -              around_message_id, window, sort, profile, detail,
 -              after=None, before=None, exclude_session_ids=None) -> str:
@@ -69214,21 +69400,14 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..124a757e7f5d3a9863f6569ceb614d3b
 +                "full" if isinstance(detail, str) and detail.strip().lower() == "full" else "adaptive", after_ts, before_ts,
 +                exclude_session_ids)
          return _read_scoped(db, session_id.strip(), profile)
-     limit = _clamp_int(limit, 3, 1, 10)
-     if not query or not isinstance(query, str) or not query.strip():
-@@ -601,30 +818,46 @@ def _dispatch(query, role_filter, limit, db, current_session_id, session_id,
- def session_search(query: str = "", role_filter: str | None = None, limit: int = 3, db=None,
-                    current_session_id: str | None = None, session_id: str | None = None, around_message_id: int | None = None,
+@@ -603,3 +861,5 @@ def session_search(query: str = "", role_filter: str | None = None, limit: int =
                     window: int = 5, sort: str | None = None, profile: str | None = None, detail: str = "adaptive",
 -                   after: str | None = None, before: str | None = None, exclude_session_ids: Optional[list[str]] = None) -> str:
 +                   after: str | None = None, before: str | None = None, exclude_session_ids: Optional[list[str]] = None,
 +                   content_offset: int | None = None, content_limit: int | None = None,
 +                   content_field: str | None = None) -> str:
      """Run session search, closing DBs opened here. Positional order is frozen for old callers;
-     new parameters are appended after ``detail``."""
-     from hermes_constants import get_hermes_home
-     from hermes_state import SessionDB, format_session_db_unavailable
-     from hermes_state_registry import release_or_close
+@@ -610,19 +870,33 @@ def session_search(query: str = "", role_filter: str | None = None, limit: int =
      owned_dbs: list[Any] = []
 -    # A raw `@session:<profile>/<id>` link as session_id: ids never contain "/", so
 -    # split on it and adopt the embedded profile only when none was passed.
@@ -69275,11 +69454,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..124a757e7f5d3a9863f6569ceb614d3b
 +            current_session_id = None
 +        db = profile_db
          owned_dbs.append(profile_db)
-     # A managed worker's handle is a RuntimeSessionStore: it mirrors the owner's write and lineage
-     # surface, not the FTS read API, and every read is an owner RPC. Handing it here made recall in a
-@@ -643,8 +876,9 @@ def session_search(query: str = "", role_filter: str | None = None, limit: int =
-         owned_dbs.append(db)
-     try:
+@@ -645,4 +919,5 @@ def session_search(query: str = "", role_filter: str | None = None, limit: int =
          return _dispatch(query, role_filter, limit, db, current_session_id, session_id,
 -                         around_message_id, window, sort, profile, detail,
 -                         after=after, before=before, exclude_session_ids=exclude_session_ids)
@@ -69287,11 +69462,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..124a757e7f5d3a9863f6569ceb614d3b
 +                         after=after, before=before, exclude_session_ids=exclude_session_ids,
 +                         content_offset=content_offset, content_limit=content_limit, content_field=content_field)
      finally:
-         for owned_db in reversed(owned_dbs):
-             _quiet(lambda: release_or_close(owned_db), None, "Failed to close session_search SessionDB")
-@@ -663,9 +897,11 @@ SESSION_SEARCH_SCHEMA = {
-     "name": "session_search",
-     "description": (
+@@ -665,5 +940,7 @@ SESSION_SEARCH_SCHEMA = {
          "Recall past conversations: search or read old Hermes sessions (FTS5), or "
 -        "scroll inside one. Four shapes, picked by args: `query` = discovery "
 +        "scroll inside one. Shapes are picked by args: `query` = discovery "
@@ -69301,78 +69472,46 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..124a757e7f5d3a9863f6569ceb614d3b
 +        "`session_id` + `around_message_id` = scroll (window around an anchor); "
 +        "add `content_offset` to page one bounded message body; "
          "`session_id` alone = read a whole session — how you resolve an "
-         "`@session:<profile>/<id>` link (split on '/' into profile + id); no "
-         "args = browse recent sessions. Results are actual DB messages, no LLM. "
-@@ -683,7 +919,8 @@ SESSION_SEARCH_SCHEMA = {
-                 "type": "string",
-                 "description": (
+@@ -685,3 +962,4 @@ SESSION_SEARCH_SCHEMA = {
                      "Search query (discovery shape). Keywords, phrases, or boolean "
 -                    "expressions to find in past sessions. Omit to browse recent "
 +                    "expressions to find in past sessions. With session_id, search "
 +                    "only that session and return bounded substring excerpts. Omit to browse recent "
                      "sessions. Ignored when session_id + around_message_id are set "
-                     "(scroll shape)."
-                 ),
-@@ -691,7 +928,8 @@ SESSION_SEARCH_SCHEMA = {
-             "limit": {
-                 "type": "integer",
+@@ -693,3 +971,4 @@ SESSION_SEARCH_SCHEMA = {
                  "description": (
 -                    "Discovery shape only. Max sessions to return (default 3, max 10). "
 +                    "Maximum sessions in discovery or matching messages in a scoped "
 +                    "search (default 3, max 10). "
                      "Bump to 5–10 when the topic likely spans several sessions and you "
-                     "want to pick the right one to scroll into."
-                 ),
-@@ -701,7 +939,8 @@ SESSION_SEARCH_SCHEMA = {
-                 "type": "string",
-                 "enum": ["newest", "oldest"],
+@@ -703,3 +982,4 @@ SESSION_SEARCH_SCHEMA = {
                  "description": (
 -                    "Discovery shape only. Temporal bias on top of FTS5 ranking: omit "
 +                    "Temporal bias for discovery; scoped search orders matching "
 +                    "messages newest first by default. For discovery omit "
                      "for relevance-only (exploratory recall), 'newest' for "
-                     "\"where did we leave X\", 'oldest' for \"how did X start\"."
-                 ),
-@@ -710,7 +949,8 @@ SESSION_SEARCH_SCHEMA = {
-                 "type": "string",
-                 "enum": ["adaptive", "full"],
+@@ -712,3 +992,4 @@ SESSION_SEARCH_SCHEMA = {
                  "description": (
 -                    "Discovery shape only. 'adaptive' (default) fully hydrates the "
 +                    "In scoped search, 'adaptive' (default) returns up to 512 characters "
 +                    "per excerpt; 'full' returns up to 4000. In discovery, 'adaptive' fully hydrates the "
                      "top-ranked result and returns only the exact anchor message for "
-                     "lower-ranked results. 'full' returns bookends and the complete "
-                     "anchored window for every result."
-@@ -720,7 +960,7 @@ SESSION_SEARCH_SCHEMA = {
-             "after": {
-                 "type": "string",
+@@ -722,3 +1003,3 @@ SESSION_SEARCH_SCHEMA = {
                  "description": (
 -                    "Discovery shape only. Inclusive lower bound on session start "
 +                    "Inclusive lower bound on session start "
                      "time. ISO date/datetime (e.g. 2026-06-01) or relative duration "
-                     "(7d, 24h, 2w = within the last N). Use only when the user names "
-                     "a time frame. sort is a ranking bias, not a bound."
-@@ -729,7 +969,7 @@ SESSION_SEARCH_SCHEMA = {
-             "before": {
-                 "type": "string",
+@@ -731,3 +1012,3 @@ SESSION_SEARCH_SCHEMA = {
                  "description": (
 -                    "Discovery shape only. Exclusive upper bound on session start "
 +                    "Exclusive upper bound on session start "
                      "time. ISO date/datetime (a date-only value is midnight UTC that "
-                     "day) or relative duration (7d = older than a week). Use only "
-                     "when the user names a time frame."
-@@ -739,7 +979,7 @@ SESSION_SEARCH_SCHEMA = {
-                 "type": "array",
-                 "items": {"type": "string"},
+@@ -741,3 +1022,3 @@ SESSION_SEARCH_SCHEMA = {
                  "description": (
 -                    "Discovery shape only. Session ids already inspected this task. "
 +                    "Session ids already inspected this task. "
                      "Those sessions and their lineage are omitted so a later query "
-                     "explores instead of repeating the same hit. Cap 20."
-                 ),
-@@ -747,9 +987,8 @@ SESSION_SEARCH_SCHEMA = {
-             "session_id": {
-                 "type": "string",
+@@ -749,5 +1030,4 @@ SESSION_SEARCH_SCHEMA = {
                  "description": (
 -                    "Scroll shape. Session to read inside. Use the session_id returned "
 -                    "from a prior discovery call. Must be paired with "
@@ -69380,11 +69519,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..124a757e7f5d3a9863f6569ceb614d3b
 +                    "Session to read or search inside. Pair with query to search "
 +                    "only this session, or around_message_id to scroll."
                  ),
-             },
-             "around_message_id": {
-@@ -760,6 +999,21 @@ SESSION_SEARCH_SCHEMA = {
-                     "prior window."
-                 ),
+@@ -762,2 +1042,17 @@ SESSION_SEARCH_SCHEMA = {
              },
 +            "content_offset": {
 +                "type": "integer", "minimum": 0,
@@ -69402,27 +69537,18 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..124a757e7f5d3a9863f6569ceb614d3b
 +                                "text pages only textual parts, excluding image and attachment payloads."),
 +            },
              "window": {
-                 "type": "integer",
-                 "description": (
-@@ -772,7 +1026,8 @@ SESSION_SEARCH_SCHEMA = {
-                 "type": "string",
-                 "description": (
+@@ -774,3 +1069,4 @@ SESSION_SEARCH_SCHEMA = {
                      "Optional. Comma-separated roles to include. Discovery defaults to "
 -                    "'user,assistant' (tool output is usually noise). Pass "
 +                    "'user,assistant' (tool output is usually noise); session-scoped "
 +                    "search defaults to 'user,assistant,tool' for recovery. Pass "
                      "'user,assistant,tool' to include tool output (debugging tool "
-                     "behaviour) or 'tool' to search tool output only."
-                 ),
-@@ -802,6 +1057,7 @@ registry.register(
-         query=args.get("query") or "", limit=args.get("limit", 3), window=args.get("window", 5),
-         detail=args.get("detail", "adaptive"), db=kw.get("db"), current_session_id=kw.get("current_session_id"),
+@@ -804,3 +1100,4 @@ registry.register(
          **{k: args.get(k) for k in ("role_filter", "session_id", "around_message_id", "sort", "profile",
 -                                    "after", "before", "exclude_session_ids")}),
 +                                    "after", "before", "exclude_session_ids", "content_offset", "content_limit",
 +                                    "content_field")}),
      check_fn=check_session_search_requirements,
-     emoji="🔍")
 diff --git a/tools/shared_document_cache.py b/tools/shared_document_cache.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..1401abe9bfe48d1d71832393e366836f67931ea8
