@@ -1,3 +1,39 @@
+# v0.7.37: session links keep their profile and source
+
+A named-profile history link could resolve the correct title but open a
+same-ID conversation from the default profile. Two navigation seams dropped
+the owner: the reference click discarded its profile, then the shared tab
+opener forwarded explicit routes only for Bot workspaces. Links now capture
+the existing source resolver before asynchronous loading and pass their
+profile through the existing tab-opening path. A legacy source keeps its
+profile-only routing; no connection is invented. Unqualified links retain
+their existing behavior. Tab metadata now matches the explicit owner before
+reusing a cached row, so same-ID titles from another profile or connection
+cannot suppress the existing bounded metadata lookup. No new RPC, tool, dependency, quota or fallback.
+
+The installed native Linux application reproduces the wrong-profile result
+before the repair using two separately owned, same-ID CLI histories in an
+isolated home. Four real-store owner-routing regressions fail before the fix;
+one ordinary-link control already passes. A further same-ID title case also
+fails before the metadata repair; its five existing slice controls pass. The final related selection passes
+twelve files / one hundred twenty-five tests without retries. Lint and native typechecking
+pass. The replacement Linux image must pass the same native title-and-click
+acceptance before installation and again after installation, with no model
+inference and no original session/profile data used. These are private native
+acceptance histories, not proof of original-user-window adoption.
+
+Seven exact source paths are installed on Linux and macOS before publication,
+with target-only rollback and original file metadata preserved. The Linux
+renderer is rebuilt from native prepared inputs without external networking.
+The macOS renderer remains pending under the already recorded resource hold;
+this release does not repeat the refused build, lower its headroom gate,
+unlock the screen or start the original Mac Gateway. Source parity and
+renderer adoption remain separate claims. No production token, cache-hit,
+RAM or latency reduction is inferred from this correctness fix. Raw histories,
+host details, credentials, screenshots and personal data are not published.
+
+---
+
 # v0.7.36: usable session links inside quoted answers
 
 An actual native recall reply returned a session reference as a JSON string.
