@@ -16,7 +16,7 @@ Historical source comments and release payloads received [privacy maintenance](d
 
 - A [compact bot settings editor](docs/desktop-bot-settings.md) that keeps model/effort visible and groups optional appearance controls.
 - Optional [per-model effort ceilings](docs/reasoning-effort-limits.md), with effective/requested effort disclosure and offline request-boundary checks.
-- A consolidated [699-path source and Desktop kit for upstream v0.22.5](docs/stable-full-kit.md), with pinned hashes and a reproducible test selection. It includes the interface, workflow, search, memory/cache, usage, waiting and update-preservation changes as one complete alternative.
+- A consolidated [701-path source and Desktop kit for upstream v0.22.5](docs/stable-full-kit.md), with pinned hashes and a reproducible test selection. It includes the interface, workflow, search, memory/cache, usage, waiting and update-preservation changes as one complete alternative.
 - The historical **582-path cumulative kit** remains available for its different pinned base. See [its inventory](patches/manifest.json); do not stack it over the consolidated stable kit.
 - An optional [cache-miss evidence repair for v0.22.5](docs/cache-miss-evidence.md) stops attributing misses to expiry from idle time alone; it preserves historical metrics and request/cache policy.
 - A [role-specific THINK/ACTION extension for upstream v0.22.5](docs/stable-role-workflows.md) adds native bounded plans, pinned ACTION steps, independent review, re-planning and per-bot model/effort editing. It includes the runtime repairs as one alternative full patch; family labels do not prove provider readiness.
@@ -85,13 +85,13 @@ Review the [optional external-memory pilot guide](docs/external-memory-pilot.md)
 Clone the release and run from its repository root; the same commands work after extracting the release archive and entering its top-level directory. Only Python and Git are needed for this companion-only walkthrough. Native profile setup has the additional upstream prerequisites documented separately.
 
 ```sh
-git clone --branch v0.7.8 --single-branch https://github.com/ap08960695/hermes-legion.git
+git clone --branch v0.7.9 --single-branch https://github.com/ap08960695/hermes-legion.git
 cd hermes-legion
 python3 scripts/verify_release.py
 python3 scripts/legion_plan.py --team examples/team.full.json --snapshot examples/snapshots/synthetic-ready.json --tasks examples/scenarios/parallel-production.json --now 1
 ```
 
-The walkthrough pins v0.7.8. The consolidated stable kit is an alternative to the historical cumulative patch and the smaller stable units; select exactly one matching manifest. Source application, a running application, original-session adoption and measured workload improvements remain separate evidence. See the [verification record](docs/verification.md).
+The walkthrough pins v0.7.9. The consolidated stable kit is an alternative to the historical cumulative patch and the smaller stable units; select exactly one matching manifest. Source application, a running application, original-session adoption and measured workload improvements remain separate evidence. See the [verification record](docs/verification.md).
 
 For an existing Mac, follow the [isolated source installation and update guide](docs/macos-install-update.md). It keeps native CLI, Desktop packaging and production activation evidence separate.
 
@@ -147,4 +147,6 @@ Hosted Group Chats now keep empty profiles thread-free behind the native ready g
 
 Repeated plugin manifest reads now reuse the native YAML file cache while each caller keeps private mutable metadata. See [manifest metadata reuse](docs/plugin-manifest-cache.md) for validation and measured limits.
 
-Cold profile SQLite opens now run off the event loop with native cancellation and shutdown custody. See [profile startup I/O](docs/profile-startup-io.md) for verification and the known standby/control issue.
+Cold profile SQLite opens now run off the event loop with native cancellation and shutdown custody. See [profile startup I/O](docs/profile-startup-io.md) for verification; the former standby/control issue is resolved in [ready standby group controls](docs/standby-group-controls.md).
+
+Ready standby coordinators now accept canonical group creation and messages through their native owner without allocating idle supervisor threads. See [standby group controls](docs/standby-group-controls.md).

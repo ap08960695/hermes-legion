@@ -21310,6 +21310,16 @@ index 65887575dec12b3ddb9f859ebe56156264ea120e..d321c3ec28f00bdc9e4ba5f89a5557d8
          return handlers
  
      async def dispatch(self, request):
+diff --git a/gateway/session_group_controls.py b/gateway/session_group_controls.py
+index 0f0b80d2..aea2965c 100644
+--- a/gateway/session_group_controls.py
++++ b/gateway/session_group_controls.py
+@@ -97,3 +97,4 @@ def _group(authority, actor, method, params, *, host_scope=False):
+         status = service.runtime.status()
+-        if not status.get('running') or status.get('stopping'):
++        # An armed standby owner accepts producers without allocating an idle supervisor.
++        if not (status.get('running') or status.get('armed')) or status.get('stopping'):
+             service = None
 diff --git a/gateway/session_hosted_service.py b/gateway/session_hosted_service.py
 index 30c6ef5d..599c6164 100644
 --- a/gateway/session_hosted_service.py
@@ -43925,6 +43935,90 @@ index 0000000000000000000000000000000000000000..38f94e18be97338f7c0a7413dd2e9741
 +    finally:
 +        await owner.close()
 +        store.close_all_db_handles()
+diff --git a/tests/gateway/test_standby_group_control.py b/tests/gateway/test_standby_group_control.py
+new file mode 100644
+index 0000000..8437048
+--- /dev/null
++++ b/tests/gateway/test_standby_group_control.py
+@@ -0,0 +1,78 @@
++"""Canonical control admission distinguishes armed standby from stopped runtime."""
++import pytest
++
++from gateway import hosted_rooms
++from gateway.session_hosted_service import start_ready_hosted_services
++from tests.gateway.test_hosted_group_members import _gateway, _desktop, _members
++
++
++def test_ready_standby_creates_through_its_owner_and_wakes_one_coordinator(tmp_path, monkeypatch):
++    with _gateway(tmp_path, monkeypatch, served=('alpha',)) as (runner, homes, call):
++        service = runner.session_authority.hosted_room_service
++        before = service.runtime.status()
++        assert not before['running']
++        desktop = _desktop(runner, call)
++        assert desktop('default', 'groups.capabilities')['result']['driver'] is True
++        assert not service.runtime.status()['running']
++        created = desktop('default', 'groups.create', room_id='crew', name='Crew',
++                          members=_members('default', 'alpha'))
++        assert 'result' in created, created
++        assert service.runtime.status()['running'], 'native create must wake its armed standby owner'
++        assert service.runtime.status()['armed'] is True
++        coordinator = service.runtime._thread
++        # Metadata reads and additional wakes keep the same native coordinator.
++        service.wakeup()
++        assert 'result' in desktop('default', 'groups.state', room_id='crew')
++        assert service.runtime._thread is coordinator
++
++
++def test_stopped_group_refuses_a_send_without_appending_or_reviving(tmp_path, monkeypatch):
++    with _gateway(tmp_path, monkeypatch, served=('alpha',)) as (runner, homes, call):
++        service = runner.session_authority.hosted_room_service
++        desktop = _desktop(runner, call)
++        created = desktop('default', 'groups.create', room_id='crew', name='Crew',
++                          members=_members('default', 'alpha'))
++        assert 'result' in created
++        assert service.stop(timeout=5)
++        events = hosted_rooms.read_events(service.db_path, room_id='crew')['events']
++        reply = desktop('default', 'groups.send', room_id='crew', event_id='refused',
++                        payload={'text': '@alpha fixture', 'thread_id': 'thread'})
++        assert reply['error']['message'] == 'runtime_coordination_required', reply
++        assert hosted_rooms.read_events(service.db_path, room_id='crew')['events'] == events
++        # A late readiness callback and ordinary wake must not undo explicit Stop.
++        start_ready_hosted_services(runner)
++        service.wakeup()
++        assert not service.runtime.status()['running']
++        assert service.runtime.status()['stopping']
++
++
++@pytest.mark.asyncio
++async def test_pre_ready_group_refuses_execution_until_native_ready_gate(tmp_path, monkeypatch):
++    from gateway.control_socket import GatewayControlServer
++    from gateway.run_runtime import initialize_gateway_runtime
++    from gateway.session_controls import AuthorityConnection
++    from gateway.session_hosted_service import ensure_hosted_service
++    from tests.gateway.test_profile_runtime_io import _world
++
++    with _world(tmp_path, monkeypatch) as (runner, root, target):
++        runner.config._runtime_profile_homes = (('default', root), ('alpha', target))
++        await initialize_gateway_runtime(runner)
++        runner.session_control_server = GatewayControlServer(root, verb_handlers={})
++        await ensure_hosted_service(runner)
++        service = runner.session_authority.hosted_room_service
++        connection = AuthorityConnection(runner.session_authority, object(),
++                                         {'user_id': 'desktop', 'profile_scope': 'host'})
++        try:
++            created = await connection.dispatch({'id': 1, 'method': 'groups.create',
++                'params': {'room_id': 'crew', 'name': 'Crew', 'members': _members('default', 'alpha')}})
++            assert 'result' in created, created
++            refused = await connection.dispatch({'id': 2, 'method': 'groups.send',
++                'params': {'room_id': 'crew', 'event_id': 'too-early',
++                           'payload': {'text': 'fixture', 'thread_id': 'thread'}}})
++            assert refused['error']['message'] == 'runtime_coordination_required', refused
++            assert not service.runtime.status()['running']
++            runner.session_runtime_descriptor['state'] = 'ready'
++            await ensure_hosted_service(runner)
++            assert service.runtime.status()['running']
++        finally:
++            assert service.stop(timeout=5)
 diff --git a/tests/gateway/test_worker_transport_retry_policy.py b/tests/gateway/test_worker_transport_retry_policy.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..66c90251c6e3dde1c0bee95bd4d7108a6d0c0f4a
@@ -67125,7 +67219,7 @@ index 79519693dd5fba61c15cb2f19cfef03bd64f647f..943d1c91aa79338bf630d11058c0169e
 +    canonical_method(_name, params=_params, result=ProfileWorkflowResult,
 +                     doc="Profile-scoped bot workflow configuration with an expected-revision fence.")
 diff --git a/tui_gateway/hosted_room_driver.py b/tui_gateway/hosted_room_driver.py
-index 2d14741a..8c4eeafd 100644
+index 2d14741a..0ea5b1ec 100644
 --- a/tui_gateway/hosted_room_driver.py
 +++ b/tui_gateway/hosted_room_driver.py
 @@ -21,2 +21,3 @@ from typing import Any, ContextManager, Protocol, cast
@@ -67186,7 +67280,11 @@ index 2d14741a..8c4eeafd 100644
 +            if self._armed and not self._stop.is_set():
 +                self._start_locked()
  
-@@ -480,3 +498,3 @@ class HostedRoomRuntime:
+@@ -205,2 +223,3 @@ class HostedRoomRuntime:
+                 "running": bool(thread and thread.is_alive()), "stopping": self._stop.is_set(),
++                "armed": self._armed,
+                 "process_generation": self.process_generation,
+@@ -480,3 +499,3 @@ class HostedRoomRuntime:
                  continue
 -            room_thread = threading.Thread(
 +            room_thread = spawn_context_thread(

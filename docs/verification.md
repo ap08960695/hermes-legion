@@ -1,3 +1,14 @@
+# v0.7.9: canonical groups work with ready standby
+
+701 pinned paths. Canonical room controls distinguish an armed standby coordinator
+from an unarmed or stopped runtime. Native create/admission wakes its owner once;
+empty profiles retain zero idle supervisor threads. See [standby group controls](standby-group-controls.md) for scope. The current selection passes 51 files / 283
+tests, zero retries, including all three group failures recorded in v0.7.8. Installed
+Linux/macOS acceptance each passes 8 controls and one deterministic offline member
+execution, with zero provider calls. Code-health is clear. Original macOS Gateway
+and Desktop bundle adoption remain separate; no original-user workload savings claim.
+Historical counts below overlap and are retained as history.
+
 # v0.7.8: keep served profiles responsive during cold SQLite open
 
 699 pinned paths. Existing owned executor and scope-aware handle cache; cancellation

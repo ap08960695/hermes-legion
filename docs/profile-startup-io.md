@@ -1,3 +1,7 @@
+> The group-control issue described below was observed in v0.7.8 and is resolved
+> in v0.7.9. See [standby group controls](standby-group-controls.md). The historical
+> validation results below remain unchanged.
+
 # Responsive profile database startup
 
 Opening a cold profile's native SQLite store previously ran on the Gateway event
