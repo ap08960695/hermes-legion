@@ -32207,10 +32207,10 @@ index b3e999dd66c55324219c30e38c6822441d26e01d..f3489c89fb0f87f22edaeddd8da8c648
          # and duplicating them in the lineage display read (#59661).
 diff --git a/hermes_state_global_recall.py b/hermes_state_global_recall.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..0ef7828b62fd3331b36bb70c1222dea70a8ef2aa
+index 00000000..36f81fcc
 --- /dev/null
 +++ b/hermes_state_global_recall.py
-@@ -0,0 +1,841 @@
+@@ -0,0 +1,868 @@
 +"""Bounded verification of structured FTS hits with the active SQLite tokenizer."""
 +
 +from __future__ import annotations
@@ -32220,6 +32220,7 @@ index 0000000000000000000000000000000000000000..0ef7828b62fd3331b36bb70c1222dea7
 +import base64
 +import codecs
 +from collections import OrderedDict, deque
++from itertools import chain
 +import json
 +import re
 +import sqlite3
@@ -32238,6 +32239,42 @@ index 0000000000000000000000000000000000000000..0ef7828b62fd3331b36bb70c1222dea7
 +_AMBIGUOUS_ASCII_ESCAPE = re.compile(r'\\u00(?:3[0-9]|4[1-6]|5[5c]|6[1-6]|75)', re.I)
 +_HEX_DIGITS = frozenset('0123456789abcdefABCDEF')
 +_ASCII_LOWER = str.maketrans('ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')
++_SURROGATES = re.compile(r'[\ud800-\udfff]')
++
++
++def _positions_complete(positions):
++    return bool(positions) and all(position is not None for position in positions.values())
++
++
++def _remaining_text_state(first, chunks, deadline, chars, size, binary):
++    """Drain decoded text without tokenizing it; preserve validation and full offsets."""
++    for text in chain((first,), chunks):
++        if deadline is not None and time.monotonic() >= deadline:
++            raise TimeoutError('structured global search timed out')
++        chars += len(text)
++        size += len(text.encode('utf-8', 'surrogatepass'))
++        binary |= '\x00' in text or _SURROGATES.search(text) is not None
++    return chars, size, binary
++
++
++def _literal_positions(chunks, literals, deadline):
++    needles = [term.translate(_ASCII_LOWER) for term in literals]
++    found = {term: None for term in literals}
++    tail, chars = '', 0
++    keep = max(map(len, needles), default=1) - 1
++    for text in chunks:
++        if deadline is not None and time.monotonic() >= deadline:
++            raise TimeoutError('structured global search timed out')
++        # Still consume every fragment: a matched prefix must not hide invalid UTF-8 later.
++        if _positions_complete(found):
++            continue
++        folded = (tail + text).translate(_ASCII_LOWER)
++        for term, needle in zip(literals, needles):
++            if found[term] is None and (index := folded.find(needle)) >= 0:
++                found[term] = (chars - len(tail) + index, 0)
++        chars += len(text)
++        tail = folded[-keep:] if keep else ''
++    return found
 +
 +
 +def _unicode_fragments(chunks):
@@ -32602,6 +32639,7 @@ index 0000000000000000000000000000000000000000..0ef7828b62fd3331b36bb70c1222dea7
 +    def _tokens_from_chunks(self, chunks, prepared, *, cjk_split=False):
 +        token_specs = [(key, value[0]) for key, value in prepared.items() if not value[1]]
 +        positions = {key: None for key, _ in token_specs}
++        remaining = len(token_specs)
 +        max_token = max((len(token) for _, phrase in token_specs for token in phrase), default=0)
 +        max_phrase = max((len(phrase) for _, phrase in token_specs), default=1)
 +        recent = deque(maxlen=max_phrase)
@@ -32611,7 +32649,7 @@ index 0000000000000000000000000000000000000000..0ef7828b62fd3331b36bb70c1222dea7
 +        binary = False
 +
 +        def finish():
-+            nonlocal normalized, start_char, start_byte
++            nonlocal normalized, start_char, start_byte, remaining
 +            if normalized:
 +                recent.append((normalized, start_char, start_byte))
 +                for key, phrase in token_specs:
@@ -32621,12 +32659,19 @@ index 0000000000000000000000000000000000000000..0ef7828b62fd3331b36bb70c1222dea7
 +                    if all((part[0].startswith(wanted) if key[1] and index == len(phrase) - 1
 +                            else part[0] == wanted) for index, (part, wanted) in enumerate(zip(tail, phrase))):
 +                        positions[key] = (tail[0][1], tail[0][2])
++                        remaining -= 1
 +            normalized = ''
 +            start_char = start_byte = None
++            return bool(token_specs) and remaining == 0
 +
++        chunks = iter(chunks)
 +        for text in chunks:
 +            if self.deadline is not None and time.monotonic() >= self.deadline:
 +                raise TimeoutError('structured global search timed out')
++            if _positions_complete(positions):
++                chars, size, binary = _remaining_text_state(text, chunks, self.deadline, chars, size, binary)
++                return positions, chars, size, binary
++            chunk_start_chars = chars
 +            for char in text:
 +                code = ord(char)
 +                binary |= code == 0 or 0xD800 <= code <= 0xDFFF
@@ -32644,7 +32689,10 @@ index 0000000000000000000000000000000000000000..0ef7828b62fd3331b36bb70c1222dea7
 +                    if len(normalized) <= max_token:
 +                        normalized = (normalized + folded)[:max_token + 1]
 +                else:
-+                    finish()
++                    if finish():
++                        chars, size, binary = _remaining_text_state(
++                            text[chars - chunk_start_chars:], chunks, self.deadline, chars, size, binary)
++                        return positions, chars, size, binary
 +                chars += 1
 +                size += 1 if code < 128 else len(char.encode('utf-8', 'surrogatepass'))
 +        finish()
@@ -32780,21 +32828,10 @@ index 0000000000000000000000000000000000000000..0ef7828b62fd3331b36bb70c1222dea7
 +                            positions, _, _, _ = self._tokens_from_chunks(
 +                                chunks(), prepared, cjk_split=self.cjk_split)
 +                        if literal_terms:
-+                            folded_terms = [s.translate(_ASCII_LOWER) for s in literal_terms]
-+                            found = [None] * len(folded_terms)
-+                            tail = ''
-+                            chars = 0
-+                            keep = max(map(len, folded_terms), default=1) - 1
-+                            for text in chunks():
-+                                folded = (tail + text).translate(_ASCII_LOWER)
-+                                for i, needle in enumerate(folded_terms):
-+                                    if found[i] is None and (index := folded.find(needle)) >= 0:
-+                                        found[i] = (chars - len(tail) + index, 0)
-+                                chars += len(text)
-+                                tail = folded[-keep:] if keep else ''
++                            found = _literal_positions(chunks(), literal_terms, self.deadline)
 +                            for key, value in prepared.items():
 +                                if value[1]:
-+                                    positions[key] = found[literal_terms.index(key[0])]
++                                    positions[key] = found[key[0]]
 +                self.tool_cache[message_id] = positions
 +                if len(self.tool_cache) > 64:
 +                    self.tool_cache.popitem(last=False)
@@ -32961,20 +32998,10 @@ index 0000000000000000000000000000000000000000..0ef7828b62fd3331b36bb70c1222dea7
 +                        if len(literals) != len(self.terms):
 +                            positions, _, _, _ = self._tokens_from_chunks(chunks(), prepared)
 +                        if literals:
-+                            needles = [term.translate(_ASCII_LOWER) for term in literals]
-+                            found = [None] * len(needles)
-+                            tail, chars = '', 0
-+                            keep = max(map(len, needles), default=1) - 1
-+                            for text in chunks():
-+                                folded = (tail + text).translate(_ASCII_LOWER)
-+                                for i, needle in enumerate(needles):
-+                                    if found[i] is None and (index := folded.find(needle)) >= 0:
-+                                        found[i] = (chars - len(tail) + index, 0)
-+                                chars += len(text)
-+                                tail = folded[-keep:] if keep else ''
++                            found = _literal_positions(chunks(), literals, self.deadline)
 +                            for key, val in prepared.items():
 +                                if val[1]:
-+                                    positions[key] = found[literals.index(key[0])]
++                                    positions[key] = found[key[0]]
 +                self.field_cache[cache_key] = positions
 +                if len(self.field_cache) > 64:
 +                    self.field_cache.popitem(last=False)
@@ -56901,6 +56928,121 @@ index 0000000000000000000000000000000000000000..3fffa0c5b6ab2a8c017d6fa85a91010e
 +        base64.b64decode(result["content"]).decode("utf-8", "surrogatepass")
 +        == "alpha\ud800beta"
 +    )
+diff --git a/tests/hermes_state/test_tool_argument_match_work.py b/tests/hermes_state/test_tool_argument_match_work.py
+new file mode 100644
+index 00000000..fcb6c99e
+--- /dev/null
++++ b/tests/hermes_state/test_tool_argument_match_work.py
+@@ -0,0 +1,109 @@
++"""Boolean argument matches should not tokenize unrelated suffixes forever."""
++
++import json
++import sqlite3
++
++import pytest
++
++import hermes_state_global_recall as recall
++from hermes_state_stream_recall import UnsupportedJSON
++
++
++@pytest.fixture
++def conn():
++    with sqlite3.connect(":memory:") as db:
++        db.execute("CREATE TABLE messages(id INTEGER PRIMARY KEY, tool_calls TEXT)")
++        yield db
++
++
++@pytest.mark.parametrize("needle, route", [("fixture_command", "decoded"), ("ความจำ", "decoded"),
++                                          ("fixture_command", "native")])
++def test_early_argument_match_keeps_matching_work_bounded(conn, monkeypatch, needle, route):
++    calls = [{"function": {"name": needle, "arguments": json.dumps({"payload": "unrelated " * 50_000})}}]
++    conn.execute("INSERT INTO messages VALUES(1, ?)", (json.dumps(calls, ensure_ascii=False),))
++    work = {"token_characters": 0, "literal_characters": 0}
++    classify = recall._Unicode61.classify
++    fragments = recall._decoded_unicode_escapes
++
++    def observe_character(self, char):
++        work["token_characters"] += 1
++        if work["token_characters"] > 4096:
++            raise TimeoutError("synthetic tokenizer work budget exhausted")
++        return classify(self, char)
++
++    class ObservedText(str):
++        def __radd__(self, other):
++            return ObservedText(str(other) + str(self))
++
++        def translate(self, table):
++            work["literal_characters"] += len(self)
++            if work["literal_characters"] > 4096:
++                raise TimeoutError("synthetic literal work budget exhausted")
++            return super().translate(table)
++
++    def observe_fragments(chunks):
++        for text in fragments(chunks):
++            yield ObservedText(text)
++
++    monkeypatch.setattr(recall._Unicode61, "classify", observe_character)
++    monkeypatch.setattr(recall, "_decoded_unicode_escapes", observe_fragments)
++    search = recall.GlobalSearch(conn, [(needle, False)])
++    try:
++        matched = search.tool_contains(1, needle) if route == "decoded" else search.native_field_contains(
++            1, "tool_calls", needle)
++        assert matched == 1
++        assert max(work.values()) <= 4096
++    finally:
++        search.close()
++
++
++@pytest.mark.parametrize("suffix", [b',"tail":"\xff"}', b',"tail":}'])
++def test_positive_head_still_validates_the_entire_argument_suffix(conn, suffix):
++    raw = b'{"name":"fixture_command"' + suffix
++    conn.execute("INSERT INTO messages VALUES(1, CAST(? AS TEXT))", (raw,))
++    search = recall.GlobalSearch(conn, [("fixture_command", False)])
++    try:
++        with pytest.raises(UnsupportedJSON):
++            search.tool_contains(1, "fixture_command")
++    finally:
++        search.close()
++
++
++@pytest.mark.parametrize("term, prefix, expected", [("run", False, 0), ("run", True, 1),
++                                                   ("lateword", False, 1), ("absent", False, 0)])
++def test_absent_late_and_prefix_matches_remain_exact(conn, term, prefix, expected):
++    raw = json.dumps({"head": "runway", "body": "unrelated " * 1000, "tail": "lateword"})
++    conn.execute("INSERT INTO messages VALUES(1, ?)", (raw,))
++    search = recall.GlobalSearch(conn, [(term, prefix)])
++    try:
++        assert search.tool_contains(1, term, prefix) == expected
++    finally:
++        search.close()
++
++
++def test_early_match_preserves_full_unicode_lengths_and_binary_suffix(conn):
++    text = "needle " + "unrelated " * 5000 + "ไทย\x00\ud800"
++    conn.execute("ALTER TABLE messages ADD COLUMN content TEXT")
++    conn.execute("INSERT INTO messages(id, content) VALUES(1, ?)", (
++        "\x00json:" + json.dumps([{"type": "text", "text": text}]),))
++    search = recall.GlobalSearch(conn, [("needle", False)])
++    try:
++        info = search.info(1)
++        assert info["positions"][("needle", False)] == (0, 0)
++        assert info["chars"] == len(text)
++        assert info["bytes"] == len(text.encode("utf-8", "surrogatepass"))
++        assert info["binary"]
++    finally:
++        search.close()
++
++
++def test_a_positive_term_does_not_hide_other_terms_later_or_absent(conn):
++    conn.execute("INSERT INTO messages VALUES(1, ?)", (json.dumps({
++        "head": "earlyword", "body": "unrelated " * 1000, "tail": "lateword"}),))
++    search = recall.GlobalSearch(conn, [(word, False) for word in ("earlyword", "lateword", "absent")])
++    try:
++        assert search.tool_contains(1, "earlyword") == 1
++        assert search.tool_contains(1, "lateword") == 1
++        assert search.tool_contains(1, "absent") == 0
++    finally:
++        search.close()
 diff --git a/tests/kanban_policy_helpers.py b/tests/kanban_policy_helpers.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..773adda3445facead82d5d515699b5b1ddf40dad

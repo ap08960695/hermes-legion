@@ -1,3 +1,43 @@
+# v0.7.34: avoid redundant work after verified argument matches
+
+Boolean tool-argument checks previously kept tokenizing or case-folding unrelated
+suffixes after all requested terms were already found. A synthetic valid SQLite
+tool-call fixture reproduces two excessive-work failures, one for Unicode61 tokens
+and one for Thai substring matching. Candidate review also caught a raw-field path
+that continued through the rest of its read chunk; matching now stops at the first
+conclusive token boundary in that chunk as well.
+
+The remaining decoded stream is still consumed and validated. Full character and
+UTF-8 byte lengths and binary/surrogate flags remain correct for excerpts and
+paging. An early positive match cannot hide invalid UTF-8 or malformed JSON later.
+Missing terms, late matches, prefixes, phrases, multiple query terms, native CJK
+semantics, caller transactions and deadline failures retain their contracts.
+The same matching logic covers decoded argument fields and legacy native fields;
+no full JSON hydration, higher deadline or extra model call is introduced.
+
+Final related tests: 240 files / 2308 passed, zero failures,
+16 existing skips, zero file retries and four workers. Scoped code
+health and test Ruff pass. The runtime module retains its pre-existing FURB167
+alias warning; no new lint finding is introduced. Overlapping suites are not summed.
+Linux and macOS production Python each pass twelve installed native controls,
+including actual registry discovery, negative/prefix/late results, invalid suffixes,
+full Unicode metadata and expired deadlines. Both hosts install the exact two
+paths with scoped rollback and restored permissions before publication. The full
+consolidated patch is checked for apply/reverse/reapply and installed parity on
+both hosts. Original models, quotas, resource gates and prompt/tool schemas stay.
+Linux activation remains native and idle-only; original Mac Gateway stays off.
+
+In one synthetic 500,000-character unrelated suffix fixture, instrumented ABBA
+samples classify 500,056 characters before versus thirty after, returning the same
+boolean result. Observations were 98.19/99.33 ms before and 2.36/2.17 ms after,
+including instrumentation. This is a component result, not an original-workload
+latency, RAM, model-token or provider-cache claim. The earlier original Captain
+baseline timeout remains a separate preserved result; it has not been replayed
+and candidate success on that original query is not claimed. The broader Hermes
+improvement objective remains active.
+
+---
+
 # v0.7.33: reliable and bounded session discovery
 
 Discovery previously capped raw matching messages at 300 before excluding current
