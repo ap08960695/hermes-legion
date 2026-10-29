@@ -33564,16 +33564,16 @@ index 0000000000000000000000000000000000000000..6c0b975bbbb0940234b5981301709b81
 +                                               "snippet_encoding": paged["encoding"]}
 +    return None
 diff --git a/hermes_state_schema.py b/hermes_state_schema.py
-index c83e6b21..a990f6c8 100644
+index c83e6b21..89e49539 100644
 --- a/hermes_state_schema.py
 +++ b/hermes_state_schema.py
-@@ -939,2 +939,16 @@ class SessionSchemaMixin:
+@@ -939,2 +939,31 @@ class SessionSchemaMixin:
  
-+    def _initialize_declared_schema(self, cursor: sqlite3.Cursor) -> None:
-+        """Publish a fresh declaration once; retain settled/legacy open lock behavior."""
++    def _initialize_declared_schema(self, cursor: sqlite3.Cursor) -> bool:
++        """Publish a declaration; report a fresh store without changing existing-store locks."""
 +        if cursor.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone() is not None:
 +            cursor.executescript(SCHEMA_SQL)
-+            return
++            return False
 +        cursor.execute("BEGIN IMMEDIATE")
 +        try:
 +            self._execute_ddl_script_transactional(cursor, SCHEMA_SQL)
@@ -33582,12 +33582,32 @@ index c83e6b21..a990f6c8 100644
 +            raise
 +        else:
 +            self._conn.commit()
++        return True
++
++    def _initialize_deferred_schema(self, cursor: sqlite3.Cursor, *, fresh: bool) -> None:
++        """Batch a new store's deferred objects; settled opens retain their lock-free checks."""
++        if not fresh:
++            self._execute_ddl_skipping_settled_triggers(cursor, DEFERRED_INDEX_SQL)
++            return
++        cursor.execute("BEGIN IMMEDIATE")
++        try:
++            self._execute_ddl_skipping_settled_triggers(cursor, DEFERRED_INDEX_SQL)
++        except BaseException:
++            self._conn.rollback()
++            raise
++        else:
++            self._conn.commit()
 +
      def _init_schema(self):
-@@ -955,3 +969,3 @@ class SessionSchemaMixin:
+@@ -955,3 +984,3 @@ class SessionSchemaMixin:
          cursor = self._conn.cursor()
 -        cursor.executescript(SCHEMA_SQL)
-+        self._initialize_declared_schema(cursor)
++        fresh = self._initialize_declared_schema(cursor)
+ 
+@@ -981,3 +1010,3 @@ class SessionSchemaMixin:
+             logger.debug("idx_messages_platform_msg_id create skipped: %s", exc)
+-        self._execute_ddl_skipping_settled_triggers(cursor, DEFERRED_INDEX_SQL)  # same ordering constraint (``active``)
++        self._initialize_deferred_schema(cursor, fresh=fresh)  # same ordering constraint (``active``)
  
 diff --git a/hermes_state_search.py b/hermes_state_search.py
 index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ababe2b8f7 100644
@@ -53894,10 +53914,10 @@ index 0000000000000000000000000000000000000000..64c9835869e795fcc74d5a4049a4cdd8
 +    assert json.loads(row["tool_names"]) == json.loads(pin)
 diff --git a/tests/hermes_state/test_fresh_schema_atomicity.py b/tests/hermes_state/test_fresh_schema_atomicity.py
 new file mode 100644
-index 0000000..351300c
+index 00000000..6b473f4b
 --- /dev/null
 +++ b/tests/hermes_state/test_fresh_schema_atomicity.py
-@@ -0,0 +1,63 @@
+@@ -0,0 +1,101 @@
 +"""A fresh declared schema publishes atomically without changing existing-store recovery."""
 +from contextlib import closing
 +import sqlite3
@@ -53905,7 +53925,7 @@ index 0000000..351300c
 +import pytest
 +
 +
-+def _observe_writer(monkeypatch, *, deny=None):
++def _observe_writer(monkeypatch, *, deny=None, operation=sqlite3.SQLITE_CREATE_TABLE):
 +    import hermes_state
 +    native = hermes_state._connect_tracked_db
 +    created = []
@@ -53913,8 +53933,8 @@ index 0000000..351300c
 +    def connect(*args, **kwargs):
 +        conn = native(*args, **kwargs)
 +
-+        def authorize(operation, name, _column, _database, _trigger):
-+            if operation == sqlite3.SQLITE_CREATE_TABLE:
++        def authorize(action, name, _column, _database, _trigger):
++            if action == operation:
 +                created.append((name, conn.in_transaction))
 +                if name == deny:
 +                    return sqlite3.SQLITE_DENY
@@ -53961,6 +53981,44 @@ index 0000000..351300c
 +        SessionDB(path)
 +    with closing(sqlite3.connect(path)) as conn:
 +        assert conn.execute('SELECT value FROM owner_fixture').fetchall() == [('preserve',)]
++
++
++def test_fresh_deferred_triggers_are_created_in_a_transaction(tmp_path, monkeypatch):
++    from hermes_state import SessionDB
++    created = _observe_writer(monkeypatch, operation=sqlite3.SQLITE_CREATE_TRIGGER)
++    expected = {'sessions_runtime_ledger_delete_guard', 'messages_transcript_revision_update',
++                'messages_message_uid_insert'}
++    with SessionDB(tmp_path / 'state.db') as db:
++        observed = {name: pending for name, pending in created if name in expected}
++        assert set(observed) == expected
++        assert all(observed.values())
++        assert not db._conn.in_transaction
++
++
++def test_failed_fresh_deferred_phase_rolls_back_earlier_triggers(tmp_path, monkeypatch):
++    from hermes_state import SessionDB
++    path = tmp_path / 'state.db'
++    _observe_writer(monkeypatch, operation=sqlite3.SQLITE_CREATE_TRIGGER,
++                    deny='messages_transcript_revision_update')
++    with pytest.raises(sqlite3.DatabaseError, match='not authorized'):
++        SessionDB(path)
++    with closing(sqlite3.connect(path)) as conn:
++        assert conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'").fetchall() == []
++        assert conn.execute("SELECT count(*) FROM sessions").fetchone()[0] == 0
++
++
++def test_existing_deferred_reconcile_keeps_its_ordinary_transaction_behavior(tmp_path, monkeypatch):
++    from hermes_state import SessionDB
++    path = tmp_path / 'state.db'
++    with closing(sqlite3.connect(path)) as conn:
++        conn.execute('CREATE TABLE owner_fixture(value TEXT NOT NULL)')
++        conn.execute("INSERT INTO owner_fixture VALUES ('preserve')")
++        conn.commit()
++    created = _observe_writer(monkeypatch, operation=sqlite3.SQLITE_CREATE_TRIGGER)
++    with SessionDB(path) as db:
++        observed = [pending for name, pending in created if name == 'sessions_runtime_ledger_delete_guard']
++        assert observed == [False]
++        assert db._conn.execute('SELECT value FROM owner_fixture').fetchone()[0] == 'preserve'
 diff --git a/tests/hermes_state/test_global_fts_verifier.py b/tests/hermes_state/test_global_fts_verifier.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..701778dd45d74b6cd0ee2b60e9f5e0efdf62c0eb

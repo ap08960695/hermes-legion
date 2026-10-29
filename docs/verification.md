@@ -1,3 +1,37 @@
+# v0.7.30: batch the fresh deferred index/trigger phase
+
+Fresh store initialization previously committed each deferred index and trigger
+separately. A failure could leave an earlier trigger committed even though the
+phase failed. Initialization now identifies a genuinely empty declared schema and
+runs its later deferred phase in one BEGIN IMMEDIATE transaction with rollback on
+BaseException. The declared-table phase remains a separate earlier transaction.
+Existing stores keep ordinary behavior, so settled checks do not gain a mandatory
+write lock. Later FTS/migrations, schema version, ownership and durability stay native.
+
+Two new native tests failed before the change: fresh triggers were created outside
+a transaction, and an injected second-trigger denial left the first committed.
+The existing-store/data control passed. The final related selection passes
+274 files / 2353 tests, zero failures and zero file retries,
+with 16 existing skips. Scoped source health and Ruff pass.
+
+Linux and macOS production Python each pass six installed-source controls: fresh
+transaction/integrity, native history and FTS, settled/read-only reopen, injected
+deferred rollback and ordinary recovery, existing owner data and transaction
+behavior, and a settled opener behind another writer. Private synthetic databases
+and denied networking are used; no original-user store or model is called.
+Linux activation is idle-only and original Mac Gateway remains off. The complete
+consolidated patch is applied/reversed/reapplied and installed parity is checked
+on both hosts. Companion tests are a separate selection; no renderer rebuild.
+
+Diagnostic ABBA trials on sixteen fresh native stores reduced the open phase by
+about 36.6 percent. One untraced matched native Gateway startup pair with 116 fresh synthetic profiles took 24.44 seconds before and 19.43 seconds after (about 20.5 percent lower). This is a single controlled pair, not a production or already-settled-store latency result. PSS did not improve; no RAM saving is claimed.
+No original-workload latency, RAM, usage or provider-cache gain is inferred from
+that component result. Original quota, model, effort, fallback and resource gates
+are preserved. Earlier twenty inherited broad auxiliary failures remain documented;
+historical overlapping test selections below are not summed. Full goal stays active.
+
+---
+
 # v0.7.29: bound long-lived profile lock buffers
 
 Native synthetic startup allocation attribution found that profile reservation

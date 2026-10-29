@@ -136,3 +136,9 @@ RAM, latency or token reduction.
 Gateway holds one native lock descriptor for each reserved profile. Its small UTF-8 owner record now uses a 4 KiB I/O buffer rather than a filesystem-derived default for the reservation lifetime. The record is still flushed and fsynced before reservation succeeds. Lock inode identity, exclusion, private modes, partial-claim rollback, maintenance purpose, and native release rules are unchanged. No new knob, cache, cleanup loop or profile limit is introduced.
 
 Sixteen native reservations previously retained about 2.15 MB of traced Python allocations; the bounded implementation retains about 0.13 MB in the Linux production interpreter. This is an allocation measurement, not a promised reduction of whole-process RAM. Current synthetic startup PSS measurements remain allocator-sensitive; do not convert buffer bytes into an asserted production RSS/PSS saving. Traced runs also include profiler overhead.
+
+## Fresh-store deferred schema phase
+
+A genuinely empty store already commits its declared tables as an atomic phase. Its later deferred index/trigger phase now also commits as one separate transaction, after native column reconciliation. A failure rolls back that deferred phase; the earlier declared tables remain committed and normal later reconciliation can recover. Existing and settled stores keep their ordinary checks, without a new mandatory writer transaction. All per-profile ownership, durability, schema inspection, cache behavior and later FTS/migration phases remain native.
+
+This targets first-time database setup. Use fresh and settled measurements separately; do not equate fewer setup commits with faster model generation, lower token usage, better provider caching or a whole-process RAM saving. No new configuration or background maintenance is introduced.
