@@ -81,6 +81,8 @@ remains unstarted.
 An artificial custom data root with no committed dependency environment correctly
 refuses a managed store-Python launcher under the no-lazy-install guard. It is not
 a provider failure or permission to create an environment. Isolated process-entry
-CLI checks and actual-owner terminal checks are distinct evidence. Full parallel
-bot coordination after this repair remains unproven; do not substitute metadata
-visibility or a successful terminal command for a completed worker graph.
+CLI checks and actual-owner terminal checks are distinct evidence. A later
+[bounded native parallel case](parallel-native-acceptance.md) completed on the
+same repaired source. Its request intervals and terminal receipts, rather than
+metadata visibility alone, support that narrow result; original-user adoption,
+continuous unattended scheduling and all-family behavior remain unproven.

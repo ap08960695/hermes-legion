@@ -1,3 +1,16 @@
+# v0.7.22: bounded real native parallel evidence
+
+Evidence-only update; the exact 748-path source patch payload is unchanged from
+v0.7.21. A new synthetic Linux case completed six native cards / seven runs with
+36 physical high-effort requests, zero retries/fallback and nine artifact checks.
+Native run overlap was 18 seconds and main model request overlap 13.839283 seconds.
+No tools or model requests followed terminal handoffs; final quiet observation was
+15 seconds. Original model/configuration/quotas/holds remained unchanged.
+See [the case, method and limits](parallel-native-acceptance.md). This is not
+continuous production scheduling, all-family adoption, cross-bot cache causality
+or measured workload savings. Source regression/native Linux/macOS acceptance
+below remains historical evidence on the same bytes, not repeated test totals.
+
 # v0.7.21: compact saved profile routing
 
 748 pinned paths. Broader profile/workflow selection: 84 files / 738 pass / six
