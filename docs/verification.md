@@ -1,3 +1,13 @@
+# v0.7.12: isolated authority caller fixtures
+
+724 pinned paths; runtime source unchanged from v0.7.11. Seventeen test files repair
+native config-loader signatures, unavailable-primary isolation and launcher-aware
+client PATH assertions. Additional direct callers: 122 files / 719 passed /
+0 failed, zero retries; code-health clear. The original 58 failures reproduce on
+pre-v0.7.11 runtime bytes. See [authority caller verification](authority-caller-verification.md).
+No model calls, production quota/fallback changes or Gateway restart. Historical
+counts below overlap and are not a whole-project green claim.
+
 # v0.7.11: profile preparation cancellation and shutdown custody
 
 707 pinned paths. All bootstrap writes and the store opener drain their physical
