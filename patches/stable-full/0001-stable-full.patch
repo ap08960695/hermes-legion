@@ -20839,7 +20839,7 @@ index 2273eefbfbde931de128cb32e3904a294ee472b9..8b7ce4b9e69df541771d87510ce323b5
      async def _busy_start_command(self, event: MessageEvent, quick_key: str, source):
          # Telegram's /start is a platform ping (bot launch/deep-link), not a user command.
 diff --git a/gateway/run_goals.py b/gateway/run_goals.py
-index 99271d77..293c25dc 100644
+index 99271d77..42046e81 100644
 --- a/gateway/run_goals.py
 +++ b/gateway/run_goals.py
 @@ -294,2 +294,13 @@ class GatewayGoalsMixin:
@@ -20856,9 +20856,10 @@ index 99271d77..293c25dc 100644
 +                "thread_id": str(source.thread_id or ""), "notifier_profile": profile}
 +
      async def _post_turn_goal_continuation(
-@@ -323,2 +334,3 @@ class GatewayGoalsMixin:
+@@ -323,2 +334,4 @@ class GatewayGoalsMixin:
                  active_delegations=_active_deleg,
 +                kanban_notification_target=self._goal_kanban_notification_target(source),
++                after_model_turn=True,
              ),
 diff --git a/gateway/run_housekeeping_disk.py b/gateway/run_housekeeping_disk.py
 index 4b6a3162f7584f4802681880949112ea65778e13..c632d351f463cb8a42a57fcf34f89419aae79a36 100644
@@ -21681,6 +21682,39 @@ index ab3aace258bce8c74b151553153b2bb3d554bf1d..ffd77e68db65a54ca43054f612b26211
      finally:
          _ACTIVE_POLICY.reset(policy_token)
          reset_terminal_scope(terminal_token)
+diff --git a/gateway/session_viewer_automation.py b/gateway/session_viewer_automation.py
+index d998b5e8..8ff62c0c 100644
+--- a/gateway/session_viewer_automation.py
++++ b/gateway/session_viewer_automation.py
+@@ -79,3 +79,3 @@ def _wire(value):
+ 
+-def _special(mgr, kind, target, call, args, kwargs):
++def _special(mgr, kind, target, call, args, kwargs, notification_target=None):
+     """Calls that are more than one manager method; ``None`` when ``call`` is a plain method."""
+@@ -96,3 +96,5 @@ def _special(mgr, kind, target, call, args, kwargs):
+         return mgr.evaluate_after_turn(str((args or [""])[0] or ""), user_initiated=True,
+-                                       background_processes=processes, active_delegations=delegations)
++                                       background_processes=processes, active_delegations=delegations,
++                                       after_model_turn=kwargs.get("after_model_turn") is True,
++                                       kanban_notification_target=notification_target)
+     if kind == "goal" and call == "set" and isinstance(kwargs.get("contract"), dict):
+@@ -112,3 +114,3 @@ _NOT_SPECIAL = object()
+ 
+-def invoke(runner, kind, target, call, args, kwargs) -> dict:
++def invoke(runner, kind, target, call, args, kwargs, *, notification_target=None) -> dict:
+     """Run one call against ``target``'s persisted state: ``{state, value}`` or ``{state, error}``."""
+@@ -117,3 +119,3 @@ def invoke(runner, kind, target, call, args, kwargs) -> dict:
+     try:
+-        value = _special(mgr, kind, target, call, args, kwargs)
++        value = _special(mgr, kind, target, call, args, kwargs, notification_target)
+         if value is _NOT_SPECIAL:
+@@ -159,3 +161,5 @@ async def automation(connection, ref, params):
+         with _profile_runtime_scope(home), _session_workspace(runner, live.source):
+-            return invoke(runner, kind, target, call, args, kwargs)
++            target_route = (runner._goal_kanban_notification_target(live.source)
++                            if kind == "goal" and call == "evaluate_after_turn" else None)
++            return invoke(runner, kind, target, call, args, kwargs, notification_target=target_route)
+     rows = lambda: tuple(authority.db.get_meta(f"{k}:{target}") for k in ("goal", "loop", "heartbeat"))
 diff --git a/gateway/session_worker_construct.py b/gateway/session_worker_construct.py
 index efff49a7d7a5292a856e5a1a134bdc74c13b9ae0..7c92903d6fa07fce0b7e594c23d2822f74cd6ecc 100644
 --- a/gateway/session_worker_construct.py
@@ -23002,21 +23036,15 @@ index 00000000..4697f543
 +            atomic_config_write(profile_dir / 'config.yaml', config)
 +    return workflow_snapshot(profile_dir)
 diff --git a/hermes_cli/cli_loops_mixin.py b/hermes_cli/cli_loops_mixin.py
-index 8041a09c750ddb22e3c2edf435ed7f6cdfce9758..51b9ffc31b4ce53f63c2bbdb59418139349cef35 100644
+index 8041a09c..e06b2e32 100644
 --- a/hermes_cli/cli_loops_mixin.py
 +++ b/hermes_cli/cli_loops_mixin.py
-@@ -686,7 +686,7 @@ class CLILoopsMixin:
- 
-     def _maybe_resume_parked_goal(self) -> None:
+@@ -688,3 +688,3 @@ class CLILoopsMixin:
          """Idle hook run from process_loop: when a parked /goal's barrier has lifted (the process
 -        exited, the timer elapsed, or the wait aged past its cap), queue the continuation so the
 +        exited, its trigger fired, or the timer elapsed), queue the continuation so the
          loop resumes WITHOUT waiting for an unrelated turn to re-evaluate it. The barrier used to be
-         checked only lazily, on the next turn; a session with nothing else arriving stayed parked
-         indefinitely (one run: 3 h 22 min on a grandchild's poller)."""
-@@ -704,7 +704,10 @@ class CLILoopsMixin:
-             if not (state.waiting_on_pid is not None or state.waiting_on_session is not None or state.waiting_until):
-                 return  # not parked
+@@ -706,3 +706,6 @@ class CLILoopsMixin:
              if mgr.is_waiting():
 -                return  # barrier still holds (is_waiting() also applies the age cap)
 +                if state.status == "paused":
@@ -23024,17 +23052,17 @@ index 8041a09c750ddb22e3c2edf435ed7f6cdfce9758..51b9ffc31b4ce53f63c2bbdb59418139
 +                    _cprint(f"  ⏸ Goal paused — {state.paused_reason}")
 +                return  # still parked, or paused because its target cannot be verified
              prompt = mgr.next_continuation_prompt()
-             if prompt:
-                 from cli import _DIM, _RST, _cprint
-@@ -821,7 +824,7 @@ class CLILoopsMixin:
-         via ``/goal resume``. Empty-response skip mirrors ``gateway/run.py``."""
-         from cli import _DIM, _RST, _cprint, _looks_like_slash_command
+@@ -823,3 +826,3 @@ class CLILoopsMixin:
          mgr = self._get_goal_manager()
 -        if mgr is None or not mgr.is_active():
 +        if mgr is None or not mgr.refresh() or not mgr.is_active():
              return
- 
-         # Slash commands don't count as "real user messages": they're dispatched via
+@@ -870,3 +873,4 @@ class CLILoopsMixin:
+         decision = mgr.evaluate_after_turn(
+-            last_response, user_initiated=True, background_processes=_bg_procs, active_delegations=_active_deleg)
++            last_response, user_initiated=True, background_processes=_bg_procs, active_delegations=_active_deleg,
++            after_model_turn=True)
+         _print_decision_message(decision)
 diff --git a/hermes_cli/cli_model_switch_mixin.py b/hermes_cli/cli_model_switch_mixin.py
 index 322bb02fa4f05d391a738479b3ed8376273cd264..b68debfe19a22dc4016fcb6b997127b020da6983 100644
 --- a/hermes_cli/cli_model_switch_mixin.py
@@ -23741,7 +23769,7 @@ index 0000000000000000000000000000000000000000..e7be6d1c50f59f85be6c89a3bfc765e0
 +    args = parser.parse_args(['goal', *sys.argv[1:]])
 +    raise SystemExit(args.func(args))
 diff --git a/hermes_cli/goals.py b/hermes_cli/goals.py
-index 96ee695e..f1a693c7 100644
+index 96ee695e..6ab88897 100644
 --- a/hermes_cli/goals.py
 +++ b/hermes_cli/goals.py
 @@ -15,2 +15,3 @@ import os
@@ -23806,17 +23834,31 @@ index 96ee695e..f1a693c7 100644
      waiting_on_pid: Optional[int] = None
 +    waiting_on_pid_fingerprint: Optional[str] = None
      waiting_on_session: Optional[str] = None
-@@ -472,2 +515,5 @@ class GoalState:
+@@ -448,2 +491,4 @@ class GoalState:
+     waiting_on_delegations: int = 0
++    # A judge-created card wait is advisory: new completed work may be rejudged before its timer.
++    waiting_on_kanban_cards: int = 0
+     waiting_reason: Optional[str] = None
+@@ -461,3 +506,3 @@ class GoalState:
+         raw_subgoals = data.get("subgoals") or []
+-        ints = {k: int(data.get(k) or 0) for k in ("turns_used", "consecutive_parse_failures", "consecutive_transport_failures", "waiting_on_delegations")}
++        ints = {k: int(data.get(k) or 0) for k in ("turns_used", "consecutive_parse_failures", "consecutive_transport_failures", "waiting_on_delegations", "waiting_on_kanban_cards")}
+         floats = {k: float(data.get(k) or 0.0) for k in ("created_at", "last_turn_at", "waiting_until", "waiting_since")}
+@@ -472,2 +517,5 @@ class GoalState:
              waiting_on_pid=(int(data["waiting_on_pid"]) if data.get("waiting_on_pid") else None),
 +            waiting_on_pid_fingerprint=(data.get("waiting_on_pid_fingerprint")
 +                if isinstance(data.get("waiting_on_pid_fingerprint"), str)
 +                and 0 < len(data["waiting_on_pid_fingerprint"]) <= 256 else None),
              waiting_on_session=(str(data["waiting_on_session"]) if data.get("waiting_on_session") else None),
-@@ -491,2 +537,3 @@ class GoalState:
+@@ -491,2 +539,3 @@ class GoalState:
          self.waiting_on_pid = None
 +        self.waiting_on_pid_fingerprint = None
          self.waiting_on_session = None
-@@ -689,19 +736,5 @@ def migrate_goal_to_session(old_session_id: str, new_session_id: str, *, reason:
+@@ -494,2 +543,3 @@ class GoalState:
+         self.waiting_on_delegations = 0
++        self.waiting_on_kanban_cards = 0
+         self.waiting_reason = None
+@@ -689,19 +739,5 @@ def migrate_goal_to_session(old_session_id: str, new_session_id: str, *, reason:
      """
 -    if not old_session_id or not new_session_id or old_session_id == new_session_id:
 -        return False
@@ -23839,7 +23881,7 @@ index 96ee695e..f1a693c7 100644
 +
 +    return migrate_control_state('goal:', old_session_id, new_session_id, GoalState.from_json, _get_session_db)
  
-@@ -736,5 +769,32 @@ def _pid_alive(pid: int) -> bool:
+@@ -736,5 +772,32 @@ def _pid_alive(pid: int) -> bool:
  
 -def _session_waiting(session_id: str) -> bool:
 -    """True while the process_registry session is running and its trigger hasn't fired. Fail-safe:
@@ -23875,7 +23917,7 @@ index 96ee695e..f1a693c7 100644
 +def _session_waiting(session_id: str) -> Optional[bool]:
 +    """True while the registry trigger is pending; None when the registry cannot be inspected."""
      if not session_id:
-@@ -744,5 +804,5 @@ def _session_waiting(session_id: str) -> bool:
+@@ -744,5 +807,5 @@ def _session_waiting(session_id: str) -> bool:
  
 -        return bool(process_registry.is_session_waiting(session_id))
 +        return process_registry.is_session_waiting(session_id, strict=True)
@@ -23883,17 +23925,17 @@ index 96ee695e..f1a693c7 100644
 -        return False
 +        return None
  
-@@ -902,2 +962,3 @@ def judge_goal(
+@@ -902,2 +965,3 @@ def judge_goal(
      active_delegations: int = 0,
 +    active_kanban_cards: int = 0,
  ) -> tuple[str, str, bool, Optional[dict[str, Any]], bool]:
-@@ -930,3 +991,4 @@ def judge_goal(
+@@ -930,3 +994,4 @@ def judge_goal(
          background_block=_render_background_block(background_processes)
 -        + (JUDGE_DELEGATIONS_BLOCK_TEMPLATE.format(count=active_delegations) if active_delegations > 0 else ""),
 +        + (JUDGE_DELEGATIONS_BLOCK_TEMPLATE.format(count=active_delegations) if active_delegations > 0 else "")
 +        + (JUDGE_KANBAN_BLOCK_TEMPLATE.format(count=active_kanban_cards) if active_kanban_cards > 0 else ""),
          current_time=safe_strftime(datetime.now(tz=UTC).astimezone(), "%Y-%m-%d %H:%M:%S %Z"),
-@@ -1111,2 +1173,16 @@ class GoalManager:
+@@ -1111,2 +1176,16 @@ class GoalManager:
  
 +    def refresh(self) -> bool:
 +        """Observe external goal controls at a turn boundary; unknown is not absent."""
@@ -23910,7 +23952,7 @@ index 96ee695e..f1a693c7 100644
 +        return True
 +
      def is_active(self) -> bool:
-@@ -1130,5 +1206,5 @@ class GoalManager:
+@@ -1130,5 +1209,5 @@ class GoalManager:
          if s.status == "active":
 -            if s.waiting_on_session and _session_waiting(s.waiting_on_session):
 +            if s.waiting_on_session and _session_waiting(s.waiting_on_session) is not False:
@@ -23918,7 +23960,7 @@ index 96ee695e..f1a693c7 100644
 -            if s.waiting_on_pid and _pid_alive(s.waiting_on_pid):
 +            if s.waiting_on_pid and _pid_observation(s.waiting_on_pid) is not False:
                  return f"⏳ Goal (parked on {s.waiting_reason or f'pid {s.waiting_on_pid}'}, {meta}): {s.goal}"
-@@ -1182,2 +1258,19 @@ class GoalManager:
+@@ -1182,2 +1261,19 @@ class GoalManager:
  
 +    def configure(self, goal: str, contract: GoalContract) -> GoalState:
 +        """Save an owner's form without resetting turn budgets, gates or wait barriers.
@@ -23938,7 +23980,7 @@ index 96ee695e..f1a693c7 100644
 +        return self._save()
 +
      def set_contract(self, contract: GoalContract) -> Optional[GoalState]:
-@@ -1378,5 +1471,7 @@ class GoalManager:
+@@ -1378,5 +1474,7 @@ class GoalManager:
              raise ValueError("pid must be a positive integer")
 -        if not _pid_alive(pid):
 +        observation = _pid_observation(pid)
@@ -23948,7 +23990,20 @@ index 96ee695e..f1a693c7 100644
 +        fingerprint = _pid_fingerprint(pid) if observation is True else None
 +        return self._park(reason, waiting_on_pid=pid, waiting_on_pid_fingerprint=fingerprint)
  
-@@ -1414,6 +1509,4 @@ class GoalManager:
+@@ -1391,3 +1489,4 @@ class GoalManager:
+ 
+-    def wait_for_seconds(self, seconds: int, reason: str = "", *, on_delegations: int = 0) -> GoalState:
++    def wait_for_seconds(self, seconds: int, reason: str = "", *, on_delegations: int = 0,
++                         on_kanban_cards: int = 0) -> GoalState:
+         """Park until ``seconds`` from now (backoff/cooldown waits with no process to track). With
+@@ -1401,3 +1500,5 @@ class GoalManager:
+             raise ValueError("seconds must be a positive integer")
+-        return self._park(reason, waiting_until=time.time() + seconds, waiting_on_delegations=max(0, int(on_delegations)))
++        return self._park(reason, waiting_until=time.time() + seconds,
++                          waiting_on_delegations=max(0, int(on_delegations)),
++                          waiting_on_kanban_cards=max(0, int(on_kanban_cards)))
+ 
+@@ -1414,6 +1515,4 @@ class GoalManager:
          """True iff a barrier is set AND not yet satisfied. A satisfied barrier is cleared here
 -        (lazy auto-clear) so the next evaluation resumes normal judging. A pid/session barrier
 -        also expires after ``_MAX_BARRIER_WAIT_S``: a watcher or poller that never exits would
@@ -23957,7 +24012,7 @@ index 96ee695e..f1a693c7 100644
 +        (lazy auto-clear) so the next evaluation resumes normal judging. A long-running verified
 +        operation remains parked; an unverified one is paused for inspection after the limit."""
          s = self._state
-@@ -1421,6 +1514,16 @@ class GoalManager:
+@@ -1421,6 +1520,16 @@ class GoalManager:
              return False
 +        unverified = False
          if s.waiting_on_session is not None:
@@ -23975,7 +24030,7 @@ index 96ee695e..f1a693c7 100644
 +            elif still is None:
 +                unverified = True
          elif s.waiting_until:
-@@ -1434,9 +1537,9 @@ class GoalManager:
+@@ -1434,9 +1543,9 @@ class GoalManager:
              return False
 -        if still and s.waiting_since and s.waiting_until == 0.0 and time.time() - s.waiting_since > _MAX_BARRIER_WAIT_S:
 -            logger.info("goal %s: wait barrier on %s exceeded %ds; resuming judging",
@@ -23991,21 +24046,51 @@ index 96ee695e..f1a693c7 100644
 -        return still
 +        return bool(still)
  
-@@ -1487,2 +1590,3 @@ class GoalManager:
+@@ -1454,3 +1563,4 @@ class GoalManager:
+ 
+-    def _apply_wait_directive(self, wait_directive: dict[str, Any], reason: str, *, active_delegations: int = 0) -> Optional[dict[str, Any]]:
++    def _apply_wait_directive(self, wait_directive: dict[str, Any], reason: str, *, active_delegations: int = 0,
++                              active_kanban_cards: int = 0) -> Optional[dict[str, Any]]:
+         """Judge said WAIT: set the barrier and park. The counted turn stands (the judge ran) but no
+@@ -1472,3 +1582,4 @@ class GoalManager:
+         else:
+-            self.wait_for_seconds(int(wait_directive["seconds"]), reason=reason, on_delegations=active_delegations)
++            self.wait_for_seconds(int(wait_directive["seconds"]), reason=reason,
++                                  on_delegations=active_delegations, on_kanban_cards=active_kanban_cards)
+             tgt = f"{wait_directive['seconds']}s"
+@@ -1487,2 +1598,4 @@ class GoalManager:
          active_delegations: int = 0,
 +        kanban_notification_target: Optional[dict[str, str]] = None,
++        after_model_turn: bool = False,
      ) -> dict[str, Any]:
-@@ -1497,2 +1601,5 @@ class GoalManager:
+@@ -1495,4 +1608,13 @@ class GoalManager:
+ 
++        # Only a native successful post-turn hook can release an advisory card timer. A changed
++        # card count is not completion evidence; passive reads and explicit owner barriers stay quiet.
++        if (after_model_turn is True and state.waiting_on_kanban_cards > 0 and state.waiting_until
++                and state.waiting_on_pid is None and state.waiting_on_session is None):
++            self.stop_waiting()
++
+         # Parked on a live process or an unexpired deadline: quiesce without burning a turn.
          if self.is_waiting():
 +            if state.status == "paused":
 +                reason = state.paused_reason or "wait target could not be verified"
 +                return _decision("paused", False, None, "wait_unverified", reason, f"⏸ Goal paused — {reason}")
              return self._waiting_decision(state)
-@@ -1513,2 +1620,4 @@ class GoalManager:
+@@ -1510,2 +1632,3 @@ class GoalManager:
+ 
++        active_cards = count_active_kanban_cards(self.session_id, notification_target=kanban_notification_target)
+         verdict, reason, parse_failed, wait_directive, transport_failed = judge_goal(
+@@ -1513,2 +1636,3 @@ class GoalManager:
              contract=state.contract if state.has_contract() else None, active_delegations=active_delegations,
-+            active_kanban_cards=count_active_kanban_cards(
-+                self.session_id, notification_target=kanban_notification_target),
++            active_kanban_cards=active_cards,
          )
+@@ -1523,3 +1647,4 @@ class GoalManager:
+         if verdict == "wait" and wait_directive:
+-            parked = self._apply_wait_directive(wait_directive, reason, active_delegations=active_delegations)
++            parked = self._apply_wait_directive(wait_directive, reason, active_delegations=active_delegations,
++                                                active_kanban_cards=active_cards)
+             if parked is not None:
 diff --git a/hermes_cli/heartbeat.py b/hermes_cli/heartbeat.py
 index b10a5846fbf6f7c090dd0956ab8fd1e8d76ecfb6..c1cba192a93c8a47453d39e5fe0b44156e0492e8 100644
 --- a/hermes_cli/heartbeat.py
@@ -43532,7 +43617,7 @@ index 85c8ef62..1f4d6406 100644
      monkeypatch.setattr(run, '_resolve_gateway_model', lambda config: 'fixture')
 diff --git a/tests/gateway/test_goal_kanban_route_count.py b/tests/gateway/test_goal_kanban_route_count.py
 new file mode 100644
-index 00000000..3cfe1c67
+index 00000000..21bcc9d2
 --- /dev/null
 +++ b/tests/gateway/test_goal_kanban_route_count.py
 @@ -0,0 +1,122 @@
@@ -43614,8 +43699,8 @@ index 00000000..3cfe1c67
 +        parked = goals.GoalManager(session_id=stored)
 +        assert parked.is_waiting()
 +        used = parked.state.turns_used
-+        await runner._post_turn_goal_continuation(session_entry=SimpleNamespace(session_id=stored),
-+                                                 source=source, final_response="Still pending")
++        # An idle observation is not a second successful model turn.
++        parked.evaluate_after_turn("Passive observation")
 +        assert counts == [1] and goals.GoalManager(session_id=stored).state.turns_used == used
 +    finally:
 +        runner._shutdown_executor(drain_timeout=5)
@@ -45295,6 +45380,62 @@ index 0000000..5becd15
 +        await connection.close()
 +        unbind_owner(authority)
 +        store.close_all_db_handles()
+diff --git a/tests/gateway/test_session_viewer_automation.py b/tests/gateway/test_session_viewer_automation.py
+index 42f4e11f..119327b3 100644
+--- a/tests/gateway/test_session_viewer_automation.py
++++ b/tests/gateway/test_session_viewer_automation.py
+@@ -7,3 +7,3 @@ session driven this way is skipped by the gateway's own post-turn goal hook (nev
+ import json
+-from types import SimpleNamespace
++from types import MethodType, SimpleNamespace
+ 
+@@ -29,2 +29,4 @@ async def owner(tmp_path, monkeypatch):
+     runner._adapter_for_source = lambda source: runner.adapters.get(source.platform)
++    runner._goal_kanban_notification_target = MethodType(run.GatewayRunner._goal_kanban_notification_target, runner)
++    runner._active_profile_name = lambda: "default"
+     authority = await initialize_session_authority(runner, profile_id=str(tmp_path / 'fixture'), instance_id='owner')
+@@ -175 +177,41 @@ async def test_a_tool_that_moves_the_goal_mid_turn_repaints_the_viewers_once(own
+     assert [u['control']['goal']['subgoals'] for u in updates] == [['tests pass']]
++
++
++@pytest.mark.asyncio
++async def test_viewer_judges_new_card_results_using_only_its_native_live_route(owner, tmp_path, monkeypatch):
++    from hermes_cli import goals, kanban_db as kb, kanban_db_connect as kbc, kanban_db_notify as notify
++    monkeypatch.setenv('HERMES_KANBAN_HOME', str(tmp_path / 'kanban'))
++    monkeypatch.delenv('HERMES_KANBAN_DB', raising=False)
++    monkeypatch.delenv('HERMES_KANBAN_BOARD', raising=False)
++    live = owner.authority.sessions[owner.ref.session_id]
++    route = owner.authority.runner._goal_kanban_notification_target(live.source)
++    with kbc.connect_closing() as conn:
++        task = kb.create_task(conn, title='synthetic original card', workspace_kind='scratch')
++        notify.add_notify_sub(conn, task_id=task, **route)
++        claimed = kb.claim_task(conn, task, claimer='synthetic-owned-run')
++        other = kb.create_task(conn, title='synthetic neighbor', workspace_kind='scratch')
++        notify.add_notify_sub(conn, task_id=other, **{**route, 'chat_id': 'unrelated-neighbor'})
++    await owner.call('goal', 'set', 'Verify original followed work', max_turns=4)
++    counts = []
++
++    def judge(*a, **kw):
++        counts.append(kw['active_kanban_cards'])
++        return ('wait', 'Pending', False, {'seconds': 900}, False) if len(counts) == 1 else (
++            'done', 'Original result verified', False, None, False)
++
++    monkeypatch.setattr(goals, 'judge_goal', judge)
++    forged = {**route, 'chat_id': 'unrelated-neighbor'}
++    await owner.call('goal', 'evaluate_after_turn', 'Original work pending', after_model_turn=True,
++                     kanban_notification_target=forged)
++    assert counts == [1]
++    with kbc.connect_closing() as conn:
++        kb.complete_task(conn, task, expected_run_id=claimed.current_run_id,
++                         result='Original result', fire_lifecycle_hook=False)
++    for provenance in (None, 'true', 1):
++        reply = await owner.call('goal', 'evaluate_after_turn', 'Passive observation', after_model_turn=provenance)
++        assert reply['value']['verdict'] == 'waiting' and counts == [1]
++    reply = await owner.call('goal', 'evaluate_after_turn', 'Actual completed result turn', after_model_turn=True,
++                             kanban_notification_target=forged)
++    assert counts == [1, 0] and reply['value']['status'] == 'done'
++    await owner.call('goal', 'evaluate_after_turn', 'Late duplicate notification', after_model_turn=True)
++    assert counts == [1, 0]
 diff --git a/tests/gateway/test_standby_group_control.py b/tests/gateway/test_standby_group_control.py
 new file mode 100644
 index 0000000..8437048
@@ -46468,6 +46609,241 @@ index 00000000..ac0cd899
 +    again = manager.evaluate_after_turn("Still waiting")
 +    assert not again["should_continue"] and counts == [2]
 +    assert manager.state.turns_used == turns
+diff --git a/tests/hermes_cli/test_goal_result_wait.py b/tests/hermes_cli/test_goal_result_wait.py
+new file mode 100644
+index 00000000..95d8c02f
+--- /dev/null
++++ b/tests/hermes_cli/test_goal_result_wait.py
+@@ -0,0 +1,229 @@
++"""Fresh completed turns can rejudge advisory card waits; passive polls cannot."""
++import os
++import queue
++import time
++from pathlib import Path
++from types import SimpleNamespace
++from unittest.mock import AsyncMock
++
++import pytest
++
++from gateway.config import GatewayConfig, Platform
++from gateway.run import GatewayRunner
++from gateway.session import SessionSource
++from gateway.session_viewer_automation import invoke
++from hermes_cli import goals, kanban_db as kb, kanban_db_connect as kbc
++from hermes_cli import kanban_db_notify as notify
++from hermes_cli.cli_loops_mixin import CLILoopsMixin
++
++
++@pytest.fixture
++def fleet(tmp_path, monkeypatch):
++    home = tmp_path / ".hermes"
++    home.mkdir()
++    monkeypatch.setattr(Path, "home", lambda: tmp_path)
++    monkeypatch.setenv("HERMES_HOME", str(home))
++    monkeypatch.setenv("HERMES_KANBAN_HOME", str(home))
++    for name in ("HERMES_KANBAN_DB", "HERMES_KANBAN_TASK", "HERMES_KANBAN_BOARD"):
++        monkeypatch.delenv(name, raising=False)
++    goals._DB_CACHE.clear()
++    goals._get_session_db()
++    yield home
++    goals._DB_CACHE.clear()
++
++
++class Cli(CLILoopsMixin):
++    def __init__(self, manager):
++        self.manager = manager
++        self.agent = SimpleNamespace(session_id=manager.session_id)
++        self.session_id = manager.session_id
++        self._pending_input = queue.Queue()
++        self.response = "Original work pending"
++
++    def _get_goal_manager(self):
++        return self.manager
++
++    def _last_assistant_response_text(self):
++        return self.response
++
++
++def pending(session, *, gateway=False):
++    with kbc.connect_closing() as conn:
++        task = kb.create_task(conn, title="synthetic original work", workspace_kind="scratch")
++        notify.add_notify_sub(conn, task_id=task, platform="local" if gateway else "tui",
++                              chat_id="synthetic-room" if gateway else session, notifier_profile="default")
++        claimed = kb.claim_task(conn, task, claimer="synthetic-owned-run")
++        assert claimed and claimed.current_run_id
++        return task, claimed.current_run_id
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize("surface", ["gateway", "tui", "cli", "viewer"])
++async def test_real_completed_turn_rejudges_card_result_before_timer_expiry(fleet, monkeypatch, surface):
++    sid = "synthetic-result-history"
++    task, run = pending(sid, gateway=surface == "gateway")
++    manager = goals.GoalManager(session_id=sid)
++    manager.set("Verify the original task before finishing", max_turns=4)
++    calls = []
++
++    def judge(*args, **kwargs):
++        calls.append(kwargs["active_kanban_cards"])
++        return (("wait", "Original task pending", False, {"seconds": 900}, False)
++                if len(calls) == 1 else ("done", "Original result verified", False, None, False))
++
++    monkeypatch.setattr(goals, "judge_goal", judge)
++    runner = object.__new__(GatewayRunner)
++    runner.config = GatewayConfig(multiplex_profiles=False)
++    runner.adapters = {}
++    runner._defer_goal_status_notice_after_delivery = AsyncMock()
++    source = SessionSource(platform=Platform.LOCAL, chat_id="synthetic-room", profile="default")
++    cli = Cli(manager)
++    import cli as cli_module
++    monkeypatch.setattr(cli_module, "_cprint", lambda *args, **kwargs: None)
++    from tui_gateway import server
++    monkeypatch.setattr(server, "_emit", lambda *args, **kwargs: None)
++    session = {"session_key": sid, "agent": SimpleNamespace(session_id=sid)}
++
++    async def finished_turn(text):
++        if surface == "gateway":
++            await runner._post_turn_goal_continuation(session_entry=SimpleNamespace(session_id=sid),
++                                                     source=source, final_response=text)
++        elif surface == "tui":
++            server._goal_followup_after_turn("synthetic-ui", session, {"completed": True}, "complete", text)
++        elif surface == "cli":
++            cli.response = text
++            cli._maybe_continue_goal_after_turn()
++        else:
++            result = invoke(runner, "goal", sid, "evaluate_after_turn", [text], {"after_model_turn": True})
++            assert "error" not in result
++
++    try:
++        await finished_turn("Original task is still pending")
++        assert calls == [1] and goals.GoalManager(sid).is_waiting()
++        with kbc.connect_closing() as conn:
++            assert kb.complete_task(conn, task, result="Synthetic original result verified",
++                                    expected_run_id=run, fire_lifecycle_hook=False)
++            assert kb.get_run(conn, run).outcome == "completed"
++        assert goals.GoalManager(sid).state.waiting_until > time.time() + 800
++        await finished_turn("The original completed result has been verified")
++        assert calls == [1, 0]
++        assert goals.GoalManager(sid).state.status == "done"
++    finally:
++        runner._shutdown_executor(drain_timeout=5)
++
++
++def test_passive_evaluation_does_not_rejudge_even_after_original_task_finishes(fleet, monkeypatch):
++    sid = "synthetic-passive-history"
++    task, run = pending(sid)
++    manager = goals.GoalManager(session_id=sid)
++    manager.set("Finish original work", max_turns=4)
++    calls = []
++
++    def judge(*args, **kwargs):
++        calls.append(kwargs["active_kanban_cards"])
++        return "wait", "Pending original work", False, {"seconds": 900}, False
++
++    monkeypatch.setattr(goals, "judge_goal", judge)
++    assert manager.evaluate_after_turn("Pending")["verdict"] == "wait"
++    used = manager.state.turns_used
++    with kbc.connect_closing() as conn:
++        kb.complete_task(conn, task, result="Synthetic verified result", expected_run_id=run, fire_lifecycle_hook=False)
++    for _ in range(3):
++        assert manager.is_waiting()
++        assert not manager.evaluate_after_turn("Passive status observation")["should_continue"]
++    assert calls == [1] and manager.state.turns_used == used
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize("barrier", ["manual-time", "live-pid"])
++async def test_real_turn_does_not_clear_explicit_owner_wait(fleet, monkeypatch, barrier):
++    sid = "synthetic-explicit-wait"
++    manager = goals.GoalManager(session_id=sid)
++    manager.set("Preserve the explicit wait", max_turns=4)
++    if barrier == "manual-time":
++        manager.wait_for_seconds(900, reason="Explicit owner deadline")
++    else:
++        manager.wait_on(os.getpid(), reason="Original verified process remains live")
++    def forbidden(*args, **kwargs):
++        raise AssertionError("Explicit wait must not call the judge")
++    monkeypatch.setattr(goals, "judge_goal", forbidden)
++    runner = object.__new__(GatewayRunner)
++    runner.config = GatewayConfig(multiplex_profiles=False)
++    runner.adapters = {}
++    runner._defer_goal_status_notice_after_delivery = AsyncMock()
++    try:
++        await runner._post_turn_goal_continuation(session_entry=SimpleNamespace(session_id=sid),
++            source=SessionSource(platform=Platform.LOCAL, chat_id="synthetic-room"), final_response="New reply")
++        assert goals.GoalManager(sid).is_waiting()
++        assert goals.GoalManager(sid).state.turns_used == 0
++    finally:
++        runner._shutdown_executor(drain_timeout=5)
++
++
++def test_wait_origin_roundtrips_and_old_rows_keep_their_deadline():
++    import json
++    old = goals.GoalState.from_json(json.dumps({"goal": "legacy", "waiting_until": time.time() + 900}))
++    assert old.waiting_on_kanban_cards == 0
++    state = goals.GoalState(goal="original", waiting_until=time.time() + 900, waiting_on_kanban_cards=2)
++    loaded = goals.GoalState.from_json(state.to_json())
++    assert loaded.waiting_on_kanban_cards == 2
++    loaded.clear_wait()
++    assert loaded.waiting_on_kanban_cards == 0 and loaded.waiting_until == 0
++
++
++def test_new_turn_may_repark_while_other_original_work_remains(fleet, monkeypatch):
++    sid = "synthetic-partial-result"
++    task, run = pending(sid)
++    pending(sid)
++    mgr = goals.GoalManager(sid)
++    mgr.set("Verify both original results", max_turns=4)
++    counts = []
++
++    def judge(*args, **kw):
++        counts.append(kw["active_kanban_cards"])
++        return "wait", "Remaining original work", False, {"seconds": 900}, False
++
++    monkeypatch.setattr(goals, "judge_goal", judge)
++    mgr.evaluate_after_turn("Both pending")
++    with kbc.connect_closing() as conn:
++        kb.complete_task(conn, task, expected_run_id=run, result="First result", fire_lifecycle_hook=False)
++    assert mgr.evaluate_after_turn("First result processed", after_model_turn=True)["verdict"] == "wait"
++    assert counts == [2, 1] and mgr.state.waiting_on_kanban_cards == 1 and mgr.is_waiting()
++    assert mgr.state.turns_used == 2
++
++
++def test_new_turn_still_runs_quality_gates_and_preserves_turn_budget(fleet, monkeypatch):
++    sid = "synthetic-gated-result"
++    pending(sid)
++    mgr = goals.GoalManager(sid)
++    mgr.set("Original output must pass its gate", max_turns=2)
++    calls = []
++
++    def judge(*a, **kw):
++        calls.append(kw["active_kanban_cards"])
++        return "wait", "Pending original work", False, {"seconds": 900}, False
++
++    monkeypatch.setattr(goals, "judge_goal", judge)
++    mgr.evaluate_after_turn("Pending")
++    mgr.add_gate("synthetic-gate")
++    monkeypatch.setattr(goals, "_gate_workspace", lambda: (fleet, None))
++    monkeypatch.setattr(goals, "run_gate", lambda gate, **kw: (False, 1, "Original output still invalid"))
++    decision = mgr.evaluate_after_turn("New original result", after_model_turn=True)
++    assert decision["status"] == "paused" and not decision["should_continue"]
++    assert decision["verdict"] == "gate_failed" and calls == [1]
++    assert mgr.state.turns_used == 2 and mgr.state.gates[0].attempts == 1
++
++
++@pytest.mark.parametrize("barrier", ["session", "judge-pid", "judge-time-no-cards"])
++def test_real_turn_preserves_non_card_waits(fleet, monkeypatch, barrier):
++    mgr = goals.GoalManager("synthetic-other-barrier")
++    mgr.set("Preserve independent original wait", max_turns=4)
++    if barrier == "session":
++        mgr.wait_on_session("synthetic-owned-process")
++        monkeypatch.setattr(goals, "_session_waiting", lambda target: True)
++    else:
++        directive = {"pid": os.getpid()} if barrier == "judge-pid" else {"seconds": 900}
++        mgr._apply_wait_directive(directive, "Original wait", active_kanban_cards=1 if barrier == "judge-pid" else 0)
++    monkeypatch.setattr(goals, "judge_goal", lambda *a, **kw: pytest.fail("Independent wait called judge"))
++    assert mgr.evaluate_after_turn("Actual new reply", after_model_turn=True)["verdict"] == "waiting"
++    assert mgr.state.turns_used == 0 and mgr.state.waiting_on_kanban_cards == 0
 diff --git a/tests/hermes_cli/test_goal_self_management.py b/tests/hermes_cli/test_goal_self_management.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..15833da3b4354dd439ec57357d2fe8c7ad844515
@@ -69753,6 +70129,16 @@ index 456132b9c00951fccdeee7035e949a0c9101e900..32619a395bfc143daf7e7788932b605b
  def _dispatch_command(rid, *, session_id: str, name: str, arg: str) -> dict:
      """Delegate a fixed intent to the existing TUI command dispatcher."""
      handler = _methods.get("command.dispatch")
+diff --git a/tui_gateway/prompt_turn.py b/tui_gateway/prompt_turn.py
+index 67bf1e3c..4be689f3 100644
+--- a/tui_gateway/prompt_turn.py
++++ b/tui_gateway/prompt_turn.py
+@@ -372,3 +372,4 @@ def _goal_followup_after_turn(
+             decision = goal_mgr.evaluate_after_turn(
+-                raw, user_initiated=True, background_processes=_bg_procs, active_delegations=_active_deleg)
++                raw, user_initiated=True, background_processes=_bg_procs, active_delegations=_active_deleg,
++                after_model_turn=True)
+             if verdict_msg := decision.get("message") or "":
 diff --git a/tui_gateway/session_compression.py b/tui_gateway/session_compression.py
 index 2d10ea89e7c360af409c6443cf58b72d510d9976..e9144e595d1a509be694bf5109f66dfb376176e1 100644
 --- a/tui_gateway/session_compression.py

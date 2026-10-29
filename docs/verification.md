@@ -1,3 +1,18 @@
+# v0.7.25: completed card-result goal waits
+
+The consolidated kit has 756 source paths. Related goal, viewer and loop
+selection: 30 files / 302 passes, zero failures and file retries. Scoped source
+health has no new findings. Linux and macOS native installed acceptance each
+verify nine scenarios with real isolated SQLite and controlled judge decisions;
+no real model or external provider calls. Full public apply/reverse/reapply and
+installed parity are checked on both hosts. Original-session adoption and a
+continuous autonomous bot graph remain unproven.
+
+See [the advisory wait repair and limits](goal-result-waits.md). Earlier evidence
+below is historical, overlaps this selection and must not be summed.
+
+---
+
 # v0.7.24: Gateway goal notification identity
 
 The consolidated kit pins 752 source paths. Goal/board/notification/multiplex:
