@@ -21579,6 +21579,16 @@ index 8a6bdd63..a9de7bf9 100644
 -        await adopt_before_restore(authority, sid, tracked=False)
 +        await adopt_before_restore(authority, sid, tracked=False, store_io=store_io)
  
+diff --git a/gateway/session_local_recovery.py b/gateway/session_local_recovery.py
+index 0661918b..4d7e9ef4 100644
+--- a/gateway/session_local_recovery.py
++++ b/gateway/session_local_recovery.py
+@@ -167,2 +167,5 @@ def restore_local_session(authority, sid):
+         raise RuntimeStoreError('runtime_draining')
++    # Lazy local adapters bypass boot-time adapter wiring; result wakes need this owner to
++    # enter the native authority FIFO rather than a classic handler that local routes do not have.
++    adapter.gateway_runner = authority.runner
+     live = authority.sessions.get(sid)
 diff --git a/gateway/session_managed_worker.py b/gateway/session_managed_worker.py
 index 86baeb5c..73e470de 100644
 --- a/gateway/session_managed_worker.py
@@ -44176,6 +44186,15 @@ index 72d55887..951ab834 100644
 -    monkeypatch.setattr("hermes_constants.get_default_hermes_root", lambda: root)
 +    monkeypatch.setattr("hermes_constants.get_default_hermes_root", lambda *, home=None: root)
      set_multiplex_active(True)
+diff --git a/tests/gateway/test_kanban_notifier_served_apiserver_wake.py b/tests/gateway/test_kanban_notifier_served_apiserver_wake.py
+index 82e74ae3..6a844843 100644
+--- a/tests/gateway/test_kanban_notifier_served_apiserver_wake.py
++++ b/tests/gateway/test_kanban_notifier_served_apiserver_wake.py
+@@ -110,3 +110,3 @@ def served(tmp_path, monkeypatch):
+     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+-    monkeypatch.setattr("hermes_constants.get_default_hermes_root", lambda: root)
++    monkeypatch.setattr("hermes_constants.get_default_hermes_root", lambda *, home=None: root)
+     return SimpleNamespace(root=root, builder=root / "profiles" / "builder", atlas=root / "profiles" / "atlas")
 diff --git a/tests/gateway/test_legacy_session_migration.py b/tests/gateway/test_legacy_session_migration.py
 index 9a87f9e0..a18c06e4 100644
 --- a/tests/gateway/test_legacy_session_migration.py
@@ -44209,6 +44228,72 @@ index 0d312eb4..35e21754 100644
 -    monkeypatch.setattr(run, '_load_gateway_config', lambda: {'platform_toolsets': {'cli': []}})
 +    monkeypatch.setattr(run, '_load_gateway_config', lambda config_path=None: {'platform_toolsets': {'cli': []}})
      store = SessionStore(tmp_path / 'sessions', GatewayConfig())
+diff --git a/tests/gateway/test_local_kanban_wake_owner.py b/tests/gateway/test_local_kanban_wake_owner.py
+new file mode 100644
+index 00000000..1f7994a5
+--- /dev/null
++++ b/tests/gateway/test_local_kanban_wake_owner.py
+@@ -0,0 +1,60 @@
++"""Lazy local adapters must admit genuine result wakes through their own native authority."""
++from dataclasses import replace
++from types import MethodType
++
++import pytest
++import pytest_asyncio
++
++from gateway.config import Platform
++from gateway.run import GatewayRunner
++from gateway.wake import WakeNotAccepted, deliver_wake
++from hermes_state_runtime import list_session_admissions
++from tests.gateway.test_session_viewer_automation import owner as owner  # re-export native pytest fixture
++
++
++@pytest_asyncio.fixture
++async def attached(owner, monkeypatch):
++    from gateway import run
++    monkeypatch.setattr(run, '_load_gateway_config', lambda *args: {'platform_toolsets': {'cli': []}})
++    runner = owner.authority.runner
++    runner.config = runner.session_store.config
++    runner.config.multiplex_profiles = True
++    runner._session_key_for_source = MethodType(GatewayRunner._session_key_for_source, runner)
++    monkeypatch.setattr(owner.authority, '_schedule', lambda ref: None)  # hold only real model execution
++    reply = await owner.viewer.dispatch({'id': 1, 'method': 'session.resume',
++                                         'params': {'session_id': owner.ref.session_id}})
++    assert 'result' in reply
++    return owner
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('human_queued', [False, True])
++async def test_local_result_wake_uses_native_fifo_without_a_second_handler(attached, human_queued):
++    owner = attached
++    live = owner.authority.sessions[owner.ref.session_id]
++    adapter = owner.authority.runner.adapters[Platform.LOCAL]
++    if human_queued:
++        reply = await owner.viewer.dispatch({'id': 2, 'method': 'prompt.submit', 'params': {
++            'session_id': owner.ref.session_id, 'submission_id': 'synthetic-human', 'text': 'Original queued human input'}})
++        assert 'result' in reply
++    before = list_session_admissions(owner.authority.db, session_id=owner.ref.session_id)
++    await deliver_wake(adapter, text='Original followed task completed', source=live.source)
++    after = list_session_admissions(owner.authority.db, session_id=owner.ref.session_id)
++    assert len(after) == len(before) + 1
++    assert after[:len(before)] == before
++    assert after[-1]['status'] == 'queued'
++    assert 'local_automation_v1' in after[-1]['payload']
++    assert after[-1]['payload']['text'] == 'Original followed task completed'
++    assert adapter.gateway_runner is owner.authority.runner
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('field,value', [('chat_id', 'unowned-room'), ('profile', 'unowned-profile')])
++async def test_local_wake_cannot_borrow_a_foreign_route(attached, field, value):
++    owner = attached
++    live = owner.authority.sessions[owner.ref.session_id]
++    adapter = owner.authority.runner.adapters[Platform.LOCAL]
++    before = list_session_admissions(owner.authority.db, session_id=owner.ref.session_id)
++    with pytest.raises(WakeNotAccepted):
++        await deliver_wake(adapter, text='Unowned result must not enter', source=replace(live.source, **{field: value}))
++    assert list_session_admissions(owner.authority.db, session_id=owner.ref.session_id) == before
 diff --git a/tests/gateway/test_local_resume_compression_child.py b/tests/gateway/test_local_resume_compression_child.py
 index b6f5d5fd..3f58e881 100644
 --- a/tests/gateway/test_local_resume_compression_child.py

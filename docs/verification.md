@@ -1,3 +1,19 @@
+# v0.7.26: lazy local adapter owner binding
+
+Consolidated kit:759 source paths. Related native wake/local/notifier selection:
+32 files /114 latest per-file passes, zero failures/retries; final changed fixture
+four passes. Scoped health clear. Linux and macOS production Python each verify
+four real authority/FIFO scenarios with model scheduling held and no model calls.
+Full public apply/reverse/reapply and installed parity are checked on both hosts.
+
+A real fourteen-request discovery case found the bug and achieved actual model
+overlap, but failed its full loop. It is retained and never replayed. Provider
+reacceptance of the corrected loop and original-session adoption remain unproven.
+See [the owner-binding repair and evidence limits](local-result-wake.md).
+Historical selections below overlap and must not be summed.
+
+---
+
 # v0.7.25: completed card-result goal waits
 
 The consolidated kit has 756 source paths. Related goal, viewer and loop
