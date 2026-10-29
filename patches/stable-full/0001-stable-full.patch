@@ -28321,6 +28321,15 @@ index 0000000..cf5d0e9
 +    with kb.write_txn(conn):
 +        validate_current_inputs(conn,task_id)
 +        yield
+diff --git a/hermes_cli/kanban_workflow.py b/hermes_cli/kanban_workflow.py
+index 8f3ca6ba..e4c50c84 100644
+--- a/hermes_cli/kanban_workflow.py
++++ b/hermes_cli/kanban_workflow.py
+@@ -133,3 +133,3 @@ DEFAULT_WORKFLOW = Workflow(
+         # (reopen_review_task ignores the requested target). Phase 1 fixes it.
+-        "review": ("triage", "todo", "ready", "done"),
++        "review": ("triage", "todo", "ready", "blocked", "done"),
+         "done": ("triage", "todo", "ready"),
 diff --git a/hermes_cli/kanban_write_scopes.py b/hermes_cli/kanban_write_scopes.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..47a2b9ee6f92c48eef1455927cd9bf73674948c3
@@ -28660,6 +28669,28 @@ index 0000000000000000000000000000000000000000..66538f304e8a2f433e82cd15b66feb02
 +    info = _compile_verified.cache_info()
 +    return {'hits': info.hits, 'misses': info.misses,
 +            'entries': info.currsize, 'max_entries': info.maxsize}
+diff --git a/hermes_cli/plugins_ledger.py b/hermes_cli/plugins_ledger.py
+index 5df35196..6e8750e9 100644
+--- a/hermes_cli/plugins_ledger.py
++++ b/hermes_cli/plugins_ledger.py
+@@ -8,2 +8,3 @@ import logging
+ from dataclasses import dataclass, field
++from functools import cached_property
+ from pathlib import Path
+@@ -62,2 +63,8 @@ class PluginRegistration:
+ class PluginLedgerMixin:
++    @cached_property
++    def _registration_dispose_callback(self) -> Callable[[PluginRegistration], None]:
++        # Handles share cleanup code only within their owning manager; keep late
++        # method lookup so overrides and teardown still target that manager.
++        return lambda disposed: self._forget_registrations([disposed])
++
+     def _track_registration(
+@@ -74,3 +81,3 @@ class PluginLedgerMixin:
+             kind=kind, key=key, release=release, plugin_key=manifest_key(manifest), persistent=persistent)
+-        registration._on_dispose = lambda disposed: self._forget_registrations([disposed])
++        registration._on_dispose = self._registration_dispose_callback
+         self._ownership_ledger.setdefault(registration.plugin_key, []).append(registration)
 diff --git a/hermes_cli/plugins_loader.py b/hermes_cli/plugins_loader.py
 index 0a9e8e50bbd803f37da25192628891008c8dce7e..87100e53975b7cb32866c39f0a817e33c2a32378 100644
 --- a/hermes_cli/plugins_loader.py
@@ -46818,6 +46849,17 @@ index 0000000000000000000000000000000000000000..c32f55ae16a63a4761daa18422f495d3
 +    assert migrate('parent', 'child') is True
 +    assert other_db.get_meta(new) == other_raw
 +    assert original_db.get_meta(old) == raw and original_db.get_meta(new) is None
+diff --git a/tests/hermes_cli/test_gateway_multiplex_status.py b/tests/hermes_cli/test_gateway_multiplex_status.py
+index c4e40800..999318a1 100644
+--- a/tests/hermes_cli/test_gateway_multiplex_status.py
++++ b/tests/hermes_cli/test_gateway_multiplex_status.py
+@@ -24,4 +24,6 @@ def _fake_multiplexer(monkeypatch, tmp_path, *, multiplex: bool, pid_file: bool
+     import hermes_constants
++    from hermes_cli import profiles
+     from gateway import status
+ 
++    monkeypatch.setattr(profiles, "_get_wrapper_dir", lambda: tmp_path / "wrappers")
+     (tmp_path / "profiles" / "beta").mkdir(parents=True)
 diff --git a/tests/hermes_cli/test_goal_kanban_board_counts.py b/tests/hermes_cli/test_goal_kanban_board_counts.py
 new file mode 100644
 index 00000000..ac0cd899
@@ -51082,6 +51124,85 @@ index 0000000..0dee928
 +        assert parse_manifest_file(path, plugin, 'user', '') is None
 +    finally:
 +        path.chmod(mode)
+diff --git a/tests/hermes_cli/test_plugin_registration_memory.py b/tests/hermes_cli/test_plugin_registration_memory.py
+new file mode 100644
+index 00000000..6ab0fb02
+--- /dev/null
++++ b/tests/hermes_cli/test_plugin_registration_memory.py
+@@ -0,0 +1,73 @@
++"""Ledger cleanup memory scales with managers, preserving per-handle ownership."""
++
++import sys
++from unittest.mock import Mock
++
++import pytest
++
++from hermes_cli.plugins import PluginManager
++from hermes_cli.plugins_manifest import PluginManifest
++
++
++def _register(manager, manifest, name, release, *, persistent=False):
++    return manager._track_registration(manifest, "fixture", name, release, persistent=persistent)
++
++
++def test_cleanup_callback_memory_is_bounded_by_managers(tmp_path):
++    managers = [PluginManager(scope_key=str(tmp_path / str(i))) for i in range(3)]
++    manifest = PluginManifest(name="fixture-ledger")
++    releases = [Mock() for _ in managers]
++    groups = [[_register(manager, manifest, str(i), release) for i in range(128)]
++              for manager, release in zip(managers, releases)]
++    callbacks = {id(handle._on_dispose): handle._on_dispose for group in groups for handle in group}
++    # The cleanup function is the same operation for every handle owned by one
++    # manager. Hundreds of handles must not each retain a fresh function object.
++    assert sum(sys.getsizeof(callback) for callback in callbacks.values()) < 1024 * len(managers)
++
++    groups[1][0].dispose()
++    groups[1][0].dispose()
++    assert releases[1].call_count == 1
++    releases[0].assert_not_called()
++    releases[2].assert_not_called()
++    assert groups[1][0] not in managers[1]._registration_order
++    assert all(handle.active for handle in groups[0] + groups[2])
++    for manager, group, release in zip(managers, groups, releases):
++        for handle in group:
++            handle.dispose()
++        assert manager._registration_order == []
++        assert manager._ownership_ledger == {}
++        assert release.call_count == len(group)
++
++
++def test_cleanup_keeps_late_owner_dispatch_for_persistent_handles(tmp_path):
++    manager = PluginManager(scope_key=str(tmp_path))
++    manifest = PluginManifest(name="fixture-ledger")
++    ordinary = _register(manager, manifest, "ordinary", Mock())
++    persistent = _register(manager, manifest, "persistent", Mock(), persistent=True)
++    original = manager._forget_registrations
++    forget = Mock(wraps=original)
++    manager._forget_registrations = forget
++
++    persistent.dispose()
++    forget.assert_called_once_with([persistent])
++    assert ordinary.active
++    assert manager._ownership_ledger[manifest.name] == [ordinary]
++    ordinary.dispose()
++    assert manager._ownership_ledger == {}
++
++
++def test_release_failure_still_forgets_only_its_own_handle(tmp_path):
++    manager = PluginManager(scope_key=str(tmp_path))
++    manifest = PluginManifest(name="fixture-ledger")
++    failed_release = Mock(side_effect=ValueError("synthetic release failure"))
++    failed = _register(manager, manifest, "failed", failed_release)
++    survivor = _register(manager, manifest, "survivor", Mock())
++
++    with pytest.raises(ValueError, match="synthetic release failure"):
++        failed.dispose()
++    failed.dispose()
++    failed_release.assert_called_once()
++    assert not failed.active and survivor.active
++    assert manager._ownership_ledger[manifest.name] == [survivor]
++    survivor.dispose()
++    assert manager._ownership_ledger == {}
 diff --git a/tests/hermes_cli/test_profile_config_cache_release.py b/tests/hermes_cli/test_profile_config_cache_release.py
 new file mode 100644
 index 00000000..2feb7609

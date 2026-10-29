@@ -1,3 +1,40 @@
+# v0.7.32: leaner plugin cleanup and accurate review-block metadata
+
+Every registration previously allocated a fresh cleanup closure that captured its
+manager. The same cleanup operation is now cached once per manager with the native
+cached_property mechanism. Managers keep distinct callbacks and all registrations
+retain their own release operation. Cleanup still late-binds the owner's method,
+always runs after a release failure, and remains idempotent.
+
+The new callback-memory test failed before the repair; two lifecycle controls
+passed. The broader run also exposed an older workflow mismatch: the existing
+backend accepts review-to-block moves but its workflow metadata denied them. The
+metadata now agrees with that existing verb without changing kernel gates or
+mutating any live card. Three multiplex-status fixtures now use an isolated
+launcher directory, keeping the original-home I/O protection active. Those four
+failures were reproduced on the parent code; no assertion or guard was relaxed. The final related selection passes 344 files / 3528
+tests, zero failures, 8 existing skips and zero file retries.
+Scoped source health and Ruff pass. Overlapping selections are not added together.
+
+Linux and macOS production Python each pass seven installed native controls:
+callback allocation bound, cross-owner ledger isolation, repeated disposal,
+complete cleanup, persistent late dispatch, failed-release cleanup, and native
+review-to-block behavior matching the published workflow. No model
+or provider request is made. Exact scoped rollback and permissions are preserved;
+Linux activation is native and idle-only, while original Mac Gateway stays off.
+The full consolidated patch is applied/reversed/reapplied and installed parity is
+checked on both hosts. No renderer rebuild or dependency/config change is needed.
+
+The sixteen-manager / 8,192-handle component fixture retains 2,158,464 fewer Python
+bytes. Four sequential native 116-profile fresh startup measurements (ABBA) show
+mean PSS 336,038,912 before versus 333,786,624 after, zero swap. That controlled
+series is not an original-user workload benchmark or a general latency/RAM claim.
+No model-usage, provider-cache or inference-speed improvement is inferred.
+Original models, quotas, effort ceilings, fallback and resource gates remain.
+The broader improvement objective stays active.
+
+---
+
 # v0.7.31: make auxiliary and compaction test fixtures faithful
 
 Twenty inherited failures were caused by dynamically fabricated MagicMock

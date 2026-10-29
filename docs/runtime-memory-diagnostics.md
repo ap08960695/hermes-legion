@@ -142,3 +142,24 @@ Sixteen native reservations previously retained about 2.15 MB of traced Python a
 A genuinely empty store already commits its declared tables as an atomic phase. Its later deferred index/trigger phase now also commits as one separate transaction, after native column reconciliation. A failure rolls back that deferred phase; the earlier declared tables remain committed and normal later reconciliation can recover. Existing and settled stores keep their ordinary checks, without a new mandatory writer transaction. All per-profile ownership, durability, schema inspection, cache behavior and later FTS/migration phases remain native.
 
 This targets first-time database setup. Use fresh and settled measurements separately; do not equate fewer setup commits with faster model generation, lower token usage, better provider caching or a whole-process RAM saving. No new configuration or background maintenance is introduced.
+
+## Plugin ledger cleanup callbacks
+
+Plugin registration handles now reuse one cleanup callback within their owning
+manager. Managers remain separate, with late method lookup, per-handle release,
+persistent registration ownership and exception/finally cleanup unchanged.
+No mutable plugin module or manifest state is merged across profiles.
+
+A production-interpreter component fixture with sixteen native managers and
+8,192 registration handles reduced retained Python allocations from 3,775,936 to
+1,617,472 bytes. Callback function objects fell from 8,192 to sixteen. This is the
+registration fixture, not a whole-Gateway RAM reduction percentage.
+Four separate native Gateway startups with 116 fresh synthetic profiles in ABBA
+order observed mean PSS 336,038,912 versus 333,786,624 bytes, with zero swap. This
+small controlled-series difference does not establish original-workload RAM or
+startup latency savings. No token, cache-hit or inference-speed gain is claimed.
+
+Existing immutable plugin code reuse remains bounded at its original capacity.
+A separate sixteen-profile diagnostic observed 49 code-cache misses throughout,
+525 hits and no duplicated source code objects; increasing the cache cap was not
+justified. All native profile isolation, lifecycle, models, quotas and gates remain.
