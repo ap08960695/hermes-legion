@@ -1,3 +1,34 @@
+# v0.7.31: make auxiliary and compaction test fixtures faithful
+
+Twenty inherited failures were caused by dynamically fabricated MagicMock
+attributes, rather than demonstrated production failures. Ordinary auxiliary
+clients now explicitly declare that they do not own the main-context compression
+recovery boundary. Three single-model conversation fixtures explicitly declare
+that they have no MoA aggregator slot. All assertions and behavioral expectations
+are unchanged. Only six test files change; runtime, credentials, retry/fallback
+policy, models, quotas and resource gates are unchanged.
+
+The same six-file baseline had 286 passes and 20 failures; corrected fixtures
+pass all 306 cases. The final related selection passes 125 files / 1,290 tests,
+zero failures, zero skips and zero file retries. Selections overlap and must not
+be added together. Structural comparison verifies that the only AST changes are
+the explicit mock-constructor fields. Scoped code health and Ruff pass.
+
+Both installed hosts have the exact six test files and pass two additional
+production-Python checks against actual synchronous and asynchronous SDK client
+constructors. The real clients have neither fabricated ownership nor aggregator
+attributes. No HTTP request or model inference is attempted. These are SDK-contract
+checks, not a new full-loop model benchmark. The complete consolidated patch is
+applied, reversed and reapplied on both hosts, with full installed-source parity.
+
+No Gateway or Desktop restart is required for this test-only maintenance. Original
+process identities, settings and protected files are preserved. No RAM, cache-hit,
+token-cost or latency reduction is claimed by this release. The earlier twenty
+failures remain recorded in historical reports below; this release resolves that
+specific inherited set. The broader improvement objective remains active.
+
+---
+
 # v0.7.30: batch the fresh deferred index/trigger phase
 
 Fresh store initialization previously committed each deferred index and trigger
