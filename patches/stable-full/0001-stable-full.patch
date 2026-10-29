@@ -32968,6 +32968,32 @@ index 0000000000000000000000000000000000000000..6c0b975bbbb0940234b5981301709b81
 +                                               "snippet_offset": offset, "offset_unit": paged["offset_unit"],
 +                                               "snippet_encoding": paged["encoding"]}
 +    return None
+diff --git a/hermes_state_schema.py b/hermes_state_schema.py
+index c83e6b21..a990f6c8 100644
+--- a/hermes_state_schema.py
++++ b/hermes_state_schema.py
+@@ -939,2 +939,16 @@ class SessionSchemaMixin:
+ 
++    def _initialize_declared_schema(self, cursor: sqlite3.Cursor) -> None:
++        """Publish a fresh declaration once; retain settled/legacy open lock behavior."""
++        if cursor.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone() is not None:
++            cursor.executescript(SCHEMA_SQL)
++            return
++        cursor.execute("BEGIN IMMEDIATE")
++        try:
++            self._execute_ddl_script_transactional(cursor, SCHEMA_SQL)
++        except BaseException:
++            self._conn.rollback()
++            raise
++        else:
++            self._conn.commit()
++
+     def _init_schema(self):
+@@ -955,3 +969,3 @@ class SessionSchemaMixin:
+         cursor = self._conn.cursor()
+-        cursor.executescript(SCHEMA_SQL)
++        self._initialize_declared_schema(cursor)
+ 
 diff --git a/hermes_state_search.py b/hermes_state_search.py
 index a7993f49d168f2f461a09b0e7a00aa264c665d82..38fe242a84a6393292602eb74aaf62ababe2b8f7 100644
 --- a/hermes_state_search.py
@@ -51275,6 +51301,75 @@ index 0000000000000000000000000000000000000000..64c9835869e795fcc74d5a4049a4cdd8
 +    row = db.get_session(sid)
 +    assert row["system_prompt"] == ("original prefix" if in_place else "legacy child prefix")
 +    assert json.loads(row["tool_names"]) == json.loads(pin)
+diff --git a/tests/hermes_state/test_fresh_schema_atomicity.py b/tests/hermes_state/test_fresh_schema_atomicity.py
+new file mode 100644
+index 0000000..351300c
+--- /dev/null
++++ b/tests/hermes_state/test_fresh_schema_atomicity.py
+@@ -0,0 +1,63 @@
++"""A fresh declared schema publishes atomically without changing existing-store recovery."""
++from contextlib import closing
++import sqlite3
++
++import pytest
++
++
++def _observe_writer(monkeypatch, *, deny=None):
++    import hermes_state
++    native = hermes_state._connect_tracked_db
++    created = []
++
++    def connect(*args, **kwargs):
++        conn = native(*args, **kwargs)
++
++        def authorize(operation, name, _column, _database, _trigger):
++            if operation == sqlite3.SQLITE_CREATE_TABLE:
++                created.append((name, conn.in_transaction))
++                if name == deny:
++                    return sqlite3.SQLITE_DENY
++            return sqlite3.SQLITE_OK
++
++        conn.set_authorizer(authorize)
++        return conn
++
++    monkeypatch.setattr(hermes_state, '_connect_tracked_db', connect)
++    return created
++
++
++def test_fresh_declared_tables_stay_in_one_transaction(tmp_path, monkeypatch):
++    from hermes_state import SessionDB
++    created = _observe_writer(monkeypatch)
++    with SessionDB(tmp_path / 'state.db') as db:
++        declared = {name: pending for name, pending in created
++                    if name in {'schema_version', 'system_prompts', 'sessions', 'messages', 'runtime_epoch'}}
++        assert set(declared) == {'schema_version', 'system_prompts', 'sessions', 'messages', 'runtime_epoch'}
++        assert all(declared.values()), 'fresh declared tables must not commit one at a time'
++        assert not db._conn.in_transaction
++        assert db._conn.execute('PRAGMA quick_check').fetchone()[0] == 'ok'
++
++
++def test_failed_fresh_ddl_leaves_no_partial_declared_tables(tmp_path, monkeypatch):
++    from hermes_state import SessionDB
++    path = tmp_path / 'state.db'
++    _observe_writer(monkeypatch, deny='system_prompts')
++    with pytest.raises(sqlite3.DatabaseError, match='not authorized'):
++        SessionDB(path)
++    with closing(sqlite3.connect(path)) as conn:
++        assert conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall() == []
++
++
++def test_a_failed_existing_store_reconcile_preserves_its_data(tmp_path, monkeypatch):
++    from hermes_state import SessionDB
++    path = tmp_path / 'state.db'
++    with closing(sqlite3.connect(path)) as conn:
++        conn.execute('CREATE TABLE owner_fixture (value TEXT NOT NULL)')
++        conn.execute("INSERT INTO owner_fixture VALUES ('preserve')")
++        conn.commit()
++    _observe_writer(monkeypatch, deny='system_prompts')
++    with pytest.raises(sqlite3.DatabaseError, match='not authorized'):
++        SessionDB(path)
++    with closing(sqlite3.connect(path)) as conn:
++        assert conn.execute('SELECT value FROM owner_fixture').fetchall() == [('preserve',)]
 diff --git a/tests/hermes_state/test_global_fts_verifier.py b/tests/hermes_state/test_global_fts_verifier.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..701778dd45d74b6cd0ee2b60e9f5e0efdf62c0eb

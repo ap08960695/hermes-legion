@@ -1,3 +1,12 @@
+# v0.7.10: atomic fresh schema with fewer initialization commits
+
+703 pinned paths. An empty SQLite schema gets one native declaration transaction;
+existing stores retain their previous lock/reconcile behavior. See [fresh schema startup](fresh-schema-startup.md) for the 35.4% fresh-only median improvement and
+limits. Native regression: 272 files / 2,335 passed / 0 failed / 16 existing platform
+skips, zero retries; code-health clear. Installed Linux/macOS: 8 native controls each,
+network denied, zero providers. This is not a whole-Gateway RAM/token/cache/latency
+or original-user adoption claim. Historical results below overlap.
+
 # v0.7.9: canonical groups work with ready standby
 
 701 pinned paths. Canonical room controls distinguish an armed standby coordinator
