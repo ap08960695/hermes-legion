@@ -20876,6 +20876,15 @@ index 2867e3e0a531a5a42c921c7561dfe0b626c6646a..49fcbb072368f0ffabdb81a6ebb6a4ed
              return ""
          logger.info(
              "Gateway turn paused by global emergency stop (platform=%s chat=%s)",
+diff --git a/gateway/run_profile_reconcile.py b/gateway/run_profile_reconcile.py
+index 9789bfc0..fa750d89 100644
+--- a/gateway/run_profile_reconcile.py
++++ b/gateway/run_profile_reconcile.py
+@@ -531,2 +531,4 @@ class GatewayProfileReconcileMixin:
+                     await asyncio.to_thread(release_profile_log_handlers, home)
++                from hermes_cli.config_effective import release_retired_profile_config
++                await asyncio.to_thread(release_retired_profile_config, home)
+             finally:
 diff --git a/gateway/run_runtime.py b/gateway/run_runtime.py
 index 49f4233a..f57348ef 100644
 --- a/gateway/run_runtime.py
@@ -23355,7 +23364,7 @@ index 63ff490ee732eca4f4d604c29d221f4704b5969c..4f73d46a465d612640ff072375ffa36c
          # in 'running' at once — counted across every active board and across both the ready and review
          # dispatch lanes (workers are OS processes sharing one machine's memory, so the cap bounds the
 diff --git a/hermes_cli/config_effective.py b/hermes_cli/config_effective.py
-index ac32724b..5aaa13bb 100644
+index ac32724b..651733a8 100644
 --- a/hermes_cli/config_effective.py
 +++ b/hermes_cli/config_effective.py
 @@ -73,3 +73,11 @@ def load_user_config_effective(config_path: Optional[Path] = None, *, fail_close
@@ -23382,6 +23391,44 @@ index ac32724b..5aaa13bb 100644
 -                    backup_config(config_path, "good")
 +                    backup_config(config_path, "good", snapshot=source)
  
+@@ -116 +125,37 @@ def load_user_config_effective(config_path: Optional[Path] = None, *, fail_close
+         return effective
++
++
++def release_retired_profile_config(home: Path) -> int:
++    """Forget a deleted/renamed home's config copies; a parked live home keeps its recovery state."""
++    from hermes_constants import named_profile_is_deleted
++    from hermes_cli.config_read_errors import _CONFIG_PARSE_FAILURES, _CONFIG_PARSE_WARNED
++
++    if home.exists() and not named_profile_is_deleted(home):
++        return 0
++    target = home / 'config.yaml'
++    canonical = target.resolve()
++    with _config._CONFIG_LOCK:
++        caches = (_config._LOAD_CONFIG_CACHE, _config._RAW_CONFIG_CACHE,
++                  _config._LAST_EXPANDED_CONFIG_BY_PATH, _EFFECTIVE_CACHE,
++                  _LAST_GOOD_USER_RAW, _CONFIG_PARSE_FAILURES)
++        paths = set().union(*(cache.keys() for cache in caches))
++        paths.update(key[0] for key in _CONFIG_PARSE_WARNED)
++    retired = set()
++    for path in paths:
++        try:
++            if path == str(target) or Path(path).resolve() == canonical:
++                retired.add(path)
++        except OSError:
++            # Another profile's unreadable alias must not block this home's retirement.
++            continue
++    with _config._CONFIG_LOCK:
++        if home.exists() and not named_profile_is_deleted(home):
++            return 0  # A recreated profile must keep its new live settings.
++        removed = 0
++        for cache in caches:
++            for path in retired:
++                if path in cache:
++                    del cache[path]
++                    removed += 1
++        _CONFIG_PARSE_WARNED.difference_update(key for key in list(_CONFIG_PARSE_WARNED) if key[0] in retired)
++        return removed
 diff --git a/hermes_cli/console_engine.py b/hermes_cli/console_engine.py
 index d456f6408d43d54b3b0b27c7efac935f3efaf8ec..f8731582d165862a680c012868e2049b2efe7876 100644
 --- a/hermes_cli/console_engine.py
@@ -28481,12 +28528,10 @@ index 95419c36..f3e3aa90 100644
 +        data = deepcopy(load_yaml_file_readonly(manifest_file)) or {}
          if not isinstance(data, Mapping):
 diff --git a/hermes_cli/profiles.py b/hermes_cli/profiles.py
-index 08b7eb1057f21f91175dc19074a98c24bd515def..4c21edeeb96a70732e16ebfe77199161ef23d902 100644
+index 08b7eb10..bec750fe 100644
 --- a/hermes_cli/profiles.py
 +++ b/hermes_cli/profiles.py
-@@ -430,11 +430,14 @@ def _existing_profile_dir(name: str) -> tuple[str, Path]:
-     return canon, profile_dir
- 
+@@ -432,7 +432,10 @@ def _existing_profile_dir(name: str) -> tuple[str, Path]:
  
 -def get_profile_dir(name: str) -> Path:
 -    """Resolve a profile name to its HERMES_HOME directory."""
@@ -28500,11 +28545,7 @@ index 08b7eb1057f21f91175dc19074a98c24bd515def..4c21edeeb96a70732e16ebfe77199161
 +        from hermes_constants import get_default_hermes_root
 +        return get_default_hermes_root(home=home)
      # The name becomes a path component under profiles/; refuse anything that
-     # is not a valid profile id so every caller (WS params, /p/<profile>/
-     # prefixes, tool args) fails closed instead of escaping the root. The
-@@ -442,14 +445,17 @@ def get_profile_dir(name: str) -> Path:
-     # profiles/hermes may still exist and must keep resolving.
-     if not _PROFILE_ID_RE.match(canon):
+@@ -444,10 +447,13 @@ def get_profile_dir(name: str) -> Path:
          raise _invalid_profile_name_error(canon)
 -    return _get_profiles_root() / canon
 +    if home is None:
@@ -28522,8 +28563,43 @@ index 08b7eb1057f21f91175dc19074a98c24bd515def..4c21edeeb96a70732e16ebfe77199161
 -        profile_dir = get_profile_dir(canon)
 +        profile_dir = get_profile_dir(canon) if home is None else get_profile_dir(canon, home=home)
      except ValueError:
-         return False
-     if canon == "default":
+@@ -1793,6 +1799,5 @@ def delete_profile(name: str, yes: bool = False) -> Path:
+     mark_named_profile_deleted(profile_dir)
+-    # The multiplexer sees the tombstone, stops this profile's adapters and releases its handles
+-    # into the directory before we remove it. Identity settlement is a separate delete-only
+-    # operation below: an ordinary unserve must preserve identity, because a rename's old name
+-    # leaves the served set exactly like a deleted one does (#111926, delete side).
++    # The multiplexer unroutes this tombstone and releases handles before removal. Identity
++    # settlement is delete-only: a rename's old name also leaves the served set, so ordinary
++    # unserve must preserve its identity for the rename (#111926, delete side).
+     _notify_multiplexer(canon)
+@@ -1838,4 +1843,3 @@ def delete_profile(name: str, yes: bool = False) -> Path:
+     try:
+-        # A multiplexer still tearing the profile down holds its gateway.lock: never remove a home
+-        # a live runtime owns (its writers would recreate the tree under the tombstone).
++        # A live gateway.lock fences removal while runtime writers still own this home.
+         if not wait_profile_unowned(profile_dir):
+@@ -1852,2 +1856,4 @@ def delete_profile(name: str, yes: bool = False) -> Path:
+         raise RuntimeError(f"Could not remove profile directory {profile_dir}: {remove_error}") from remove_error
++    from hermes_cli.config_effective import release_retired_profile_config
++    release_retired_profile_config(profile_dir)
+     print(f"\nProfile '{canon}' deleted.")
+@@ -2387,10 +2393,10 @@ def rename_profile(old_name: str, new_name: str) -> Path:
+     print(f"✓ Renamed {old_dir.name} → {new_dir.name}")
+-    # The tombstone lives at profiles/.deleted/<old_name>; old_dir is gone so nothing can
+-    # resurrect it, and a future profile reusing the old name must not read as deleted.
++    # The old home is gone; a future profile reusing its name must not read as deleted.
+     if live_mux:
+         clear_named_profile_deleted(old_dir)
++    from hermes_cli.config_effective import release_retired_profile_config
++    release_retired_profile_config(old_dir)
+ 
+-    # 2b. Record the rename so Bot Mode group chats can re-link persisted
+-    # member descriptors to the new slug (#110200). Best-effort: a metadata
+-    # write failure must never fail the rename itself.
++    # 2b. Re-link persisted Bot Mode members to the new slug (#110200); a metadata
++    # write failure must not fail the rename itself.
+     _record_profile_rename(new_dir, old_canon)
 diff --git a/hermes_cli/prompt_suggestion_context.py b/hermes_cli/prompt_suggestion_context.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..9d685642f7c70d117389db4dbb5090ea2e5165b1
@@ -43525,6 +43601,15 @@ index 0000000000000000000000000000000000000000..b56e1df2088ed8d7ded862f6b7d20162
 +    finally:
 +        conn.close()
 +        shutil.rmtree(home)
+diff --git a/tests/gateway/test_kanban_multiplex_served_profile_parity.py b/tests/gateway/test_kanban_multiplex_served_profile_parity.py
+index 72d55887..951ab834 100644
+--- a/tests/gateway/test_kanban_multiplex_served_profile_parity.py
++++ b/tests/gateway/test_kanban_multiplex_served_profile_parity.py
+@@ -37,3 +37,3 @@ def served(tmp_path, monkeypatch):
+     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+-    monkeypatch.setattr("hermes_constants.get_default_hermes_root", lambda: root)
++    monkeypatch.setattr("hermes_constants.get_default_hermes_root", lambda *, home=None: root)
+     set_multiplex_active(True)
 diff --git a/tests/gateway/test_legacy_session_migration.py b/tests/gateway/test_legacy_session_migration.py
 index 9a87f9e0..a18c06e4 100644
 --- a/tests/gateway/test_legacy_session_migration.py
@@ -43797,6 +43882,63 @@ index 37d0651b..11d5c723 100644
 +    with _runner(RecoverableHandleCache()) as runner, pytest.raises(RuntimeError) as exc:
 +        await run_runtime._build_profile_authority(runner, 'worker', home, register=False)
      assert 'is unavailable' in str(exc.value)
+diff --git a/tests/gateway/test_profile_config_cache_release.py b/tests/gateway/test_profile_config_cache_release.py
+new file mode 100644
+index 00000000..0ea198dc
+--- /dev/null
++++ b/tests/gateway/test_profile_config_cache_release.py
+@@ -0,0 +1,51 @@
++"""A retired profile drops config copies; a parked profile or live writer keeps its recovery state."""
++from pathlib import Path
++from types import SimpleNamespace
++
++import pytest
++
++from hermes_cli import config, config_effective
++from hermes_constants import mark_named_profile_deleted, reset_hermes_home_override, set_hermes_home_override
++from gateway.run_profile_reconcile import GatewayProfileReconcileMixin
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('deleted,retired', [(True, True), (False, True), (True, False)])
++async def test_unserve_releases_only_retired_config(tmp_path, monkeypatch, deleted, retired):
++    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
++    root = tmp_path / '.hermes'
++    home = root / 'profiles' / 'retiring'
++    home.mkdir(parents=True)
++    managed = tmp_path / 'managed'
++    managed.mkdir()
++    monkeypatch.setenv('HERMES_HOME', str(root))
++    monkeypatch.setenv('HERMES_MANAGED_DIR', str(managed))
++    for path in [root, home]:
++        (path / 'config.yaml').write_text('display:\n  skin: mono\n')
++        token = set_hermes_home_override(path)
++        try:
++            config.load_config()
++            config.read_raw_config()
++            config_effective.load_user_config_effective()
++        finally:
++            reset_hermes_home_override(token)
++    caches = [config._LOAD_CONFIG_CACHE, config._RAW_CONFIG_CACHE,
++              config._LAST_EXPANDED_CONFIG_BY_PATH, config_effective._EFFECTIVE_CACHE,
++              config_effective._LAST_GOOD_USER_RAW]
++    key, root_key = str(home / 'config.yaml'), str(root / 'config.yaml')
++    held = [cache[root_key] for cache in caches]
++    assert all(key in cache for cache in caches)
++    if deleted:
++        mark_named_profile_deleted(home)
++    runner = SimpleNamespace(_profile_failed_platforms={}, _profile_adapters={},
++                             pairing_stores={}, _served_profile_homes={},
++                             _served_profile_signatures={}, _agent_cache={},
++                             config=SimpleNamespace(_runtime_profile_homes=()))
++    if not retired:
++        async def still_writing(*args):
++            return False
++        monkeypatch.setattr('gateway.run_runtime.unserve_profile_runtime', still_writing)
++        runner.session_authorities = SimpleNamespace()
++    await GatewayProfileReconcileMixin._unserve_profile(runner, 'retiring', home)
++    assert all((key not in cache) if deleted and retired else (key in cache) for cache in caches)
++    assert all(cache[root_key] is value for cache, value in zip(caches, held))
 diff --git a/tests/gateway/test_profile_runtime_io.py b/tests/gateway/test_profile_runtime_io.py
 new file mode 100644
 index 0000000..b0636be
@@ -49378,6 +49520,65 @@ index 0000000..0dee928
 +        assert parse_manifest_file(path, plugin, 'user', '') is None
 +    finally:
 +        path.chmod(mode)
+diff --git a/tests/hermes_cli/test_profile_config_cache_release.py b/tests/hermes_cli/test_profile_config_cache_release.py
+new file mode 100644
+index 00000000..2feb7609
+--- /dev/null
++++ b/tests/hermes_cli/test_profile_config_cache_release.py
+@@ -0,0 +1,53 @@
++"""Completed profile deletion/rename retires only that profile's parsed config copies."""
++from pathlib import Path
++
++import pytest
++
++from hermes_cli import config, config_effective, profiles
++from hermes_constants import reset_hermes_home_override, set_hermes_home_override
++
++
++def _load(home):
++    token = set_hermes_home_override(home)
++    try:
++        config.load_config()
++        config.read_raw_config()
++        config_effective.load_user_config_effective()
++    finally:
++        reset_hermes_home_override(token)
++
++
++@pytest.mark.parametrize('operation', ['delete', 'rename'])
++def test_retired_profile_drops_its_config_caches_only(tmp_path, monkeypatch, operation):
++    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
++    root = tmp_path / '.hermes'
++    root.mkdir()
++    managed = tmp_path / 'managed'
++    managed.mkdir()
++    monkeypatch.setenv('HERMES_HOME', str(root))
++    monkeypatch.setenv('HERMES_MANAGED_DIR', str(managed))
++    old = root / 'profiles' / 'retiring'
++    old.mkdir(parents=True)
++    for home in [root, old]:
++        (home / 'config.yaml').write_text('display:\n  skin: mono\n')
++        _load(home)
++    caches = [config._LOAD_CONFIG_CACHE, config._RAW_CONFIG_CACHE,
++              config._LAST_EXPANDED_CONFIG_BY_PATH, config_effective._EFFECTIVE_CACHE,
++              config_effective._LAST_GOOD_USER_RAW]
++    old_key, root_key = str(old / 'config.yaml'), str(root / 'config.yaml')
++    assert all(old_key in cache and root_key in cache for cache in caches)
++    held = [cache[root_key] for cache in caches]
++    # Synthetic profiles own no OS services/backends; exercise native filesystem and identity paths.
++    for name in ['_cleanup_gateway_service', '_stop_profile_backends', '_stop_bot_desktop',
++                 '_maybe_unregister_gateway_service', '_maybe_register_gateway_service']:
++        monkeypatch.setattr(profiles, name, lambda *args: None)
++    monkeypatch.setattr(profiles, '_check_gateway_running', lambda path: False)
++    monkeypatch.setattr(profiles, '_live_default_multiplexer', lambda: False)
++    monkeypatch.setattr(profiles, 'check_alias_collision', lambda name: 'fixture skips shell alias')
++    if operation == 'delete':
++        profiles.delete_profile('retiring', yes=True)
++    else:
++        profiles.rename_profile('retiring', 'renamed')
++    assert not old.exists()
++    assert all(old_key not in cache for cache in caches)
++    assert all(cache[root_key] is value for cache, value in zip(caches, held))
 diff --git a/tests/hermes_cli/test_profile_history_search.py b/tests/hermes_cli/test_profile_history_search.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..6256a6eafce2e41b60b5a0d8ed00d9b1d8eb234f

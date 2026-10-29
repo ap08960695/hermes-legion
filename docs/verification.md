@@ -1,3 +1,15 @@
+# v0.7.16: retire old profile config caches
+
+735 pinned paths. Completed delete/rename and permitted Gateway retirement
+release old config cache values and warning records. Parked live homes,
+unfinished authorities and sibling profiles retain their recovery state.
+Latest-per-file regression: 256 files / 1,855 passed / 0 failed / 7 existing skips,
+zero retries. Five installed production-Python controls each on Linux/macOS;
+eight packaged-renderer checkpoints with a separately instrumented private backend.
+No inference or measured original-workload RSS/PSS savings claimed.
+See [profile config cache retirement](profile-config-cache-retirement.md).
+Historical counts and focused runs overlap and are not summed.
+
 # v0.7.15: preserve the validated config generation
 
 731 pinned paths. Both native readers now back up their parsed bytes and
