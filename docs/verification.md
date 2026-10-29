@@ -1,3 +1,48 @@
+# v0.7.36: usable session links inside quoted answers
+
+An actual native recall reply returned a session reference as a JSON string.
+The installed Desktop swallowed the closing quote into the session identifier,
+so the link could not resolve its title or open the intended conversation.
+The bare-reference matcher now stops at quote delimiters. Explicitly quoted
+values with spaces, inline/fenced code, punctuation, profile boundaries and
+normal session links retain their existing behavior. No new tool, prompt,
+dependency, account, quota, model call or fallback is added by this fix.
+
+Four quote regressions fail before the repair; nineteen controls already pass.
+The related native UI selection passes six files / fifty-nine tests with no
+retry, and the native Linux typecheck and offline prepared build pass. The
+actual prior reply and new packaged UI are checked in an isolated home with
+external network denied. A copied local-session receipt remains bound to its
+original owner: it is not authorization to resume that session under a new
+profile. The click-through control uses a new same-owner native CLI transcript
+replaying the prior verification answer and a separate derived reply that links
+to that control. Importing foreign local authority is not claimed as accepted. No owner
+gate is weakened, and this is not original-user-window adoption.
+
+Exact two-file source installation on Linux and macOS precedes publication,
+with scoped rollback and original permissions preserved. The installed Linux image passes nine rendered checkpoints: actual JSON
+reference resolution, same-owner click-through, native profile rename, overlay
+dismissal, compact delete/cancel, target-only deletion and reload persistence.
+The image was validated before installation; no model request was made by the UI
+acceptance. Expected font/plugin-list fetches fail because external network is
+deliberately denied; no application exception is observed. The existing macOS image is intentionally kept:
+its build was refused before starting because available RAM was below the
+existing six-GiB build headroom gate. No process was stopped to force a build,
+and the locked Mac screen was not unlocked. macOS renderer adoption remains
+pending; source parity is a separate verified claim.
+
+A separate native provider-backed recall check used one fresh user prompt and
+four physical requests, under a hard five-request cap. It recovered five exact
+facts and the source reference from thirty-four messages of a genuinely
+completed private test workflow, using two complementary history searches in
+13.46 seconds. Observed main-call input was 20,747 tokens, including 11,648
+reported cached tokens. These are one-case observations, not a causal production
+before/after reduction, cross-bot cache-sharing proof or months-long retention.
+The raw transcript, session identifiers, profile data, screenshots and private
+host details are excluded from this repository.
+
+---
+
 # v0.7.35: faster ASCII history verification with unchanged matching
 
 A large ASCII argument miss still called the Python character classifier once per
