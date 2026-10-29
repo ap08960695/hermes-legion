@@ -21542,6 +21542,17 @@ index 8a6bdd63..a9de7bf9 100644
 -        await adopt_before_restore(authority, sid, tracked=False)
 +        await adopt_before_restore(authority, sid, tracked=False, store_io=store_io)
  
+diff --git a/gateway/session_managed_worker.py b/gateway/session_managed_worker.py
+index 86baeb5c..73e470de 100644
+--- a/gateway/session_managed_worker.py
++++ b/gateway/session_managed_worker.py
+@@ -555,2 +555,6 @@ async def _spawn_registered_worker(authority, ref, row):
+         cwd = (await asyncio.to_thread(Path(__file__).resolve)).parents[1]
++        # This child is Hermes: restore its owner's tree after the routed-profile scrub,
++        # before an editable/runtime package can bind a stale agent namespace at startup.
++        from cron.scheduler_worker_env import pin_hermes_tree_on_pythonpath
++        env = pin_hermes_tree_on_pythonpath(dict(os.environ) if env is None else env, cwd)
+         from gateway.session_worker_spawn import acquire_process
 diff --git a/gateway/session_policy.py b/gateway/session_policy.py
 index ab3aace258bce8c74b151553153b2bb3d554bf1d..ffd77e68db65a54ca43054f612b2621170c552d8 100644
 --- a/gateway/session_policy.py
@@ -43791,6 +43802,75 @@ index ee7c47f1df862ca90e10429a28202cded5d7f004..4ee61e2f3eed4d6511055e92cfdd7abb
      assert built['api_key'] == key
  
  
+diff --git a/tests/gateway/test_managed_worker_source_pin.py b/tests/gateway/test_managed_worker_source_pin.py
+new file mode 100644
+index 00000000..a9bdd55e
+--- /dev/null
++++ b/tests/gateway/test_managed_worker_source_pin.py
+@@ -0,0 +1,63 @@
++"""A routed native worker imports its owner's source after the secret/env scrub."""
++import asyncio
++import json
++import os
++from pathlib import Path
++import subprocess
++import sys
++from types import SimpleNamespace
++
++import pytest
++
++
++@pytest.mark.parametrize('routed', [True, False])
++def test_worker_uses_owner_source_instead_of_stale_runtime_package(tmp_path, monkeypatch, routed):
++    from gateway import session_managed_worker as managed
++    from gateway import session_managed_worker_log
++    from cron import scheduler_worker_env
++
++    root = Path(managed.__file__).resolve().parents[1]
++    stale = tmp_path / 'stale-runtime'
++    package = stale / 'agent'
++    package.mkdir(parents=True)
++    (package / '__init__.py').write_text('STALE_RUNTIME = True\n')
++    # The routed profile's sanitizer legitimately removed the Hermes checkout.
++    # The surviving editable/runtime package must not win module resolution.
++    env = {k: os.environ[k] for k in ('PATH', 'LANG', 'HERMES_DISABLE_LAZY_INSTALLS') if k in os.environ}
++    env.update(PYTHONPATH=str(stale), PYTHONSAFEPATH='1', PYTHONDONTWRITEBYTECODE='1',
++               HERMES_HOME=str(tmp_path / 'owned'), OWN_TOOL_TOKEN='synthetic-owned')
++    monkeypatch.setattr(managed, '_worker_env', lambda authority: dict(env) if routed else None)
++    if not routed:
++        for key, value in env.items():
++            monkeypatch.setenv(key, value)
++    monkeypatch.setattr(session_managed_worker_log, 'worker_log_path', lambda profile: None)
++    # This test runtime owns its dependencies; retain the helper's native no-generation branch.
++    monkeypatch.setattr(scheduler_worker_env, '_committed_dependency_site_packages', lambda source: None)
++    native_popen = subprocess.Popen
++    seen = []
++
++    def import_probe(argv, **kwargs):
++        seen.append(kwargs)
++        return native_popen([sys.executable, '-P', '-c',
++            'import agent, agent.reasoning_limits, json, os; '
++            'print(json.dumps({"source":list(agent.__path__)[0], '
++            '"own_secret":os.environ.get("OWN_TOOL_TOKEN")}))'], **kwargs)
++
++    monkeypatch.setattr(managed.subprocess, 'Popen', import_probe)
++    authority = SimpleNamespace(profile_id=str(tmp_path / 'owned'), pending_stop_causes={})
++    ref = SimpleNamespace(session_id='synthetic-source-pin')
++    worker, process = asyncio.run(managed._spawn_registered_worker(authority, ref, {'generation':1}))
++    try:
++        stdout, _ = process.communicate(timeout=15)
++        assert process.returncode == 0, 'Managed child imported stale package or lost dependencies'
++        result = json.loads(stdout)
++        assert Path(result['source']).resolve() == root / 'agent'
++        assert result['own_secret'] == 'synthetic-owned'
++        assert str(stale) in seen[0]['env']['PYTHONPATH'].split(os.pathsep)
++        assert seen[0]['env']['HERMES_HOME'] == str(tmp_path / 'owned')
++    finally:
++        if process.poll() is None:
++            process.kill()
++            process.wait(timeout=5)
++        process.stdin.close() if not process.stdin.closed else None
++        process.stdout.close() if not process.stdout.closed else None
 diff --git a/tests/gateway/test_managed_worker_wire_mode.py b/tests/gateway/test_managed_worker_wire_mode.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..d82c8ccc2426cd9059392e8a8677b63f6e3525ee

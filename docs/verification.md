@@ -1,3 +1,10 @@
+# v0.7.20: managed-worker source pinning
+
+742 pinned paths. Full managed-worker selection: 40 files / 124 pass / 0 fail,
+zero retries. Installed native source/secret isolation checks pass on Linux and
+macOS with zero model/network requests. See [source pinning](managed-worker-source-pinning.md).
+The new real coordinator reached the provider and created THINK, then gave_up at the private iteration cap after eight requests. Parallel-bot completion is NOT_PROVEN; no global-green, original-user adoption or workload savings claim.
+
 # v0.7.19: known native auxiliary reasoning floor
 
 740 pinned paths. Four focused files / 24 pass; broad 74-file selection / 848 pass
