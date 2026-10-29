@@ -130,3 +130,9 @@ the rest of the profile configuration unchanged. Compare normal untraced samples
 at matched lifecycle stages; removing profiler overhead is not a memory-saving
 fix. This feature supplies evidence for later repairs, not a claimed production
 RAM, latency or token reduction.
+
+## Persistent profile locks
+
+Gateway holds one native lock descriptor for each reserved profile. Its small UTF-8 owner record now uses a 4 KiB I/O buffer rather than a filesystem-derived default for the reservation lifetime. The record is still flushed and fsynced before reservation succeeds. Lock inode identity, exclusion, private modes, partial-claim rollback, maintenance purpose, and native release rules are unchanged. No new knob, cache, cleanup loop or profile limit is introduced.
+
+Sixteen native reservations previously retained about 2.15 MB of traced Python allocations; the bounded implementation retains about 0.13 MB in the Linux production interpreter. This is an allocation measurement, not a promised reduction of whole-process RAM. Current synthetic startup PSS measurements remain allocator-sensitive; do not convert buffer bytes into an asserted production RSS/PSS saving. Traced runs also include profiler overhead.

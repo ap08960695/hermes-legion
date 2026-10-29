@@ -21292,6 +21292,17 @@ index 0000000000000000000000000000000000000000..11eb994bc1a4ea82f578232f4253d6f9
 +    if include_allocations:
 +        result['allocations'] = _allocation_snapshot()
 +    return result
+diff --git a/gateway/runtime_ownership.py b/gateway/runtime_ownership.py
+index fabd7632..65d849eb 100644
+--- a/gateway/runtime_ownership.py
++++ b/gateway/runtime_ownership.py
+@@ -164,3 +164,5 @@ class ProfileOwnership:
+                     fd = _open_lock(path)
+-                    handle = os.fdopen(fd, 'r+', encoding='utf-8')  # windows-footgun: ok — write-only
++                    # Tiny owner records stay open for the reservation's lifetime; avoid
++                    # retaining a filesystem-sized default buffer for every served profile.
++                    handle = os.fdopen(fd, 'r+', buffering=4096, encoding='utf-8')  # windows-footgun: ok — write-only
+                     try:
 diff --git a/gateway/session_authority.py b/gateway/session_authority.py
 index 3bc6c596..ae00972b 100644
 --- a/gateway/session_authority.py
@@ -44692,6 +44703,62 @@ index 00000000..0ea198dc
 +    await GatewayProfileReconcileMixin._unserve_profile(runner, 'retiring', home)
 +    assert all((key not in cache) if deleted and retired else (key in cache) for cache in caches)
 +    assert all(cache[root_key] is value for cache, value in zip(caches, held))
+diff --git a/tests/gateway/test_profile_lock_memory.py b/tests/gateway/test_profile_lock_memory.py
+new file mode 100644
+index 00000000..b9901174
+--- /dev/null
++++ b/tests/gateway/test_profile_lock_memory.py
+@@ -0,0 +1,50 @@
++"""Small durable lock records must not retain filesystem-sized I/O buffers per bot."""
++import gc
++import json
++import os
++import tracemalloc
++
++import pytest
++
++
++@pytest.mark.platforms("linux", "macos")
++def test_many_profile_locks_stay_small_and_exclusive(tmp_path):
++    from gateway.runtime_ownership import OwnershipConflict, ProfileOwnership
++
++    owner, contender = ProfileOwnership(), ProfileOwnership()
++    homes = [tmp_path / f"profile-{index}" for index in range(16)]
++    for home in homes:
++        home.mkdir()
++    owner.reserve([tmp_path / "warmup"])
++    owner.close()
++    already_tracing = tracemalloc.is_tracing()
++    if not already_tracing:
++        tracemalloc.start()
++    try:
++        gc.collect()
++        before = tracemalloc.get_traced_memory()[0]
++        owner.reserve(homes, purpose="small-lock-fixture")
++        gc.collect()
++        retained = tracemalloc.get_traced_memory()[0] - before
++        # 32 KiB per record leaves ample Python metadata overhead, without retaining
++        # a 128 KiB filesystem-derived buffer for every permanently open descriptor.
++        assert retained < len(homes) * 32 * 1024, retained
++        inodes = []
++        for home in homes:
++            lock = home / "gateway.lock"
++            record = json.loads(lock.read_text(encoding="utf-8"))
++            assert record["pid"] == os.getpid()
++            assert record["hermes_home"] == str(home.resolve())
++            assert record["purpose"] == "small-lock-fixture"
++            inodes.append(lock.stat().st_ino)
++        with pytest.raises(OwnershipConflict):
++            contender.reserve(homes)
++        assert tuple(owner.homes) == tuple(sorted(home.resolve() for home in homes))
++        owner.close()
++        contender.reserve(homes)
++        assert [(home / "gateway.lock").stat().st_ino for home in homes] == inodes
++    finally:
++        owner.close()
++        contender.close()
++        if not already_tracing:
++            tracemalloc.stop()
 diff --git a/tests/gateway/test_profile_runtime_io.py b/tests/gateway/test_profile_runtime_io.py
 new file mode 100644
 index 0000000..b0636be

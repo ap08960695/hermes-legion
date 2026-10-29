@@ -1,3 +1,35 @@
+# v0.7.29: bound long-lived profile lock buffers
+
+Native synthetic startup allocation attribution found that profile reservation
+held a filesystem-sized text I/O buffer for every lock descriptor. The repair
+bounds that existing buffer to 4096 bytes. It does not remove locks, change lock
+records, reduce the served fleet, interrupt active work, or alter any model,
+quota, effort, fallback, ownership, review or resource gate.
+
+The regression failed before the repair at 2,152,541 retained bytes for sixteen
+real reservations. The related native test selection passes 7 files / 46 tests,
+zero failures and zero retries, with six existing other-OS skips. It covers native
+exclusion, partial-reservation rollback, stale and foreign locks, inode lifetime,
+bootstrap, shutdown and endpoint identity. Scoped source health and Ruff pass.
+
+Linux and macOS production interpreters each pass six installed-source checks:
+bounded retained allocation, externally visible durable records/private mode,
+exclusion, rollback, same-inode reacquisition/late cleanup, and a record larger
+than the buffer. These operate on synthetic private homes with networking denied.
+No model call or original user database is used. Original Mac Gateway stays off.
+The complete consolidated patch is applied, reversed and reapplied on both hosts;
+installed parity is a separate check. No renderer rebuild is required.
+
+The allocation reduction is directly measured. Whole-Gateway PSS did not show a
+stable equally sized improvement in the initial raw startup pairs. Allocator and
+measurement effects must remain visible; this release makes no quantified original
+workload RAM, startup latency, usage, or provider-cache saving claim. Full Hermes
+acceptance and representative workload measurement remain ongoing. Earlier twenty
+inherited broad auxiliary failures remain documented. Historical overlapping test
+selections below are not added together.
+
+---
+
 # v0.7.28: discover the role-plan contract before creating work
 
 A retained failed automatic-dispatch case showed Captain prescribing an internal
