@@ -20877,39 +20877,39 @@ index 2867e3e0a531a5a42c921c7561dfe0b626c6646a..49fcbb072368f0ffabdb81a6ebb6a4ed
          logger.info(
              "Gateway turn paused by global emergency stop (platform=%s chat=%s)",
 diff --git a/gateway/run_runtime.py b/gateway/run_runtime.py
-index 49f4233a..d55b2ed7 100644
+index 49f4233a..f57348ef 100644
 --- a/gateway/run_runtime.py
 +++ b/gateway/run_runtime.py
-@@ -35,2 +35,24 @@ def reserved_profile_homes(runner):
+@@ -35,2 +35,9 @@ def reserved_profile_homes(runner):
  
 +async def _open_profile_session_db(runner):
 +    """Drain the owned writer before cancellation can release its profile reservation."""
 +    from gateway.run import _gateway_session_db_inner
-+    pending = asyncio.create_task(runner._run_in_executor_with_context(_gateway_session_db_inner, runner))
-+    cancelled = None
-+    while True:
-+        try:
-+            db = await asyncio.shield(pending)
-+        except asyncio.CancelledError as exc:
-+            if pending.cancelled():
-+                raise
-+            cancelled = exc
-+        except Exception:
-+            if cancelled is not None:
-+                raise cancelled
-+            raise
-+        else:
-+            if cancelled is not None:
-+                raise cancelled
-+            return db
++    from gateway.session_bootstrap_io import profile_store_io
++    return await profile_store_io(_gateway_session_db_inner, runner, get_executor=runner._get_executor)
 +
 +
  async def _build_profile_authority(runner, name, home, *, register):
-@@ -44,3 +66,3 @@ async def _build_profile_authority(runner, name, home, *, register):
+@@ -39,2 +46,5 @@ async def _build_profile_authority(runner, name, home, *, register):
+     from gateway.session_authority import initialize_session_authority
++    from functools import partial
++    from gateway.session_bootstrap_io import profile_store_io
++    store_io = partial(profile_store_io, get_executor=runner._get_executor)
+     registry = runner.session_authorities
+@@ -44,6 +54,6 @@ async def _build_profile_authority(runner, name, home, *, register):
      with _profile_runtime_scope(home, hydrate_secrets=False):
 -        db = getattr(runner._session_db, '_db', runner._session_db)
 +        db = await _open_profile_session_db(runner)
          if db is None:
+             raise RuntimeError(_store_open_failure(runner, home))
+-        if (await asyncio.to_thread(Path(db.db_path).resolve)).parent != home:
++        if (await store_io(Path(db.db_path).resolve)).parent != home:
+             raise RuntimeError(f'session authority database does not belong to the reserved profile {home}')
+@@ -52,3 +62,3 @@ async def _build_profile_authority(runner, name, home, *, register):
+             authority = await initialize_session_authority(
+-                runner, profile_id=str(home), instance_id=instance_id, db=db, register=register)
++                runner, profile_id=str(home), instance_id=instance_id, db=db, register=register, store_io=store_io)
+         except BaseException:
 diff --git a/gateway/run_runtime_init.py b/gateway/run_runtime_init.py
 index 3e75e19c4b044dd08256963840da9ca016c7ff69..1817890fc2cda1023c33b2f4c35c5e394ef75eef 100644
 --- a/gateway/run_runtime_init.py
@@ -21241,6 +21241,81 @@ index 0000000000000000000000000000000000000000..11eb994bc1a4ea82f578232f4253d6f9
 +    if include_allocations:
 +        result['allocations'] = _allocation_snapshot()
 +    return result
+diff --git a/gateway/session_authority.py b/gateway/session_authority.py
+index 3bc6c596..ae00972b 100644
+--- a/gateway/session_authority.py
++++ b/gateway/session_authority.py
+@@ -1373,3 +1373,3 @@ def backfill_compression_created_sources(db):
+ 
+-async def initialize_session_authority(runner, *, profile_id, instance_id, db=None, register=True):
++async def initialize_session_authority(runner, *, profile_id, instance_id, db=None, register=True, store_io=None):
+     """Call after exclusive profile ownership, before connecting adapters/API.
+@@ -1379,2 +1379,5 @@ async def initialize_session_authority(runner, *, profile_id, instance_id, db=No
+     """
++    if store_io is None:
++        from gateway.session_bootstrap_io import profile_store_io
++        store_io = profile_store_io
+     if db is None:
+@@ -1384,11 +1387,11 @@ async def initialize_session_authority(runner, *, profile_id, instance_id, db=No
+     from pathlib import Path
+-    db_key = await asyncio.to_thread(Path(db.db_path).resolve)
+-    epoch = await asyncio.to_thread(begin_runtime_epoch, db, instance_id=instance_id)
++    db_key = await store_io(Path(db.db_path).resolve)
++    epoch = await store_io(begin_runtime_epoch, db, instance_id=instance_id)
+     # Hot-serve builds a profile while the loop serves the others: both writes stay off it.
+-    await asyncio.to_thread(recover_session_inputs, db, epoch=epoch)
++    await store_io(recover_session_inputs, db, epoch=epoch)
+     # A lost automation turn has nobody to resolve it: it settles interrupted before any FIFO runs.
+     from gateway.session_unattended_unknown import settle_recovered_unattended
+-    await asyncio.to_thread(settle_recovered_unattended, db, epoch)
+-    await asyncio.to_thread(backfill_legacy_session_owners, db)
+-    await asyncio.to_thread(backfill_compression_created_sources, db)
++    await store_io(settle_recovered_unattended, db, epoch)
++    await store_io(backfill_legacy_session_owners, db)
++    await store_io(backfill_compression_created_sources, db)
+     authority = SessionAuthority(runner, profile_id=profile_id, instance_id=instance_id, db=db, epoch=epoch)
+@@ -1397,3 +1400,3 @@ async def initialize_session_authority(runner, *, profile_id, instance_id, db=No
+     from gateway.session_local_adoption import adopt_local_compressions
+-    await adopt_local_compressions(authority)
++    await adopt_local_compressions(authority, store_io=store_io)
+     if register:
+diff --git a/gateway/session_bootstrap_io.py b/gateway/session_bootstrap_io.py
+new file mode 100644
+index 0000000..6dd5de7
+--- /dev/null
++++ b/gateway/session_bootstrap_io.py
+@@ -0,0 +1,31 @@
++"""Keep profile preparation under custody until its physical I/O has settled."""
++import asyncio
++from contextvars import copy_context
++from functools import partial
++
++
++async def profile_store_io(operation, *args, get_executor=None, **kwargs):
++    """Drain even repeated cancellation; Gateway work belongs to its native shutdown pool.
++
++    Shield the executor Future itself: a child Task can also be cancelled during loop teardown,
++    leaving its physical writer running after the profile reservation has been released.
++    Resolve the executor per operation so the native closing fence remains authoritative.
++    """
++    executor = get_executor() if get_executor is not None else None
++    pending = asyncio.get_running_loop().run_in_executor(
++        executor, copy_context().run, partial(operation, *args, **kwargs))
++    cancelled = None
++    try:
++        while not pending.done():
++            try:
++                await asyncio.shield(pending)
++            except asyncio.CancelledError as exc:
++                cancelled = exc
++        result = pending.result()
++    except BaseException:
++        if cancelled is not None:
++            raise cancelled
++        raise
++    if cancelled is not None:
++        raise cancelled
++    return result
 diff --git a/gateway/session_bot_workflow.py b/gateway/session_bot_workflow.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..04868875b5317ae995baac923e434c7de1a012f6
@@ -21426,6 +21501,33 @@ index 2cff15e5964167865e128981d820f32464e517c8..4372f7fcc873204ea0f8f79ab35fbd6b
      tier = (getattr(view, 'service_tier', None) if view is not None
              else parse_service_tier((effective.get('agent') or {}).get('service_tier'))) or ''
      provider = getattr(view, 'provider', None) if view is not None else route.get('provider')
+diff --git a/gateway/session_local_adoption.py b/gateway/session_local_adoption.py
+index 8a6bdd63..a9de7bf9 100644
+--- a/gateway/session_local_adoption.py
++++ b/gateway/session_local_adoption.py
+@@ -42,3 +42,3 @@ def _adopt(authority, sid, receipt):
+ 
+-async def adopt_before_restore(authority, sid, *, tracked=True):
++async def adopt_before_restore(authority, sid, *, tracked=True, store_io=None):
+     """Commit *sid*'s due catch-up in a worker, so the restore that follows only reads.
+@@ -55,3 +55,6 @@ async def adopt_before_restore(authority, sid, *, tracked=True):
+         else:
+-            await asyncio.to_thread(write)
++            if store_io is None:
++                from gateway.session_bootstrap_io import profile_store_io
++                store_io = profile_store_io
++            await store_io(write)
+     except RuntimeStoreError as exc:  # the restore that follows refuses the receipt and logs it
+@@ -60,3 +63,3 @@ async def adopt_before_restore(authority, sid, *, tracked=True):
+ 
+-async def adopt_local_compressions(authority):
++async def adopt_local_compressions(authority, *, store_io=None):
+     """Boot and hot-profile recovery: every receipt's due catch-up, before ``recover_local_sessions``."""
+@@ -64,3 +67,3 @@ async def adopt_local_compressions(authority):
+     for sid in local_receipt_ids(authority):
+-        await adopt_before_restore(authority, sid, tracked=False)
++        await adopt_before_restore(authority, sid, tracked=False, store_io=store_io)
+ 
 diff --git a/gateway/session_policy.py b/gateway/session_policy.py
 index ab3aace258bce8c74b151553153b2bb3d554bf1d..ffd77e68db65a54ca43054f612b2621170c552d8 100644
 --- a/gateway/session_policy.py
@@ -43279,6 +43381,129 @@ index 0000000000000000000000000000000000000000..d82c8ccc2426cd9059392e8a8677b63f
 +    assert built.get("api_mode") == wire
 +    assert built["api_key"] == (launch_key or "synthetic-route-key")
 +    assert built["base_url"] == "https://wire.example/api"
+diff --git a/tests/gateway/test_profile_authority_io.py b/tests/gateway/test_profile_authority_io.py
+new file mode 100644
+index 0000000..59b03d3
+--- /dev/null
++++ b/tests/gateway/test_profile_authority_io.py
+@@ -0,0 +1,117 @@
++"""Profile preparation must retain ownership until a cancelled physical write finishes."""
++import asyncio
++import threading
++
++import pytest
++
++from tests.gateway.test_profile_runtime_io import _world
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('cancel_scope', ['caller', 'all_new_tasks'])
++@pytest.mark.parametrize('operation', [
++    'open_store', 'begin_runtime_epoch', 'recover_session_inputs', 'settle_recovered_unattended',
++    'backfill_legacy_session_owners', 'backfill_compression_created_sources', '_adopt',
++])
++async def test_cancelled_authority_preparation_keeps_physical_write_custody(tmp_path, monkeypatch, operation, cancel_scope):
++    from gateway import session_authority
++    from gateway.run_runtime import initialize_gateway_runtime, _build_profile_authority
++    from gateway.runtime_ownership import process_ownership
++    from hermes_constants import get_hermes_home
++
++    with _world(tmp_path, monkeypatch) as (runner, root, target):
++        await initialize_gateway_runtime(runner)
++        if operation == '_adopt':
++            from gateway.run import _profile_runtime_scope
++            from gateway.session_local import create_local_session
++            from gateway.session_cron import unbind_owner
++            from gateway.session_controls import AuthorityConnection
++            from tests.gateway.test_local_receipt_untracked_compression import _compact_like_0_22_2
++            from gateway import run
++            monkeypatch.setattr(run, '_load_gateway_config', lambda: {'platform_toolsets': {'cli': []}})
++            with _profile_runtime_scope(target, hydrate_secrets=False):
++                first = await _build_profile_authority(runner, 'alpha', target, register=False)
++                connection = AuthorityConnection(first, object(), {'user_id': 'owner'})
++                ref = create_local_session(first, connection.actor, {'request_id': 'fixture', 'source': 'tui',
++                    'cwd': str(target), 'model': 'm', 'toolsets': []})
++                _compact_like_0_22_2(first.db, ref.session_id, 'fixture-child')
++                await connection.close()
++                unbind_owner(first)
++                runner.session_authorities.remove(target)
++        entered, release, finished, observed = (threading.Event() for _ in range(4))
++        import hermes_state_registry
++        from gateway import session_local_adoption, session_unattended_unknown
++        module = {'open_store': hermes_state_registry, '_adopt': session_local_adoption,
++                  'settle_recovered_unattended': session_unattended_unknown}.get(operation, session_authority)
++        seam = 'acquire' if operation == 'open_store' else operation
++        native = getattr(module, seam)
++        writes, checks = [], []
++
++        def physical_write(*args, **kwargs):
++            if get_hermes_home().resolve() != target:
++                return native(*args, **kwargs)
++            if operation != 'open_store':
++                store = args[0].db if operation == '_adopt' else args[0]
++                assert store.db_path.resolve().parent == target
++            entered.set()
++            assert release.wait(8), 'the observer must release the private writer'
++            writes.append(process_ownership.owns(target))
++            try:
++                return native(*args, **kwargs)
++            finally:
++                finished.set()
++
++        monkeypatch.setattr(module, seam, physical_write)
++
++        async def owning_call():
++            try:
++                return await _build_profile_authority(runner, 'alpha', target, register=False)
++            finally:
++                if runner.session_authorities.for_home(target) is None:
++                    process_ownership.release(target)
++
++        prior_tasks = set(asyncio.all_tasks())
++        task = asyncio.create_task(owning_call())
++        loop = asyncio.get_running_loop()
++
++        def cancel_twice():
++            victims = {task} if cancel_scope == 'caller' else set(asyncio.all_tasks()) - prior_tasks
++            for victim in victims:
++                victim.cancel()
++                loop.call_soon(victim.cancel)
++            loop.call_soon(lambda: loop.call_soon(inspect_custody))
++
++        def inspect_custody():
++            checks.extend([task.done(), process_ownership.owns(target),
++                           runner._shutdown_executor(drain_timeout=0)])
++            observed.set()
++
++        def observe():
++            try:
++                if not entered.wait(8):
++                    return
++                loop.call_soon_threadsafe(cancel_twice)
++                observed.wait(5)
++            finally:
++                release.set()
++
++        watcher = threading.Thread(target=observe)
++        watcher.start()
++        try:
++            with pytest.raises(asyncio.CancelledError):
++                await task
++            assert await asyncio.to_thread(finished.wait, 8)
++            assert observed.is_set()
++            assert checks[0] is False, 'cancellation must wait for the physical writer'
++            assert checks[1] is True, 'profile reservation must outlive the write'
++            assert checks[2] >= 1, 'native shutdown must see this database writer'
++            assert writes == [True], 'physical mutation must not run after ownership release'
++            assert runner.session_authorities.for_home(target) is None
++            from gateway.session_cron import owner_for_home
++            assert owner_for_home(target) is None
++            assert not process_ownership.owns(target)
++        finally:
++            release.set()
++            await asyncio.to_thread(watcher.join, 8)
++            assert not watcher.is_alive()
++            assert await asyncio.to_thread(finished.wait, 8)
 diff --git a/tests/gateway/test_profile_authority_park_reason.py b/tests/gateway/test_profile_authority_park_reason.py
 index 37d0651b..11d5c723 100644
 --- a/tests/gateway/test_profile_authority_park_reason.py

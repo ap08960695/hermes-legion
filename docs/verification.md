@@ -1,3 +1,14 @@
+# v0.7.11: profile preparation cancellation and shutdown custody
+
+707 pinned paths. All bootstrap writes and the store opener drain their physical
+executor Future before cancellation releases profile custody. Native regression:
+273 files / 2,349 passed / 0 failed / 16 existing
+skips, zero retries. Final focused selection: 26 passed, overlapping the broad
+selection. Installed Linux/macOS: 7 native controls each; code-health clear and
+zero provider calls. See [profile bootstrap custody](profile-bootstrap-custody.md).
+No original-user conversation adoption or usage/RAM/cache saving is claimed.
+Historical results below overlap.
+
 # v0.7.10: atomic fresh schema with fewer initialization commits
 
 703 pinned paths. An empty SQLite schema gets one native declaration transaction;
