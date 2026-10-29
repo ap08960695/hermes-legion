@@ -1,3 +1,82 @@
+# v0.7.27: keep completed independent review evidence readable
+
+A later fresh automatic-dispatch case reached all original role handoffs:
+THINK complete, independent Analyst complete, ACTION requesting review, and the
+independent reviewer completing the same card. All seven artifact checks passed.
+It used 37 physical requests, and real THINK/Analyst calls overlapped for about
+2.91 seconds. Four local automation admissions actually reached terminal
+completed state. Captain then could not inspect the completed original card:
+validation still treated the reviewer as an unrelated ACTION assignee. The
+native goal correctly paused. This failed case is retained without replay;
+it does not establish successful whole-goal completion.
+
+The validator now recognizes a completed independent review only when the latest
+native run is completed, has an end timestamp, matches the current assignee and
+has the native claimed-event provenance of a review run. It keeps the original
+actor, parent/run/hash, step, dependencies and write scope intact. Foreign
+terminal assignees remain refused. No alternate role registry, status rewrite,
+model request, automatic retry or authority bypass is introduced.
+
+The new real-world regression failed before the fix while two foreign-assignee
+controls passed. The final combined related selection has 8 files / 58 passes,
+zero failures and zero file retries. Linux and macOS production Python each
+pass six installed-source checks with zero network/model requests, including
+completed-review readback and foreign completed-assignee refusal. The same
+release includes the strict step-ID brief/error clarification described below.
+Full provider-backed reacceptance remains separate; original-session adoption,
+all provider pairs, production usage savings and shared-cache causality are
+not established. Historical overlapping suites must not be summed.
+
+A subsequent fresh bounded case stopped before ACTION because Captain's brief
+introduced an underscore-containing internal step ID as an explicit requirement.
+THINK detected its conflict with the strict grammar and asked for clarification.
+The private case drained after 21 physical requests and was not replayed. This
+separate coordination/policy issue remains open: routine internal identifiers
+should not require owner intervention, while externally meaningful identifiers
+and material authority gates must remain protected. No approval rule or identifier
+validator was weakened to make the case pass.
+
+---
+
+# v0.7.27: advertise strict THINK step IDs before handoff
+
+A fresh bounded automatic-dispatch case completed the independent Analyst work,
+but the THINK bot submitted an underscore-containing step ID. The unchanged
+validator correctly refused it. Its former error said only “unique lowercase id,”
+and the worker brief omitted the accepted grammar, so the bot unnecessarily
+asked the user about a technical formatting rule. That failed case used 22
+physical requests after its private workers drained; it is retained, never
+replayed, and is not reported as a successful full loop.
+
+The brief and error now state `[a-z][a-z0-9-]{0,63}` and explicitly exclude
+underscores. The existing validator, exact plan hash, run binding, write scopes,
+independent review, quotas, effort ceilings and approval policy are unchanged.
+No tool, parser relaxation, retry or model call is added by the repair.
+
+Two new tests failed on the unchanged parent. The final related selection has
+8 files / 58 passes / zero failures and file retries. Scoped source health and
+Ruff pass. Linux and macOS production Python each pass six installed-source
+checks using native SQLite/configuration/handoff APIs, with no network or model
+requests: brief grammar, atomic invalid-ID refusal, durable valid plan, and
+legacy completion. These checks do not establish provider-backed autonomy.
+
+A separate earlier case used 18 requests and stopped at an inline Python command
+approval refusal. The policy remains deny. Existing jq passed the real native
+Terminal path for read-only JSON aggregation while inline Python remained
+blocked. Capability selection must preserve approval boundaries; it is not
+permission to disable them or replay a failed task.
+
+The complete 759-path public patch is verified by apply/reverse/reapply on both
+hosts, and installed source parity is checked separately. Linux activation is
+idle-only. The original macOS Gateway stays off. Fresh provider-backed full-loop
+acceptance remains separate work. Original-session adoption, all provider pairs,
+production usage savings and cross-bot cache causality are not established.
+Earlier broad auxiliary testing retains twenty documented inherited failures;
+this scoped passing selection is not a globally green upstream suite.
+Historical selections below overlap and must not be summed.
+
+---
+
 # v0.7.26: lazy local adapter owner binding
 
 Consolidated kit:759 source paths. Related native wake/local/notifier selection:

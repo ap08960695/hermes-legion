@@ -70,7 +70,7 @@ Captain selects an eligible role pair using existing project, confidentiality, t
 
 The native handoff requires a current THINK run, validates the plan, and stores its SHA256 plus the bounded plan on that same run. The plan survives managed scratch-workspace cleanup. It is not an instruction to retain the complete THINK conversation.
 
-Limits: version 1; at most 16 steps; at most 16 constraints and acceptance items per step; at most 500 characters per item; 2,000 characters per step instruction; 16 KiB total canonical JSON. Step IDs must be unique lowercase identifiers. An empty `write_scope` declares no writes. Declared paths are relative literal paths; they do not grant filesystem permission.
+Limits: version 1; at most 16 steps; at most 16 constraints and acceptance items per step; at most 500 characters per item; 2,000 characters per step instruction; 16 KiB total canonical JSON. Step IDs must be unique and match `[a-z][a-z0-9-]{0,63}`: 1–64 characters, starting with a lowercase letter, then lowercase letters, digits or hyphens. Use `implement-inventory`, not `implement_inventory`. The THINK worker brief and a refused handoff both state this grammar; invalid plans still leave the current run intact. An empty `write_scope` declares no writes. Declared paths are relative literal paths; they do not grant filesystem permission.
 
 ## THINK → ACTION
 
@@ -138,3 +138,5 @@ Both halves must be admitted by the owning fleet dispatcher's existing profile
 allowlist. A routed Captain's private configuration cannot widen that list. If a
 chosen pair is unavailable, decomposition refuses it instead of silently assigning
 the work to another bot or account.
+
+Completed independent review remains readable through the original card and pinned plan. A completed reviewer is recognized only by its latest completed native run, matching current assignee, and the original native claim marked as review. An unrelated terminal assignee cannot borrow that provenance. No new execution or publication authority is granted.

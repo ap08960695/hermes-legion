@@ -27523,10 +27523,10 @@ index 0000000000000000000000000000000000000000..58b56c27b5d1935a0575e16d2d3b41aa
 +    return prepared
 diff --git a/hermes_cli/kanban_role_flow.py b/hermes_cli/kanban_role_flow.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..4afc20b6e88ff775a68240303dbf9a0887b2af3c
+index 00000000..211ad980
 --- /dev/null
 +++ b/hermes_cli/kanban_role_flow.py
-@@ -0,0 +1,210 @@
+@@ -0,0 +1,223 @@
 +"""Role-specific plans on native task runs; no second scheduler or model calls.
 +
 +Plans are bounded immutable handoff metadata. They survive scratch cleanup and
@@ -27596,7 +27596,8 @@ index 0000000000000000000000000000000000000000..4afc20b6e88ff775a68240303dbf9a08
 +
 +    if (not isinstance(step, dict) or set(step) - {'id', 'instructions', 'acceptance', 'write_scope', 'after'}
 +            or not isinstance(step.get('id'), str) or not _ID.fullmatch(step['id']) or step['id'] in ids):
-+        raise ValueError('role_plan step needs a unique lowercase id')
++        raise ValueError('role_plan step needs a unique lowercase id matching '
++                         '[a-z][a-z0-9-]{0,63} (no underscores)')
 +    instructions = step.get('instructions')
 +    if not isinstance(instructions, str) or not instructions.strip() or len(instructions) > 2000:
 +        raise ValueError('role_plan step instructions must contain 1 to 2000 characters')
@@ -27646,7 +27647,7 @@ index 0000000000000000000000000000000000000000..4afc20b6e88ff775a68240303dbf9a08
 +    if (actor is None or actor['mode'] != 'action' or actor['counterpart'] != run.profile
 +            or thinker['counterpart'] != binding['actor'] or binding['sha256'] != record['sha256']):
 +        raise ValueError('ACTION role plan counterpart or hash mismatch')
-+    review = task.status == 'review' or (task.current_run_id is not None
++    review = task.status == 'review' or _completed_review(conn, task) or (task.current_run_id is not None
 +                                        and kb._retry_status_for_run(conn, task.id) == 'review')
 +    if task.assignee != binding['actor'] and not review:
 +        raise ValueError('ACTION role plan belongs to another bot')
@@ -27658,6 +27659,17 @@ index 0000000000000000000000000000000000000000..4afc20b6e88ff775a68240303dbf9a08
 +        raise ValueError('ACTION role plan step is missing')
 +    _step_dependencies(conn, task, parent, run, record, step)
 +    return record, step
++
++
++def _completed_review(conn, task):
++    """A terminal reviewer keeps its own native claim provenance for readback."""
++    from hermes_cli import kanban_db as kb
++
++    if task.status != 'done':
++        return False
++    run = kb.latest_run(conn, task.id)
++    return (run is not None and run.profile == task.assignee and run.outcome == 'completed'
++            and run.ended_at is not None and kb._retry_status_for_run(conn, task.id, run.id) == 'review')
 +
 +
 +def _step_dependencies(conn, task, parent, run, record, step):
@@ -27726,6 +27738,7 @@ index 0000000000000000000000000000000000000000..4afc20b6e88ff775a68240303dbf9a08
 +        return ('## THINK planning contract\nPlan only; do not implement changes. Complete with metadata.role_plan: '
 +                '{version:1, role:"' + workflow['role'] + '", constraints:[text], steps:[{id, instructions, '
 +                'acceptance:[text], write_scope:[relative path], after:[earlier step id]}]}. '
++                'Each id must be unique and match [a-z][a-z0-9-]{0,63} (no underscores). '
 +                'Keep it within 16 KiB and 16 steps. Empty write_scope means no declared writes. '
 +                'Split independent work; order steps that share write paths. No new authorization or paid fallback.\n')
 +    return ''
@@ -49218,10 +49231,10 @@ index 0000000000000000000000000000000000000000..72fa96e134cb1f21be00e8315f49b3e9
 +    assert kb.get_task(c,first).status=='ready'
 diff --git a/tests/hermes_cli/test_kanban_role_flow.py b/tests/hermes_cli/test_kanban_role_flow.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..5dcc0700f34c4d7a960f21edd6e69aa796fb881b
+index 00000000..820664cb
 --- /dev/null
 +++ b/tests/hermes_cli/test_kanban_role_flow.py
-@@ -0,0 +1,296 @@
+@@ -0,0 +1,357 @@
 +"""Native role handoffs, idempotency and review: isolated SQLite, zero inference."""
 +import hashlib
 +import json
@@ -49518,6 +49531,67 @@ index 0000000000000000000000000000000000000000..5dcc0700f34c4d7a960f21edd6e69aa7
 +    assert action(world, parent) == tid
 +    assert kb.get_task(conn, tid).status == 'archived'
 +    assert len(kb.list_runs(conn, tid)) == 1
++
++
++def test_think_brief_explains_step_id_grammar_before_handoff(world):
++    conn = world[0]
++    tid = create(world, 'developer-think')
++    kb.claim_task(conn, tid)
++    context = kb.build_worker_context(conn, tid)
++    assert '[a-z][a-z0-9-]{0,63}' in context
++    assert 'no underscores' in context
++
++
++def test_invalid_step_id_refusal_explains_format_and_preserves_run(world):
++    conn = world[0]
++    tid = create(world, 'developer-think')
++    run = kb.claim_task(conn, tid)
++    value = plan()
++    value['steps'][0]['id'] = 'implement_inventory_and_request_review'
++    with pytest.raises(ValueError) as error:
++        kb.complete_task(conn, tid, summary='Plan ready', metadata={'role_plan': value},
++                         expected_run_id=run.current_run_id, fire_lifecycle_hook=False)
++    assert '[a-z][a-z0-9-]{0,63}' in str(error.value)
++    assert 'no underscores' in str(error.value)
++    task = kb.get_task(conn, tid)
++    assert task.status == 'running' and task.current_run_id == run.current_run_id
++    current = kb.latest_run(conn, tid)
++    assert current.ended_at is None and not (current.metadata or {}).get('role_plan')
++
++
++def test_completed_independent_review_keeps_original_plan_evidence_readable(world):
++    conn = world[0]
++    parent, _ = finish_plan(world)
++    tid = action(world, parent)
++    implementer = kb.claim_task(conn, tid)
++    assert kb.request_review(conn, tid, summary='Ready', reviewer='independent-reviewer',
++                             expected_run_id=implementer.current_run_id)
++    review = kb.claim_review_task(conn, tid)
++    assert kb.complete_task(conn, tid, summary='Verified', expected_run_id=review.current_run_id,
++                            fire_lifecycle_hook=False)
++    context = kb.build_worker_context(conn, tid)
++    assert 'Write the deterministic fixture.' in context
++    assert kb.get_task(conn, tid).assignee == 'independent-reviewer'
++    assert kb.latest_run(conn, tid).id == review.current_run_id
++
++
++@pytest.mark.parametrize('has_review', [False, True])
++def test_terminal_plan_cannot_borrow_unrelated_assignee(world, has_review):
++    conn = world[0]
++    parent, _ = finish_plan(world)
++    tid = action(world, parent)
++    run = kb.claim_task(conn, tid)
++    if has_review:
++        assert kb.request_review(conn, tid, summary='Ready', reviewer='independent-reviewer',
++                                 expected_run_id=run.current_run_id)
++        run = kb.claim_review_task(conn, tid)
++    assert kb.complete_task(conn, tid, summary='Verified', expected_run_id=run.current_run_id,
++                            fire_lifecycle_hook=False)
++    with kb.write_txn(conn):
++        conn.execute('UPDATE tasks SET assignee=? WHERE id=?', ('unrelated-reader', tid))
++    with pytest.raises(ValueError, match='belongs to another bot'):
++        kb.build_worker_context(conn, tid)
++    assert kb.latest_run(conn, tid).id == run.current_run_id
 diff --git a/tests/hermes_cli/test_kanban_run_inputs.py b/tests/hermes_cli/test_kanban_run_inputs.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..2a04b5ef28aa550e8ea0015c912545cb7a9c74a9
