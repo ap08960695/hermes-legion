@@ -32207,10 +32207,10 @@ index b3e999dd66c55324219c30e38c6822441d26e01d..f3489c89fb0f87f22edaeddd8da8c648
          # and duplicating them in the lineage display read (#59661).
 diff --git a/hermes_state_global_recall.py b/hermes_state_global_recall.py
 new file mode 100644
-index 00000000..36f81fcc
+index 00000000..e534fa78
 --- /dev/null
 +++ b/hermes_state_global_recall.py
-@@ -0,0 +1,868 @@
+@@ -0,0 +1,902 @@
 +"""Bounded verification of structured FTS hits with the active SQLite tokenizer."""
 +
 +from __future__ import annotations
@@ -32240,6 +32240,7 @@ index 00000000..36f81fcc
 +_HEX_DIGITS = frozenset('0123456789abcdefABCDEF')
 +_ASCII_LOWER = str.maketrans('ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')
 +_SURROGATES = re.compile(r'[\ud800-\udfff]')
++_ASCII_WORD_RUN = re.compile(r'[A-Za-z0-9]+')
 +
 +
 +def _positions_complete(positions):
@@ -32664,6 +32665,58 @@ index 00000000..36f81fcc
 +            start_char = start_byte = None
 +            return bool(token_specs) and remaining == 0
 +
++        def consume_ascii(text):
++            nonlocal normalized, start_char, start_byte, chars, size, binary
++            cursor = 0
++            for word in _ASCII_WORD_RUN.finditer(text):
++                begin, end = word.span()
++                if begin > cursor:
++                    if finish():
++                        return cursor
++                    binary |= text.find('\x00', cursor, begin) >= 0
++                    chars += begin - cursor
++                    size += begin - cursor
++                if start_char is None:
++                    start_char, start_byte = chars, size
++                if len(normalized) <= max_token:
++                    folded = text[begin:min(end, begin + max_token + 1)].lower()
++                    normalized = (normalized + folded)[:max_token + 1]
++                chars += end - begin
++                size += end - begin
++                cursor = end
++            if cursor < len(text):
++                if finish():
++                    return cursor
++                binary |= text.find('\x00', cursor) >= 0
++                chars += len(text) - cursor
++                size += len(text) - cursor
++            return None
++
++        def consume_unicode(text):
++            nonlocal normalized, start_char, start_byte, chars, size, binary
++            chunk_start_chars = chars
++            current_chars, current_bytes, current_binary = chars, size, binary
++            for char in text:
++                code = ord(char)
++                current_binary |= code == 0 or 0xD800 <= code <= 0xDFFF
++                is_token, folded = self.oracle.classify(char)
++                if cjk_split and any(_cjk_token_boundary(ord(c)) for c in folded):
++                    finish()
++                    # A quoted Latin phrase cannot jump over native CJK tokens.
++                    recent.clear()
++                elif is_token:
++                    if folded and start_char is None:
++                        start_char, start_byte = current_chars, current_bytes
++                    if len(normalized) <= max_token:
++                        normalized = (normalized + folded)[:max_token + 1]
++                elif finish():
++                    chars, size, binary = current_chars, current_bytes, current_binary
++                    return current_chars - chunk_start_chars
++                current_chars += 1
++                current_bytes += 1 if code < 128 else len(char.encode('utf-8', 'surrogatepass'))
++            chars, size, binary = current_chars, current_bytes, current_binary
++            return None
++
 +        chunks = iter(chunks)
 +        for text in chunks:
 +            if self.deadline is not None and time.monotonic() >= self.deadline:
@@ -32671,30 +32724,11 @@ index 00000000..36f81fcc
 +            if _positions_complete(positions):
 +                chars, size, binary = _remaining_text_state(text, chunks, self.deadline, chars, size, binary)
 +                return positions, chars, size, binary
-+            chunk_start_chars = chars
-+            for char in text:
-+                code = ord(char)
-+                binary |= code == 0 or 0xD800 <= code <= 0xDFFF
-+                is_token, folded = self.oracle.classify(char)
-+                if cjk_split and any(_cjk_token_boundary(ord(c)) for c in folded):
-+                    finish()
-+                    # Native CJK tokenization emits one or more CJK tokens;
-+                    # a quoted Latin phrase cannot jump across them.
-+                    recent.clear()
-+                elif is_token:
-+                    if folded and start_char is None:
-+                        start_char, start_byte = chars, size
-+                    # An extra normalized character distinguishes exact words
-+                    # from prefixes without retaining arbitrarily long tokens.
-+                    if len(normalized) <= max_token:
-+                        normalized = (normalized + folded)[:max_token + 1]
-+                else:
-+                    if finish():
-+                        chars, size, binary = _remaining_text_state(
-+                            text[chars - chunk_start_chars:], chunks, self.deadline, chars, size, binary)
-+                        return positions, chars, size, binary
-+                chars += 1
-+                size += 1 if code < 128 else len(char.encode('utf-8', 'surrogatepass'))
++            consume = consume_ascii if text.isascii() else consume_unicode
++            stopped = consume(text)
++            if stopped is not None:
++                chars, size, binary = _remaining_text_state(text[stopped:], chunks, self.deadline, chars, size, binary)
++                return positions, chars, size, binary
 +        finish()
 +        return positions, chars, size, binary
 +
@@ -54113,6 +54147,70 @@ index 2a7cb7872d7389b5741c9626ecf350aaa5e16536..92c5c81e52d44a1112d5607e144a9485
 +    response=client.post('/api/fs/preview-check',json={'session_id':'origin','paths':['photo.tiff','huge.md']})
 +    assert response.status_code==200
 +    assert [row['state'] for row in response.json()['files']]==['unsupported','too_large']
+diff --git a/tests/hermes_state/test_ascii_token_runs.py b/tests/hermes_state/test_ascii_token_runs.py
+new file mode 100644
+index 00000000..ca15cbe1
+--- /dev/null
++++ b/tests/hermes_state/test_ascii_token_runs.py
+@@ -0,0 +1,58 @@
++"""ASCII argument misses should not require one Python tokenizer call per byte."""
++
++import json
++import sqlite3
++
++import pytest
++
++import hermes_state_global_recall as recall
++
++
++@pytest.mark.parametrize("route", ["decoded", "native"])
++def test_large_ascii_miss_uses_bounded_character_classification(monkeypatch, route):
++    with sqlite3.connect(":memory:") as db:
++        db.execute("CREATE TABLE messages(id INTEGER PRIMARY KEY, tool_calls TEXT)")
++        raw = json.dumps({"function": {"name": "fixture_command", "arguments": "unrelated " * 50_000}})
++        db.execute("INSERT INTO messages VALUES(1, ?)", (raw,))
++        original = recall._Unicode61.classify
++        calls = 0
++
++        def observed(self, char):
++            nonlocal calls
++            calls += 1
++            if calls > 4096:
++                raise TimeoutError("synthetic per-character work budget exhausted")
++            return original(self, char)
++
++        monkeypatch.setattr(recall._Unicode61, "classify", observed)
++        search = recall.GlobalSearch(db, [("absentword", False)])
++        try:
++            actual = search.tool_contains(1, "absentword") if route == "decoded" else search.native_field_contains(
++                1, "tool_calls", "absentword")
++            assert actual == 0
++            assert calls <= 4096
++        finally:
++            search.close()
++
++
++@pytest.mark.parametrize("text, term, prefix, expected", [
++    ("x" * 65535 + "needle", "needle", False, False),
++    ("x" * 65535 + " needle", "needle", False, True),
++    ("needle" + "x" * 65535, "needle", False, False),
++    ("needle" + "x" * 65535, "needle", True, True),
++    ("alpha" + ", " * 40000 + "beta", "alpha beta", False, True),
++    ("prefix ไทย needle café", "cafe", False, True),
++])
++def test_ascii_runs_preserve_native_boundaries_and_unicode(text, term, prefix, expected):
++    with sqlite3.connect(":memory:") as db:
++        db.execute("CREATE TABLE messages(id INTEGER PRIMARY KEY, content TEXT)")
++        raw = "\x00json:" + json.dumps([{"type": "text", "text": text}])
++        db.execute("INSERT INTO messages VALUES(1, ?)", (raw,))
++        search = recall.GlobalSearch(db, [(term, prefix)])
++        try:
++            assert bool(search.contains(1, term, prefix)) == expected
++            info = search.info(1)
++            assert info["chars"] == len(text)
++            assert info["bytes"] == len(text.encode("utf-8"))
++        finally:
++            search.close()
 diff --git a/tests/hermes_state/test_bounded_search_snippet.py b/tests/hermes_state/test_bounded_search_snippet.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..e36170ad9decffa2b3306f4bf83388db15a308e0

@@ -1,3 +1,48 @@
+# v0.7.35: faster ASCII history verification with unchanged matching
+
+A large ASCII argument miss still called the Python character classifier once per
+character even after the earlier positive-match optimization. Two native SQLite
+resource regressions reproduce this unnecessary work through decoded and raw field
+checks. The verifier now consumes bounded ASCII word/gap runs with a compiled
+standard-library regex, preserving the exact existing ASCII letters/digits rule.
+Non-ASCII chunks retain the native Unicode61 codepoint classifier and CJK boundary
+handling. No extra index, database connection, dependency or model call is added.
+
+Prefix matching, phrases across long punctuation/chunk boundaries, words split
+between chunks, Unicode folding, complete character/UTF-8 byte metadata, binary
+flags, suffix validation and loud deadlines remain checked. Token buffers retain
+their original query-sized bounds; huge word runs are sliced only to that bound.
+No full field hydration or matching-policy change is introduced.
+
+The final related selection passes 241 files / 2316 tests,
+zero failures, 16 existing skips and zero file retries with four
+workers. Scoped source health and test Ruff pass; the existing runtime FURB167
+alias warning is unchanged. Overlapping selections are not summed. Native production
+Python on Linux and macOS each passes fifteen installed controls, including real
+registry discovery, decoded/raw negative work bounds, exact cross-chunk offsets,
+prefix/late/malformed/deadline behavior and full Unicode/binary metadata.
+Both hosts install the exact two paths with scoped rollback and metadata restored
+before publication. Full-kit apply/reverse/reapply and installed parity are verified
+on both hosts. Linux activation is native and idle-only; original Mac Gateway stays
+off. No renderer, quota, model, account, tool schema or prompt-prefix change is made.
+
+Four sequential uninstrumented ABBA component samples preserve boolean results:
+
+| Synthetic case | Before, ms | After, ms |
+|---|---|---|
+| 500k-character ASCII word miss | 112.24 / 111.05 | 41.56 / 41.44 |
+| 500k-character single ASCII word miss | 64.50 / 65.23 | 2.07 / 2.14 |
+| 200k-character Unicode control miss | 78.70 / 68.56 | 74.53 / 70.12 |
+| Early positive with 500k-character suffix | 2.09 / 1.97 | 2.01 / 1.99 |
+
+These are small-sample component observations, not original-workload latency, RAM,
+model-token or provider-cache evidence. The Unicode/positive controls establish no
+general performance ranking. The earlier original Captain baseline timeout remains
+a separate preserved condition; it has not been replayed, and candidate success
+on that original query is not claimed. The broader Hermes objective stays active.
+
+---
+
 # v0.7.34: avoid redundant work after verified argument matches
 
 Boolean tool-argument checks previously kept tokenizing or case-folding unrelated
