@@ -40,6 +40,29 @@ Both links must be reciprocal, with matching roles and opposite modes. Supported
 
 Create new counterpart bots when needed. Before converting an existing bot, inspect its assigned unfinished work and active sessions. Do not repurpose a live worker to satisfy a rollout checklist. Keep planning bots' tools limited to their planning duties; a role label is not an execution sandbox.
 
+## Discover the plan contract before writing a brief
+
+Run `hermes profile list --routing-json` once when coordinating role work.
+When the already bounded roster includes an admitted THINK bot, the root response
+also contains one `role_plan_contract`: version, native metadata handoff, the
+validator's step-ID pattern, a valid example, and ID-choice ownership. It is
+omitted for legacy-only, empty and unavailable planning rosters. The existing
+64-profile cap and secret-safe saved-config reader remain unchanged.
+
+THINK chooses compliant internal step IDs; Captain supplies requirements rather
+than prescribing those IDs. Keep required external file/API names in instructions
+and write scopes. For example, a compliant internal ID may be `implement-feature`
+while required names such as `summarize_records` and `inventory_data.py` retain
+their underscores. This is guidance for choosing internal metadata, not automatic
+renaming, a validator relaxation, permission to ignore an exact external contract,
+or authority for a material scope change.
+
+The THINK worker brief uses the same ownership/external-name guidance. Discovery
+is opt-in metadata, not an addition to every model tool schema or an injection
+into existing conversations. Saved admission and a planning contract do not prove
+provider readiness, remaining quota, current claims or permission to start work.
+Current quota, stop, write-scope, review and publication checks still apply.
+
 ## Captain → THINK
 
 Captain selects an eligible role pair using existing project, confidentiality, tool, quota and approval gates. Send THINK a bounded planning task with clear acceptance criteria. THINK plans only and completes its native task with a structured `metadata.role_plan`:

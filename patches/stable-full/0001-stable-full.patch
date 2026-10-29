@@ -27523,10 +27523,10 @@ index 0000000000000000000000000000000000000000..58b56c27b5d1935a0575e16d2d3b41aa
 +    return prepared
 diff --git a/hermes_cli/kanban_role_flow.py b/hermes_cli/kanban_role_flow.py
 new file mode 100644
-index 00000000..211ad980
+index 00000000..cfbf561f
 --- /dev/null
 +++ b/hermes_cli/kanban_role_flow.py
-@@ -0,0 +1,223 @@
+@@ -0,0 +1,237 @@
 +"""Role-specific plans on native task runs; no second scheduler or model calls.
 +
 +Plans are bounded immutable handoff metadata. They survive scratch cleanup and
@@ -27539,6 +27539,18 @@ index 00000000..211ad980
 +import re
 +
 +_ID = re.compile(r'[a-z][a-z0-9-]{0,63}\Z')
++
++
++def planning_contract():
++    """On-demand guidance for internal IDs; existing validation remains authoritative."""
++    return {'version': 1, 'handoff': 'metadata.role_plan',
++            'step_id': {'pattern': _ID.pattern, 'example': 'implement-feature', 'owner': 'think'},
++            'step_id_guidance': 'THINK chooses compliant internal step IDs; '
++                                'Captain supplies requirements, not prescribed step IDs.',
++            'external_names': 'Preserve exact required external file/API names in instructions/write_scope; '
++                              'never rename them to match step IDs.',
++            'authority': 'Internal metadata choices grant no new authority; '
++                         'ask about material scope changes or incompatible externally required names.'}
 +
 +
 +def role_config(profile):
@@ -27735,10 +27747,12 @@ index 00000000..211ad980
 +                'Existing quota, permissions, independent review and publication gates still apply.\n')
 +    workflow = role_config(task.assignee)
 +    if workflow and workflow['mode'] == 'think':
++        contract = planning_contract()
 +        return ('## THINK planning contract\nPlan only; do not implement changes. Complete with metadata.role_plan: '
 +                '{version:1, role:"' + workflow['role'] + '", constraints:[text], steps:[{id, instructions, '
 +                'acceptance:[text], write_scope:[relative path], after:[earlier step id]}]}. '
 +                'Each id must be unique and match [a-z][a-z0-9-]{0,63} (no underscores). '
++                + contract['step_id_guidance'] + ' ' + contract['external_names'] + ' '
 +                'Keep it within 16 KiB and 16 steps. Empty write_scope means no declared writes. '
 +                'Split independent work; order steps that share write paths. No new authorization or paid fallback.\n')
 +    return ''
@@ -28683,10 +28697,10 @@ index dfde72ad..ce736da7 100644
      from hermes_cli.profiles import format_profile_label, get_active_profile_name, list_profiles
 diff --git a/hermes_cli/profile_routing.py b/hermes_cli/profile_routing.py
 new file mode 100644
-index 00000000..c493e366
+index 00000000..6be37506
 --- /dev/null
 +++ b/hermes_cli/profile_routing.py
-@@ -0,0 +1,65 @@
+@@ -0,0 +1,71 @@
 +"""Bounded saved routing metadata for the existing profile CLI, never a readiness probe."""
 +from __future__ import annotations
 +
@@ -28746,10 +28760,16 @@ index 00000000..c493e366
 +        allowed = _dispatch_profile_allowlist(normalize_profile_name)
 +        names = sorted(set(list_profile_names()))
 +        names = [name for name in names if allowed is None or name in allowed]
-+        return {'version': 1, 'profiles': [_entry(name, root, allowed) for name in names[:_LIMIT]],
-+                'total_profiles': len(names), 'truncated': len(names) > _LIMIT,
-+                'readiness': 'not_probed',
-+                'authority': 'Saved routing metadata only; current dispatch, quota, stop, review and resource gates still apply.'}
++        rows = [_entry(name, root, allowed) for name in names[:_LIMIT]]
++        result = {'version': 1, 'profiles': rows,
++                  'total_profiles': len(names), 'truncated': len(names) > _LIMIT,
++                  'readiness': 'not_probed',
++                  'authority': 'Saved routing metadata only; current dispatch, quota, stop, review and resource gates still apply.'}
++        if any(row.get('dispatch_admitted') is True
++               and (row.get('workflow') or {}).get('mode') == 'think' for row in rows):
++            from hermes_cli.kanban_role_flow import planning_contract
++            result['role_plan_contract'] = planning_contract()
++        return result
 +    finally:
 +        reset_hermes_home_override(token)
 diff --git a/hermes_cli/profiles.py b/hermes_cli/profiles.py
@@ -49231,10 +49251,10 @@ index 0000000000000000000000000000000000000000..72fa96e134cb1f21be00e8315f49b3e9
 +    assert kb.get_task(c,first).status=='ready'
 diff --git a/tests/hermes_cli/test_kanban_role_flow.py b/tests/hermes_cli/test_kanban_role_flow.py
 new file mode 100644
-index 00000000..820664cb
+index 00000000..5cd7b44f
 --- /dev/null
 +++ b/tests/hermes_cli/test_kanban_role_flow.py
-@@ -0,0 +1,357 @@
+@@ -0,0 +1,369 @@
 +"""Native role handoffs, idempotency and review: isolated SQLite, zero inference."""
 +import hashlib
 +import json
@@ -49592,6 +49612,18 @@ index 00000000..820664cb
 +    with pytest.raises(ValueError, match='belongs to another bot'):
 +        kb.build_worker_context(conn, tid)
 +    assert kb.latest_run(conn, tid).id == run.current_run_id
++
++
++def test_think_owns_internal_ids_without_renaming_external_requirements(world):
++    conn = world[0]
++    body = 'Preserve exact API summarize_records and artifact inventory_data.py.'
++    tid = create(world, 'developer-think', body)
++    kb.claim_task(conn, tid)
++    context = kb.build_worker_context(conn, tid)
++    assert 'THINK chooses compliant internal step IDs' in context
++    assert 'external file/API names' in context
++    assert 'summarize_records' in context and 'inventory_data.py' in context
++    assert kb.get_task(conn, tid).body == body
 diff --git a/tests/hermes_cli/test_kanban_run_inputs.py b/tests/hermes_cli/test_kanban_run_inputs.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..2a04b5ef28aa550e8ea0015c912545cb7a9c74a9
@@ -50870,10 +50902,10 @@ index 0000000000000000000000000000000000000000..6256a6eafce2e41b60b5a0d8ed00d9b1
 +        assert rows[0]['profile']=='writer' and 'system_prompt' not in rows[0]
 diff --git a/tests/hermes_cli/test_profile_routing_snapshot.py b/tests/hermes_cli/test_profile_routing_snapshot.py
 new file mode 100644
-index 00000000..f6ff9720
+index 00000000..d87fcc9c
 --- /dev/null
 +++ b/tests/hermes_cli/test_profile_routing_snapshot.py
-@@ -0,0 +1,109 @@
+@@ -0,0 +1,143 @@
 +"""Compact routing metadata uses native profile/dispatch rules without provider work."""
 +import argparse
 +import json
@@ -50983,6 +51015,40 @@ index 00000000..f6ff9720
 +    assert rows['action']['pair_status']=='unreadable'
 +    assert not list(fleet.rglob('*.corrupt.*'))
 +    assert 'private-invalid-sentinel' not in json.dumps(result)
++
++
++def test_discovery_contract_example_can_complete_a_native_think_handoff(fleet):
++    import re
++    from hermes_cli import kanban_db as kb, kanban_db_connect as kbc
++    from hermes_cli.profile_routing import routing_snapshot
++    from hermes_cli.kanban_role_flow import completed_plan
++    before = {p: p.read_bytes() for p in fleet.rglob('config.yaml')}
++    snapshot = routing_snapshot()
++    contract = snapshot['role_plan_contract']
++    step_id = contract['step_id']['example']
++    assert contract['handoff'] == 'metadata.role_plan' and contract['version'] == 1
++    assert contract['step_id']['owner'] == 'think'
++    assert re.fullmatch(contract['step_id']['pattern'], step_id)
++    assert not re.fullmatch(contract['step_id']['pattern'], 'implement_inventory')
++    with kbc.connect_closing() as conn:
++        tid = kb.create_task(conn, title='Discoverable synthetic plan', assignee='think',
++                              workspace_kind='dir', workspace_path=str(fleet))
++        run = kb.claim_task(conn, tid)
++        value = {'version': 1, 'role': 'developer', 'constraints': ['No new authority'],
++                 'steps': [{'id': step_id, 'instructions': 'Preserve summarize_records in inventory_data.py',
++                            'acceptance': ['Offline checks pass'], 'write_scope': ['inventory_data.py']}]}
++        assert kb.complete_task(conn, tid, summary='Plan ready', metadata={'role_plan': value},
++                                expected_run_id=run.current_run_id, fire_lifecycle_hook=False)
++        assert completed_plan(conn, tid)[3]['plan'] == value
++    assert {p: p.read_bytes() for p in fleet.rglob('config.yaml')} == before
++
++
++def test_legacy_only_discovery_omits_plan_contract(fleet):
++    from hermes_cli.profile_routing import routing_snapshot
++    atomic_config_replace(fleet/'config.yaml', {'kanban': {'dispatch_profiles': ['analyst']}})
++    snapshot = routing_snapshot()
++    assert [row['name'] for row in snapshot['profiles']] == ['analyst']
++    assert 'role_plan_contract' not in snapshot
 diff --git a/tests/hermes_cli/test_prompt_suggestion_context.py b/tests/hermes_cli/test_prompt_suggestion_context.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..702570ec97c5286c5b0ae8ca2dbcd1e40ab4053c

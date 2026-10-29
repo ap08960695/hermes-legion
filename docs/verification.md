@@ -1,3 +1,76 @@
+# v0.7.28: discover the role-plan contract before creating work
+
+A retained failed automatic-dispatch case showed Captain prescribing an internal
+step ID that contradicted the validator. THINK then asked the user to resolve
+that technical conflict. The repair makes the existing native routing CLI expose
+the plan contract once, only when its bounded admitted roster includes THINK.
+Its example and pattern come from the native role-plan module. The same module
+supplies ID-choice ownership and external-name guidance in the THINK worker brief.
+No global tool schema, account, quota, provider, model, approval or validator
+change is introduced. No existing conversation prefix or worker is reloaded.
+
+Before the change, two new behavior checks failed. The final related native
+selection passes 9 files / 68 tests, with zero failures and zero file retries.
+A third control keeps legacy-only discovery free of the planning contract.
+The CLI test consumes the advertised ID through a real SQLite THINK completion
+and checks that profile configuration remains byte-identical. Existing empty,
+unadmitted, corrupt-peer, bounded-roster and secret-output controls still pass.
+The worker test keeps exact externally required file/API names intact.
+Scoped source health and Ruff pass.
+
+Linux and macOS production Python each pass eight installed-source checks with
+zero network/model requests, including native CLI contract discovery and a
+legacy-only omission, a durable native plan using its advertised ID, strict
+invalid-ID refusal, completed-review readback and foreign-assignee rejection.
+The complete 759-path patch is checked by apply/reverse/reapply on both hosts,
+with installed parity checked separately. Linux activation is idle-only; the
+original Mac Gateway stays off. No renderer rebuild is needed.
+
+A fresh provider-backed private GPT role loop now completed end to end using the
+same frozen source and its actual embedded dispatcher: three original cards,
+four native runs, a validated THINK plan, independent Analyst reference, paired
+ACTION, independent review on the same card, Captain verification and native
+goal done. Only the initial user prompt was submitted; there were no manual
+staged dispatch calls, retries, additional human prompts or paid fallback.
+
+The case used 39 physical requests under an unchanged hard limit of 42 physical requests.
+The private fixture allowed six goal turns and actually completed in five.
+This does not change any original account quota or live profile limit. A preceding
+fresh case used 40 requests, reached the same artifact/review work, then correctly
+paused at its five-turn fixture cap when the judge requested more explicit
+verification confirmation. It was retained and never replayed. Different inputs
+and responses prevent attributing the later success or request count solely to
+the fixture cap or this patch.
+
+Actual THINK/Analyst model calls overlapped for about 5.06 seconds. Captain called
+the native routing CLI once and received its planning contract. Captain and the
+independent reviewer each have an actual successful verify.py tool receipt;
+all seven artifact cases passed. Four original-card result admissions reached
+terminal completed state. Every worker's last tool was its successful native
+handoff, with zero observed subsequent model starts for that native session.
+After goal done, a fifteen-second observation saw zero additional requests.
+The private owner then exited through its genuine idle-only native stop path.
+
+Among 34 returned main calls with known input usage, the provider reported 552,925
+input tokens and 471,552 cached input tokens (about 85.3 percent). This is observed
+synthetic-workload input caching, not a billed-cost saving, a production before/
+after improvement, complete auxiliary-token accounting, or cross-bot cache
+causality. All protected original files and supplied inputs remained unchanged;
+no auth files were copied and no raw credential matches were found in the case.
+
+This acceptance covers one isolated GPT coordinator/planner/analyst/action/reviewer
+graph on frozen installed-equivalent code. It does not prove original Captain
+adoption, all provider families, all workloads or completion of the broader
+maintenance objective.
+
+Provider-backed acceptance above is separate from the offline/native checks.
+These offline/native checks alone do not prove model autonomy, original-session
+adoption, all provider pairs, production usage savings or cross-bot cache causality.
+Earlier twenty inherited broad auxiliary failures remain documented. Historical
+selections below overlap and must not be summed.
+
+---
+
 # v0.7.27: keep completed independent review evidence readable
 
 A later fresh automatic-dispatch case reached all original role handoffs:

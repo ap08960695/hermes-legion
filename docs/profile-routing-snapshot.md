@@ -86,3 +86,5 @@ CLI checks and actual-owner terminal checks are distinct evidence. A later
 same repaired source. Its request intervals and terminal receipts, rather than
 metadata visibility alone, support that narrow result; original-user adoption,
 continuous unattended scheduling and all-family behavior remain unproven.
+
+When an admitted THINK bot appears in the bounded response, one root `role_plan_contract` describes the native handoff and internal step-ID ownership, pattern and example. Legacy-only/held planning rosters omit it. It grants no readiness, quota or execution authority. See the role-plan protocol for preservation of required external names.
