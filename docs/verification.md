@@ -1,3 +1,34 @@
+# v0.7.23: bounded retries and cross-board goal waiting
+
+The consolidated kit now pins 750 source paths. The new goal/board/notification
+selection passes 290 cases across 15 files, zero failures and file retries.
+Code-health reports zero new findings for the three scoped source/test paths.
+Native installed acceptance on Linux and macOS each passes ten SQLite/goal
+checks; both hosts also pass the five real-SDK controlled-loopback retry checks.
+No real model or external provider is called for this release.
+
+The async repair has a separate three-file/24-pass focused selection. Its broader
+125-file selection has 1,270 passes and 20 inherited failures, all reproduced on
+the unchanged parent in the same six failed files; zero new failures. The exact
+inherited names are in the test selection. Overlapping selections are not summed,
+and this is not a globally green upstream suite.
+
+Both native hosts apply, reverse and reapply the 750-path public patch using the
+unchanged checkout verifier. Each original installed tree has 749 exact files and
+one pre-existing comment-only, Python-AST-equivalent Kanban tool difference; zero
+missing files. No source-wide restore or replacement was performed. Linux Gateway
+loaded the scoped source during confirmed idle; the original macOS Gateway stayed
+stopped. Existing stop state, profiles, models, quotas, credentials and work were
+preserved. This does not prove an original session adopted the new behavior.
+
+See [goal waiting](goal-kanban-awareness.md) and [auxiliary retry policy](async-auxiliary-retries.md).
+These cases establish retry admission and native advisory-count/wait mechanics,
+not workload billing/cache/RAM savings or a continuous autonomous bot graph.
+The previously bounded real-provider graph below remains separate historical
+proof; it was not replayed or charged again for this release.
+
+---
+
 # v0.7.22: bounded real native parallel evidence
 
 Evidence-only update; the exact 748-path source patch payload is unchanged from

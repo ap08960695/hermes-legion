@@ -173,7 +173,7 @@ index 1d8e485170d5da132a6a8ab3017cade1e2dc09a9..24c0912cdc50c31f728e99f55e3c7eea
      from agent.served_model import install_served_model_capture
      install_served_model_capture(agent, client)
 diff --git a/agent/auxiliary_client.py b/agent/auxiliary_client.py
-index 88f1fa59..d42a601c 100644
+index 88f1fa59..ffa83cfd 100644
 --- a/agent/auxiliary_client.py
 +++ b/agent/auxiliary_client.py
 @@ -1171,4 +1171,5 @@ class _CodexStreamGuard:
@@ -364,6 +364,20 @@ index 88f1fa59..d42a601c 100644
 +            if getattr(client, "_main_compression_context_bound", False):
 +                raise
              if not _should_retry_same_provider(task, transient_err, ""):
+@@ -8354,4 +8415,3 @@ async def _async_call_llm_impl(
+     try:
+-        # Retry ONCE on the same provider for a transient blip before fallback (see call_llm()).
+-        # (PR #16587)
++        # At most one retry, honoring the sync budget and main-client ownership gate.
+         _force_stream_async = _provider_requires_stream(request_provider, req.base_info or req.resolved_base_url)
+@@ -8372,4 +8432,5 @@ async def _async_call_llm_impl(
+         except Exception as transient_err:
+-            # The async Codex adapter wraps the sync stream via to_thread: same TimeoutError here.
+-            if not _should_retry_same_provider(task, transient_err, " (async)"):
++            if (getattr(client, "_main_compression_context_bound", False) is True
++                    or _transient_retry_count() == 0
++                    or not _should_retry_same_provider(task, transient_err, " (async)")):
+                 raise
 diff --git a/agent/auxiliary_codex_reasoning.py b/agent/auxiliary_codex_reasoning.py
 new file mode 100644
 index 00000000..565fdb8e
@@ -23705,23 +23719,21 @@ index 0000000000000000000000000000000000000000..e7be6d1c50f59f85be6c89a3bfc765e0
 +    args = parser.parse_args(['goal', *sys.argv[1:]])
 +    raise SystemExit(args.func(args))
 diff --git a/hermes_cli/goals.py b/hermes_cli/goals.py
-index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e94d21f5d8432e42aa57d1effbc55770fd068c03 100644
+index 96ee695e..53bcf956 100644
 --- a/hermes_cli/goals.py
 +++ b/hermes_cli/goals.py
-@@ -50,8 +50,8 @@ DEFAULT_MAX_CONSECUTIVE_TRANSPORT_FAILURES = 5
- # on concrete evidence instead of a vibe check.
- DEFAULT_GATE_TIMEOUT_SECONDS = 300
+@@ -15,2 +15,3 @@ import os
+ import re
++import sqlite3
+ import subprocess
+@@ -52,4 +53,4 @@ DEFAULT_GATE_TIMEOUT_SECONDS = 300
  DEFAULT_GATE_MAX_RETRIES = 3
 -# Longest a pid/session wait barrier may hold the loop before judging resumes. Timed barriers
 -# (``waiting_until``) carry their own deadline and are exempt.
 +# Maximum age of an unverified pid/session barrier before the goal is paused for inspection.
 +# A verified live operation is not considered complete merely because this time has passed.
  _MAX_BARRIER_WAIT_S = 30 * 60
- # Bounded tail of a failed gate's combined stdout/stderr fed back to the agent.
- _GATE_OUTPUT_TAIL_CHARS = 3000
-@@ -153,6 +153,12 @@ JUDGE_SYSTEM_PROMPT = (
-     "nothing else dispatchable — return ``wait_for_seconds`` between 600 and "
-     "1800. Their results wake the agent on their own; re-poking it now only "
+@@ -155,2 +156,8 @@ JUDGE_SYSTEM_PROMPT = (
      "produces a status recap.\n"
 +    # local patch 25
 +    "- The agent coordinates Kanban cards that are still running or queued "
@@ -23730,11 +23742,7 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e94d21f5d8432e42aa57d1effbc55770
 +    "``wait_for_seconds`` between 900 and 1800. A finished, blocked or failed "
 +    "card wakes the agent by itself.\n"
      "Picking WAIT parks the loop without burning a turn; it resumes "
-     "automatically when the pid exits or the time elapses. Do NOT pick WAIT "
-     "just because work remains — only when re-poking now would be pure "
-@@ -177,6 +183,29 @@ JUDGE_DELEGATIONS_BLOCK_TEMPLATE = (
-     "their results are delivered to it automatically when they finish.\n\n"
- )
+@@ -179,2 +186,34 @@ JUDGE_DELEGATIONS_BLOCK_TEMPLATE = (
  
 +# local patch 25: the judge knew delegations and processes but not board cards, so a Captain waiting on
 +# running cards was re-poked every turn (16 of 19 goal wakes were status recaps on 2026-10-09).
@@ -23745,52 +23753,45 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e94d21f5d8432e42aa57d1effbc55770
 +
 +
 +def count_active_kanban_cards(session_id: Optional[str]) -> int:
-+    """Running/ready/todo cards whose notifications go to this session (fail-safe 0)."""
++    """Followed running/ready/todo cards in this fleet, respecting execution pins."""
 +    if not session_id:
 +        return 0
 +    try:
-+        from hermes_cli import kanban_db_connect as kbc
-+        with kbc.connect_closing() as conn:
-+            row = conn.execute(
-+                "SELECT COUNT(DISTINCT s.task_id) FROM kanban_notify_subs s JOIN tasks t ON t.id = s.task_id "
-+                "WHERE s.chat_id = ? AND t.status IN ('running', 'ready', 'todo')", (str(session_id),)).fetchone()
-+        return int(row[0] or 0) if row else 0
++        from hermes_cli import kanban_db as kb, kanban_db_notify as notify
++        if os.environ.get("HERMES_KANBAN_DB", "").strip() or kb._explicit_board_intent_pinned():
++            paths = [kb.kanban_db_path()]
++        else:
++            paths = [kb.kanban_db_path(board=b["slug"]) for b in kb.list_boards(include_archived=False)]
++        total, seen = 0, set()
++        for path in paths:
++            try:
++                resolved = path.resolve()
++                if resolved not in seen:
++                    seen.add(resolved)
++                    total += notify.count_active_tasks_for_chat(str(session_id), db_path=resolved)
++            except (OSError, sqlite3.Error):
++                continue  # One unavailable board must not hide healthy followed work.
++        return total
 +    except Exception:
 +        return 0
 +
 +
  # Judge prompt block listing running background processes (WAIT vs CONTINUE, which pid).
- JUDGE_BACKGROUND_BLOCK_TEMPLATE = (
-     "Background processes the agent currently has running (it may be waiting "
-@@ -441,6 +470,7 @@ class GoalState:
-     # should_continue=False without burning a turn; cleared lazily when satisfied or by unwait/pause/
-     # resume/clear. Defaults empty so old state_meta rows load unchanged.
+@@ -443,2 +482,3 @@ class GoalState:
      waiting_on_pid: Optional[int] = None
 +    waiting_on_pid_fingerprint: Optional[str] = None
      waiting_on_session: Optional[str] = None
-     waiting_until: float = 0.0
-     # Live delegation batches when a timed WAIT was set because of them; the barrier lifts as soon
-@@ -470,6 +500,9 @@ class GoalState:
-             paused_reason=data.get("paused_reason"),
-             subgoals=[str(s).strip() for s in raw_subgoals if str(s).strip()] if isinstance(raw_subgoals, list) else [],
+@@ -472,2 +512,5 @@ class GoalState:
              waiting_on_pid=(int(data["waiting_on_pid"]) if data.get("waiting_on_pid") else None),
 +            waiting_on_pid_fingerprint=(data.get("waiting_on_pid_fingerprint")
 +                if isinstance(data.get("waiting_on_pid_fingerprint"), str)
 +                and 0 < len(data["waiting_on_pid_fingerprint"]) <= 256 else None),
              waiting_on_session=(str(data["waiting_on_session"]) if data.get("waiting_on_session") else None),
-             waiting_reason=data.get("waiting_reason"),
-             contract=GoalContract.from_dict(data.get("contract")),
-@@ -489,6 +522,7 @@ class GoalState:
- 
-     def clear_wait(self) -> None:
+@@ -491,2 +534,3 @@ class GoalState:
          self.waiting_on_pid = None
 +        self.waiting_on_pid_fingerprint = None
          self.waiting_on_session = None
-         self.waiting_until = 0.0
-         self.waiting_on_delegations = 0
-@@ -687,23 +721,9 @@ def migrate_goal_to_session(old_session_id: str, new_session_id: str, *, reason:
-     so exactly one active goal row exists per logical conversation (avoids the "two active goals" hazard of
-     a pure copy).
+@@ -689,19 +733,5 @@ def migrate_goal_to_session(old_session_id: str, new_session_id: str, *, reason:
      """
 -    if not old_session_id or not new_session_id or old_session_id == new_session_id:
 -        return False
@@ -23813,11 +23814,7 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e94d21f5d8432e42aa57d1effbc55770
 +
 +    return migrate_control_state('goal:', old_session_id, new_session_id, GoalState.from_json, _get_session_db)
  
- 
- # ── Judge ─────────────────────────────────────────────────────────────
-@@ -734,17 +754,44 @@ def _pid_alive(pid: int) -> bool:
-         return False
- 
+@@ -736,5 +766,32 @@ def _pid_alive(pid: int) -> bool:
  
 -def _session_waiting(session_id: str) -> bool:
 -    """True while the process_registry session is running and its trigger hasn't fired. Fail-safe:
@@ -23853,9 +23850,7 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e94d21f5d8432e42aa57d1effbc55770
 +def _session_waiting(session_id: str) -> Optional[bool]:
 +    """True while the registry trigger is pending; None when the registry cannot be inspected."""
      if not session_id:
-         return False
-     try:
-         from tools.process_registry import process_registry
+@@ -744,5 +801,5 @@ def _session_waiting(session_id: str) -> bool:
  
 -        return bool(process_registry.is_session_waiting(session_id))
 +        return process_registry.is_session_waiting(session_id, strict=True)
@@ -23863,29 +23858,17 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e94d21f5d8432e42aa57d1effbc55770
 -        return False
 +        return None
  
- 
- _JSON_OBJECT_RE = re.compile(r"\{.*?\}", re.DOTALL)
-@@ -900,6 +947,7 @@ def judge_goal(
-     background_processes: Optional[list[dict[str, Any]]] = None,
-     contract: Optional[GoalContract] = None,
+@@ -902,2 +959,3 @@ def judge_goal(
      active_delegations: int = 0,
 +    active_kanban_cards: int = 0,
  ) -> tuple[str, str, bool, Optional[dict[str, Any]], bool]:
-     """Ask the auxiliary model whether the goal is satisfied.
- 
-@@ -928,7 +976,8 @@ def judge_goal(
-         goal=_truncate(goal, 2000),
-         response=_truncate(last_response, _JUDGE_RESPONSE_SNIPPET_CHARS),
+@@ -930,3 +988,4 @@ def judge_goal(
          background_block=_render_background_block(background_processes)
 -        + (JUDGE_DELEGATIONS_BLOCK_TEMPLATE.format(count=active_delegations) if active_delegations > 0 else ""),
 +        + (JUDGE_DELEGATIONS_BLOCK_TEMPLATE.format(count=active_delegations) if active_delegations > 0 else "")
 +        + (JUDGE_KANBAN_BLOCK_TEMPLATE.format(count=active_kanban_cards) if active_kanban_cards > 0 else ""),
          current_time=safe_strftime(datetime.now(tz=UTC).astimezone(), "%Y-%m-%d %H:%M:%S %Z"),
-     )
-     if contract is not None and not contract.is_empty():
-@@ -1109,6 +1158,20 @@ class GoalManager:
-     def state(self) -> Optional[GoalState]:
-         return self._state
+@@ -1111,2 +1170,16 @@ class GoalManager:
  
 +    def refresh(self) -> bool:
 +        """Observe external goal controls at a turn boundary; unknown is not absent."""
@@ -23902,11 +23885,7 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e94d21f5d8432e42aa57d1effbc55770
 +        return True
 +
      def is_active(self) -> bool:
-         return self._state is not None and self._state.status == "active"
- 
-@@ -1128,9 +1191,9 @@ class GoalManager:
-         gat = f", {len(s.gates)} gate{'s' if len(s.gates) != 1 else ''}" if s.gates else ""
-         meta = f"{turns}{sub}{con}{gat}"
+@@ -1130,5 +1203,5 @@ class GoalManager:
          if s.status == "active":
 -            if s.waiting_on_session and _session_waiting(s.waiting_on_session):
 +            if s.waiting_on_session and _session_waiting(s.waiting_on_session) is not False:
@@ -23914,11 +23893,7 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e94d21f5d8432e42aa57d1effbc55770
 -            if s.waiting_on_pid and _pid_alive(s.waiting_on_pid):
 +            if s.waiting_on_pid and _pid_observation(s.waiting_on_pid) is not False:
                  return f"⏳ Goal (parked on {s.waiting_reason or f'pid {s.waiting_on_pid}'}, {meta}): {s.goal}"
-             if s.waiting_until and time.time() < s.waiting_until:
-                 remaining = int(s.waiting_until - time.time())
-@@ -1180,6 +1243,23 @@ class GoalManager:
-         )
-         return self._save()
+@@ -1182,2 +1255,19 @@ class GoalManager:
  
 +    def configure(self, goal: str, contract: GoalContract) -> GoalState:
 +        """Save an owner's form without resetting turn budgets, gates or wait barriers.
@@ -23938,11 +23913,7 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e94d21f5d8432e42aa57d1effbc55770
 +        return self._save()
 +
      def set_contract(self, contract: GoalContract) -> Optional[GoalState]:
-         """Attach or replace the completion contract on the active goal."""
-         if self._state is None:
-@@ -1376,9 +1456,11 @@ class GoalManager:
-         pid = int(pid)
-         if pid <= 0:
+@@ -1378,5 +1468,7 @@ class GoalManager:
              raise ValueError("pid must be a positive integer")
 -        if not _pid_alive(pid):
 +        observation = _pid_observation(pid)
@@ -23952,11 +23923,7 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e94d21f5d8432e42aa57d1effbc55770
 +        fingerprint = _pid_fingerprint(pid) if observation is True else None
 +        return self._park(reason, waiting_on_pid=pid, waiting_on_pid_fingerprint=fingerprint)
  
-     def wait_on_session(self, session_id: str, reason: str = "") -> GoalState:
-         """Park on a process_registry session's OWN trigger: exit OR ``watch_patterns`` match. The
-@@ -1412,17 +1494,25 @@ class GoalManager:
- 
-     def is_waiting(self) -> bool:
+@@ -1414,6 +1506,4 @@ class GoalManager:
          """True iff a barrier is set AND not yet satisfied. A satisfied barrier is cleared here
 -        (lazy auto-clear) so the next evaluation resumes normal judging. A pid/session barrier
 -        also expires after ``_MAX_BARRIER_WAIT_S``: a watcher or poller that never exits would
@@ -23965,7 +23932,7 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e94d21f5d8432e42aa57d1effbc55770
 +        (lazy auto-clear) so the next evaluation resumes normal judging. A long-running verified
 +        operation remains parked; an unverified one is paused for inspection after the limit."""
          s = self._state
-         if s is None:
+@@ -1421,6 +1511,16 @@ class GoalManager:
              return False
 +        unverified = False
          if s.waiting_on_session is not None:
@@ -23983,11 +23950,7 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e94d21f5d8432e42aa57d1effbc55770
 +            elif still is None:
 +                unverified = True
          elif s.waiting_until:
-             still = time.time() < s.waiting_until
-             if still and s.waiting_on_delegations > 0:
-@@ -1432,13 +1522,13 @@ class GoalManager:
-                     still = False
-         else:
+@@ -1434,9 +1534,9 @@ class GoalManager:
              return False
 -        if still and s.waiting_since and s.waiting_until == 0.0 and time.time() - s.waiting_since > _MAX_BARRIER_WAIT_S:
 -            logger.info("goal %s: wait barrier on %s exceeded %ds; resuming judging",
@@ -24003,26 +23966,16 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e94d21f5d8432e42aa57d1effbc55770
 -        return still
 +        return bool(still)
  
-     # --- the main entry point called after every turn -----------------
- 
-@@ -1495,6 +1585,9 @@ class GoalManager:
- 
-         # Parked on a live process or an unexpired deadline: quiesce without burning a turn.
+@@ -1497,2 +1597,5 @@ class GoalManager:
          if self.is_waiting():
 +            if state.status == "paused":
 +                reason = state.paused_reason or "wait target could not be verified"
 +                return _decision("paused", False, None, "wait_unverified", reason, f"⏸ Goal paused — {reason}")
              return self._waiting_decision(state)
- 
-         state.turns_used += 1
-@@ -1511,6 +1604,7 @@ class GoalManager:
-         verdict, reason, parse_failed, wait_directive, transport_failed = judge_goal(
-             state.goal, last_response, subgoals=state.subgoals or None, background_processes=background_processes,
+@@ -1513,2 +1616,3 @@ class GoalManager:
              contract=state.contract if state.has_contract() else None, active_delegations=active_delegations,
 +            active_kanban_cards=count_active_kanban_cards(self.session_id),
          )
-         state.last_verdict = verdict
-         state.last_reason = reason
 diff --git a/hermes_cli/heartbeat.py b/hermes_cli/heartbeat.py
 index b10a5846fbf6f7c090dd0956ab8fd1e8d76ecfb6..c1cba192a93c8a47453d39e5fe0b44156e0492e8 100644
 --- a/hermes_cli/heartbeat.py
@@ -25849,12 +25802,42 @@ index e3a1f306c46d076069c4c80334e04b4440aa1d18..a6490dce316a89cf26a683745eca06e1
  
  def decompose_triage_task(
 diff --git a/hermes_cli/kanban_db_notify.py b/hermes_cli/kanban_db_notify.py
-index f85857ddcbe464a5529fa3bb7a8ef72ca6d92fec..fdfb459ed08817c731f7de1f8517a281d8c9b63c 100644
+index f85857dd..516e94cf 100644
 --- a/hermes_cli/kanban_db_notify.py
 +++ b/hermes_cli/kanban_db_notify.py
-@@ -365,9 +365,10 @@ def claim_unseen_events_for_sub(
-     so concurrent gateway watchers on the same board DB serialize on SQLite's
-     writer lock and only the first claims a given event range. Callers send the
+@@ -254,2 +254,31 @@ def count_notify_subs(
+ 
++def count_active_tasks_for_chat(
++    chat_id: str, db_path: Optional[Path] = None, *, board: Optional[str] = None,
++) -> int:
++    """Count followed running/ready/todo tasks without creating or migrating a DB.
++
++    Reads committed WAL rows. Missing databases or legacy tables count as zero;
++    other SQLite errors propagate so fleet readers can skip only the affected DB.
++    """
++    path = db_path if db_path is not None else _kb.kanban_db_path(board=board)
++    if not path.exists():
++        return 0
++    conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.1)
++    try:
++        try:
++            row = conn.execute(
++                "SELECT COUNT(DISTINCT s.task_id) FROM kanban_notify_subs s "
++                "JOIN tasks t ON t.id = s.task_id "
++                "WHERE s.chat_id = ? AND t.status IN ('running', 'ready', 'todo')",
++                (chat_id,),
++            ).fetchone()
++        except sqlite3.OperationalError as exc:
++            if "no such table" in str(exc).lower():
++                return 0
++            raise
++        return int(row[0]) if row else 0
++    finally:
++        conn.close()
++
++
+ def remove_notify_sub(
+@@ -367,5 +396,6 @@ def claim_unseen_events_for_sub(
      events, then leave the cursor or call :func:`rewind_notify_cursor` on
 -    delivery failure.
 +    delivery failure. This SQL-only claim can compose inside a preparation
@@ -25863,11 +25846,7 @@ index f85857ddcbe464a5529fa3bb7a8ef72ca6d92fec..fdfb459ed08817c731f7de1f8517a281
 -    with _kb.write_txn(conn):
 +    with _kb.write_txn(conn, allow_nested=True):
          old_cursor = _notify_cursor(conn, task_id, platform, chat_id, thread_id)
-         if old_cursor is None:
-             return 0, 0, []
-@@ -378,6 +379,14 @@ def claim_unseen_events_for_sub(
-         if not events:
-             return old_cursor, old_cursor, []
+@@ -380,2 +410,10 @@ def claim_unseen_events_for_sub(
          _cas_cursor(conn, _sub_key(task_id, platform, chat_id, thread_id), new_cursor, old_cursor)
 +        from hermes_cli.kanban_event_origin import is_self_event
 +        subscription = conn.execute(
@@ -25878,8 +25857,6 @@ index f85857ddcbe464a5529fa3bb7a8ef72ca6d92fec..fdfb459ed08817c731f7de1f8517a281
 +        # destinations and all unattributed/worker events keep normal delivery.
 +        events = [event for event in events if not is_self_event(event, dict(subscription))]
          return old_cursor, new_cursor, events
- 
- 
 diff --git a/hermes_cli/kanban_db_tui_delivery.py b/hermes_cli/kanban_db_tui_delivery.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..774c1a9b2b6452563c2b4c9f56bff95085ee4a40
@@ -37444,6 +37421,120 @@ index f50bde233000d94f301dd0adcca76442e53774ad..f58ba2c10ede80b712e4083c7bb568d9
      def test_kimi_keeps_its_documented_omission(self) -> None:
          """Kimi speaks the adaptive contract but is out of scope here (#13848)."""
          kwargs = _kwargs(
+diff --git a/tests/agent/test_auxiliary_async_retry_budget.py b/tests/agent/test_auxiliary_async_retry_budget.py
+new file mode 100644
+index 00000000..db4ebe7b
+--- /dev/null
++++ b/tests/agent/test_auxiliary_async_retry_budget.py
+@@ -0,0 +1,108 @@
++"""Async auxiliary requests respect zero retry budget and main-owned clients."""
++import asyncio
++import json
++
++import httpx
++import pytest
++from openai import AsyncOpenAI, APIStatusError
++
++import agent.auxiliary_client as aux
++
++
++async def _exercise(monkeypatch, budget, statuses, *, main_bound=False):
++    requests = []
++    recovery_errors = []
++
++    def respond(request):
++        assert request.method == "POST"
++        assert request.url == "https://aux-fixture.invalid/v1/chat/completions"
++        body = json.loads(request.content)
++        assert body["model"] == "synthetic-aux"
++        requests.append(request.url.path)
++        status = statuses[min(len(requests) - 1, len(statuses) - 1)]
++        if status != 200:
++            return httpx.Response(status, json={"error": {"message": "synthetic failure", "type": "fixture"}})
++        return httpx.Response(200, json={
++            "id": "synthetic", "object": "chat.completion", "created": 0,
++            "model": "synthetic-aux", "choices": [{"index": 0,
++                "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
++            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
++        })
++
++    def no_recovery(error, *args, **kwargs):
++        recovery_errors.append(error)
++        yield from ()
++        raise error
++
++    async def send(_client, request, *args, **kwargs):
++        # Relay may construct a protected SDK client. Intercept the HTTP boundary
++        # for that client too, rather than leaving its transport on real DNS.
++        response = respond(request)
++        response.request = request
++        return response
++
++    monkeypatch.setattr(httpx.AsyncClient, "send", send)
++    monkeypatch.setattr("hermes_cli.config.load_config", lambda: {"auxiliary": {"transient_retries": budget}})
++    monkeypatch.setattr(aux, "_start_recovery_ladder", no_recovery)
++    async with httpx.AsyncClient() as http:
++        async with AsyncOpenAI(api_key="synthetic", base_url="https://aux-fixture.invalid/v1",
++                               max_retries=0, http_client=http) as client:
++            client._main_compression_context_bound = main_bound
++            # Only client acquisition is replaced; real native preparation, retry
++            # admission, relay and SDK serialization exercise the transport above.
++            monkeypatch.setattr(aux, "resolve_vision_provider_client",
++                                lambda **kwargs: ("custom", client, "synthetic-aux"))
++            response = error = None
++            try:
++                response = await aux.async_call_llm(
++                    task="vision", provider="custom", model="synthetic-aux",
++                    base_url="https://aux-fixture.invalid/v1", api_key="synthetic",
++                    messages=[{"role": "user", "content": "synthetic"}], timeout=1,
++                )
++            except APIStatusError as exc:
++                error = exc
++            assert not http.is_closed, "Retry refusal must not close a borrowed transport"
++    return requests, response, error, recovery_errors
++
++
++@pytest.mark.parametrize("budget", [0, -1])
++def test_disabled_async_retry_sends_one_request_and_preserves_error(monkeypatch, budget):
++    requests, response, error, recovered = asyncio.run(_exercise(monkeypatch, budget, [503]))
++    assert len(requests) == 1
++    assert response is None and error.status_code == 503
++    assert recovered == [error]
++
++
++def test_disabled_async_retry_does_not_spend_a_successful_second_attempt(monkeypatch):
++    requests, response, error, _ = asyncio.run(_exercise(monkeypatch, 0, [503, 200]))
++    assert len(requests) == 1
++    assert response is None and error.status_code == 503
++
++
++@pytest.mark.parametrize("budget", [1, 2, 6, None])
++def test_enabled_async_retry_keeps_existing_one_retry_ceiling(monkeypatch, budget):
++    requests, response, error, recovered = asyncio.run(_exercise(monkeypatch, budget, [503]))
++    assert len(requests) == 2
++    assert response is None and error.status_code == 503
++    assert recovered == [error]
++
++
++def test_enabled_async_retry_can_recover_one_transient_failure(monkeypatch):
++    requests, response, error, recovered = asyncio.run(_exercise(monkeypatch, 1, [503, 200]))
++    assert len(requests) == 2
++    assert response.choices[0].message.content == "ok"
++    assert error is None and recovered == []
++
++
++def test_main_bound_async_client_does_not_retry_on_another_aux_task(monkeypatch):
++    requests, response, error, recovered = asyncio.run(_exercise(monkeypatch, 1, [503], main_bound=True))
++    assert len(requests) == 1
++    assert response is None and error.status_code == 503
++    assert recovered == [error]
++
++
++def test_nontransient_async_failure_does_not_retry(monkeypatch):
++    requests, response, error, recovered = asyncio.run(_exercise(monkeypatch, 1, [400]))
++    assert len(requests) == 1
++    assert response is None and error.status_code == 400
++    assert recovered == [error]
 diff --git a/tests/agent/test_auxiliary_codex_effort_carriers.py b/tests/agent/test_auxiliary_codex_effort_carriers.py
 new file mode 100644
 index 00000000..c58ed1b5
@@ -46031,6 +46122,183 @@ index 0000000000000000000000000000000000000000..c32f55ae16a63a4761daa18422f495d3
 +    assert migrate('parent', 'child') is True
 +    assert other_db.get_meta(new) == other_raw
 +    assert original_db.get_meta(old) == raw and original_db.get_meta(new) is None
+diff --git a/tests/hermes_cli/test_goal_kanban_board_counts.py b/tests/hermes_cli/test_goal_kanban_board_counts.py
+new file mode 100644
+index 00000000..ac0cd899
+--- /dev/null
++++ b/tests/hermes_cli/test_goal_kanban_board_counts.py
+@@ -0,0 +1,171 @@
++"""Goal waiting sees followed work without mutating or escaping board scope."""
++from contextlib import closing
++from pathlib import Path
++import sqlite3
++
++import pytest
++
++from hermes_cli import goals, kanban_db as kb, kanban_db_connect as kbc
++from hermes_cli import kanban_db_notify as notify
++
++
++@pytest.fixture
++def fleet(tmp_path, monkeypatch):
++    home = tmp_path / ".hermes"
++    home.mkdir()
++    for name in ("HERMES_KANBAN_DB", "HERMES_KANBAN_BOARD", "HERMES_KANBAN_TASK", "HERMES_DELEGATED_CHILD_CONTEXT"):
++        monkeypatch.delenv(name, raising=False)
++    monkeypatch.setattr(Path, "home", lambda: tmp_path)
++    monkeypatch.setenv("HERMES_HOME", str(home))
++    monkeypatch.setenv("HERMES_KANBAN_HOME", str(home))
++    goals._DB_CACHE.clear()
++    yield home
++    goals._DB_CACHE.clear()
++
++
++def _follow(board="default", *, chat="own-session", blocked=False, duplicate=False):
++    if board != "default":
++        kb.create_board(board)
++    with kbc.connect_closing(board=board) as conn:
++        task = kb.create_task(conn, title="synthetic", workspace_kind="scratch",
++                              initial_status="blocked" if blocked else "running")
++        notify.add_notify_sub(conn, task_id=task, platform="tui", chat_id=chat, delivery_mode="wake")
++        if duplicate:
++            notify.add_notify_sub(conn, task_id=task, platform="local", chat_id=chat, delivery_mode="wake")
++    return task
++
++
++def test_counts_followed_tasks_across_registered_live_boards(fleet):
++    _follow()
++    _follow("other")
++    assert goals.count_active_kanban_cards("own-session") == 2
++
++
++def test_current_board_selection_does_not_hide_other_followed_work(fleet):
++    _follow("left")
++    _follow("right")
++    kb.set_current_board("left")
++    assert goals.count_active_kanban_cards("own-session") == 2
++
++
++def test_empty_fleet_probe_creates_no_database_or_directories(fleet):
++    assert not list(fleet.iterdir())
++    assert goals.count_active_kanban_cards("own-session") == 0
++    assert not list(fleet.iterdir())
++
++
++def test_legacy_database_is_not_initialized_or_migrated(fleet):
++    path = fleet / "kanban.db"
++    with closing(sqlite3.connect(path)) as conn:
++        conn.execute("CREATE TABLE unrelated (id INTEGER)")
++        conn.commit()
++    before = path.read_bytes()
++    assert goals.count_active_kanban_cards("own-session") == 0
++    assert path.read_bytes() == before
++    with closing(sqlite3.connect(path)) as conn:
++        assert conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall() == [("unrelated",)]
++
++
++def test_same_task_notification_rows_count_once_and_other_chats_stay_out(fleet):
++    _follow(duplicate=True)
++    _follow(chat="another-session")
++    _follow(blocked=True)
++    assert goals.count_active_kanban_cards("own-session") == 1
++
++
++def test_archived_board_does_not_inflate_pending_work(fleet):
++    _follow()
++    _follow("retired")
++    kb.write_board_metadata("retired", archived=True)
++    assert goals.count_active_kanban_cards("own-session") == 1
++
++
++def test_same_database_alias_is_not_counted_twice(fleet):
++    _follow()
++    kb.write_board_metadata("alias")
++    kb.kanban_db_path(board="alias").symlink_to(kb.kanban_db_path(board="default"))
++    assert goals.count_active_kanban_cards("own-session") == 1
++
++
++def test_explicit_database_pin_does_not_enumerate_other_boards(fleet, monkeypatch):
++    _follow()
++    _follow("other")
++    monkeypatch.setenv("HERMES_KANBAN_DB", str(kb.kanban_db_path(board="default")))
++    def forbidden(**kwargs):
++        raise AssertionError("A pinned read must not enumerate the fleet")
++    monkeypatch.setattr(kb, "list_boards", forbidden)
++    assert goals.count_active_kanban_cards("own-session") == 1
++
++
++@pytest.mark.parametrize("fence", ["worker", "machine", "delegate"])
++def test_native_execution_fence_keeps_the_current_board(fleet, monkeypatch, fence):
++    _follow("left")
++    _follow("right")
++    kb.set_current_board("left")
++    if fence == "worker":
++        monkeypatch.setenv("HERMES_KANBAN_TASK", "synthetic-worker")
++        assert goals.count_active_kanban_cards("own-session") == 1
++    elif fence == "delegate":
++        monkeypatch.setenv("HERMES_DELEGATED_CHILD_CONTEXT", str(fleet))
++        assert goals.count_active_kanban_cards("own-session") == 1
++    else:
++        with kb.pin_first_board_resolution():
++            assert goals.count_active_kanban_cards("own-session") == 1
++
++
++def test_unreadable_sibling_does_not_hide_healthy_board_counts(fleet):
++    _follow()
++    _follow("healthy")
++    kb.write_board_metadata("broken")
++    kb.kanban_db_path(board="broken").write_bytes(b"synthetic non-SQLite data")
++    assert goals.count_active_kanban_cards("own-session") == 2
++
++
++def test_unregistered_other_fleet_is_not_enumerated(fleet, monkeypatch):
++    _follow()
++    with monkeypatch.context() as other:
++        root = fleet.parent / "separate-fleet"
++        root.mkdir()
++        other.setenv("HERMES_HOME", str(root))
++        other.setenv("HERMES_KANBAN_HOME", str(root))
++        _follow()
++        _follow("other")
++    assert goals.count_active_kanban_cards("own-session") == 1
++
++
++def test_committed_rows_in_uncheckpointed_wal_are_visible(fleet):
++    with kbc.connect_closing() as conn:
++        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
++        task = kb.create_task(conn, title="synthetic WAL task", workspace_kind="scratch")
++        notify.add_notify_sub(conn, task_id=task, platform="tui", chat_id="own-session")
++        wal = Path(str(kb.kanban_db_path()) + "-wal")
++        assert wal.stat().st_size > 0
++        assert goals.count_active_kanban_cards("own-session") == 1
++
++
++def test_no_session_skips_board_discovery(fleet, monkeypatch):
++    def forbidden(**kwargs):
++        raise AssertionError("An unbound goal must not discover boards")
++    monkeypatch.setattr(kb, "list_boards", forbidden)
++    assert goals.count_active_kanban_cards(None) == 0
++    assert not list(fleet.iterdir())
++
++
++def test_goal_judge_sees_cross_board_count_and_then_parks_without_rejudging(fleet, monkeypatch):
++    _follow("left")
++    _follow("right")
++    manager = goals.GoalManager(session_id="own-session")
++    manager.set("finish the two original tasks", max_turns=3)
++    counts = []
++    def judge(*args, **kwargs):
++        counts.append(kwargs["active_kanban_cards"])
++        return "wait", "original tasks pending", False, {"seconds": 900}, False
++    monkeypatch.setattr(goals, "judge_goal", judge)
++    decision = manager.evaluate_after_turn("Both original tasks are pending")
++    assert counts == [2]
++    assert decision["verdict"] == "wait" and not decision["should_continue"]
++    assert manager.state.waiting_until > manager.state.last_turn_at
++    turns = manager.state.turns_used
++    again = manager.evaluate_after_turn("Still waiting")
++    assert not again["should_continue"] and counts == [2]
++    assert manager.state.turns_used == turns
 diff --git a/tests/hermes_cli/test_goal_self_management.py b/tests/hermes_cli/test_goal_self_management.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..15833da3b4354dd439ec57357d2fe8c7ad844515
