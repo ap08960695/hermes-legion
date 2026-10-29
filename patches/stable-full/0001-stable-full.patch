@@ -59661,6 +59661,140 @@ index 0000000000000000000000000000000000000000..21503b41148859027f4abb8777503684
 +            return original.sub(replacement,text)
 +    monkeypatch.setattr(ansi_strip,'_ANSI_ESCAPE_RE',Guard())
 +    assert ansi_strip.strip_ansi('\x1b]x'*1000)=='x'*1000
+diff --git a/tests/tools/test_mcp_schema_cache_publication.py b/tests/tools/test_mcp_schema_cache_publication.py
+new file mode 100644
+index 00000000..2b40f304
+--- /dev/null
++++ b/tests/tools/test_mcp_schema_cache_publication.py
+@@ -0,0 +1,128 @@
++"""Concurrent native MCP cache writers retain peer servers without re-discovery."""
++import json
++import multiprocessing
++import os
++from pathlib import Path
++
++import pytest
++
++
++def _writer(root, server, started, read, release, done):
++    os.environ.update(HOME=str(root), HERMES_HOME=str(root), HERMES_MANAGED_DIR=str(root / 'managed'),
++                      HERMES_DISABLE_LAZY_INSTALLS='1')
++    from tools import mcp_schema_cache as cache
++    cache._cache_path = lambda: root / 'cache.json'
++    native = cache._load_all
++    if read is not None:
++        def snapshot():
++            data = native()
++            read.set()
++            if not release.wait(15):
++                raise TimeoutError('test writer was not released')
++            return data
++        cache._load_all = snapshot
++    started.set()
++    try:
++        cache.write_cache_entry(server, 'fixture', tools=[{'name': server}])
++    finally:
++        done.set()
++
++
++def test_two_process_writers_preserve_both_native_manifests(tmp_path):
++    ctx = multiprocessing.get_context('spawn')
++    started_a, started_b, read_a, release, done_a, done_b = [ctx.Event() for _ in range(6)]
++    first = ctx.Process(target=_writer, args=(tmp_path, 'first', started_a, read_a, release, done_a))
++    second = ctx.Process(target=_writer, args=(tmp_path, 'second', started_b, None, release, done_b))
++    first.start()
++    try:
++        assert read_a.wait(15)
++        second.start()
++        assert started_b.wait(15)
++        # The old writer finishes from A's old snapshot; a serialized writer waits for A.
++        # No timing assertion: either outcome is valid provided both entries survive.
++        done_b.wait(2)
++    finally:
++        release.set()
++        first.join(20)
++        if second.pid is not None:
++            second.join(20)
++        for process in (first, second):
++            if process.pid is not None and process.is_alive():
++                process.terminate()
++                process.join(5)
++    assert first.exitcode == second.exitcode == 0
++    data = json.loads((tmp_path / 'cache.json').read_text())
++    assert set(data) == {'first', 'second'}
++    assert data['first']['tools'] == [{'name': 'first'}]
++    assert data['second']['tools'] == [{'name': 'second'}]
++
++
++def test_failed_publish_preserves_good_manifest_and_releases_writer(tmp_path, monkeypatch):
++    from tools import mcp_schema_cache as cache
++    monkeypatch.setattr(cache, '_cache_path', lambda: tmp_path / 'cache.json')
++    cache.write_cache_entry('original', 'fixture', tools=[{'name': 'original'}])
++    original = (tmp_path / 'cache.json').read_bytes()
++    native = cache._save_all
++    def refused(data):
++        raise OSError('synthetic publication failure')
++    monkeypatch.setattr(cache, '_save_all', refused)
++    with pytest.raises(OSError, match='synthetic publication failure'):
++        cache.write_cache_entry('failed', 'fixture', tools=[])
++    assert (tmp_path / 'cache.json').read_bytes() == original
++    monkeypatch.setattr(cache, '_save_all', native)
++    cache.write_cache_entry('next', 'fixture', tools=[{'name': 'next'}])
++    assert cache.get_cached_entry('original', 'fixture')['tools'] == [{'name': 'original'}]
++    assert cache.get_cached_entry('next', 'fixture')['tools'] == [{'name': 'next'}]
++    assert cache.get_cached_entry('failed', 'fixture') is None
++
++
++def test_busy_publisher_never_proceeds_unlocked(tmp_path, monkeypatch):
++    from tools import mcp_schema_cache as cache
++    from pm import filesystem
++    monkeypatch.setattr(cache, '_cache_path', lambda: tmp_path / 'cache.json')
++    cache.write_cache_entry('original', 'fixture', tools=[])
++    original = (tmp_path / 'cache.json').read_bytes()
++    monkeypatch.setattr(filesystem, 'lock_fd', lambda *args, **kwargs: False)
++    with pytest.raises(TimeoutError, match='publisher is busy'):
++        cache.write_cache_entry('blocked', 'fixture', tools=[])
++    assert (tmp_path / 'cache.json').read_bytes() == original
++
++
++@pytest.mark.platforms('posix')
++def test_waiting_writer_does_not_hold_other_profiles_read_lock(tmp_path, monkeypatch):
++    from concurrent.futures import ThreadPoolExecutor
++    from contextvars import ContextVar
++    import threading
++    from tools import mcp_schema_cache as cache
++    from pm import filesystem
++
++    home_a, home_b = tmp_path / 'a', tmp_path / 'b'
++    home_a.mkdir()
++    home_b.mkdir()
++    owner = ContextVar('cache_test_owner', default=home_b)
++    monkeypatch.setattr(cache, '_cache_path', lambda: owner.get() / 'cache.json')
++    cache.write_cache_entry('survivor', 'fixture', tools=[{'name': 'survivor'}])
++    waiting = threading.Event()
++    native_lock = filesystem.lock_fd
++    def observe_wait(fd, **kwargs):
++        waiting.set()
++        return native_lock(fd, **kwargs)
++    monkeypatch.setattr(filesystem, 'lock_fd', observe_wait)
++    lock = os.open(home_a / 'cache.json.lock', os.O_RDWR | os.O_CREAT, 0o600)
++    assert native_lock(lock, wait=False)
++    def write_a():
++        token = owner.set(home_a)
++        try:
++            cache.write_cache_entry('a', 'fixture', tools=[])
++        finally:
++            owner.reset(token)
++    pool = ThreadPoolExecutor(max_workers=2)
++    try:
++        write = pool.submit(write_a)
++        assert waiting.wait(10)
++        read = pool.submit(cache.get_cached_entry, 'survivor', 'fixture')
++        assert read.result(timeout=2)['tools'] == [{'name': 'survivor'}]
++    finally:
++        os.close(lock)
++        pool.shutdown(wait=True)
++    write.result()
 diff --git a/tests/tools/test_process_log_idle.py b/tests/tools/test_process_log_idle.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..38acb07eef0babfe6dd013e2eb63c461b348558d
@@ -66006,22 +66140,22 @@ index ec5a72610e075f300d5493c9e1f71d18f21d83de..d38195358a49647edcc75530f62aef3d
 +    ["from_task_id", "remaining"],
 +)
 diff --git a/tools/mcp_schema_cache.py b/tools/mcp_schema_cache.py
-index c78542c9b5a48613c765e4cd55df8521e022ac60..21236c792acbb95159068771d63a1b6c20f75ac5 100644
+index c78542c9..211c3926 100644
 --- a/tools/mcp_schema_cache.py
 +++ b/tools/mcp_schema_cache.py
-@@ -5,6 +5,9 @@ connection config (command/args/url/tools filters)."""
- 
- from __future__ import annotations
+@@ -7,2 +7,6 @@ from __future__ import annotations
  
 +import copy
++from contextlib import contextmanager
 +import functools
 +import math
  import hashlib
- import json
+@@ -10,2 +14,4 @@ import json
  import logging
-@@ -38,13 +41,22 @@ def config_fingerprint(config: dict) -> str:
-     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
- 
++import os
++import stat
+ import threading
+@@ -40,9 +46,18 @@ def config_fingerprint(config: dict) -> str:
  
 +@functools.lru_cache(maxsize=8)
 +def _read_manifest(path: Path, signature: tuple) -> dict[str, Any]:
@@ -66044,11 +66178,33 @@ index c78542c9b5a48613c765e4cd55df8521e022ac60..21236c792acbb95159068771d63a1b6c
 +    except FileNotFoundError:
 +        return {}
      except Exception as exc:
-         logger.debug("Could not read MCP schema cache %s: %s", path, exc)
-         return {}
-@@ -67,9 +79,12 @@ def get_cached_entry(server_name: str, fingerprint: str) -> Optional[dict]:
-         return None
-     ttl_ms = entry.get("ttl_ms")
+@@ -58,2 +73,25 @@ def _save_all(data: dict[str, Any]) -> None:
+ 
++@contextmanager
++def _manifest_write_lock(path: Path):
++    """Serialize peer publishers, keeping the lock inode across atomic JSON replacement."""
++    from pm.filesystem import lock_fd
++
++    path = path.resolve()
++    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
++    fd = os.open(path.with_suffix(path.suffix + '.lock'),
++                 os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
++    try:
++        info = os.fstat(fd)
++        if (not stat.S_ISREG(info.st_mode) or (os.name == 'posix'
++                and (info.st_mode & 0o077 or info.st_uid != os.getuid()))):
++            raise OSError('unsafe MCP schema cache lock')
++        if info.st_size == 0:
++            os.write(fd, b'\0')  # The native Windows byte-lock needs a nonempty range.
++        if not lock_fd(fd, wait=True, timeout=5):
++            raise TimeoutError('MCP schema cache publisher is busy; cache was not overwritten')
++        yield
++    finally:
++        os.close(fd)  # Closing releases the native lock, including after publication failure.
++
++
+ def get_cached_entry(server_name: str, fingerprint: str) -> Optional[dict]:
+@@ -69,5 +107,8 @@ def get_cached_entry(server_name: str, fingerprint: str) -> Optional[dict]:
      written_at = entry.get("written_at")
 -    expired = (isinstance(ttl_ms, (int, float)) and isinstance(written_at, (int, float))
 -               and (time.time() - written_at) * 1000.0 >= float(ttl_ms))
@@ -66060,17 +66216,14 @@ index c78542c9b5a48613c765e4cd55df8521e022ac60..21236c792acbb95159068771d63a1b6c
 +            return None
 +    return copy.deepcopy(entry)
  
- 
- def write_cache_entry(server_name: str, fingerprint: str, *, tools: list[dict],
-@@ -84,7 +99,7 @@ def write_cache_entry(server_name: str, fingerprint: str, *, tools: list[dict],
-     if cache_scope:
+@@ -85,4 +126,5 @@ def write_cache_entry(server_name: str, fingerprint: str, *, tools: list[dict],
          entry["cache_scope"] = cache_scope
-     with _cache_lock:
+-    with _cache_lock:
 -        data = _load_all()
++    # Wait outside the in-process lock so another profile's cache reads can proceed.
++    with _manifest_write_lock(_cache_path()), _cache_lock:
 +        data = dict(_load_all())
          # Write-through fires on every registration (reconnects, list_changed); skip the
-         # rewrite when the entry is byte-identical on disk. TTL'd entries always rewrite:
-         # written_at must advance or the entry would expire at its ORIGINAL write time.
 diff --git a/tools/mcp_tool_agent.py b/tools/mcp_tool_agent.py
 index e74f1510b57f110aa7069409398fb4a15677730d..9220075364eda16e55ad78352d38b46150844ffc 100644
 --- a/tools/mcp_tool_agent.py

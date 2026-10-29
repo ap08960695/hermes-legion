@@ -1,3 +1,15 @@
+# v0.7.17: preserve concurrent MCP schema entries
+
+736 pinned paths. A profile-local native lock covers manifest read-modify-write;
+no lock is held during server discovery or tool execution. Final scoped native
+regression: 98 files / 911 passed / 0 failed / 1 existing skip, zero retries.
+Five installed production-Python controls each on Linux/macOS retain both peer
+entries and cold-register both required tool schemas with zero server starts,
+network requests or model calls. Code-health reports no new findings.
+See [concurrent MCP schema publication](mcp-schema-publication.md).
+This is synthetic native acceptance, not original-workload usage or latency proof.
+Historical/focused counts overlap and are not summed.
+
 # v0.7.16: retire old profile config caches
 
 735 pinned paths. Completed delete/rename and permitted Gateway retirement
