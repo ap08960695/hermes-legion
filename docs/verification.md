@@ -1,3 +1,13 @@
+# v0.7.18: auxiliary Codex effort fidelity
+
+738 pinned paths. The final Responses request retains top-level chat effort,
+including owner ceilings, lower efforts and explicit disablement. Focused 62
+cases pass; the broad 73-file selection has 840 passes and 15 inherited failures,
+reproduced unchanged on the prior source. Five native offline serialization
+controls each on Linux/macOS pass without model calls. No new code-health
+findings. No production usage savings or successful real Captain goal completion
+is claimed. See [acceptance and known limitations](auxiliary-codex-effort.md).
+
 # v0.7.17: preserve concurrent MCP schema entries
 
 736 pinned paths. A profile-local native lock covers manifest read-modify-write;

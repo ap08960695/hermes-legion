@@ -173,23 +173,17 @@ index 1d8e485170d5da132a6a8ab3017cade1e2dc09a9..24c0912cdc50c31f728e99f55e3c7eea
      from agent.served_model import install_served_model_capture
      install_served_model_capture(agent, client)
 diff --git a/agent/auxiliary_client.py b/agent/auxiliary_client.py
-index 88f1fa59b52e374382666b5258c7348a9e32d62e..3fb39fb2804723f5ae36fba808c77604defdf899 100644
+index 88f1fa59..d42a601c 100644
 --- a/agent/auxiliary_client.py
 +++ b/agent/auxiliary_client.py
-@@ -1169,8 +1169,9 @@ class _CodexStreamGuard:
- 
-     def __init__(
+@@ -1171,4 +1171,5 @@ class _CodexStreamGuard:
          self, client: Any, total_timeout: Optional[float],
 -        no_progress_timeout: Optional[float] = None,
 +        no_progress_timeout: Optional[float] = None, *, owns_client: bool = True,
      ):
 +        self._owns_client = owns_client
          self._client = client
-         self.total_timeout = total_timeout
-         self._start = time.monotonic()
-@@ -1294,6 +1295,11 @@ class _CodexStreamGuard:
-         # This callback has two callers — ``_check_cancelled`` on the owning thread, and the daemon watchdog
-         # ``threading.Timer``, which is a stranger thread. The owning thread performs the real close in the
+@@ -1296,2 +1297,7 @@ class _CodexStreamGuard:
          # ``finally`` below, which is where the FD release belongs. See #70773.
 +        if not self._owns_client:
 +            # Compression borrows main's SDK. Only its attempt stream may be
@@ -197,38 +191,49 @@ index 88f1fa59b52e374382666b5258c7348a9e32d62e..3fb39fb2804723f5ae36fba808c77604
 +            self.close_attempt_stream("borrowed compression attempt stream close failed")
 +            return
          self.timeout_release_pending.set()
-         if threading.get_ident() == self._owner_tid:
-             _close_quietly(self._client, "client close during timeout failed")
-@@ -1384,14 +1390,15 @@ class _CodexStreamGuard:
-             self._timer.cancel()
-         # Gated on timeout_release_pending, NOT timed_out: after a hard-cancel the shared
+@@ -1386,3 +1392,3 @@ class _CodexStreamGuard:
          # client must stay usable for other sessions.
 -        if self.timeout_release_pending.is_set():
 +        if self._owns_client and self.timeout_release_pending.is_set():
              _close_quietly(self._client, "owner-thread close after timeout failed")
- 
- 
- class _CodexCompletionsAdapter:
-     """Drop-in shim routing chat.completions.create() kwargs through Codex Responses streaming."""
+@@ -1393,3 +1399,4 @@ class _CodexCompletionsAdapter:
  
 -    def __init__(self, real_client: OpenAI, model: str):
 +    def __init__(self, real_client: OpenAI, model: str, *, owns_client: bool = True):
 +        self._owns_client = owns_client
          self._client = real_client
-         self._model = model
- 
-@@ -1570,7 +1577,7 @@ class _CodexCompletionsAdapter:
-         issuer_kind = resp_kwargs.pop("_issuer_kind", None)
-         issuer_model = str(resp_kwargs.get("model") or model)
+@@ -1504,18 +1511,9 @@ class _CodexCompletionsAdapter:
+                 resp_kwargs["service_tier"] = service_tier.strip()
+-            reasoning_cfg = extra_body.get("reasoning")
+-            if isinstance(reasoning_cfg, dict):
+-                # Shared per-model vocabulary with the main transport ("max" only where the model publishes it; "minimal"/"ultra"
+-                # clamp to a listed level; ``()`` = the model takes no ``reasoning`` field at all — gpt-4o/4.1 on api.openai.com,
+-                # #76255). ``enabled: False`` goes on the wire as ``effort: none`` where the vocabulary has it,
+-                # since an omitted field leaves the model's default effort on (#75227).
+-                from agent.reasoning_effort import clamp_effort
+-                from agent.transports.codex import _codex_efforts_for_route
+-                supported = _codex_efforts_for_route(model, host, is_codex_backend=route.is_codex_backend)
+-                if supported and reasoning_cfg.get("enabled") is not False:
+-                    # Truthy-only: Codex 400s on e.g. {"effort": null}, so falsy → default.
+-                    effort = clamp_effort(reasoning_cfg.get("effort") or "medium", supported)
+-                    resp_kwargs["reasoning"] = {"effort": effort, "summary": "auto"}
+-                    resp_kwargs["include"] = ["reasoning.encrypted_content"]
+-                elif "none" in supported and not is_xai:
+-                    resp_kwargs["reasoning"] = {"effort": "none"}
++        from agent.auxiliary_codex_reasoning import responses_reasoning
++        reasoning = responses_reasoning(kwargs, model, host,
++            is_codex_backend=route.is_codex_backend, is_xai=is_xai)
++        if reasoning is not None:
++            resp_kwargs["reasoning"] = reasoning
++            if reasoning.get("summary"):
++                resp_kwargs["include"] = ["reasoning.encrypted_content"]
+         if wire_tools:
+@@ -1572,3 +1570,3 @@ class _CodexCompletionsAdapter:
          total_timeout = timeout if isinstance(timeout, (int, float)) and timeout > 0 else None
 -        guard = _CodexStreamGuard(self._client, total_timeout, no_progress_timeout=kwargs.get("no_progress_timeout"))
 +        guard = _CodexStreamGuard(self._client, total_timeout, no_progress_timeout=kwargs.get("no_progress_timeout"), owns_client=self._owns_client)
          try:
-             guard.start()
-             from agent.codex_runtime import _consume_codex_event_stream
-@@ -1584,6 +1591,16 @@ class _CodexCompletionsAdapter:
-             if guard.timed_out.is_set() and guard.cancel_requested():
-                 guard.close_attempt_stream("late cancelled attempt stream close failed")
+@@ -1586,2 +1584,12 @@ class _CodexCompletionsAdapter:
              try:
 +                if not self._owns_client:
 +                    # A completed response can arrive after the pre-stream
@@ -241,36 +246,25 @@ index 88f1fa59b52e374382666b5258c7348a9e32d62e..3fb39fb2804723f5ae36fba808c77604
 +                        guard.close_attempt_stream("late borrowed compression result close failed")
 +                        raise
                  # Some Codex-compatible hosts accept ``stream=True`` but return a completed
-                 # Responses object (not iterable) — don't hand it to the consumer.
-                 if hasattr(event_stream, "output"):
-@@ -1601,11 +1618,18 @@ class _CodexCompletionsAdapter:
-             text_parts, tool_calls_raw, usage, finish_reason = _parse_codex_final_response(
-                 final, issuer_kind=issuer_kind, issuer_model=issuer_model,
+@@ -1603,2 +1611,6 @@ class _CodexCompletionsAdapter:
              )
 +            if not self._owns_client:
 +                guard.check_cancelled()
 +                if guard.timed_out.is_set():
 +                    raise TimeoutError("Borrowed compression attempt expired")
              # Undo only the aliases THIS request emitted, before the call reaches Hermes dispatch.
-             for tc in tool_calls_raw or ():
-                 if tc.function.name in wire_aliases:
-                     tc.function.name = wire_aliases[tc.function.name]
+@@ -1608,2 +1620,5 @@ class _CodexCompletionsAdapter:
          except Exception as exc:
 +            if not self._owns_client:
 +                from agent.compression_main_context import CompressionMainContextStopped
 +                raise CompressionMainContextStopped() from None
              if guard.timed_out.is_set():
-                 raise TimeoutError(guard.timeout_message()) from exc
-             logger.debug("Codex auxiliary Responses API call failed: %s", exc)
-@@ -2609,11 +2633,16 @@ def _record_route_info(
- 
- 
+@@ -2611,3 +2626,3 @@ def _record_route_info(
  def _relay_auxiliary_metadata(
 -    *, provider: str | None = None, api_mode: str | None = None
 +    *, provider: str | None = None, api_mode: str | None = None, body: dict[str, Any] | None = None
  ) -> tuple[str, str, dict[str, Any]] | None:
-     context = _RELAY_AUX_CALL_CONTEXT.get()
-     if context is None:
+@@ -2616,2 +2631,7 @@ def _relay_auxiliary_metadata(
          return None
 +    # local patch 16: aux clients for Responses providers (Codex/xAI OAuth) are chat-completions
 +    # adapters, so Relay sees a ``messages`` body. Labelling it codex_responses made Relay's
@@ -278,66 +272,38 @@ index 88f1fa59b52e374382666b5258c7348a9e32d62e..3fb39fb2804723f5ae36fba808c77604
 +    if isinstance(body, dict) and "messages" in body and "input" not in body:
 +        api_mode = "chat_completions"
      attempt_count = int(context.get("attempt_count") or 0)
-     context["attempt_count"] = attempt_count + 1
-     provider_name = str(provider or context.get("provider") or "auxiliary")
-@@ -2642,7 +2671,7 @@ def _relay_sync_completion(
-     task = relay_context.get("task")
-     relay_context["stream_provider"] = provider or relay_context.get("provider")
+@@ -2644,3 +2664,3 @@ def _relay_sync_completion(
      callback = create or (lambda request: _create_with_progress(client, request, task))
 -    route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode)
 +    route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode, body=kwargs)
      # Isolate only the provider callback so the owning thread can unwind its lease/DB
-     # transaction on hard cancel without touching the shared client.
-     if route is None:
-@@ -2675,7 +2704,7 @@ async def _relay_async_completion(
-     kwargs = prepare_chat_messages(client, kwargs)
-     # Async twin of the seam default above (#98466).
+@@ -2677,3 +2697,3 @@ async def _relay_async_completion(
      callback = create or (lambda request: _acreate_with_progress(client, request))
 -    route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode)
 +    route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode, body=kwargs)
      if route is None:
-         return await callback(kwargs)
-     provider_name, fallback_model, metadata = route
-@@ -2704,8 +2733,8 @@ def _relay_sync_stream(
-     kwargs = prepare_chat_messages(client, kwargs)
-     # The bypass runs inside the provider callback, AFTER Relay has seen (and possibly
+@@ -2706,4 +2726,4 @@ def _relay_sync_stream(
      # rewritten) the real conversation; applying it to `kwargs` would hand Relay an empty one.
 -    create = lambda request: client.chat.completions.create(**bypass_chat_sdk_request_transform(request, client))
 -    route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode)
 +    create = lambda request: client.chat.completions.create(**bypass_chat_sdk_request_transform(request, client))  # noqa: E731
 +    route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode, body=kwargs)
      if route is None:
-         return create(kwargs)
-     provider_name, fallback_model, metadata = route
-@@ -2762,7 +2791,7 @@ def _runtime_main_value(field: str) -> Any:
- def set_runtime_main(
-     provider: str, model: str, *, requested_provider: str = "", base_url: str = "",
+@@ -2764,3 +2784,3 @@ def set_runtime_main(
      api_key: Any = "", api_mode: str = "", auth_mode: str = "", session_id: str = "",
 -    cache_scope: str = "",
 +    cache_scope: str = "", compression_context: Any = None,
  ) -> contextvars.Token:
-     """Record the current context's live main runtime for auxiliary routing.
- 
-@@ -2784,6 +2813,7 @@ def set_runtime_main(
-         "auth_mode": (auth_mode or "").strip().lower(),
-         "session_id": (session_id or "").strip(),
+@@ -2786,2 +2806,3 @@ def set_runtime_main(
          "cache_scope": (cache_scope or "").strip(),
 +        "compression_context": compression_context,
      }
-     # Publish authoritative context before updating the locked mirrors.
-     token = _RUNTIME_MAIN_CONTEXT.set(runtime)
-@@ -3104,7 +3134,7 @@ def _try_anthropic(explicit_api_key: Optional[str | Callable[[], str]] = None,
- 
- _MAIN_RUNTIME_FIELDS = ("provider", "model", "base_url", "api_key", "api_mode", "auth_mode")
+@@ -3106,3 +3127,3 @@ _MAIN_RUNTIME_FIELDS = ("provider", "model", "base_url", "api_key", "api_mode",
  _MAIN_RUNTIME_CONTEXT_FIELDS = _MAIN_RUNTIME_FIELDS + (
 -    "requested_provider", "session_id", "cache_scope",
 +    "requested_provider", "session_id", "cache_scope", "compression_context",
  )
- 
- 
-@@ -3124,6 +3154,11 @@ def _normalize_main_runtime(main_runtime: Optional[dict[str, Any]]) -> dict[str,
-     normalized: dict[str, Any] = {}
-     for field in _MAIN_RUNTIME_CONTEXT_FIELDS:
+@@ -3126,2 +3147,7 @@ def _normalize_main_runtime(main_runtime: Optional[dict[str, Any]]) -> dict[str,
          value = main_runtime.get(field)
 +        if field == "compression_context":
 +            from agent.compression_main_context import MainCompressionContext
@@ -345,11 +311,7 @@ index 88f1fa59b52e374382666b5258c7348a9e32d62e..3fb39fb2804723f5ae36fba808c77604
 +                normalized[field] = value
 +            continue
          if field == "api_key" and callable(value) and not isinstance(value, str):
-             normalized[field] = value
-         elif isinstance(value, str) and value.strip():
-@@ -6018,6 +6053,19 @@ def _get_cached_client(
-     previously occurred in long-running gateways where recycled worker threads created unbounded entries
-     (#10200).
+@@ -6020,2 +6046,15 @@ def _get_cached_client(
      """
 +    if task == "compression":
 +        compression_cfg = _get_auxiliary_task_config(task)
@@ -365,11 +327,7 @@ index 88f1fa59b52e374382666b5258c7348a9e32d62e..3fb39fb2804723f5ae36fba808c77604
 +            raise CompressionMainContextStopped()
 +        return resolve_bound_compression(compression_runtime, model, async_mode=async_mode)
      # A bare llama.cpp alias keys on the live local endpoint: a restarted server (new port/key)
-     # must not be served the old client, and a stopped one resolves to nothing, not a cloud client.
-     from agent.auxiliary_local_runtime import bare_llamacpp_endpoint
-@@ -6796,6 +6844,13 @@ def _build_call_kwargs(
-     # Conversation affinity (OpenCode relay, opt-in custom-provider header) — same key as the main
-     # turn so compression/title/vision calls stay on the conversation's warm backend.
+@@ -6798,2 +6837,9 @@ def _build_call_kwargs(
      from agent.opencode_affinity import merge_session_affinity_headers
 +    from agent.reasoning_limits import configured_limits, current_reasoning_limits, limit_wire_request
 +    from hermes_cli.config import load_config_readonly
@@ -379,21 +337,13 @@ index 88f1fa59b52e374382666b5258c7348a9e32d62e..3fb39fb2804723f5ae36fba808c77604
 +    kwargs = limit_wire_request(kwargs, limits, model,
 +                                'anthropic_messages' if projection.messages_wire else 'chat_completions')
      return merge_session_affinity_headers(kwargs, provider, base_url, _runtime_main_value("session_id") or None)
- 
- 
-@@ -7415,6 +7470,9 @@ def _resolve_call_client(
-             task=task)
-         effective_provider = _effective_provider_for_client(client, resolved_provider)
+@@ -7417,2 +7463,5 @@ def _resolve_call_client(
          if client is None:
 +            # A selected Codex advisor is not interchangeable with a rescue model.
 +            if task == "moa_reference" and _normalize_aux_provider(resolved_provider) == "openai-codex":
 +                raise AuxiliaryClientUnavailable("Selected Codex MoA advisor is unavailable; fallback is disabled.")
              # Explicit provider with no credentials: honor the task fallback_chain before
-             # raising (fallback entries may use OAuth / credential-pool auth).
-             _explicit = (resolved_provider or "").strip().lower()
-@@ -7934,6 +7992,14 @@ def _aux_recovery_ladder(
-     strips → Nous heal/refresh → credential refresh/pool rotation → provider fallback.
-     Each rung returns a response, narrows ``first_err`` and falls through, or re-raises.
+@@ -7936,2 +7985,10 @@ def _aux_recovery_ladder(
      Raises the narrowed ``first_err`` when exhausted (after evicting a connection-poisoned client)."""
 +    if task == "compression" and (
 +        getattr(client, "_main_compression_context_bound", False)
@@ -404,26 +354,44 @@ index 88f1fa59b52e374382666b5258c7348a9e32d62e..3fb39fb2804723f5ae36fba808c77604
 +    if task == "moa_reference" and _normalize_aux_provider(resolved_provider) == "openai-codex":
 +        raise first_err
      tag = " (async)" if async_mode else ""
-     route = _LadderRoute(
-         client, task, tag, async_mode, base_info, resolved_provider, resolved_model,
-@@ -8113,6 +8179,8 @@ def _should_retry_same_provider(task: Optional[str], exc: Exception, tag: str) -
-     """True when ``exc`` is a transient transport blip worth a same-provider retry; critical-path
-     tasks skip it on a full-budget timeout (``_should_skip_same_provider_retry``) and go straight
+@@ -8115,2 +8172,4 @@ def _should_retry_same_provider(task: Optional[str], exc: Exception, tag: str) -
      to fallback."""
 +    if task == "compression" and "same_main_context" in _get_auxiliary_task_config(task):
 +        return False
      if not _is_transient_transport_error(exc):
-         return False
-     if _should_skip_same_provider_retry(task, exc):
-@@ -8211,6 +8279,8 @@ def _call_llm_impl(
-         try:
-             return _primary(provider=request_provider, base_url=req.base_info)
+@@ -8213,2 +8272,4 @@ def _call_llm_impl(
          except Exception as transient_err:
 +            if getattr(client, "_main_compression_context_bound", False):
 +                raise
              if not _should_retry_same_provider(task, transient_err, ""):
-                 raise
-             _max_transient_retries = _transient_retry_count()
+diff --git a/agent/auxiliary_codex_reasoning.py b/agent/auxiliary_codex_reasoning.py
+new file mode 100644
+index 00000000..565fdb8e
+--- /dev/null
++++ b/agent/auxiliary_codex_reasoning.py
+@@ -0,0 +1,22 @@
++"""Translate auxiliary chat reasoning controls onto their actual Responses wire."""
++
++
++def responses_reasoning(kwargs, model, host, *, is_codex_backend, is_xai):
++    from agent.reasoning_effort import clamp_effort
++    from agent.transports.codex import _codex_efforts_for_route
++
++    extra = kwargs.get('extra_body') or {}
++    config = extra.get('reasoning')
++    if not isinstance(config, dict):
++        config = kwargs.get('reasoning')
++    if not isinstance(config, dict):
++        effort = kwargs.get('reasoning_effort', extra.get('reasoning_effort'))
++        if effort is None:
++            return None
++        config = {'enabled': effort != 'none', 'effort': effort}
++    supported = _codex_efforts_for_route(model, host, is_codex_backend=is_codex_backend)
++    if config.get('enabled') is False:
++        return {'effort': 'none'} if 'none' in supported and not is_xai else None
++    if not supported:
++        return None
++    return {'effort': clamp_effort(config.get('effort') or 'medium', supported), 'summary': 'auto'}
 diff --git a/agent/cache_change_evidence.py b/agent/cache_change_evidence.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..7972af6c0aececd154b3dfb4d338616e9d472a68
@@ -37334,6 +37302,65 @@ index f50bde233000d94f301dd0adcca76442e53774ad..f58ba2c10ede80b712e4083c7bb568d9
      def test_kimi_keeps_its_documented_omission(self) -> None:
          """Kimi speaks the adaptive contract but is out of scope here (#13848)."""
          kwargs = _kwargs(
+diff --git a/tests/agent/test_auxiliary_codex_effort_carriers.py b/tests/agent/test_auxiliary_codex_effort_carriers.py
+new file mode 100644
+index 00000000..c58ed1b5
+--- /dev/null
++++ b/tests/agent/test_auxiliary_codex_effort_carriers.py
+@@ -0,0 +1,53 @@
++"""Effort selected by native auxiliary configuration survives Responses translation."""
++from copy import deepcopy
++from types import SimpleNamespace
++
++import pytest
++
++from agent.auxiliary_client import _CodexCompletionsAdapter, _build_call_kwargs
++from agent.reasoning_limits import owner_reasoning_limits
++
++
++def responses(kwargs, *, model='gpt-6.1-terra', host='https://chatgpt.com/backend-api/codex'):
++    adapter = _CodexCompletionsAdapter(SimpleNamespace(base_url=host), model)
++    return adapter._build_responses_kwargs({'messages': [{'role': 'user', 'content': 'Synthetic task'}],
++                                           **kwargs})[0]
++
++
++@pytest.mark.parametrize('effort', ['low', 'high', 'max', 'none'])
++def test_chat_effort_carrier_survives_codex_translation(effort):
++    request = {'reasoning_effort': effort}
++    original = deepcopy(request)
++    result = responses(request)
++    assert result['reasoning']['effort'] == effort
++    assert request == original
++
++
++@pytest.mark.parametrize('carrier', ['reasoning_effort', 'extra_body'])
++def test_nested_chat_effort_and_responses_effort_are_understood(carrier):
++    request = ({'extra_body': {'reasoning_effort': 'high'}} if carrier == 'extra_body'
++               else {'reasoning': {'effort': 'high'}})
++    assert responses(request)['reasoning']['effort'] == 'high'
++
++
++def test_native_auxiliary_cap_reaches_the_final_codex_wire():
++    with owner_reasoning_limits({'gpt-6.1-terra': 'high'}):
++        request = _build_call_kwargs('openai', 'gpt-6.1-terra',
++            [{'role': 'user', 'content': 'Synthetic task'}],
++            extra_body={'reasoning_effort': 'max'})
++    assert responses(request)['reasoning']['effort'] == 'high'
++
++
++def test_existing_explicit_nested_disable_keeps_precedence():
++    result = responses({'reasoning_effort': 'high', 'extra_body': {'reasoning': {'enabled': False}}})
++    assert result['reasoning'] == {'effort': 'none'}
++    assert 'include' not in result
++
++
++def test_omitted_reasoning_remains_omitted_without_an_owner_cap():
++    assert 'reasoning' not in responses({})
++
++
++def test_model_without_reasoning_does_not_gain_an_unsupported_field():
++    result = responses({'reasoning_effort': 'high'}, model='gpt-4o', host='https://api.openai.com/v1')
++    assert 'reasoning' not in result
 diff --git a/tests/agent/test_cache_change_evidence.py b/tests/agent/test_cache_change_evidence.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..84bc89c2f066a93106f51d5e7ede13012e48384b
