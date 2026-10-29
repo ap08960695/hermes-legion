@@ -23232,6 +23232,23 @@ index 63ff490ee732eca4f4d604c29d221f4704b5969c..4f73d46a465d612640ff072375ffa36c
          # Global concurrency cap (#33488): when set to a positive int, the HOST never has more than N tasks
          # in 'running' at once — counted across every active board and across both the ready and review
          # dispatch lanes (workers are OS processes sharing one machine's memory, so the cap bounds the
+diff --git a/hermes_cli/config_effective.py b/hermes_cli/config_effective.py
+index ac32724b..9f35c270 100644
+--- a/hermes_cli/config_effective.py
++++ b/hermes_cli/config_effective.py
+@@ -73,3 +73,11 @@ def load_user_config_effective(config_path: Optional[Path] = None, *, fail_close
+     with _config._CONFIG_LOCK:
+-        user_sig, cache_sig = _config._load_config_cache_sig(config_path)
++        try:
++            user_sig, cache_sig = _config._load_config_cache_sig(config_path)
++        except OSError as exc:
++            if fail_closed:
++                raise
++            # Metadata can fail before the file open too; dropping this layer would lose
++            # owner limits and every other override despite a last-good copy being available.
++            _EFFECTIVE_CACHE.pop(path_key, None)
++            return _effective(_recover_user_raw(config_path, path_key, exc))
+         cached = _EFFECTIVE_CACHE.get(path_key)
 diff --git a/hermes_cli/console_engine.py b/hermes_cli/console_engine.py
 index d456f6408d43d54b3b0b27c7efac935f3efaf8ec..f8731582d165862a680c012868e2049b2efe7876 100644
 --- a/hermes_cli/console_engine.py
@@ -44372,6 +44389,87 @@ index 0000000000000000000000000000000000000000..38f94e18be97338f7c0a7413dd2e9741
 +    finally:
 +        await owner.close()
 +        store.close_all_db_handles()
+diff --git a/tests/gateway/test_session_reasoning_read_failure.py b/tests/gateway/test_session_reasoning_read_failure.py
+new file mode 100644
+index 0000000..5becd15
+--- /dev/null
++++ b/tests/gateway/test_session_reasoning_read_failure.py
+@@ -0,0 +1,75 @@
++"""A profile config stat failure cannot silently remove a saved session's cost ceiling."""
++import json
++from pathlib import Path
++from types import SimpleNamespace
++
++import pytest
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('follows', [False, True])
++@pytest.mark.parametrize('error', [PermissionError, OSError])
++async def test_owner_read_fault_keeps_the_ceiling_on_the_final_wire(tmp_path, monkeypatch, follows, error):
++    from gateway.config import GatewayConfig
++    from gateway.session import SessionStore
++    from gateway.session_authority import initialize_session_authority
++    from gateway.session_controls import AuthorityConnection
++    from gateway.session_local import create_local_session
++    from gateway.session_policy import policy_for_source, policy_scope
++    from gateway.session_cron import unbind_owner
++    from hermes_constants import get_hermes_home
++    from agent.reasoning_limits import limit_agent_request
++
++    def refuse(*args, **kwargs):
++        raise AssertionError('offline session cost test attempted network access')
++    monkeypatch.setattr('socket.socket.connect', refuse)
++    monkeypatch.setattr('socket.socket.connect_ex', refuse)
++    home = get_hermes_home().resolve()
++    managed = tmp_path / 'managed'
++    managed.mkdir()
++    monkeypatch.setenv('HERMES_MANAGED_DIR', str(managed))
++    path = home / 'config.yaml'
++    path.write_text(json.dumps({'model': {'default': 'gpt-6.1-terra', 'provider': 'openai-codex'},
++        'platform_toolsets': {'cli': []}, 'agent': {'reasoning_effort_limits': {'gpt-6.1-terra': 'high'}}}))
++    store = SessionStore(home / 'sessions', GatewayConfig())
++    runner = SimpleNamespace(session_store=store, _session_db=store._db, adapters={}, _draining=False,
++        _cached_agent_for=lambda route: None)
++    runner._adapter_for_source = lambda source: runner.adapters.get(source.platform)
++    authority = await initialize_session_authority(runner, profile_id=str(home), instance_id='fixture')
++    runner.session_authority = authority
++    connection = AuthorityConnection(authority, object(), {'user_id': 'owner'})
++    try:
++        assert Path(authority.db.db_path).resolve().parent == home
++        ref = create_local_session(authority, connection.actor, {'request_id': 'fixture', 'source': 'cli',
++            'cwd': str(home), 'model': 'gpt-6.1-terra', 'toolsets': [], 'reasoning': 'max',
++            'follow_profile_config': follows})
++        policy = policy_for_source(runner, authority.sessions[ref.session_id].source)
++        assert policy is not None
++        before = authority.db.get_session(ref.session_id)
++        native = Path.stat
++        denied_reads = []
++
++        def denied(self, *args, **kwargs):
++            if self == path:
++                denied_reads.append(True)
++                raise error('fixture owner metadata unavailable')
++            return native(self, *args, **kwargs)
++
++        agent = SimpleNamespace(model='gpt-6.1-terra', api_mode='codex_responses',
++                                _reasoning_effort_limits={'gpt-6.1-terra': 'high'})
++        inputs, tools = [{'role': 'user', 'content': 'fixture'}], []
++        with monkeypatch.context() as fault:
++            fault.setattr(Path, 'stat', denied)
++            with policy_scope(policy, authority=authority):
++                request = limit_agent_request(agent, {'model': agent.model, 'reasoning': {'effort': 'max'},
++                                                     'input': inputs, 'tools': tools})
++                assert request['reasoning']['effort'] == 'high'
++                assert request['input'] is inputs and request['tools'] is tools
++        assert denied_reads, 'fault must reach the native owner config read'
++        after = authority.db.get_session(ref.session_id)
++        assert after['model'] == before['model'] == 'gpt-6.1-terra'
++        assert after['system_prompt'] == before['system_prompt']
++    finally:
++        await connection.close()
++        unbind_owner(authority)
++        store.close_all_db_handles()
 diff --git a/tests/gateway/test_standby_group_control.py b/tests/gateway/test_standby_group_control.py
 new file mode 100644
 index 0000000..8437048
@@ -45016,6 +45114,61 @@ index 0000000000000000000000000000000000000000..f12bc7f5577f461154ef044b39779416
 +    graph = scan(tmp_path)
 +    assert "external.py" not in graph["source_hashes"]
 +    assert graph["warnings"] == [{"path": "bad.py", "reason": "parse_failed"}]
+diff --git a/tests/hermes_cli/test_config_effective_read_failure.py b/tests/hermes_cli/test_config_effective_read_failure.py
+new file mode 100644
+index 0000000..a2526d0
+--- /dev/null
++++ b/tests/hermes_cli/test_config_effective_read_failure.py
+@@ -0,0 +1,49 @@
++"""A config signature I/O failure must retain last-good user overrides, not defaults."""
++from pathlib import Path
++
++import pytest
++
++
++@pytest.mark.parametrize('cold', [False, True])
++@pytest.mark.parametrize('error', [PermissionError, OSError])
++def test_signature_failure_recovers_the_owning_user_config(tmp_path, monkeypatch, cold, error):
++    from hermes_cli import config as cfg, config_effective as effective
++    from hermes_cli.config_effective import load_user_config_effective
++    from hermes_constants import get_hermes_home
++
++    home = get_hermes_home()
++    managed = tmp_path / 'managed'
++    managed.mkdir()
++    monkeypatch.setenv('HERMES_MANAGED_DIR', str(managed))
++    path = home / 'config.yaml'
++    path.write_text('agent:\n  reasoning_effort_limits: {gpt-6.1-terra: high}\nsecurity: {fixture: preserve}\n')
++    (managed / 'config.yaml').write_text('display: {skin: managed-fixture}\n')
++    good = load_user_config_effective(path)
++    assert good['agent']['reasoning_effort_limits'] == {'gpt-6.1-terra': 'high'}
++    assert list((home / 'backups/config').glob('*.good.*'))
++    if cold:
++        cfg._RAW_CONFIG_CACHE.clear()
++        effective._EFFECTIVE_CACHE.clear()
++        effective._LAST_GOOD_USER_RAW.clear()
++    native = Path.stat
++
++    def denied(self, *args, **kwargs):
++        if self == path:
++            raise error('fixture config metadata unavailable')
++        return native(self, *args, **kwargs)
++
++    with monkeypatch.context() as fault:
++        fault.setattr(Path, 'stat', denied)
++        assert load_user_config_effective(path) == good
++        with pytest.raises(error):
++            load_user_config_effective(path, fail_closed=True)
++    assert load_user_config_effective(path) == good
++
++
++def test_absent_user_config_keeps_the_native_managed_only_contract(tmp_path, monkeypatch):
++    from hermes_cli.config_effective import load_user_config_effective
++    managed = tmp_path / 'managed'
++    managed.mkdir()
++    monkeypatch.setenv('HERMES_MANAGED_DIR', str(managed))
++    (managed / 'config.yaml').write_text('display: {skin: managed-fixture}\n')
++    assert load_user_config_effective(tmp_path / 'absent.yaml') == {'display': {'skin': 'managed-fixture'}}
 diff --git a/tests/hermes_cli/test_continuation_state_atomic.py b/tests/hermes_cli/test_continuation_state_atomic.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..c32f55ae16a63a4761daa18422f495d3e0f065e7

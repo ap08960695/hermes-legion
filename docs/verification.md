@@ -1,3 +1,13 @@
+# v0.7.13: preserve last-good config through metadata failures
+
+727 pinned paths. Signature I/O failures now reuse native last-good raw config/
+backup recovery; strict readers, missing-file semantics, worker snapshots and the
+normal cache path remain unchanged. Native regression: 163 files /
+1,110 passed / 0 failed / 4 skips, zero retries. Installed
+Linux/macOS: thirteen controls each, zero providers and code-health clear. See
+[config metadata recovery](config-metadata-recovery.md). No measured usage/RAM/cache
+saving or original-user conversation adoption is claimed. Historical counts overlap.
+
 # v0.7.12: isolated authority caller fixtures
 
 724 pinned paths; runtime source unchanged from v0.7.11. Seventeen test files repair
