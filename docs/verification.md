@@ -1,3 +1,19 @@
+# v0.7.24: Gateway goal notification identity
+
+The consolidated kit pins 752 source paths. Goal/board/notification/multiplex:
+35 files / 373 passes, zero failures and file retries; scoped code-health has no
+new findings. Linux and macOS installed native acceptance each pass 12 checks,
+including two real Gateway-hook/synthetic-route cases with controlled judges.
+No real model or external provider calls for this release. Both hosts pass full
+public-patch apply/reverse/reapply. Installed parity per host:751 exact plus one
+pre-existing comment-only AST-equivalent tool difference, zero missing files.
+
+See [the identity repair and evidence limits](goal-notification-identity.md).
+Historical selections below overlap and are not summed. Their broader inherited
+failures, original-session and continuous-graph limitations remain visible.
+
+---
+
 # v0.7.23: bounded retries and cross-board goal waiting
 
 The consolidated kit now pins 750 source paths. The new goal/board/notification
