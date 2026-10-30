@@ -4936,6 +4936,85 @@ index 33589152a26f10f2c548a951f6d3a056604c7667..350640892f752b7f615658866cacf2d1
        } finally {
          await closeQuietly(app)
        }
+diff --git a/apps/desktop/electron/main.ts b/apps/desktop/electron/main.ts
+index 3206f7e6..1c4005f8 100644
+--- a/apps/desktop/electron/main.ts
++++ b/apps/desktop/electron/main.ts
+@@ -12435,6 +12435,4 @@ function spawnSecondaryWindow({
+ 
+-// Open (or focus) a standalone window for a single chat session.
+-function createSessionWindow(sessionId, { connectionId = null, profile = null, watch = false } = {}) {
+-  return sessionWindows.openOrFocus(sessionId, () => spawnSecondaryWindow({ connectionId, sessionId, profile, watch }))
+-}
++const createSessionWindow = (sessionId, opts = {}) =>
++  sessionWindows.openOrFocus(sessionId, () => spawnSecondaryWindow({ ...opts, sessionId }), opts)
+ 
+diff --git a/apps/desktop/electron/session-windows.test.ts b/apps/desktop/electron/session-windows.test.ts
+index 2d57a503..51e73b0b 100644
+--- a/apps/desktop/electron/session-windows.test.ts
++++ b/apps/desktop/electron/session-windows.test.ts
+@@ -304 +304,35 @@ test('secondary URLs preserve exact local and remote routes in packaged and deve
+ })
++
++test('registry keeps same-ID histories separate by exact owner and focuses a repeated owner', () => {
++  const registry = createSessionWindowRegistry()
++
++  const first = makeFakeWindow(),
++    second = makeFakeWindow(),
++    third = makeFakeWindow()
++
++  const owner = { connectionId: 'source-a', profile: 'work' }
++
++  assert.equal(
++    registry.openOrFocus('shared-history', () => first, owner),
++    first
++  )
++  assert.equal(
++    registry.openOrFocus('shared-history', () => second, { ...owner, profile: 'default' }),
++    second
++  )
++  assert.equal(
++    registry.openOrFocus('shared-history', () => third, { ...owner, connectionId: 'source-b' }),
++    third
++  )
++  assert.equal(
++    registry.openOrFocus(
++      'shared-history',
++      () => {
++        throw new Error('must focus the existing owner')
++      },
++      owner
++    ),
++    first
++  )
++  assert.equal(registry.size, 3)
++})
+diff --git a/apps/desktop/electron/session-windows.ts b/apps/desktop/electron/session-windows.ts
+index 36b6aabe..411a3ea3 100644
+--- a/apps/desktop/electron/session-windows.ts
++++ b/apps/desktop/electron/session-windows.ts
+@@ -149,3 +149,3 @@ function instanceWindowBounds(
+ 
+-// A small registry keyed by sessionId that guarantees one window per chat:
++// A small registry keyed by exact owner + sessionId (or a legacy unscoped key):
+ // opening a session that already has a live window focuses it instead of
+@@ -157,6 +157,6 @@ function createSessionWindowRegistry() {
+ 
+-  function openOrFocus(sessionId, factory) {
+-    const key = typeof sessionId === 'string' ? sessionId.trim() : ''
++  function openOrFocus(sessionId, factory, owner?: { connectionId?: null | string; profile?: null | string }) {
++    const id = typeof sessionId === 'string' ? sessionId.trim() : ''
+ 
+-    if (!key) {
++    if (!id) {
+       return null
+@@ -164,2 +164,6 @@ function createSessionWindowRegistry() {
+ 
++    const key = owner
++      ? JSON.stringify([owner.connectionId?.trim() || null, owner.profile?.trim() || 'default', id])
++      : id
++
+     const existing = windows.get(key)
 diff --git a/apps/desktop/src/api/sessions.ts b/apps/desktop/src/api/sessions.ts
 index b92ab645fba5b1cb71c1858da8fec74acb389bbb..610d3242999ecaccfafb972685f5822fccb9a908 100644
 --- a/apps/desktop/src/api/sessions.ts
@@ -6116,6 +6195,51 @@ index 5444cce0efe3c6a46be3e6dd64f58371b26f8e3f..8046b16a21e5056a15f0e9eb4c17a866
            {voiceControls}
          </>
        )}
+diff --git a/apps/desktop/src/app/chat/composer/draft-recovery.tsx b/apps/desktop/src/app/chat/composer/draft-recovery.tsx
+new file mode 100644
+index 00000000..2246e78c
+--- /dev/null
++++ b/apps/desktop/src/app/chat/composer/draft-recovery.tsx
+@@ -0,0 +1,39 @@
++import { useStore } from '@nanostores/react'
++
++import { isFreshDraftScope } from '@/store/composer'
++import type { SessionOwnerScope } from '@/store/session-request-router'
++
++import type { useComposerDraft } from './hooks/use-composer-draft'
++import { RestoredDraftNotice } from './restored-draft-notice'
++import { useComposerScope } from './scope'
++import { UnassignedDraftNotice } from './unassigned-draft-notice'
++
++interface ComposerDraftRecoveryProps {
++  draft: ReturnType<typeof useComposerDraft>
++  scope: string | null
++  owner: SessionOwnerScope
++}
++
++/** Both recovery paths follow the editor owner without putting draft text in shell state. */
++export function ComposerDraftRecovery({ draft, scope, owner }: ComposerDraftRecoveryProps) {
++  const composer = useComposerScope()
++  const attachments = useStore(composer.attachments.$attachments)
++
++  return (
++    <>
++      <UnassignedDraftNotice
++        canRestore={() => !draft.syncDraftFromEditor().trim() && composer.attachments.$attachments.get().length === 0}
++        empty={!draft.hasText && attachments.length === 0}
++        onRestored={draft.loadIntoComposer}
++        owner={owner}
++        scope={scope}
++      />
++      <RestoredDraftNotice
++        freshDraft={scope === null || isFreshDraftScope(scope)}
++        onUndone={draft.clearDraft}
++        owner={owner}
++        readLiveText={draft.syncDraftFromEditor}
++      />
++    </>
++  )
++}
 diff --git a/apps/desktop/src/app/chat/composer/focus.ts b/apps/desktop/src/app/chat/composer/focus.ts
 index 3c7f5a20da88790d5ad67782b3e9567299d30533..09e0281be881435fda8e54e3caf90e640b8aded4 100644
 --- a/apps/desktop/src/app/chat/composer/focus.ts
@@ -6165,6 +6289,618 @@ index 3c7f5a20da88790d5ad67782b3e9567299d30533..09e0281be881435fda8e54e3caf90e64
  /** Insert typed ref chips (carrying a display label) into a composer — the
   * structured cousin of {@link requestComposerInsert}, used for session links. */
  export const requestComposerInsertRefs = (
+diff --git a/apps/desktop/src/app/chat/composer/hooks/composer-draft-access.ts b/apps/desktop/src/app/chat/composer/hooks/composer-draft-access.ts
+new file mode 100644
+index 00000000..9b045561
+--- /dev/null
++++ b/apps/desktop/src/app/chat/composer/hooks/composer-draft-access.ts
+@@ -0,0 +1,63 @@
++import type { RefObject } from 'react'
++
++import {
++  type ComposerAttachment,
++  type ComposerAttachmentScope,
++  isFreshDraftScope,
++  stashSessionDraft
++} from '@/store/composer'
++import { draftOwnerKey } from '@/store/composer-draft-owner'
++import { type ComposerDraftRetry, matchingDraftRetry, writeDraftRetry } from '@/store/composer-draft-retry'
++import type { SessionOwnerScope } from '@/store/session-request-router'
++
++interface DraftAccessArgs {
++  attachmentScope: ComposerAttachmentScope
++  draftRef: RefObject<string>
++  draftOwnerRef: RefObject<SessionOwnerScope>
++  draftRetryRef: RefObject<ComposerDraftRetry | undefined>
++  draftScopeRef: RefObject<string | null>
++}
++
++/** All writes carry the committed editor owner; async callers supply their captured owner explicitly. */
++export function createComposerDraftAccess({
++  attachmentScope,
++  draftRef,
++  draftOwnerRef,
++  draftRetryRef,
++  draftScopeRef
++}: DraftAccessArgs) {
++  const stashAt = (
++    scope: string | null,
++    text = draftRef.current,
++    attachments = attachmentScope.$attachments.get(),
++    owner = draftOwnerRef.current
++  ) => stashSessionDraft(scope, text, attachments, owner)
++
++  const sameDraftScope = (a: string | null | undefined, b: string | null | undefined) =>
++    (isFreshDraftScope(a) || !a ? null : a) === (isFreshDraftScope(b) || !b ? null : b)
++
++  // A rejected or unconfirmed send is restored with its identity, so Enter on that exact draft is
++  // the explicit retry. Recorded per draft scope (it survives a reload with the draft text).
++  const rememberDraftRetry = (scope: string | null, retry: ComposerDraftRetry, owner = draftOwnerRef.current) => {
++    writeDraftRetry(scope, retry, owner)
++
++    if (sameDraftScope(scope, draftScopeRef.current) && draftOwnerKey(owner) === draftOwnerKey(draftOwnerRef.current)) {
++      draftRetryRef.current = retry
++    }
++  }
++
++  // The identity a send of exactly this draft retries, if any. Spent by the send either way: a
++  // rejection restores it again, and an accepted send leaves nothing to retry.
++  const takeDraftRetry = (text: string, attachments: ComposerAttachment[]) => {
++    const retry = matchingDraftRetry(draftRetryRef.current, text, attachments)
++    draftRetryRef.current = undefined
++
++    if (retry) {
++      writeDraftRetry(draftScopeRef.current, undefined, draftOwnerRef.current)
++    }
++
++    return retry
++  }
++
++  return { stashAt, rememberDraftRetry, takeDraftRetry }
++}
+diff --git a/apps/desktop/src/app/chat/composer/hooks/composer-submit-dispatch.test.ts b/apps/desktop/src/app/chat/composer/hooks/composer-submit-dispatch.test.ts
+new file mode 100644
+index 00000000..3ef82d05
+--- /dev/null
++++ b/apps/desktop/src/app/chat/composer/hooks/composer-submit-dispatch.test.ts
+@@ -0,0 +1,56 @@
++import { afterEach, expect, it, vi } from 'vitest'
++
++import { clearSessionDraft, rotateFreshDraftKey, stashSessionDraft, takeSessionDraft } from '@/store/composer'
++
++import type { ChatBarProps } from '../types'
++
++import { createComposerSubmitDispatch } from './composer-submit-dispatch'
++
++const owner = { connectionId: 'submit-source', profile: 'work' }
++const first = '__new__:first-owner-lifecycle'
++const next = '__new__:next-owner-lifecycle'
++
++afterEach(() => {
++  clearSessionDraft(first, owner)
++  clearSessionDraft(next, owner)
++})
++
++it.each([true, false])('keeps the raw fresh lifecycle bound while a send settles (%s)', async accepted => {
++  let settle!: (accepted: boolean) => void
++
++  const pending = new Promise<boolean>(resolve => {
++    settle = resolve
++  })
++
++  const rawScope = { current: first as string | null }
++  const ownerRef = { current: owner }
++  const loaded = vi.fn()
++  const onSubmit = vi.fn<ChatBarProps['onSubmit']>(() => pending)
++
++  const send = createComposerSubmitDispatch({
++    draftScopeRef: rawScope,
++    draftOwnerRef: ownerRef,
++    onSubmit,
++    stashAt: (scope, text = '', attachments = [], captured) => {
++      stashSessionDraft(scope, text, attachments, captured)
++    },
++    loadIntoComposer: loaded
++  })
++
++  stashSessionDraft(first, 'Original fresh send', [], owner)
++  send('Original fresh send')
++  rawScope.current = next
++  const actualNext = rotateFreshDraftKey()
++  stashSessionDraft(next, 'Keep next fresh draft', [], owner)
++  stashSessionDraft(actualNext, 'Keep ambient fresh lifecycle', [], owner)
++  settle(accepted)
++  await pending
++  await Promise.resolve()
++
++  expect(onSubmit.mock.calls[0]?.[1]?.composerScope).toBeNull()
++  expect(takeSessionDraft(next, owner).text).toBe('Keep next fresh draft')
++  expect(takeSessionDraft(actualNext, owner).text).toBe('Keep ambient fresh lifecycle')
++  expect(takeSessionDraft(first, owner).text).toBe(accepted ? '' : 'Original fresh send')
++  expect(loaded).not.toHaveBeenCalled()
++  clearSessionDraft(actualNext, owner)
++})
+diff --git a/apps/desktop/src/app/chat/composer/hooks/composer-submit-dispatch.ts b/apps/desktop/src/app/chat/composer/hooks/composer-submit-dispatch.ts
+new file mode 100644
+index 00000000..d753ea55
+--- /dev/null
++++ b/apps/desktop/src/app/chat/composer/hooks/composer-submit-dispatch.ts
+@@ -0,0 +1,95 @@
++import type { RefObject } from 'react'
++
++import { clearSessionDraft, type ComposerAttachment, isFreshDraftScope } from '@/store/composer'
++import { draftOwnerKey } from '@/store/composer-draft-owner'
++import { type ComposerDraftRetry, draftRetry } from '@/store/composer-draft-retry'
++import type { SessionOwnerScope } from '@/store/session-request-router'
++
++import type { ChatBarProps } from '../types'
++
++interface SubmitDispatchArgs {
++  draftScopeRef: RefObject<string | null>
++  draftOwnerRef?: RefObject<SessionOwnerScope>
++  onSubmit: ChatBarProps['onSubmit']
++  stashAt: (scope: string | null, text?: string, attachments?: ComposerAttachment[], owner?: SessionOwnerScope) => void
++  rememberDraftRetry?: (scope: string | null, retry: ComposerDraftRetry, owner?: SessionOwnerScope) => void
++  loadIntoComposer: (text: string, attachments: ComposerAttachment[]) => void
++}
++
++/** Send settlement belongs to the clicked editor, even after owner/scope navigation commits. */
++export function createComposerSubmitDispatch({
++  draftScopeRef,
++  draftOwnerRef,
++  onSubmit,
++  stashAt,
++  rememberDraftRetry,
++  loadIntoComposer
++}: SubmitDispatchArgs) {
++  const dispatchSubmit = (
++    text: string,
++    attachments?: ComposerAttachment[],
++    displayKind?: 'hidden',
++    target?: Parameters<ChatBarProps['onSubmit']>[1]
++  ) => {
++    // A fresh chat's composer is keyed by its per-lifecycle fresh-draft key
++    // (`__new__:<uuid>`), but the submit contract spells "no session yet" as
++    // null. Keep the raw lifecycle key separately: a later fresh chat must not
++    // become the destination of this send settlement.
++    const submittedDraftScope = target?.storedSessionId ?? draftScopeRef.current
++    const submittedScope = isFreshDraftScope(submittedDraftScope) ? null : submittedDraftScope
++
++    // Freeze owner at the click: pending navigation must not re-home success or rejection.
++    const owner = draftOwnerRef?.current
++    const submittedOwner = typeof owner === 'object' && owner ? { ...owner } : owner
++    let restoreScope = submittedDraftScope
++    const submittedAttachments = attachments ?? []
++
++    // Only this operation's explicit session.create handoff may re-home a
++    // pre-session submit. A null → stored render can also be user navigation.
++    const assignment =
++      submittedScope === null
++        ? {
++            onComposerScopeAssigned: (scope: string) => {
++              restoreScope = scope
++            }
++          }
++        : {}
++
++    // The composer owns this send's identity: the caller's (a queue entry), the restored draft's
++    // (the explicit retry), else a new one. Equal text never inherits an identity, so a new
++    // message that repeats an uncertain send, in this pane or another, is its own turn.
++    const submissionId = target?.submission_id ?? crypto.randomUUID()
++
++    const restore = () => {
++      stashAt(restoreScope, text, submittedAttachments, submittedOwner ?? null)
++      // Restored with its identity: Enter on this exact draft retries the same send.
++      rememberDraftRetry?.(restoreScope, draftRetry(submissionId, text, submittedAttachments), submittedOwner ?? null)
++
++      if (
++        draftScopeRef.current === restoreScope &&
++        draftOwnerKey(draftOwnerRef?.current) === draftOwnerKey(submittedOwner)
++      ) {
++        loadIntoComposer(text, submittedAttachments)
++      }
++    }
++
++    // A hidden submit is machine text (a setup note, never something the user
++    // typed), so a rejection drops it instead of loading it into the draft.
++    const rejected = displayKind ? () => {} : restore
++
++    void Promise.resolve(
++      onSubmit(text, {
++        ...target,
++        submission_id: submissionId,
++        ...(attachments ? { attachments } : {}),
++        composerScope: submittedScope,
++        ...assignment,
++        ...(displayKind ? { displayKind } : {})
++      })
++    )
++      .then(accepted => void (accepted === false ? rejected() : clearSessionDraft(submittedDraftScope, submittedOwner)))
++      .catch(rejected)
++  }
++
++  return dispatchSubmit
++}
+diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-draft.owner.test.tsx b/apps/desktop/src/app/chat/composer/hooks/use-composer-draft.owner.test.tsx
+new file mode 100644
+index 00000000..cb2f941b
+--- /dev/null
++++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-draft.owner.test.tsx
+@@ -0,0 +1,204 @@
++import { act, cleanup, render } from '@testing-library/react'
++import { useRef } from 'react'
++import { afterEach, expect, it, vi } from 'vitest'
++
++import { clearSessionDraft, mainComposerScope, stashSessionDraft, takeSessionDraft } from '@/store/composer'
++import { readDraftRetry } from '@/store/composer-draft-retry'
++import type { SessionOwnerScope } from '@/store/session-request-router'
++
++import type { ChatBarProps } from '../types'
++
++import { useComposerDraft } from './use-composer-draft'
++import { useComposerSubmit } from './use-composer-submit'
++import { useComposerUndo } from './use-composer-undo'
++
++const adapter = vi.hoisted(() => {
++  let text = ''
++  const listeners = new Set<() => void>()
++
++  const api = {
++    setText(value: string) {
++      text = value
++      listeners.forEach(listener => listener())
++    }
++  }
++
++  const runtime = {
++    getState: () => ({ text }),
++    subscribe(listener: () => void) {
++      listeners.add(listener)
++
++      return () => {
++        listeners.delete(listener)
++      }
++    }
++  }
++
++  return { aui: { composer: () => api }, runtime }
++})
++
++vi.mock('@assistant-ui/react', () => ({
++  useAui: () => adapter.aui,
++  useAuiState: (selector: (state: { composer: { text: string } }) => unknown) =>
++    selector({ composer: adapter.runtime.getState() }),
++  useComposerRuntime: () => adapter.runtime
++}))
++
++const original = { connectionId: 'draft-host', profile: 'default' }
++const work = { connectionId: 'draft-host', profile: 'work' }
++const id = 'owner-hook-history'
++
++let handles: {
++  draft: ReturnType<typeof useComposerDraft>
++  submit: ReturnType<typeof useComposerSubmit>
++  undo: ReturnType<typeof useComposerUndo>
++}
++
++function Harness({ owner, onSubmit = () => true }: { owner: SessionOwnerScope; onSubmit?: ChatBarProps['onSubmit'] }) {
++  const queueEditRef = useRef(null)
++
++  const draft = useComposerDraft({
++    activeQueueSessionKey: id,
++    draftOwner: owner,
++    focusKey: null,
++    inputDisabled: false,
++    queueEditRef,
++    sessionId: id
++  })
++
++  const submit = useComposerSubmit({
++    ...draft,
++    activeQueueSessionKey: id,
++    attachments: [],
++    busy: false,
++    disabled: false,
++    drainNextQueued: async () => false,
++    exitQueuedEdit: () => false,
++    inputDisabled: false,
++    onCancel: () => {},
++    onSteer: undefined,
++    onSteerHidden: undefined,
++    onSubmit,
++    queueCurrentDraft: () => false,
++    queueEdit: null,
++    queuedPrompts: [],
++    sessionId: id
++  })
++
++  const undo = useComposerUndo({
++    editorRef: draft.editorRef,
++    syncDraftFromEditor: draft.syncDraftFromEditor,
++    scopeKey: JSON.stringify([id, owner])
++  })
++
++  handles = { draft, submit, undo }
++
++  return <div contentEditable ref={draft.editorRef} suppressContentEditableWarning />
++}
++
++afterEach(() => {
++  cleanup()
++
++  for (const owner of [original, work, undefined]) {
++    clearSessionDraft(id, owner)
++  }
++
++  mainComposerScope.clear()
++})
++
++it('changes owner before paint even when the raw session id stays the same', () => {
++  stashSessionDraft(id, 'Original unsent words', [], original)
++  stashSessionDraft(id, 'Work unsent words', [], work)
++  const view = render(<Harness owner={original} />)
++  expect(handles.draft.draftRef.current).toBe('Original unsent words')
++  view.rerender(<Harness owner={work} />)
++  expect(handles.draft.draftRef.current).toBe('Work unsent words')
++  expect(takeSessionDraft(id, original).text.trim()).toBe('Original unsent words')
++  expect(takeSessionDraft(id, work).text).toBe('Work unsent words')
++})
++
++it('does not load legacy unassigned words into an owned composer', () => {
++  stashSessionDraft(id, 'Legacy unassigned words', [])
++  render(<Harness owner={work} />)
++  expect(handles.draft.draftRef.current).toBe('')
++  expect(takeSessionDraft(id).text).toBe('Legacy unassigned words')
++})
++
++it('persists pending typing and attachments against the outgoing owner on a same-id switch', () => {
++  const mounted = render(<Harness owner={original} />)
++  act(() => {
++    handles.draft.insertText('Original trailing typing')
++    mainComposerScope.$attachments.set([{ id: 'original-file', kind: 'file', label: 'Original file' }])
++  })
++  const view = window.document.querySelector('[contenteditable]')!
++  expect(view.textContent).toBe('Original trailing typing')
++  mounted.rerender(<Harness owner={work} />)
++  expect(handles.draft.draftRef.current).toBe('')
++  expect(takeSessionDraft(id, original).text.trim()).toBe('Original trailing typing')
++  expect(takeSessionDraft(id, original).attachments[0]?.id).toBe('original-file')
++})
++
++it('a late accepted send clears only its captured owner', async () => {
++  let settle!: (value: boolean) => void
++
++  const accepted = new Promise<boolean>(resolve => {
++    settle = resolve
++  })
++
++  const view = render(<Harness onSubmit={() => accepted} owner={original} />)
++  act(() => {
++    handles.draft.insertText('Original message')
++    handles.submit.submitDraft()
++  })
++  stashSessionDraft(id, 'Keep work draft', [], work)
++  view.rerender(<Harness owner={work} />)
++  await act(async () => {
++    settle(true)
++    await accepted
++  })
++  expect(takeSessionDraft(id, original).text.trim()).toBe('')
++  expect(takeSessionDraft(id, work).text).toBe('Keep work draft')
++  expect(handles.draft.draftRef.current).toBe('Keep work draft')
++})
++
++it('a late rejected send restores only its captured owner and retry identity', async () => {
++  let settle!: (value: boolean) => void
++
++  const accepted = new Promise<boolean>(resolve => {
++    settle = resolve
++  })
++
++  const view = render(<Harness onSubmit={() => accepted} owner={original} />)
++  act(() => {
++    handles.draft.insertText('Rejected original message')
++    handles.submit.submitDraft()
++  })
++  stashSessionDraft(id, 'Keep work draft', [], work)
++  view.rerender(<Harness owner={work} />)
++  await act(async () => {
++    settle(false)
++    await accepted
++  })
++  expect(takeSessionDraft(id, original).text.trim()).toBe('Rejected original message')
++  expect(readDraftRetry(id, original)?.id).toBeTruthy()
++  expect(readDraftRetry(id, work)).toBeUndefined()
++  expect(handles.draft.draftRef.current).toBe('Keep work draft')
++})
++
++it('cannot undo back into the previous owner words after a same-id owner switch', () => {
++  stashSessionDraft(id, 'Original owner words', [], original)
++  stashSessionDraft(id, 'Keep work owner words', [], work)
++  const view = render(<Harness owner={original} />)
++  act(() => {
++    handles.undo.recordUndoPoint()
++    handles.draft.insertText('Original extra typing')
++  })
++  view.rerender(<Harness owner={work} />)
++  let changed = false
++  act(() => {
++    changed = handles.undo.undo()
++  })
++
++  expect(changed).toBe(false)
++  expect(handles.draft.draftRef.current.trim()).toBe('Keep work owner words')
++})
+diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-draft.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-draft.ts
+index f88f2267..09e57873 100644
+--- a/apps/desktop/src/app/chat/composer/hooks/use-composer-draft.ts
++++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-draft.ts
+@@ -2,3 +2,3 @@ import { useAui, useAuiState, useComposerRuntime } from '@assistant-ui/react'
+ import { SLASH_COMMAND_RE } from '@hermes/shared'
+-import { type RefObject, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
++import { type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+ 
+@@ -16,5 +16,5 @@ import {
+   reloadPersistedDrafts,
+-  stashSessionDraft,
+   takeSessionDraft
+ } from '@/store/composer'
++import { draftOwnerKey } from '@/store/composer-draft-owner'
+ import {
+@@ -22,3 +22,2 @@ import {
+   draftRetryTextMatches,
+-  matchingDraftRetry,
+   readDraftRetry,
+@@ -29,2 +28,3 @@ import { $composerPopout } from '@/store/composer-popout'
+ import { migrateQueuedPrompts } from '@/store/composer-queue'
++import type { SessionOwnerScope } from '@/store/session-request-router'
+ 
+@@ -62,4 +62,7 @@ import { useComposerVisible } from '../visibility'
+ 
++import { createComposerDraftAccess } from './composer-draft-access'
++
+ interface UseComposerDraftArgs {
+   activeQueueSessionKey: string | null
++  draftOwner?: SessionOwnerScope
+   focusKey: ChatBarProps['focusKey']
+@@ -82,2 +85,3 @@ export function useComposerDraft({
+   activeQueueSessionKey,
++  draftOwner,
+   focusKey,
+@@ -123,5 +127,8 @@ export function useComposerDraft({
+   const draftRef = useRef('')
++  // Like draftScopeRef, this belongs to the committed editor, not a pending render.
++  const draftOwnerRef = useRef(draftOwner)
++  const ownerIdentity = draftOwnerKey(draftOwner)
+   // The uncertain send this draft was restored from, while the text is still exactly that send.
+   const draftRetryRef = useRef<ComposerDraftRetry | undefined>(undefined)
+-  const pendingDraftPersistRef = useRef<{ scope: string | null; text: string } | null>(null)
++  const pendingDraftPersistRef = useRef<{ scope: string | null; text: string; owner: SessionOwnerScope } | null>(null)
+   const draftPersistTimerRef = useRef<number | undefined>(undefined)
+@@ -302,30 +309,6 @@ export function useComposerDraft({
+ 
+-  const stashAt = (scope: string | null, text = draftRef.current, attachments = attachmentScope.$attachments.get()) =>
+-    stashSessionDraft(scope, text, attachments)
+-
+-  const sameDraftScope = (a: string | null | undefined, b: string | null | undefined) =>
+-    (isFreshDraftScope(a) || !a ? null : a) === (isFreshDraftScope(b) || !b ? null : b)
+-
+-  // A rejected or unconfirmed send is restored with its identity, so Enter on that exact draft is
+-  // the explicit retry. Recorded per draft scope (it survives a reload with the draft text).
+-  const rememberDraftRetry = (scope: string | null, retry: ComposerDraftRetry) => {
+-    writeDraftRetry(scope, retry)
+-
+-    if (sameDraftScope(scope, draftScopeRef.current)) {
+-      draftRetryRef.current = retry
+-    }
+-  }
+-
+-  // The identity a send of exactly this draft retries, if any. Spent by the send either way: a
+-  // rejection restores it again, and an accepted send leaves nothing to retry.
+-  const takeDraftRetry = (text: string, attachments: ComposerAttachment[]) => {
+-    const retry = matchingDraftRetry(draftRetryRef.current, text, attachments)
+-    draftRetryRef.current = undefined
+-
+-    if (retry) {
+-      writeDraftRetry(draftScopeRef.current, undefined)
+-    }
+-
+-    return retry
+-  }
++  const { stashAt, rememberDraftRetry, takeDraftRetry } = useMemo(
++    () => createComposerDraftAccess({ attachmentScope, draftRef, draftOwnerRef, draftRetryRef, draftScopeRef }),
++    [attachmentScope]
++  )
+ 
+@@ -468,6 +451,6 @@ export function useComposerDraft({
+         draftRetryRef.current = undefined
+-        writeDraftRetry(scope, undefined)
++        writeDraftRetry(scope, undefined, draftOwnerRef.current)
+       }
+ 
+-      const entry = { scope, text }
++      const entry = { scope, text, owner: draftOwnerRef.current }
+       pendingDraftPersistRef.current = entry
+@@ -480,3 +463,6 @@ export function useComposerDraft({
+         // silently filing text under the wrong session.
+-        if (!isPendingDraftPersistCurrent(pendingDraftPersistRef.current, entry)) {
++        if (
++          pendingDraftPersistRef.current !== entry ||
++          !isPendingDraftPersistCurrent(pendingDraftPersistRef.current, entry)
++        ) {
+           return
+@@ -485,3 +471,3 @@ export function useComposerDraft({
+         pendingDraftPersistRef.current = null
+-        stashAt(scope, text)
++        stashAt(scope, text, attachmentScope.$attachments.get(), entry.owner)
+       }, DRAFT_PERSIST_DEBOUNCE_MS)
+@@ -495,3 +481,3 @@ export function useComposerDraft({
+     }
+-  }, [composerRuntime, queueEditRef])
++  }, [composerRuntime, queueEditRef, stashAt, attachmentScope.$attachments])
+ 
+@@ -571,3 +557,6 @@ export function useComposerDraft({
+     // later than the route flips the scope, so it is not a usable signal here.
+-    if ((isFreshDraftScope(draftScopeRef.current) || !draftScopeRef.current) && activeQueueSessionKey) {
++    const owner = typeof draftOwner === 'object' && draftOwner ? { ...draftOwner } : draftOwner
++    const sameOwner = draftOwnerKey(draftOwnerRef.current) === draftOwnerKey(owner)
++
++    if (sameOwner && (isFreshDraftScope(draftScopeRef.current) || !draftScopeRef.current) && activeQueueSessionKey) {
+       const freshKey = draftScopeRef.current || freshDraftScope()
+@@ -577,6 +566,6 @@ export function useComposerDraft({
+       // fresh → stored (#139190), so only this announced handoff does.
+-      if (adoptNewSessionDraft(activeQueueSessionKey)) {
++      if (adoptNewSessionDraft(activeQueueSessionKey, owner)) {
+         migrateQueuedPrompts(freshKey, activeQueueSessionKey)
+       }
+-    } else if (!activeQueueSessionKey) {
++    } else if (sameOwner && !activeQueueSessionKey) {
+       // The reverse handoff: a session the user was typing into turned out
+@@ -587,3 +576,3 @@ export function useComposerDraft({
+       // verdict announced it. No announcement, no-op.
+-      adoptGoneSessionDraft()
++      adoptGoneSessionDraft(owner)
+     }
+@@ -591,5 +580,6 @@ export function useComposerDraft({
+     draftScopeRef.current = activeQueueSessionKey
+-    draftRetryRef.current = readDraftRetry(activeQueueSessionKey)
++    draftOwnerRef.current = owner
++    draftRetryRef.current = readDraftRetry(activeQueueSessionKey, owner)
+ 
+-    const { attachments, text } = takeSessionDraft(activeQueueSessionKey)
++    const { attachments, text } = takeSessionDraft(activeQueueSessionKey, owner)
+     loadIntoComposer(text, attachments, true)
+@@ -601,8 +591,8 @@ export function useComposerDraft({
+       if (editing?.sessionKey === activeQueueSessionKey) {
+-        stashAt(activeQueueSessionKey, editing.draft, editing.attachments)
++        stashAt(activeQueueSessionKey, editing.draft, editing.attachments, owner)
+       } else if (!isBrowsingHistory(sessionId)) {
+-        stashAt(activeQueueSessionKey, latestText)
++        stashAt(activeQueueSessionKey, latestText, attachmentScope.$attachments.get(), owner)
+       }
+     }
+-  }, [activeQueueSessionKey]) // eslint-disable-line react-hooks/exhaustive-deps
++  }, [activeQueueSessionKey, ownerIdentity]) // eslint-disable-line react-hooks/exhaustive-deps
+ 
+@@ -623,4 +613,4 @@ export function useComposerDraft({
+     reloadPersistedDrafts()
+-    draftRetryRef.current = readDraftRetry(draftScopeRef.current)
+-    const stashed = takeSessionDraft(draftScopeRef.current)
++    draftRetryRef.current = readDraftRetry(draftScopeRef.current, draftOwnerRef.current)
++    const stashed = takeSessionDraft(draftScopeRef.current, draftOwnerRef.current)
+     loadIntoComposer(stashed.text, stashed.attachments)
+@@ -664,5 +654,6 @@ export function useComposerDraft({
+     }
+-  }, [syncDraftFromEditor])
++  }, [syncDraftFromEditor, stashAt])
+ 
+   return {
++    ownerIdentity,
+     activeQueueSessionKeyRef,
+@@ -670,2 +661,3 @@ export function useComposerDraft({
+     draftScopeRef,
++    draftOwnerRef,
+     draftRef,
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-file-paste.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-file-paste.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..33e83bfb74f1364a64afee6819d52a32dd7cd9a8
@@ -6213,37 +6949,278 @@ index 0000000000000000000000000000000000000000..33e83bfb74f1364a64afee6819d52a32
 +
 +  return (clipboard: DataTransfer) => attach(extractClipboardFiles(clipboard))
 +}
+diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-owner.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-owner.ts
+new file mode 100644
+index 00000000..442e4c54
+--- /dev/null
++++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-owner.ts
+@@ -0,0 +1,31 @@
++import { useStore } from '@nanostores/react'
++
++import { $apiRequestScope } from '@/api/client'
++import { sessionDraftOwner } from '@/store/session-draft-owner'
++import type { SessionOwnerScope } from '@/store/session-request-router'
++
++import { useComposerScope } from '../scope'
++
++/** Capture the recipient from the surface or runtime; ambient routing only fills an unknown owner. */
++export function useComposerDraftOwner(
++  sessionId: string | null | undefined,
++  explicit?: SessionOwnerScope,
++  fallbackId?: string | null
++): SessionOwnerScope {
++  const surface = useComposerScope()
++  const id = sessionId || fallbackId
++  const ambient = useStore($apiRequestScope)
++
++  if (explicit != null || surface.ownerRoute != null) {
++    return sessionDraftOwner(id, explicit ?? surface.ownerRoute)
++  }
++
++  if (surface.connectionId !== undefined || surface.profile !== undefined) {
++    const connectionId = surface.connectionId ?? ambient.connectionId
++    const profile = surface.profile || ambient.profile || 'default'
++
++    return connectionId ? { connectionId, profile } : profile
++  }
++
++  return sessionDraftOwner(id)
++}
+diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.ts
+index c9ad1304..447a289d 100644
+--- a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.ts
++++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.ts
+@@ -10,9 +10,4 @@ import type { BusyInputMode } from '@/store/busy-input-mode'
+ import { hasClarifyRequest, skipClarifyRequest } from '@/store/clarify'
+-import {
+-  clearSessionDraft,
+-  type ComposerAttachment,
+-  freezeComposerTransportPayload,
+-  isFreshDraftScope
+-} from '@/store/composer'
+-import { type ComposerDraftRetry, draftRetry } from '@/store/composer-draft-retry'
++import { type ComposerAttachment, freezeComposerTransportPayload } from '@/store/composer'
++import { type ComposerDraftRetry } from '@/store/composer-draft-retry'
+ import { resetBrowseState } from '@/store/composer-input-history'
+@@ -23,2 +18,3 @@ import { answerParkedCard, skipParkedCards, yieldParkedCardsToMessage } from '@/
+ import { hasBlockingPromptRequest } from '@/store/prompts'
++import type { SessionOwnerScope } from '@/store/session-request-router'
+ 
+@@ -31,2 +27,4 @@ import type { ChatBarProps } from '../types'
+ 
++import { createComposerSubmitDispatch } from './composer-submit-dispatch'
++
+ interface UseComposerSubmitArgs {
+@@ -39,2 +37,3 @@ interface UseComposerSubmitArgs {
+   disabled: boolean
++  draftOwnerRef?: RefObject<SessionOwnerScope>
+   draftScopeRef: RefObject<string | null>
+@@ -56,5 +55,5 @@ interface UseComposerSubmitArgs {
+   setComposerText: (value: string) => void
+-  stashAt: (scope: string | null, text?: string, attachments?: ComposerAttachment[]) => void
++  stashAt: (scope: string | null, text?: string, attachments?: ComposerAttachment[], owner?: SessionOwnerScope) => void
+   /** Restored-send identity (see use-composer-draft); absent = every send is a new message. */
+-  rememberDraftRetry?: (scope: string | null, retry: ComposerDraftRetry) => void
++  rememberDraftRetry?: (scope: string | null, retry: ComposerDraftRetry, owner?: SessionOwnerScope) => void
+   takeDraftRetry?: (text: string, attachments: ComposerAttachment[]) => ComposerDraftRetry | undefined
+@@ -80,2 +79,3 @@ export function useComposerSubmit({
+   draftScopeRef,
++  draftOwnerRef,
+   draftRef,
+@@ -106,66 +106,10 @@ export function useComposerSubmit({
+ 
+-  // Shared send primitive: fire onSubmit, and if the gateway rejects (accepted
+-  // === false) or throws, re-stash the draft so the words survive. Repaint it
+-  // only while the same session still owns the visible composer; a late reject
+-  // must not publish an old session's text into the newly focused one.
+-  // `target` carries an explicit destination (a canonical queue admission).
+-  const dispatchSubmit = (
+-    text: string,
+-    attachments?: ComposerAttachment[],
+-    displayKind?: 'hidden',
+-    target?: Parameters<ChatBarProps['onSubmit']>[1]
+-  ) => {
+-    // A fresh chat's composer is keyed by its per-lifecycle fresh-draft key
+-    // (`__new__:<uuid>`), but the submit contract spells "no session yet" as
+-    // null: the create handoff below and the composer drift prong both key off
+-    // it, and draftKey(null) resolves to that same fresh bucket.
+-    const submittedScope =
+-      target?.storedSessionId ?? (isFreshDraftScope(draftScopeRef.current) ? null : draftScopeRef.current)
+-
+-    let restoreScope = submittedScope
+-    const submittedAttachments = attachments ?? []
+-
+-    // Only this operation's explicit session.create handoff may re-home a
+-    // pre-session submit. A null → stored render can also be user navigation.
+-    const assignment =
+-      submittedScope === null
+-        ? {
+-            onComposerScopeAssigned: (scope: string) => {
+-              restoreScope = scope
+-            }
+-          }
+-        : {}
+-
+-    // The composer owns this send's identity: the caller's (a queue entry), the restored draft's
+-    // (the explicit retry), else a new one. Equal text never inherits an identity, so a new
+-    // message that repeats an uncertain send, in this pane or another, is its own turn.
+-    const submissionId = target?.submission_id ?? crypto.randomUUID()
+-
+-    const restore = () => {
+-      stashAt(restoreScope, text, submittedAttachments)
+-      // Restored with its identity: Enter on this exact draft retries the same send.
+-      rememberDraftRetry?.(restoreScope, draftRetry(submissionId, text, submittedAttachments))
+-
+-      if ((isFreshDraftScope(draftScopeRef.current) ? null : draftScopeRef.current) === restoreScope) {
+-        loadIntoComposer(text, submittedAttachments)
+-      }
+-    }
+-
+-    // A hidden submit is machine text (a setup note, never something the user
+-    // typed), so a rejection drops it instead of loading it into the draft.
+-    const rejected = displayKind ? () => {} : restore
+-
+-    void Promise.resolve(
+-      onSubmit(text, {
+-        ...target,
+-        submission_id: submissionId,
+-        ...(attachments ? { attachments } : {}),
+-        composerScope: submittedScope,
+-        ...assignment,
+-        ...(displayKind ? { displayKind } : {})
+-      })
+-    )
+-      .then(accepted => void (accepted === false ? rejected() : clearSessionDraft(submittedScope)))
+-      .catch(rejected)
+-  }
++  const dispatchSubmit = createComposerSubmitDispatch({
++    draftScopeRef,
++    draftOwnerRef,
++    onSubmit,
++    stashAt,
++    rememberDraftRetry,
++    loadIntoComposer
++  })
+ 
+diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-undo.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-undo.ts
+index 72f891f6..c2b5b3d8 100644
+--- a/apps/desktop/src/app/chat/composer/hooks/use-composer-undo.ts
++++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-undo.ts
+@@ -1,2 +1,2 @@
+-import { type RefObject, useCallback, useEffect, useMemo } from 'react'
++import { type RefObject, useCallback, useEffect, useLayoutEffect, useMemo } from 'react'
+ 
+@@ -7,2 +7,4 @@ interface UseComposerUndoArgs {
+   editorRef: RefObject<HTMLDivElement | null>
++  /** Exact editor lifecycle and owner; reset before the newly committed editor can receive input. */
++  scopeKey?: string
+   /** Push a restored snapshot back into draftRef + composer state. */
+@@ -20,5 +22,7 @@ interface UseComposerUndoArgs {
+  */
+-export function useComposerUndo({ editorRef, syncDraftFromEditor }: UseComposerUndoArgs) {
++export function useComposerUndo({ editorRef, syncDraftFromEditor, scopeKey }: UseComposerUndoArgs) {
+   const history = useMemo(() => createComposerUndoHistory(), [])
+ 
++  useLayoutEffect(() => history.reset(), [history, scopeKey])
++
+   const snapshot = useCallback((): ComposerSnapshot => {
 diff --git a/apps/desktop/src/app/chat/composer/index.tsx b/apps/desktop/src/app/chat/composer/index.tsx
-index aee9bf96c50cee698de0c72fff94dc22f26a541f..dcf9e3d71eb0cfb66e5f19973a23caa782488aa4 100644
+index aee9bf96..8c94d999 100644
 --- a/apps/desktop/src/app/chat/composer/index.tsx
 +++ b/apps/desktop/src/app/chat/composer/index.tsx
-@@ -70,6 +70,7 @@ import { useComposerBranch } from './hooks/use-composer-branch'
- import { useComposerDraft } from './hooks/use-composer-draft'
- import { useComposerDrop } from './hooks/use-composer-drop'
+@@ -63,2 +63,3 @@ import { ComposerControls } from './controls'
+ import { ComposerDirectiveActions } from './directive-actions'
++import { ComposerDraftRecovery } from './draft-recovery'
+ import { COMPOSER_DROP_ACTIVE_CLASS, COMPOSER_DROP_FADE_CLASS } from './drop-affordance'
+@@ -72,3 +73,5 @@ import { useComposerDrop } from './hooks/use-composer-drop'
  import { useComposerEscCancel } from './hooks/use-composer-esc-cancel'
 +import { useComposerFilePaste } from './hooks/use-composer-file-paste'
  import { useComposerMetrics } from './hooks/use-composer-metrics'
++import { useComposerDraftOwner } from './hooks/use-composer-owner'
  import { useComposerPlaceholder } from './hooks/use-composer-placeholder'
- import { useComposerPopout } from './hooks/use-composer-popout'
-@@ -91,6 +92,7 @@ import { ActionBadges } from './micro-actions'
- import { chipTypedPathOnSpace, pathifyRefs } from './path-refs'
+@@ -92,4 +95,4 @@ import { chipTypedPathOnSpace, pathifyRefs } from './path-refs'
  import { PreparedImageRecovery } from './prepared-image-recovery'
- import { renderComposerQueueSlot, useComposerQueueScopeKey } from './queue-slot'
 +import { PromptPredictionControls } from './prompt-prediction'
- import { RestoredDraftNotice } from './restored-draft-notice'
+ import { renderComposerQueueSlot, useComposerQueueScopeKey } from './queue-slot'
+-import { RestoredDraftNotice } from './restored-draft-notice'
  import {
-   beginComposerComposition,
-@@ -300,6 +302,7 @@ export function ChatBar({
-   } = useComposerDraft({ activeQueueSessionKey, focusKey, inputDisabled, queueEditRef, sessionId })
+@@ -181,2 +184,3 @@ export function ChatBar({
+   const activeQueueSessionKey = useComposerQueueScopeKey(queueSessionKey, sessionId, freshDraftKey)
++  const draftOwner = useComposerDraftOwner(sessionId, undefined, activeQueueSessionKey)
+   const { collapsed: statusDrawerCollapsed, toggle: toggleStatusDrawer } = useStatusDrawer(activeQueueSessionKey)
+@@ -279,2 +283,11 @@ export function ChatBar({
+   // and threads it in so the draft↔queue coupling is an explicit dep, not a tangle.
++  const draft = useComposerDraft({
++    activeQueueSessionKey,
++    draftOwner,
++    focusKey,
++    inputDisabled,
++    queueEditRef,
++    sessionId
++  })
++
+   const {
+@@ -282,3 +295,2 @@ export function ChatBar({
+     clearDraft,
+-    draftScopeRef,
+     draftRef,
+@@ -296,8 +308,7 @@ export function ChatBar({
+     setComposerText,
+-    stashAt,
+-    syncDraftFromEditor,
+-    takeDraftRetry
+-  } = useComposerDraft({ activeQueueSessionKey, focusKey, inputDisabled, queueEditRef, sessionId })
++    syncDraftFromEditor
++  } = draft
  
    useComposerScreenshot({ sessionKey: activeQueueSessionKey, focusKey, onAttachImageBlob })
 +  const pasteFiles = useComposerFilePaste({ disabled: inputDisabled, onAttachDroppedItems, target: scope.target })
  
-   // Undo/redo. The rich editor bypasses Chromium's editing pipeline for speed,
-   // which also bypasses its undo stack — so we own the stack and every edit
-@@ -561,6 +564,12 @@ export function ChatBar({
-   }
+@@ -306,4 +317,5 @@ export function ChatBar({
+   // path below banks its pre-edit state through `recordUndoPoint`.
+-  const { recordUndoPoint, redo, resetUndoHistory, undo, withUndoPoint } = useComposerUndo({
++  const { recordUndoPoint, redo, undo, withUndoPoint } = useComposerUndo({
+     editorRef,
++    scopeKey: JSON.stringify([activeQueueSessionKey, draft.ownerIdentity]),
+     syncDraftFromEditor
+@@ -332,8 +344,2 @@ export function ChatBar({
  
+-  // Prior history belongs to the draft that just left — undoing into another
+-  // conversation's text is worse than having none.
+-  useEffect(() => {
+-    resetUndoHistory()
+-  }, [activeQueueSessionKey, resetUndoHistory])
+-
+   // "Add URL" dialog — open/value state, autofocus, and submit (host onAddUrl or
+@@ -417,17 +423,11 @@ export function ChatBar({
+   const { queueDraft, steerDraft, submitDraft } = useComposerSubmit({
++    ...draft,
+     busyInputMode,
+     activeQueueSessionKey,
+-    activeQueueSessionKeyRef,
+     attachments,
+     busy,
+-    clearDraft,
+     disabled,
+-    draftScopeRef,
+-    draftRef,
+     drainNextQueued,
+-    editorRef,
+     exitQueuedEdit,
+-    focusInput,
+     inputDisabled,
+-    loadIntoComposer,
+     // The submit engine's only cancel call is the Stop-button branch (busy +
+@@ -441,7 +441,3 @@ export function ChatBar({
+     queuedPrompts,
+-    sessionId,
+-    setComposerText,
+-    stashAt,
+-    rememberDraftRetry,
+-    takeDraftRetry
++    sessionId
+   })
+@@ -563,2 +559,8 @@ export function ChatBar({
    const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
 +    if (pasteFiles(event.clipboardData)) {
 +      event.preventDefault()
@@ -6252,11 +7229,7 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..dcf9e3d71eb0cfb66e5f19973a23caa7
 +    }
 +
      const imageBlobs = extractClipboardImageBlobs(event.clipboardData)
- 
-     if (imageBlobs.length > 0 && onAttachImageBlob) {
-@@ -1146,6 +1155,23 @@ export function ChatBar({
-       onQueue={queueDraft}
-       onSteer={canSteer ? () => steerDraft('steer') : undefined}
+@@ -1148,2 +1150,19 @@ export function ChatBar({
        onToggleAutoSpeak={handleToggleAutoSpeak}
 +      promptSuggestion={
 +        <PromptPredictionControls
@@ -6276,16 +7249,26 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..dcf9e3d71eb0cfb66e5f19973a23caa7
 +        />
 +      }
        state={state}
-       voiceStatus={voiceStatus}
-     />
-@@ -1229,6 +1255,7 @@ export function ChatBar({
-         suppressContentEditableWarning
-       />
+@@ -1231,2 +1250,3 @@ export function ChatBar({
        <ComposerDirectiveActions editorRef={editorRef} />
 +
        {/* assistant-ui requires ComposerPrimitive.Input somewhere in the tree
-         so the composer-state binding (text + IME + paste + form-submit hookup)
-         wires up. We render the real input UI ourselves above via the
+@@ -1305,4 +1325,5 @@ export function ChatBar({
+                 loadIntoComposer(text, restored)
+-                rememberDraftRetry(activeQueueSessionKey, draftRetry(id, text, restored))
++                rememberDraftRetry(activeQueueSessionKey, draftRetry(id, text, restored), draftOwner)
+               }}
++              owner={draftOwner}
+               request={requestBusyConfig}
+@@ -1487,7 +1508,3 @@ export function ChatBar({
+                   <ContribSlot area={COMPOSER_AREAS.top} />
+-                  <RestoredDraftNotice
+-                    freshDraft={activeQueueSessionKey === null}
+-                    onUndone={clearDraft}
+-                    readLiveText={syncDraftFromEditor}
+-                  />
++                  <ComposerDraftRecovery draft={draft} owner={draftOwner} scope={activeQueueSessionKey} />
+                   <VoiceActivity state={voiceActivityState} />
 diff --git a/apps/desktop/src/app/chat/composer/paste-files.test.tsx b/apps/desktop/src/app/chat/composer/paste-files.test.tsx
 new file mode 100644
 index 0000000000000000000000000000000000000000..a4af4194220b86b7f5fb5b75aca1b1fe91692b6d
@@ -6519,6 +7502,173 @@ index 9cf56228db79dc692013927d03c860be2367c84a..183bd046633a067bfd6d02109516aac4
    const blobs = extractClipboardImageBlobs(clipboard)
    const text = sanitizeComposerInput(clipboard.getData('text').trim())
  
+diff --git a/apps/desktop/src/app/chat/composer/prepared-image-recovery.owner.test.tsx b/apps/desktop/src/app/chat/composer/prepared-image-recovery.owner.test.tsx
+new file mode 100644
+index 00000000..9f0c3047
+--- /dev/null
++++ b/apps/desktop/src/app/chat/composer/prepared-image-recovery.owner.test.tsx
+@@ -0,0 +1,75 @@
++import { cleanup, render, screen, waitFor } from '@testing-library/react'
++import { useLayoutEffect } from 'react'
++import { afterEach, expect, it, vi } from 'vitest'
++
++import {
++  preparedSubmissionKey,
++  writePreparedSubmission
++} from '@/app/session/hooks/use-prompt-actions/prepared-submissions'
++import { captureSubmissionDestination } from '@/app/session/hooks/use-prompt-actions/submission-destination'
++import { $sessions } from '@/store/session'
++import type { SessionOwnerScope } from '@/store/session-request-router'
++import { clearAllSessionStates } from '@/store/session-states'
++
++import { PreparedImageRecovery } from './prepared-image-recovery'
++
++const original = { connectionId: 'source-a', profile: 'default' }
++const work = { connectionId: 'source-a', profile: 'work' }
++const request = vi.fn()
++const id = 'prepared-owner-history'
++const attachments = [{ id: 'image', kind: 'image' as const, label: 'fixture.png' }]
++
++async function seed() {
++  const destination = captureSubmissionDestination(id, request, { owner: original })
++  await writePreparedSubmission(preparedSubmissionKey(id, destination, 'Original retained image words', attachments), {
++    id: 'original-image-send',
++    owner: original,
++    text: 'Original retained image words',
++    attachments,
++    params: {}
++  })
++}
++
++afterEach(() => {
++  cleanup()
++  localStorage.clear()
++  $sessions.set([])
++  clearAllSessionStates()
++  request.mockClear()
++})
++
++it('uses the exact editor owner instead of a conflicting same-id cached row', async () => {
++  await seed()
++  $sessions.set([{ id, connection_id: 'source-a', profile: 'work' } as never])
++  render(
++    <PreparedImageRecovery occupied={false} onRestore={() => {}} owner={original} request={request} sessionKey={id} />
++  )
++
++  await screen.findByRole('button', { name: 'Restore image draft' })
++  expect(screen.getByText('Original retained image words')).toBeTruthy()
++  expect(request).not.toHaveBeenCalled()
++})
++
++it('does not paint retained image text from the old owner before passive effects run', async () => {
++  await seed()
++  $sessions.set([{ id, connection_id: 'source-a', profile: 'default' } as never])
++  const snapshots: string[] = []
++
++  function Probe({ owner }: { owner: SessionOwnerScope }) {
++    useLayoutEffect(() => {
++      snapshots.push(window.document.body.textContent || '')
++    })
++
++    return (
++      <PreparedImageRecovery occupied={false} onRestore={() => {}} owner={owner} request={request} sessionKey={id} />
++    )
++  }
++
++  const view = render(<Probe owner={original} />)
++  await screen.findByRole('button', { name: 'Restore image draft' })
++  snapshots.length = 0
++  view.rerender(<Probe owner={work} />)
++
++  expect(snapshots[0]).not.toContain('Original retained image words')
++  await waitFor(() => expect(screen.queryByRole('button')).toBeNull())
++})
+diff --git a/apps/desktop/src/app/chat/composer/prepared-image-recovery.tsx b/apps/desktop/src/app/chat/composer/prepared-image-recovery.tsx
+index 8974be5c..518a6879 100644
+--- a/apps/desktop/src/app/chat/composer/prepared-image-recovery.tsx
++++ b/apps/desktop/src/app/chat/composer/prepared-image-recovery.tsx
+@@ -9,2 +9,3 @@ import type { ComposerAttachment } from '@/store/composer'
+ import { notifyError } from '@/store/notifications'
++import type { SessionOwnerScope } from '@/store/session-request-router'
+ 
+@@ -12,2 +13,3 @@ interface Props {
+   sessionKey: string | null
++  owner?: SessionOwnerScope
+   request: GatewayRequest
+@@ -18,6 +20,14 @@ interface Props {
+ 
+-export function PreparedImageRecovery({ sessionKey, request, occupied, onRestore }: Props) {
++export function PreparedImageRecovery({ sessionKey, owner, request, occupied, onRestore }: Props) {
+   const { t } = useI18n()
+-  const [drafts, setDrafts] = useState<Awaited<ReturnType<typeof listPreparedImageDrafts>>>([])
+-  const scopeKey = captureSubmissionDestination(sessionKey, request).scopeKey
++  const [saved, setSaved] = useState<{ key: string; drafts: Awaited<ReturnType<typeof listPreparedImageDrafts>> }>()
++
++  const scopeKey = captureSubmissionDestination(
++    sessionKey,
++    request,
++    owner === undefined ? undefined : { owner }
++  ).scopeKey
++
++  const key = JSON.stringify([sessionKey, scopeKey])
++  const drafts = saved?.key === key ? saved.drafts : []
+ 
+@@ -25,14 +35,22 @@ export function PreparedImageRecovery({ sessionKey, request, occupied, onRestore
+     let cancelled = false
+-    setDrafts([])
++    setSaved(undefined)
+ 
+     if (sessionKey) {
+-      void listPreparedImageDrafts(sessionKey, scopeKey).then(entries => {
+-        if (!cancelled) { setDrafts(entries) }
+-      }).catch(error => {
+-        if (!cancelled) { notifyError(error, t.composer.restoreImageDraft) }
+-      })
++      void listPreparedImageDrafts(sessionKey, scopeKey)
++        .then(entries => {
++          if (!cancelled) {
++            setSaved({ key, drafts: entries })
++          }
++        })
++        .catch(error => {
++          if (!cancelled) {
++            notifyError(error, t.composer.restoreImageDraft)
++          }
++        })
+     }
+ 
+-    return () => { cancelled = true }
+-  }, [sessionKey, scopeKey, t.composer.restoreImageDraft])
++    return () => {
++      cancelled = true
++    }
++  }, [sessionKey, scopeKey, key, t.composer.restoreImageDraft])
+ 
+@@ -40,7 +58,19 @@ export function PreparedImageRecovery({ sessionKey, request, occupied, onRestore
+     <div className="flex items-center gap-2 rounded-md border bg-background px-3 py-2 text-xs" key={draft.key}>
+-      <span className="min-w-0 flex-1 truncate">{draft.text || draft.attachments.map(attachment => attachment.label).join(', ')}</span>
+-      <Button disabled={occupied} onClick={() => {
+-        onRestore(draft.text, draft.attachments, draft.id)
+-        setDrafts(current => current.filter(entry => entry.key !== draft.key))
+-      }} size="sm" type="button" variant="outline">{t.composer.restoreImageDraft}</Button>
++      <span className="min-w-0 flex-1 truncate">
++        {draft.text || draft.attachments.map(attachment => attachment.label).join(', ')}
++      </span>
++      <Button
++        disabled={occupied}
++        onClick={() => {
++          onRestore(draft.text, draft.attachments, draft.id)
++          setSaved(current =>
++            current?.key === key ? { key, drafts: current.drafts.filter(entry => entry.key !== draft.key) } : current
++          )
++        }}
++        size="sm"
++        type="button"
++        variant="outline"
++      >
++        {t.composer.restoreImageDraft}
++      </Button>
+     </div>
 diff --git a/apps/desktop/src/app/chat/composer/prompt-prediction.test.tsx b/apps/desktop/src/app/chat/composer/prompt-prediction.test.tsx
 new file mode 100644
 index 0000000000000000000000000000000000000000..304cd11c93c99d9ce04d9433e6dadb4a3b5625b7
@@ -6990,6 +8140,232 @@ index 0000000000000000000000000000000000000000..a1e8ca3227d14a2334c3903b4a2c4b8e
 +    </Popover>
 +  )
 +}
+diff --git a/apps/desktop/src/app/chat/composer/restored-draft-notice.tsx b/apps/desktop/src/app/chat/composer/restored-draft-notice.tsx
+index 609a4d3c..355b3a6e 100644
+--- a/apps/desktop/src/app/chat/composer/restored-draft-notice.tsx
++++ b/apps/desktop/src/app/chat/composer/restored-draft-notice.tsx
+@@ -5,2 +5,4 @@ import { useI18n } from '@/i18n'
+ import { $restoredDraftNotice, dismissRestoredDraftNotice, undoRestoredDraft } from '@/store/composer'
++import { draftOwnerKey } from '@/store/composer-draft-owner'
++import type { SessionOwnerScope } from '@/store/session-request-router'
+ 
+@@ -9,2 +11,3 @@ interface RestoredDraftNoticeProps {
+   freshDraft: boolean
++  owner?: SessionOwnerScope
+   /** Clear the editor after Undo emptied the fresh draft. */
+@@ -22,3 +25,3 @@ interface RestoredDraftNoticeProps {
+  */
+-export function RestoredDraftNotice({ freshDraft, onUndone, readLiveText }: RestoredDraftNoticeProps) {
++export function RestoredDraftNotice({ freshDraft, owner, onUndone, readLiveText }: RestoredDraftNoticeProps) {
+   const notice = useStore($restoredDraftNotice)
+@@ -26,3 +29,3 @@ export function RestoredDraftNotice({ freshDraft, onUndone, readLiveText }: Rest
+ 
+-  if (!notice || !freshDraft) {
++  if (!notice || !freshDraft || draftOwnerKey(notice.owner) !== draftOwnerKey(owner)) {
+     return null
+@@ -41,3 +44,3 @@ export function RestoredDraftNotice({ freshDraft, onUndone, readLiveText }: Rest
+           onClick={() => {
+-            if (undoRestoredDraft(readLiveText())) {
++            if (undoRestoredDraft(readLiveText(), owner)) {
+               onUndone()
+@@ -53,3 +56,3 @@ export function RestoredDraftNotice({ freshDraft, onUndone, readLiveText }: Rest
+           className="h-6 rounded-md px-2 text-[0.68rem]"
+-          onClick={dismissRestoredDraftNotice}
++          onClick={() => dismissRestoredDraftNotice(owner)}
+           type="button"
+diff --git a/apps/desktop/src/app/chat/composer/scope.tsx b/apps/desktop/src/app/chat/composer/scope.tsx
+index 85871fcf..8b8d998b 100644
+--- a/apps/desktop/src/app/chat/composer/scope.tsx
++++ b/apps/desktop/src/app/chat/composer/scope.tsx
+@@ -7,2 +7,3 @@ import { $activeSessionAwaitingInput } from '@/store/prompts'
+ import { $messages } from '@/store/session'
++import type { SessionOwnerScope } from '@/store/session-request-router'
+ 
+@@ -17,5 +18,4 @@ import type { ComposerTarget } from './focus'
+  *
+- * Draft TEXT needs no scoping — it lives in each ChatBar's contentEditable +
+- * draftRef and stashes per session key (`stashSessionDraft`), which already
+- * differs per surface.
++ * Draft text is owned by the exact route plus raw session key. Each surface
++ * captures that route before loading, persisting or submitting its editor.
+  */
+@@ -36,2 +36,4 @@ export interface ComposerScope {
+   profile?: null | string
++  /** Exact Desktop and backend profile alias; never reconstruct it from the voice route. */
++  ownerRoute?: SessionOwnerScope
+   /** Focus-bus routing key (`'main'` | `'tile:<id>'`). */
+diff --git a/apps/desktop/src/app/chat/composer/unassigned-draft-notice.test.tsx b/apps/desktop/src/app/chat/composer/unassigned-draft-notice.test.tsx
+new file mode 100644
+index 00000000..4abde105
+--- /dev/null
++++ b/apps/desktop/src/app/chat/composer/unassigned-draft-notice.test.tsx
+@@ -0,0 +1,81 @@
++import { cleanup, fireEvent, render, screen } from '@testing-library/react'
++import { afterEach, expect, it, vi } from 'vitest'
++
++import {
++  adoptGoneSessionDraft,
++  announceGoneSessionDraft,
++  clearSessionDraft,
++  stashSessionDraft,
++  takeSessionDraft
++} from '@/store/composer'
++
++import { RestoredDraftNotice } from './restored-draft-notice'
++import { UnassignedDraftNotice } from './unassigned-draft-notice'
++
++vi.mock('@/i18n', () => ({
++  useI18n: () => ({
++    t: {
++      composer: {
++        unassignedDraftNotice: 'An unassigned draft is available',
++        unassignedDraftRestore: 'Restore draft',
++        restoredDraftNotice: 'Restored draft',
++        restoredDraftUndo: 'Undo'
++      },
++      common: { close: 'Close' }
++    }
++  })
++}))
++
++const owner = { connectionId: 'draft-source', profile: 'work' }
++const other = { connectionId: 'other-source', profile: 'work' }
++const id = 'recovery-ui-history'
++
++afterEach(() => {
++  cleanup()
++  clearSessionDraft(id)
++
++  for (const scope of [owner, other]) {
++    clearSessionDraft(id, scope)
++    clearSessionDraft(null, scope)
++  }
++})
++
++it('offers old draft recovery without showing its text and copies only after a click', () => {
++  stashSessionDraft(id, 'Private old words', [])
++  const restored = vi.fn()
++  render(<UnassignedDraftNotice canRestore={() => true} empty onRestored={restored} owner={owner} scope={id} />)
++  expect(screen.queryByText('Private old words')).toBeNull()
++  expect(takeSessionDraft(id, owner).text).toBe('')
++  fireEvent.click(screen.getByRole('button', { name: 'Restore draft' }))
++  expect(restored).toHaveBeenCalledWith('Private old words', [])
++  expect(takeSessionDraft(id, owner).text).toBe('Private old words')
++  expect(takeSessionDraft(id).text).toBe('Private old words')
++  expect(takeSessionDraft(id, other).text).toBe('')
++})
++
++it('refuses recovery if a newly typed editor is no longer empty, and dismissing keeps the original', () => {
++  stashSessionDraft(id, 'Keep old words', [])
++  const restored = vi.fn()
++  render(<UnassignedDraftNotice canRestore={() => false} empty onRestored={restored} owner={owner} scope={id} />)
++  fireEvent.click(screen.getByRole('button', { name: 'Restore draft' }))
++  expect(restored).not.toHaveBeenCalled()
++  expect(takeSessionDraft(id, owner).text).toBe('')
++  fireEvent.click(screen.getByRole('button', { name: 'Close' }))
++  expect(takeSessionDraft(id).text).toBe('Keep old words')
++})
++
++it('never renders or consumes another owner restored-draft notice', () => {
++  stashSessionDraft(id, 'Gone original words', [], owner)
++  announceGoneSessionDraft(id, owner)
++  adoptGoneSessionDraft(owner)
++
++  const view = render(
++    <RestoredDraftNotice freshDraft onUndone={() => {}} owner={other} readLiveText={() => 'Gone original words'} />
++  )
++
++  expect(screen.queryByText('Restored draft')).toBeNull()
++  view.rerender(
++    <RestoredDraftNotice freshDraft onUndone={() => {}} owner={owner} readLiveText={() => 'Gone original words'} />
++  )
++  expect(screen.getByText('Restored draft')).toBeTruthy()
++})
+diff --git a/apps/desktop/src/app/chat/composer/unassigned-draft-notice.tsx b/apps/desktop/src/app/chat/composer/unassigned-draft-notice.tsx
+new file mode 100644
+index 00000000..affa842e
+--- /dev/null
++++ b/apps/desktop/src/app/chat/composer/unassigned-draft-notice.tsx
+@@ -0,0 +1,63 @@
++import { useState } from 'react'
++
++import { Button } from '@/components/ui/button'
++import { useI18n } from '@/i18n'
++import { useStoreSelector } from '@/lib/use-session-slice'
++import {
++  $draftTitles,
++  type ComposerAttachment,
++  hasUnassignedSessionDraft,
++  restoreUnassignedSessionDraft,
++  takeSessionDraft
++} from '@/store/composer'
++import { draftIdentityKey } from '@/store/composer-draft-owner'
++import type { SessionOwnerScope } from '@/store/session-request-router'
++
++interface UnassignedDraftNoticeProps {
++  scope: string | null
++  owner: SessionOwnerScope
++  empty: boolean
++  canRestore: () => boolean
++  onRestored: (text: string, attachments: ComposerAttachment[]) => void
++}
++
++/** Old storage has no trustworthy owner. Offer an explicit copy without previewing or consuming it. */
++export function UnassignedDraftNotice({ scope, owner, empty, canRestore, onRestored }: UnassignedDraftNoticeProps) {
++  const { t } = useI18n()
++  const available = useStoreSelector($draftTitles, () => hasUnassignedSessionDraft(scope))
++  const [dismissed, setDismissed] = useState<string | undefined>()
++  const key = draftIdentityKey(scope || '__new__', owner)
++
++  if (!available || key === undefined || dismissed === key) {
++    return null
++  }
++
++  return (
++    <div
++      className="flex items-center justify-between gap-2 text-xs text-muted-foreground"
++      data-slot="composer-unassigned-draft"
++      role="status"
++    >
++      <span>{t.composer.unassignedDraftNotice}</span>
++      <div className="flex shrink-0 items-center gap-1">
++        <Button
++          disabled={!empty}
++          onClick={() => {
++            if (canRestore() && restoreUnassignedSessionDraft(scope, owner)) {
++              const draft = takeSessionDraft(scope, owner)
++              onRestored(draft.text, draft.attachments)
++              setDismissed(key)
++            }
++          }}
++          type="button"
++          variant="ghost"
++        >
++          {t.composer.unassignedDraftRestore}
++        </Button>
++        <Button aria-label={t.common.close} onClick={() => setDismissed(key)} type="button" variant="ghost">
++          ×
++        </Button>
++      </div>
++    </div>
++  )
++}
+diff --git a/apps/desktop/src/app/chat/index.tsx b/apps/desktop/src/app/chat/index.tsx
+index 89ac18e3..1f96e3d6 100644
+--- a/apps/desktop/src/app/chat/index.tsx
++++ b/apps/desktop/src/app/chat/index.tsx
+@@ -51,2 +51,3 @@ import {
+ } from '@/store/session'
++import { sessionDraftOwner } from '@/store/session-draft-owner'
+ import { $focusedStoredSessionId } from '@/store/session-focus'
+@@ -605,5 +606,5 @@ const ChatViewContent = memo(function ChatViewContent({
+ 
+-    migrateSessionDraft(selectedSessionId, queueSessionKey)
++    migrateSessionDraft(selectedSessionId, queueSessionKey, sessionDraftOwner(activeSessionId || selectedSessionId))
+     migrateQueuedPrompts(selectedSessionId, queueSessionKey)
+-  }, [queueSessionKey, selectedSessionId, sessions])
++  }, [activeSessionId, queueSessionKey, selectedSessionId, sessions])
+ 
 diff --git a/apps/desktop/src/app/chat/route-tile.tsx b/apps/desktop/src/app/chat/route-tile.tsx
 index a5706ba38449c78733766e56f2ec62f8fb101d9e..424cdc3f17e087aed1f25ca25499bc9afb80a0b3 100644
 --- a/apps/desktop/src/app/chat/route-tile.tsx
@@ -7007,6 +8383,33 @@ index a5706ba38449c78733766e56f2ec62f8fb101d9e..424cdc3f17e087aed1f25ca25499bc9a
 +  [ARTIFACTS_ROUTE]: { render: () => <ArtifactsView />, title: 'Hub' },
    [MESSAGING_ROUTE]: { render: () => <MessagingView />, title: 'Messaging' },
    [CAPABILITIES_ROUTE]: { render: () => <CapabilitiesView />, title: 'Capabilities' }
+ }
+diff --git a/apps/desktop/src/app/chat/session-draft-title.tsx b/apps/desktop/src/app/chat/session-draft-title.tsx
+index e4e9a665..abf7ab29 100644
+--- a/apps/desktop/src/app/chat/session-draft-title.tsx
++++ b/apps/desktop/src/app/chat/session-draft-title.tsx
+@@ -2,3 +2,7 @@ import { NEW_SESSION_TITLE } from '@/lib/chat-runtime'
+ import { useStoreSelector } from '@/lib/use-session-slice'
+-import { $draftTitles, draftTitleIn } from '@/store/composer'
++import { $draftTitles, $ownedDraftTitles, draftTitleIn } from '@/store/composer'
++import { draftOwnerKey } from '@/store/composer-draft-owner'
++import type { SessionOwnerScope } from '@/store/session-request-router'
++
++import { useComposerDraftOwner } from './composer/hooks/use-composer-owner'
+ 
+@@ -8,2 +12,3 @@ export interface SessionDraftTitleProps {
+   scope: null | string
++  owner?: SessionOwnerScope
+ }
+@@ -22,4 +27,7 @@ export interface SessionDraftTitleProps {
+  */
+-export function SessionDraftTitle({ scope }: SessionDraftTitleProps) {
+-  return useStoreSelector($draftTitles, titles => draftTitleIn(titles, scope)) || NEW_SESSION_TITLE
++export function SessionDraftTitle({ scope, owner }: SessionDraftTitleProps) {
++  const resolved = useComposerDraftOwner(scope, owner)
++  const titles = draftOwnerKey(resolved) === undefined ? $draftTitles : $ownedDraftTitles
++
++  return useStoreSelector(titles, values => draftTitleIn(values, scope, resolved)) || NEW_SESSION_TITLE
  }
 diff --git a/apps/desktop/src/app/chat/session-tile-slice-title.test.ts b/apps/desktop/src/app/chat/session-tile-slice-title.test.ts
 index 9881c1aa..65ff3573 100644
@@ -7033,7 +8436,7 @@ index 9881c1aa..65ff3573 100644
 +    expect(tileStoredRow(STORED)?.title).toBe('Owned history')
    })
 diff --git a/apps/desktop/src/app/chat/session-tile.tsx b/apps/desktop/src/app/chat/session-tile.tsx
-index 84514444..924dc4b1 100644
+index 84514444..cd6d5ecc 100644
 --- a/apps/desktop/src/app/chat/session-tile.tsx
 +++ b/apps/desktop/src/app/chat/session-tile.tsx
 @@ -46,3 +46,3 @@ import { $gatewaySwitching } from '@/store/gateway-switch'
@@ -7041,7 +8444,24 @@ index 84514444..924dc4b1 100644
 -import { $activeGatewayProfile, $gatewaySwapTarget, $profiles } from '@/store/profile'
 +import { $activeGatewayProfile, $gatewaySwapTarget, $profiles, normalizeProfileKey } from '@/store/profile'
  import { $projectTree } from '@/store/projects'
-@@ -447,6 +447,3 @@ export function SessionTilePane({ storedSessionId }: { storedSessionId: string }
+@@ -295,2 +295,3 @@ function TileChat({
+       attachments,
++      ownerRoute,
+       connectionId: ownerRoute?.connectionId || undefined,
+@@ -299,11 +300,3 @@ function TileChat({
+     }),
+-    [
+-      attachments,
+-      ownerRoute?.connectionId,
+-      ownerRoute?.profile,
+-      ownerRoute?.targetProfile,
+-      runtimeId,
+-      storedSessionId,
+-      view.$messages
+-    ]
++    [attachments, ownerRoute, runtimeId, storedSessionId, view.$messages]
+   )
+@@ -447,6 +440,3 @@ export function SessionTilePane({ storedSessionId }: { storedSessionId: string }
  
 -  const storedSessionStillExists = useCallback(
 -    () => $sessions.get().some(s => sessionMatchesStoredId(s, storedSessionId)),
@@ -7049,7 +8469,7 @@ index 84514444..924dc4b1 100644
 -  )
 +  const storedSessionStillExists = useCallback(() => Boolean(tileStoredRow(storedSessionId)), [storedSessionId])
  
-@@ -614,3 +611,10 @@ export function SessionTilePane({ storedSessionId }: { storedSessionId: string }
+@@ -614,3 +604,10 @@ export function SessionTilePane({ storedSessionId }: { storedSessionId: string }
  export function tileStoredRow(storedSessionId: string): SessionInfo | undefined {
 -  const match = (s: SessionInfo) => sessionMatchesStoredId(s, storedSessionId)
 +  const tile = $sessionTiles.get().find(candidate => candidate.storedSessionId === storedSessionId)
@@ -7061,6 +8481,26 @@ index 84514444..924dc4b1 100644
 +    (!profile || normalizeProfileKey(s.profile) === normalizeProfileKey(profile)) &&
 +    (!owner || s.connection_id === owner.connectionId)
  
+@@ -663,3 +660,3 @@ export function startUnrestoredTileTitleBackfill(lookup = probeStoredSession): (
+           .then(result => {
+-            const draft = takeSessionDraft(tile.storedSessionId)
++            const draft = takeSessionDraft(tile.storedSessionId, tile.ownerRoute ?? tile.ownerProfile)
+             const current = $sessionTiles.get().find(candidate => candidate.storedSessionId === tile.storedSessionId)
+@@ -756,3 +753,5 @@ function tileDragPayload(storedSessionId: string): SessionDragPayload {
+     ? sessionTitle(stored)
+-    : tile?.workspaceTabTitle || draftTitleFor(storedSessionId) || NEW_SESSION_TITLE
++    : tile?.workspaceTabTitle ||
++      draftTitleFor(storedSessionId, tile?.ownerRoute ?? tile?.ownerProfile) ||
++      NEW_SESSION_TITLE
+ 
+@@ -982,3 +981,6 @@ export const watchSessionTiles = paneMirror<SessionTile>({
+     $sessionTiles.get().some(tile => tile.storedSessionId === storedSessionId && tile.workspaceTabTitle) ? null : (
+-      <SessionDraftTitle scope={storedSessionId} />
++      <SessionDraftTitle
++        owner={$sessionTiles.get().find(tile => tile.storedSessionId === storedSessionId)?.ownerRoute}
++        scope={storedSessionId}
++      />
+     ),
 diff --git a/apps/desktop/src/app/chat/sidebar/index.tsx b/apps/desktop/src/app/chat/sidebar/index.tsx
 index dadfd889c0a65cb953b70396c8e2ca3f30c7fc57..ac04bed0fc3815c01bc153a5eb76e2292cb30d07 100644
 --- a/apps/desktop/src/app/chat/sidebar/index.tsx
@@ -7840,31 +9280,21 @@ index f2e5260490d44eae0bc9935897be772f9b86260f..00b062d80fe78f0abccf274d537fc029
            {/* "Close running tab?" — the busy/input-blocked tile close gate. */}
            <SessionTileCloseConfirm />
 diff --git a/apps/desktop/src/app/contrib/hooks/use-desktop-integrations.test.tsx b/apps/desktop/src/app/contrib/hooks/use-desktop-integrations.test.tsx
-index cab4f50ca91c154634f9fdd228a818c65babb983..1b37ea6a10aa31052b845cbdc82ecba71ce464c4 100644
+index cab4f50c..b063d317 100644
 --- a/apps/desktop/src/app/contrib/hooks/use-desktop-integrations.test.tsx
 +++ b/apps/desktop/src/app/contrib/hooks/use-desktop-integrations.test.tsx
-@@ -1,6 +1,7 @@
- import { act, renderHook, waitFor } from '@testing-library/react'
- import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+@@ -3,2 +3,3 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
  
 +import { setApiRequestLocalMode, setSessionOwnerResolver } from '@/api/client'
  import { registerTerminalContextMenu } from '@/app/right-sidebar/terminal/terminal-context-menu'
- import { setApiRequestConnection, setApiRequestProfile } from '@/hermes'
- import { createClientSessionState } from '@/lib/chat-runtime'
-@@ -14,7 +15,9 @@ import {
-   _resetLegacyDiscardForTests,
-   _resetSessionOwnerHintsForTests,
+@@ -16,3 +17,5 @@ import {
    getSessionOwnerHint,
 -  setSessionOwnerHint
 +  setSessionOwnerHint,
 +  setSessionsLoadError,
 +  setSessionsLoading
  } from '@/store/session'
- import { dropSessionState, publishSessionState } from '@/store/session-states'
- import type * as WindowsStore from '@/store/windows'
-@@ -110,6 +113,12 @@ describe('useDesktopIntegrations', () => {
-   })
- 
+@@ -112,2 +115,8 @@ describe('useDesktopIntegrations', () => {
    afterEach(() => {
 +    setApiRequestConnection(null)
 +    setApiRequestLocalMode(false)
@@ -7873,11 +9303,19 @@ index cab4f50ca91c154634f9fdd228a818c65babb983..1b37ea6a10aa31052b845cbdc82ecba7
 +    setSessionsLoadError(false)
 +
      if (initialHermesDesktop) {
-       desktopWindow.hermesDesktop = initialHermesDesktop
-     }
-@@ -321,6 +330,254 @@ describe('useDesktopIntegrations', () => {
-       )
-     }
+@@ -212,3 +221,3 @@ describe('useDesktopIntegrations', () => {
+       // Typed on the fresh chat while the backend was still coming up.
+-      stashSessionDraft(null, 'typed while booting', [])
++      stashSessionDraft(null, 'typed while booting', [], 'default')
+ 
+@@ -218,4 +227,4 @@ describe('useDesktopIntegrations', () => {
+       // The composer's scope swap may only carry the draft when the restore announced this key.
+-      expect(adoptNewSessionDraft('remembered-session')).toBe(true)
+-      expect(takeSessionDraft('remembered-session').text).toBe('typed while booting')
++      expect(adoptNewSessionDraft('remembered-session', 'default')).toBe(true)
++      expect(takeSessionDraft('remembered-session', 'default').text).toBe('typed while booting')
+     })
+@@ -323,2 +332,250 @@ describe('useDesktopIntegrations', () => {
  
 +    it('restores an existing same-profile session outside the loaded list', async () => {
 +      setApiRequestConnection('local')
@@ -8128,11 +9566,7 @@ index cab4f50ca91c154634f9fdd228a818c65babb983..1b37ea6a10aa31052b845cbdc82ecba7
 +    })
 +
      it('repairs a remembered delegate child to its parent on restore', async () => {
-       // Written by an older build (or a list slice that served the child).
-       window.localStorage.setItem('hermes.desktop.lastSessionId.profile.default', 'delegate-child')
-@@ -334,23 +591,15 @@ describe('useDesktopIntegrations', () => {
-       expect(window.localStorage.getItem('hermes.desktop.lastSessionId.profile.default')).toBe('parent-session')
-     })
+@@ -336,10 +593,3 @@ describe('useDesktopIntegrations', () => {
  
 -    // Pins the reachability contract of the by-id resolve branch: the
 -    // `sessionBelongsToProfile(sessions, remembered, activeProfile)` gate
@@ -8144,10 +9578,7 @@ index cab4f50ca91c154634f9fdd228a818c65babb983..1b37ea6a10aa31052b845cbdc82ecba7
 -    it('clears an unlisted remembered id instead of restoring it', async () => {
 +    it('preserves an unlisted remembered id when the active owner is unknown', async () => {
        window.localStorage.setItem('hermes.desktop.lastSessionId.profile.default', 'unlisted-session')
-       stubGetSession({ connection_id: 'ssh-proxmox', id: 'unlisted-session', profile: 'default' })
-       setSessionOwnerHint('unlisted-session', { connectionId: 'ssh-proxmox', profile: 'default' })
- 
-       render({ profileReady: true, sessions: [session({ id: 'other-session', profile: 'default' })] })
+@@ -350,5 +600,4 @@ describe('useDesktopIntegrations', () => {
  
 -      await waitFor(() =>
 -        expect(window.localStorage.getItem('hermes.desktop.lastSessionId.profile.default')).toBeNull()
@@ -8155,37 +9586,29 @@ index cab4f50ca91c154634f9fdd228a818c65babb983..1b37ea6a10aa31052b845cbdc82ecba7
 +      await waitFor(() => expect(desktopWindow.hermesDesktop!.api).toHaveBeenCalled())
 +      expect(window.localStorage.getItem('hermes.desktop.lastSessionId.profile.default')).toBe('unlisted-session')
        expect(navigate).not.toHaveBeenCalledWith('/unlisted-session', { replace: true })
-     })
- 
 diff --git a/apps/desktop/src/app/contrib/hooks/use-desktop-integrations.ts b/apps/desktop/src/app/contrib/hooks/use-desktop-integrations.ts
-index edfc854e2e8b1b81c01a5c4c36e68c6ed85ad7a1..09aa03a71bdf023fb73f93352aef3b0600acf60d 100644
+index edfc854e..836c0f89 100644
 --- a/apps/desktop/src/app/contrib/hooks/use-desktop-integrations.ts
 +++ b/apps/desktop/src/app/contrib/hooks/use-desktop-integrations.ts
-@@ -8,7 +8,7 @@ import { openSession } from '@/app/open-session'
- import { commandFocusedTerminal, wordEraseFocusedTerminal } from '@/app/right-sidebar/terminal/terminal-context-menu'
- import { openConnectionDoneLink } from '@/components/assistant-ui/connector-tool'
+@@ -10,3 +10,3 @@ import { openConnectionDoneLink } from '@/components/assistant-ui/connector-tool
  import { $diskPluginsScanPending } from '@/contrib/runtime-loader'
 -import { getSession } from '@/hermes'
 +import { ambientOwnerConnectionId, getApiRequestConnection, getSession, sessionReadMatchesOwner } from '@/hermes'
  import { resolveDeepLinkAction } from '@/lib/deeplink-routes'
- import { pathFromHermesDeepLink, resolveHermesOpenPath } from '@/lib/hermes-open-target'
- import { storedSessionIdForNotification } from '@/lib/session-ids'
-@@ -27,9 +27,12 @@ import { openPluginInstallRequest } from '@/store/plugin-install-request'
- import { openFolderAsProject } from '@/store/projects'
- import {
+@@ -29,2 +29,4 @@ import {
    $selectedStoredSessionId,
 +  $sessionsLoadError,
 +  $sessionsLoading,
    forgetSessionOwnerHintsForSession,
-   getRememberedRoute,
+@@ -32,2 +34,3 @@ import {
    getRememberedSessionId,
 +  getSessionOwnerHints,
    resolveComposerSessionKey,
-   sessionBelongsToProfile,
-   sessionMatchesStoredId,
-@@ -117,7 +120,12 @@ export function useDesktopIntegrations({
-   }, [])
- 
+@@ -40,2 +43,3 @@ import {
+ } from '@/store/session'
++import { sessionDraftOwner } from '@/store/session-draft-owner'
+ import { $botChatScopes, $sessionTiles, storedSessionIdForRuntimeId } from '@/store/session-states'
+@@ -119,3 +123,8 @@ export function useDesktopIntegrations({
    const restoredRef = useRef(false)
 +  const unresolvedRestoreProfileRef = useRef<string | null>(null)
 +  const restoreContextRef = useRef({ activeProfile, locationPathname })
@@ -8194,21 +9617,13 @@ index edfc854e2e8b1b81c01a5c4c36e68c6ed85ad7a1..09aa03a71bdf023fb73f93352aef3b06
 +  const sessionsLoading = useStore($sessionsLoading)
 +  const sessionsLoadError = useStore($sessionsLoadError)
  
-   // Wait until boot has adopted the primary profile, then restore that profile's
-   // navigation exactly once. The same effect owns subsequent writes so the
-@@ -154,7 +162,8 @@ export function useDesktopIntegrations({
- 
-         const route = getRememberedRoute(activeProfile)
+@@ -156,3 +165,4 @@ export function useDesktopIntegrations({
          const routeSession = route ? routeSessionId(route) : null
 -        const last = getRememberedSessionId(activeProfile)
 +        const storedLast = getRememberedSessionId(activeProfile)
 +        const last = storedLast ?? routeSession
  
-         const restorableNonSessionRoute =
-           !!route && route !== NEW_CHAT_ROUTE && !routeSession && !isOverlayView(appViewForPath(route))
-@@ -163,7 +172,12 @@ export function useDesktopIntegrations({
-         // refresh completes. Keep the restore latch open until ownership can be
-         // decided; treating an unloaded list as authoritative would erase valid
+@@ -165,3 +175,8 @@ export function useDesktopIntegrations({
          // remembered navigation permanently.
 -        if (sessions.length === 0 && !restorableNonSessionRoute && (routeSession || last)) {
 +        if (
@@ -8218,11 +9633,15 @@ index edfc854e2e8b1b81c01a5c4c36e68c6ed85ad7a1..09aa03a71bdf023fb73f93352aef3b06
 +          (routeSession || last)
 +        ) {
            return
-         }
+@@ -226,3 +241,6 @@ export function useDesktopIntegrations({
  
-@@ -230,12 +244,6 @@ export function useDesktopIntegrations({
-           return
-         }
+-          announceNewSessionDraftKey(routeSession && resolveComposerSessionKey(routeSession, sessions))
++          announceNewSessionDraftKey(
++            routeSession && resolveComposerSessionKey(routeSession, sessions),
++            sessionDraftOwner(routeSession)
++          )
+           navigate(route, { replace: true })
+@@ -232,8 +250,2 @@ export function useDesktopIntegrations({
  
 -        // A remembered route carried a session id we can no longer validate —
 -        // clear the stale entry so the next cold start won't re-try it.
@@ -8231,11 +9650,12 @@ index edfc854e2e8b1b81c01a5c4c36e68c6ed85ad7a1..09aa03a71bdf023fb73f93352aef3b06
 -        }
 -
          if (last) {
-           // Fast path: a listed, non-delegate row restores directly, exactly
-           // as before — no by-id fetch on the common cold start.
-@@ -249,17 +257,103 @@ export function useDesktopIntegrations({
- 
-           // Unlisted (or a delegate row that reached a list slice): resolve
+@@ -243,3 +255,3 @@ export function useDesktopIntegrations({
+             repairOwnerHintsForRestore(last)
+-            announceNewSessionDraftKey(resolveComposerSessionKey(last, sessions))
++            announceNewSessionDraftKey(resolveComposerSessionKey(last, sessions), sessionDraftOwner(last))
+             navigate(sessionRoute(last), { replace: true })
+@@ -251,8 +263,90 @@ export function useDesktopIntegrations({
            // the id directly — the by-id endpoint serves delegate children the
 -          // list omits. A delegate child repairs to its parent, an orphan or
 -          // foreign-profile id clears, and a fetch failure keeps the
@@ -8332,31 +9752,24 @@ index edfc854e2e8b1b81c01a5c4c36e68c6ed85ad7a1..09aa03a71bdf023fb73f93352aef3b06
 +
 +              if (!remembered) {
                  setRememberedSessionId(null, activeProfile)
- 
-                 return
-               }
+@@ -262,4 +356,8 @@ export function useDesktopIntegrations({
  
 +              if (!listedOwner) {
 +                return
 +              }
 +
                repairOwnerHintsForRestore(remembered)
-               announceNewSessionDraftKey(resolveComposerSessionKey(remembered, sessions))
+-              announceNewSessionDraftKey(resolveComposerSessionKey(remembered, sessions))
++              announceNewSessionDraftKey(resolveComposerSessionKey(remembered, sessions), sessionDraftOwner(remembered))
                setRememberedSessionId(remembered, activeProfile)
-@@ -285,6 +379,10 @@ export function useDesktopIntegrations({
-     // restart and the window boots into the resume-error screen each time.
-     const exhausted = routedSessionId !== null && routedSessionId === resumeExhaustedSessionId
+@@ -287,2 +385,6 @@ export function useDesktopIntegrations({
  
 +    if (locationPathname !== NEW_CHAT_ROUTE || unresolvedRestoreProfileRef.current !== activeProfile) {
 +      unresolvedRestoreProfileRef.current = null
 +    }
 +
      if (routedSessionId && !exhausted && sessionBelongsToProfile(sessions, routedSessionId, activeProfile)) {
-       // A delegate child (source='subagent') is never itself a rememberable
-       // destination: it is invisible in the sidebar, so a restart would resume
-@@ -303,7 +401,11 @@ export function useDesktopIntegrations({
-           activeProfile
-         )
+@@ -305,3 +407,7 @@ export function useDesktopIntegrations({
        }
 -    } else if (!routedSessionId && !isOverlayView(appViewForPath(locationPathname))) {
 +    } else if (
@@ -8365,19 +9778,13 @@ index edfc854e2e8b1b81c01a5c4c36e68c6ed85ad7a1..09aa03a71bdf023fb73f93352aef3b06
 +      !isOverlayView(appViewForPath(locationPathname))
 +    ) {
        setRememberedRoute(locationPathname, activeProfile)
-     }
-   }, [
-@@ -315,7 +417,9 @@ export function useDesktopIntegrations({
-     resumeExhaustedSessionId,
-     resumeLastSession,
+@@ -317,3 +423,5 @@ export function useDesktopIntegrations({
      routedSessionId,
 -    sessions
 +    sessions,
 +    sessionsLoadError,
 +    sessionsLoading
    ])
- 
-   useEffect(() => {
 diff --git a/apps/desktop/src/app/contrib/surfaces.app-routes.test.tsx b/apps/desktop/src/app/contrib/surfaces.app-routes.test.tsx
 index dcd338cf4da80d10d0fd10714ebac7bd3748fdcb..8cdfb75edfd1ad399a0646998add1bbf373cc54c 100644
 --- a/apps/desktop/src/app/contrib/surfaces.app-routes.test.tsx
@@ -11852,31 +13259,107 @@ index 0000000000000000000000000000000000000000..f2f9990c12fee3d4bb238f853de6fb1f
 +    </Dialog>
 +  )
 +}
+diff --git a/apps/desktop/src/app/open-session-owner.ts b/apps/desktop/src/app/open-session-owner.ts
+new file mode 100644
+index 00000000..ff3b0cf7
+--- /dev/null
++++ b/apps/desktop/src/app/open-session-owner.ts
+@@ -0,0 +1,65 @@
++import { notifyError } from '@/store/notifications'
++import { normalizeProfileKey } from '@/store/profile'
++import {
++  $activeSessionId,
++  $selectedStoredSessionId,
++  $sessions,
++  knownSessionOwner,
++  lineageAliases,
++  ownerLookupSessionRows
++} from '@/store/session'
++import { isSessionOwnerRoute, type SessionOwnerScope } from '@/store/session-request-router'
++import { $sessionTiles, runtimeSessionOwner, type SessionTileWorkspaceScope } from '@/store/session-states'
++import { canOpenSessionWindow, openSessionInNewWindow } from '@/store/windows'
++
++function sameOwner(left: SessionOwnerScope, right: SessionOwnerScope): boolean {
++  if (typeof left === 'string' && typeof right === 'string') {
++    return normalizeProfileKey(left) === normalizeProfileKey(right)
++  }
++
++  return (
++    isSessionOwnerRoute(left) &&
++    isSessionOwnerRoute(right) &&
++    left.connectionId === right.connectionId &&
++    normalizeProfileKey(left.profile) === normalizeProfileKey(right.profile) &&
++    normalizeProfileKey(left.targetProfile ?? left.profile) ===
++      normalizeProfileKey(right.targetProfile ?? right.profile)
++  )
++}
++
++/** A visible runtime cannot be retargeted just because another owner uses the same stored id. */
++export function openConflictingSessionInWindow(storedSessionId: string, scope: SessionTileWorkspaceScope): boolean {
++  const requested = scope.ownerRoute ?? scope.ownerProfile
++
++  if (!requested) {
++    return false
++  }
++
++  const aliases = lineageAliases(storedSessionId, $sessions.get())
++  const tile = $sessionTiles.get().find(candidate => aliases.includes(candidate.storedSessionId))
++  const main = $selectedStoredSessionId.get()
++
++  if (!tile && !aliases.includes(main ?? '')) {
++    return false
++  }
++
++  const runtimeOwner = runtimeSessionOwner(tile ? tile.runtimeId : $activeSessionId.get())
++
++  const current =
++    runtimeOwner ?? (tile ? (tile.ownerRoute ?? tile.ownerProfile) : knownSessionOwner(ownerLookupSessionRows(), main))
++
++  if (sameOwner(current, requested)) {
++    return false
++  }
++
++  if (canOpenSessionWindow()) {
++    void openSessionInNewWindow(storedSessionId, scope)
++  } else {
++    notifyError(
++      new Error('This history needs a separate Desktop window to preserve the already-open session.'),
++      'Could not open chat in a new window'
++    )
++  }
++
++  return true
++}
 diff --git a/apps/desktop/src/app/open-session.test.ts b/apps/desktop/src/app/open-session.test.ts
-index 0396d9d2..cd9351ef 100644
+index 0396d9d2..984574c1 100644
 --- a/apps/desktop/src/app/open-session.test.ts
 +++ b/apps/desktop/src/app/open-session.test.ts
-@@ -157,3 +157,3 @@ describe('openSession', () => {
+@@ -17,2 +17,4 @@ const workspaceIsPageGet = vi.fn(() => false)
+ vi.mock('@/store/session-states', () => ({
++  $sessionTiles: { get: () => [] },
++  runtimeSessionOwner: () => undefined,
+   focusedSessionNeedsRoute: (focused: 'main' | 'tile' | null, workspaceIsPage: boolean) =>
+@@ -157,3 +159,3 @@ describe('openSession', () => {
      openSession('s1', navigate, 'tab')
 -    expect(openSessionTile).toHaveBeenCalledWith('s1', 'center')
 +    expect(openSessionTile).toHaveBeenCalledWith('s1', 'center', undefined, undefined, undefined)
      expect(navigate).not.toHaveBeenCalled()
-@@ -195,3 +195,3 @@ describe('openSession', () => {
+@@ -195,3 +197,3 @@ describe('openSession', () => {
      openSession('s1', navigate, 'stack')
 -    expect(openSessionTile).toHaveBeenCalledWith('s1', 'center')
 +    expect(openSessionTile).toHaveBeenCalledWith('s1', 'center', undefined, undefined, undefined)
      expect(navigate).not.toHaveBeenCalled()
-@@ -204,3 +204,3 @@ describe('openSession', () => {
+@@ -204,3 +206,3 @@ describe('openSession', () => {
      openSession('s1', navigate, 'stack')
 -    expect(reuseBlankDraftTile).toHaveBeenCalledWith('s1')
 +    expect(reuseBlankDraftTile).toHaveBeenCalledWith('s1', undefined)
      expect(openSessionTile).not.toHaveBeenCalled()
-@@ -222,3 +222,3 @@ describe('openSession', () => {
+@@ -222,3 +224,3 @@ describe('openSession', () => {
      openSession('s1', navigate, 'stack')
 -    expect(openSessionTile).toHaveBeenCalledWith('s1', 'center')
 +    expect(openSessionTile).toHaveBeenCalledWith('s1', 'center', undefined, undefined, undefined)
    })
-@@ -259,2 +259,17 @@ describe('openSession', () => {
+@@ -259,2 +261,18 @@ describe('openSession', () => {
  
 +  it('history preserves the saved ID and explicit connection/profile owner', () => {
 +    const ownerRoute = { connectionId: 'remote-example', profile: 'writer-example' }
@@ -11887,33 +13370,43 @@ index 0396d9d2..cd9351ef 100644
 +
 +    expect($sessionResumeRequest.get()).toMatchObject({ sessionId: 'older-existing-id', ownerRoute })
 +    expect(setSessionTileWorkspaceScope).toHaveBeenCalledWith('older-existing-id', {
-+      workspaceMode: 'sessions', ownerRoute
++      workspaceMode: 'sessions',
++      ownerRoute
 +    })
 +    expect(navigate).toHaveBeenCalledWith('/c/older-existing-id')
 +    expect(openSessionTile).not.toHaveBeenCalled()
 +  })
 +
    // #62045: picking the session this window already shows must still be an
-@@ -298,3 +313,3 @@ describe('openSession', () => {
+@@ -289,3 +307,3 @@ describe('openSession', () => {
+     openSession('s1', navigate, 'window')
+-    expect(openSessionInNewWindow).toHaveBeenCalledWith('s1')
++    expect(openSessionInNewWindow).toHaveBeenCalledWith('s1', { workspaceMode: 'sessions' })
+     expect(openSessionTile).not.toHaveBeenCalled()
+@@ -298,3 +316,3 @@ describe('openSession', () => {
      expect(openSessionInNewWindow).not.toHaveBeenCalled()
 -    expect(openSessionTile).toHaveBeenCalledWith('s1', 'center')
 +    expect(openSessionTile).toHaveBeenCalledWith('s1', 'center', undefined, undefined, undefined)
    })
 diff --git a/apps/desktop/src/app/open-session.ts b/apps/desktop/src/app/open-session.ts
-index b4da7a42..66cbc2f7 100644
+index b4da7a42..dd0f767c 100644
 --- a/apps/desktop/src/app/open-session.ts
 +++ b/apps/desktop/src/app/open-session.ts
-@@ -37,2 +37,3 @@ export type OpenSessionNavigate = (to: string, options?: { replace?: boolean })
+@@ -30,2 +30,3 @@ import { canOpenSessionWindow, openSessionInNewWindow } from '@/store/windows'
+ 
++import { openConflictingSessionInWindow } from './open-session-owner'
+ import { $workspaceIsPage, sessionRoute } from './routes'
+@@ -37,2 +38,3 @@ export type OpenSessionNavigate = (to: string, options?: { replace?: boolean })
  export interface OpenSessionWorkspaceScope {
 +  ownerProfile?: string
    ownerRoute?: SessionProfileRoute
-@@ -88,3 +89,4 @@ export function openSessionFromPicker(
+@@ -88,3 +90,4 @@ export function openSessionFromPicker(
    navigate: OpenSessionNavigate,
 -  intent: OpenSessionIntent = 'in-place'
 +  intent: OpenSessionIntent = 'in-place',
 +  ownerRoute?: SessionProfileRoute
  ): void {
-@@ -100,5 +102,12 @@ export function openSessionFromPicker(
+@@ -100,5 +103,12 @@ export function openSessionFromPicker(
    // surface and re-focuses the composer through its normal path).
 -  requestSessionResume(storedSessionId)
 +  if (ownerRoute) {
@@ -11928,13 +13421,25 @@ index b4da7a42..66cbc2f7 100644
  
 -  const workspaceScope = focusedSessionWorkspaceScope()
    const resolved = workspaceScope.workspaceMode === 'bots' && intent === 'in-place' ? 'stack' : intent
-@@ -130,2 +139,5 @@ export function openSession(
+@@ -122,2 +132,6 @@ export function openSession(
+ 
++  if (openConflictingSessionInWindow(storedSessionId, workspaceScope)) {
++    return
++  }
++
+   // Any explicit open/focus means the user has seen the finished-turn marker.
+@@ -130,2 +144,5 @@ export function openSession(
  
 +  const tileScope =
 +    botWorkspaceScope || workspaceScope.ownerRoute || workspaceScope.ownerProfile ? workspaceScope : undefined
 +
    let resolved: OpenSessionIntent = intent
-@@ -187,8 +199,3 @@ export function openSession(
+@@ -134,3 +151,3 @@ export function openSession(
+     if (canOpenSessionWindow()) {
+-      void openSessionInNewWindow(storedSessionId)
++      void openSessionInNewWindow(storedSessionId, workspaceScope)
+ 
+@@ -187,8 +204,3 @@ export function openSession(
      // stacking a second blank one beside it.
 -    if (
 -      spendBlankDraft &&
@@ -11944,7 +13449,7 @@ index b4da7a42..66cbc2f7 100644
 -    ) {
 +    if (spendBlankDraft && reuseBlankDraftTile(storedSessionId, tileScope)) {
        return
-@@ -196,7 +203,3 @@ export function openSession(
+@@ -196,7 +208,3 @@ export function openSession(
  
 -    if (botWorkspaceScope) {
 -      openSessionTile(storedSessionId, 'center', undefined, undefined, botWorkspaceScope)
@@ -12197,6 +13702,35 @@ index 0656345dc306a5fb275dd9a8ffea1c5fc4584335..6531af02dc5824e0cf07caf703d25263
  }
  
  /**
+diff --git a/apps/desktop/src/app/session/hooks/use-session-actions/index.ts b/apps/desktop/src/app/session/hooks/use-session-actions/index.ts
+index 75a4e608..7a6846bb 100644
+--- a/apps/desktop/src/app/session/hooks/use-session-actions/index.ts
++++ b/apps/desktop/src/app/session/hooks/use-session-actions/index.ts
+@@ -38,3 +38,3 @@ import { setSessionYolo } from '@/lib/yolo-session'
+ import { $clarifyRequests, clearClarifyRequest } from '@/store/clarify'
+-import { announceGoneSessionDraft, announceNewSessionDraftKey, migrateSessionDraft } from '@/store/composer'
++import { announceGoneSessionDraft, announceNewSessionDraftKey, migrateSessionDrafts } from '@/store/composer'
+ import { clearQueuedPrompts, migrateQueuedPrompts } from '@/store/composer-queue'
+@@ -101,2 +101,3 @@ import {
+ import { clearSessionControl } from '@/store/session-control'
++import { createdDraftOwner, sessionDraftOwner } from '@/store/session-draft-owner'
+ import { $focusedStoredSessionId } from '@/store/session-focus'
+@@ -532,4 +533,3 @@ export function useSessionActions({
+ 
+-    migrateSessionDraft(previousId, durableKey)
+-    migrateSessionDraft(nextId, durableKey)
++    migrateSessionDrafts([previousId, nextId], durableKey, sessionDraftOwner(activeSessionId))
+     migrateQueuedPrompts(previousId, durableKey)
+@@ -791,3 +791,3 @@ export function useSessionActions({
+           // to this chat now (#114122); the composer moves it on scope swap.
+-          announceNewSessionDraftKey(stored)
++          announceNewSessionDraftKey(stored, createdDraftOwner(capturedRoute, capturedProfile))
+           // The draft's preview tabs follow it the same way (#73890).
+@@ -2563,3 +2563,3 @@ export function useSessionActions({
+           // inline, undoable notice instead of leaving it stranded.
+-          announceGoneSessionDraft(storedSessionId)
++          announceGoneSessionDraft(storedSessionId, sessionDraftOwner(storedSessionId, ownerRoute))
+           startFreshSessionDraft(true)
 diff --git a/apps/desktop/src/app/settings/account-usage-panel.test.tsx b/apps/desktop/src/app/settings/account-usage-panel.test.tsx
 new file mode 100644
 index 0000000000000000000000000000000000000000..b6860dc6c555647a7921fdce81574f69e2b9e549
@@ -13739,21 +15273,26 @@ index 4a1fd216cab155c4ea62120db72c9f3884a797a3..8d2b9520fc0e5eabae81e5b8697651c2
    getApiRequestProfile,
    hermesApi,
 diff --git a/apps/desktop/src/i18n/ar_chat.ts b/apps/desktop/src/i18n/ar_chat.ts
-index 49c99c4e5ccc28a2921421709c50648c72f43f2a..40bb6acc246d886e028583c3eb1c16aefb8779dd 100644
+index 49c99c4e..585e7052 100644
 --- a/apps/desktop/src/i18n/ar_chat.ts
 +++ b/apps/desktop/src/i18n/ar_chat.ts
-@@ -2,6 +2,11 @@ import type { TranslationOverrides } from './define-locale'
- 
- export const arChat = {
+@@ -1 +1,2 @@
++import { composerDraftCopy } from './composer-draft-copy'
+ import type { TranslationOverrides } from './define-locale'
+@@ -4,2 +5,7 @@ export const arChat = {
    composer: {
-+    nextPrompt: "الطلب التالي",
-+    autocomplete: "إكمال الطلب",
-+    suggestPrompt: "اقتراح طلب",
-+    promptSuggestionHint: "توليد واحد بنموذج صغير عند النقر فقط، دون إرسال تلقائي.",
-+    noPromptSuggestion: "لا يوجد اقتراح هذه المرة.",
++    nextPrompt: 'الطلب التالي',
++    autocomplete: 'إكمال الطلب',
++    suggestPrompt: 'اقتراح طلب',
++    promptSuggestionHint: 'توليد واحد بنموذج صغير عند النقر فقط، دون إرسال تلقائي.',
++    noPromptSuggestion: 'لا يوجد اقتراح هذه المرة.',
      message: 'الرسالة',
-     wakingProfile: profile => `جار إيقاظ ${profile}`,
-     placeholderStarting: 'جار بدء Hermes...',
+@@ -133,4 +139,3 @@ export const arChat = {
+     editingQueuedInComposer: 'جار تحرير رسالة في الطابور',
+-    restoredDraftNotice: 'تمت استعادة رسالتك غير المُرسلة',
+-    restoredDraftUndo: 'تراجع',
++    ...composerDraftCopy['ar_chat'],
+     queueEdit: 'تحرير الرسالة المجدولة',
 diff --git a/apps/desktop/src/i18n/ar_settings.ts b/apps/desktop/src/i18n/ar_settings.ts
 index b4abecce80226bcb01c69351937bec2f75b1f666..4f09257dd01bc2bc977b9e757377b1060166b099 100644
 --- a/apps/desktop/src/i18n/ar_settings.ts
@@ -13778,13 +15317,93 @@ index b4abecce80226bcb01c69351937bec2f75b1f666..4f09257dd01bc2bc977b9e757377b106
        connectAccount: 'ربط حساب',
        haveApiKey: 'لديك مفتاح API بدلاً من ذلك؟',
        intro: 'سجل الدخول باشتراكك دون نسخ مفتاح API. يشغّل Hermes تسجيل الدخول من المتصفح لك داخل التطبيق.',
+diff --git a/apps/desktop/src/i18n/composer-draft-copy.ts b/apps/desktop/src/i18n/composer-draft-copy.ts
+new file mode 100644
+index 00000000..c751c6c4
+--- /dev/null
++++ b/apps/desktop/src/i18n/composer-draft-copy.ts
+@@ -0,0 +1,69 @@
++export interface ComposerDraftCopy {
++  unassignedDraftNotice: string
++  unassignedDraftRestore: string
++  restoredDraftNotice: string
++  restoredDraftUndo: string
++}
++
++export const composerDraftCopy = {
++  en: {
++    unassignedDraftNotice:
++      'An older unsent draft has no recorded owner. Restore it here only if it belongs to this chat.',
++    unassignedDraftRestore: 'Restore draft',
++    restoredDraftNotice: 'Restored your unsent message',
++    restoredDraftUndo: 'Undo'
++  },
++  de: {
++    unassignedDraftNotice:
++      'Ein älterer ungesendeter Entwurf hat keinen gespeicherten Besitzer. Stellen Sie ihn hier nur wieder her, wenn er zu diesem Chat gehört.',
++    unassignedDraftRestore: 'Entwurf wiederherstellen',
++    restoredDraftNotice: 'Ihre nicht gesendete Nachricht wurde wiederhergestellt',
++    restoredDraftUndo: 'Rückgängig'
++  },
++  es: {
++    unassignedDraftNotice:
++      'Un borrador anterior sin enviar no tiene propietario registrado. Restáuralo aquí solo si pertenece a este chat.',
++    unassignedDraftRestore: 'Restaurar borrador',
++    restoredDraftNotice: 'Se restauró tu mensaje sin enviar',
++    restoredDraftUndo: 'Deshacer'
++  },
++  fr: {
++    unassignedDraftNotice:
++      'Un ancien brouillon non envoyé ne possède pas de propriétaire enregistré. Restaurez-le ici uniquement si cette conversation lui correspond.',
++    unassignedDraftRestore: 'Restaurer le brouillon',
++    restoredDraftNotice: 'Votre message non envoyé a été restauré',
++    restoredDraftUndo: 'Annuler'
++  },
++  ja: {
++    unassignedDraftNotice:
++      '以前の未送信下書きには所有者の記録がありません。このチャットの下書きである場合のみ、ここに復元してください。',
++    unassignedDraftRestore: '下書きを復元',
++    restoredDraftNotice: '未送信のメッセージを復元しました',
++    restoredDraftUndo: '元に戻す'
++  },
++  ru: {
++    unassignedDraftNotice:
++      'У старого неотправленного черновика не указан владелец. Восстановите его здесь, только если он относится к этому чату.',
++    unassignedDraftRestore: 'Восстановить черновик',
++    restoredDraftNotice: 'Восстановлено ваше неотправленное сообщение',
++    restoredDraftUndo: 'Отменить'
++  },
++  zh: {
++    unassignedDraftNotice: '旧的未发送草稿没有记录所属会话。仅当它属于此聊天时，才在此恢复。',
++    unassignedDraftRestore: '恢复草稿',
++    restoredDraftNotice: '已恢复你未发送的消息',
++    restoredDraftUndo: '撤销'
++  },
++  'zh-hant_chat': {
++    unassignedDraftNotice: '舊的未傳送草稿沒有記錄所屬對話。僅當它屬於此聊天時，才在此還原。',
++    unassignedDraftRestore: '還原草稿',
++    restoredDraftNotice: '已還原你未送出的訊息',
++    restoredDraftUndo: '復原'
++  },
++  ar_chat: {
++    unassignedDraftNotice: 'لا توجد ملكية مسجلة لمسودة قديمة غير مرسلة. استعدها هنا فقط إذا كانت تخص هذه المحادثة.',
++    unassignedDraftRestore: 'استعادة المسودة',
++    restoredDraftNotice: 'تمت استعادة رسالتك غير المُرسلة',
++    restoredDraftUndo: 'تراجع'
++  }
++} satisfies Record<string, ComposerDraftCopy>
 diff --git a/apps/desktop/src/i18n/de.ts b/apps/desktop/src/i18n/de.ts
-index fa52d7628c503d03a70de218d09664dbe6a33a4c..ea7f3eda6901bb32bc0f594faf5c20eced21a0b8 100644
+index fa52d762..4ef390f8 100644
 --- a/apps/desktop/src/i18n/de.ts
 +++ b/apps/desktop/src/i18n/de.ts
-@@ -2204,6 +2204,19 @@ export const deOverrides = {
-       }
-     },
+@@ -1,4 +1,5 @@
+-// health: allow FILE_LINES -- locale data: translated copy for the usage-window plan UI (allowance gauges, Large/Free tags, the limit card), one key per string
+ import { defineFieldCopy } from '@/app/settings/field-copy'
+ 
++// health: allow FILE_LINES -- locale data: translated copy for the usage-window plan UI (allowance gauges, Large/Free tags, the limit card), one key per string
++import { composerDraftCopy } from './composer-draft-copy'
+ import { deBoot } from './de_boot'
+@@ -2206,2 +2207,15 @@ export const deOverrides = {
      providers: {
 +      usage: {
 +        title: 'Kontonutzung',
@@ -13800,27 +15419,48 @@ index fa52d7628c503d03a70de218d09664dbe6a33a4c..ea7f3eda6901bb32bc0f594faf5c20ec
 +        description: 'Werte gelten pro Konto. Aktualisieren prüft Kontingente ohne Modellaufruf.'
 +      },
        connectAccount: 'Ein Konto verbinden',
-       haveApiKey: 'Haben Sie stattdessen einen API-Key?',
-       intro:
-@@ -3699,6 +3712,11 @@ export const deOverrides = {
-     markAllRead: 'Alle als gelesen markieren'
-   },
+@@ -3701,2 +3715,7 @@ export const deOverrides = {
    composer: {
-+    nextPrompt: "Nächster Prompt",
-+    autocomplete: "Vervollständigen",
-+    suggestPrompt: "Prompt vorschlagen",
-+    promptSuggestionHint: "Einmal mit einem kleinen Modell erzeugen. Nur auf Klick; sendet nichts.",
-+    noPromptSuggestion: "Diesmal kein Vorschlag.",
++    nextPrompt: 'Nächster Prompt',
++    autocomplete: 'Vervollständigen',
++    suggestPrompt: 'Prompt vorschlagen',
++    promptSuggestionHint: 'Einmal mit einem kleinen Modell erzeugen. Nur auf Klick; sendet nichts.',
++    noPromptSuggestion: 'Diesmal kein Vorschlag.',
      message: 'Nachricht',
-     wakingProfile: profile => `Wecke ${profile}…`,
-     placeholderStarting: 'Hermes wird gestartet…',
+@@ -3866,4 +3885,3 @@ export const deOverrides = {
+     editingQueuedInComposer: 'Bearbeitet eingereihten Turn im Composer',
+-    restoredDraftNotice: 'Ihre nicht gesendete Nachricht wurde wiederhergestellt',
+-    restoredDraftUndo: 'Rückgängig',
++    ...composerDraftCopy['de'],
+     queueEdit: 'Bearbeiten',
 diff --git a/apps/desktop/src/i18n/en.ts b/apps/desktop/src/i18n/en.ts
-index 57a5b0604644dcb4f61155382dda4beeef8224ca..3048ee966ee8897ffbb5b5bb94621298ffd80bc5 100644
+index 57a5b060..865eb315 100644
 --- a/apps/desktop/src/i18n/en.ts
 +++ b/apps/desktop/src/i18n/en.ts
-@@ -1847,6 +1847,19 @@ export const en: Translations = {
-       }
-     },
+@@ -1,4 +1,5 @@
+-// health: allow FILE_LINES -- locale data: translated copy for the usage-window plan UI (allowance gauges, Large/Free tags, the limit card), one key per string
+ import { FIELD_DESCRIPTIONS, FIELD_LABELS } from '@/app/settings/constants'
+ 
++// health: allow FILE_LINES -- locale data: translated copy for the usage-window plan UI (allowance gauges, Large/Free tags, the limit card), one key per string
++import { composerDraftCopy } from './composer-draft-copy'
+ import { enAppTour } from './en_app_tour'
+@@ -1653,4 +1654,3 @@ export const en: Translations = {
+         title: 'Keep going on credits',
+-        description:
+-          'Use your credits when included usage runs out. Off: Hermes waits for the reset.',
++        description: 'Use your credits when included usage runs out. Off: Hermes waits for the reset.',
+         approveInBrowser: 'Approve Remote Spending in your browser to change this. It applies as soon as you approve.',
+@@ -1658,3 +1658,3 @@ export const en: Translations = {
+         cancel: 'Cancel',
+-        approvedRetry: 'Remote Spending is approved, but the change didn\'t save.',
++        approvedRetry: "Remote Spending is approved, but the change didn't save.",
+         tryAgain: 'Try again'
+@@ -1752,3 +1752,3 @@ export const en: Translations = {
+             valueUsed: percent => `${percent} used`
+-          },
++          }
+         },
+@@ -1849,2 +1849,15 @@ export const en: Translations = {
      providers: {
 +      usage: {
 +        title: 'Account usage',
@@ -13836,27 +15476,32 @@ index 57a5b0604644dcb4f61155382dda4beeef8224ca..3048ee966ee8897ffbb5b5bb94621298
 +        description: 'Readings are per account. Refresh checks quotas without running a model.'
 +      },
        connectAccount: 'Connect an account',
-       haveApiKey: 'Have an API key instead?',
-       intro:
-@@ -3266,6 +3279,11 @@ export const en: Translations = {
-   },
- 
+@@ -3268,2 +3281,7 @@ export const en: Translations = {
    composer: {
-+    nextPrompt: "Next prompt",
-+    autocomplete: "Autocomplete",
-+    suggestPrompt: "Suggest prompt",
-+    promptSuggestionHint: "Generate once with a small model. Only runs when you click; never sends.",
-+    noPromptSuggestion: "No suggestion this time.",
++    nextPrompt: 'Next prompt',
++    autocomplete: 'Autocomplete',
++    suggestPrompt: 'Suggest prompt',
++    promptSuggestionHint: 'Generate once with a small model. Only runs when you click; never sends.',
++    noPromptSuggestion: 'No suggestion this time.',
      message: 'Message',
-     wakingProfile: profile => `Waking up ${profile}…`,
-     placeholderStarting: 'Starting Hermes...',
+@@ -3430,4 +3448,3 @@ export const en: Translations = {
+     editingQueuedInComposer: 'Editing queued turn in composer',
+-    restoredDraftNotice: 'Restored your unsent message',
+-    restoredDraftUndo: 'Undo',
++    ...composerDraftCopy['en'],
+     queueEdit: 'Edit',
 diff --git a/apps/desktop/src/i18n/es.ts b/apps/desktop/src/i18n/es.ts
-index 34a9287d0f6d300ed410e09f712feee6c2ad6aab..0fb0e7046e4a2a6f7ed2bac7dbabf695b6af2500 100644
+index 34a9287d..e8bac143 100644
 --- a/apps/desktop/src/i18n/es.ts
 +++ b/apps/desktop/src/i18n/es.ts
-@@ -2192,6 +2192,19 @@ export const esOverrides = {
-       }
-     },
+@@ -1,4 +1,5 @@
+-// health: allow FILE_LINES -- locale data: translated copy for the usage-window plan UI (allowance gauges, Large/Free tags, the limit card), one key per string
+ import { defineFieldCopy } from '@/app/settings/field-copy'
+ 
++// health: allow FILE_LINES -- locale data: translated copy for the usage-window plan UI (allowance gauges, Large/Free tags, the limit card), one key per string
++import { composerDraftCopy } from './composer-draft-copy'
+ import { defineLocale, type TranslationOverrides } from './define-locale'
+@@ -2194,2 +2195,15 @@ export const esOverrides = {
      providers: {
 +      usage: {
 +        title: 'Uso por cuenta',
@@ -13872,27 +15517,32 @@ index 34a9287d0f6d300ed410e09f712feee6c2ad6aab..0fb0e7046e4a2a6f7ed2bac7dbabf695
 +        description: 'Los datos son por cuenta. Actualizar consulta cuotas sin ejecutar un modelo.'
 +      },
        connectAccount: 'Conectar una cuenta',
-       haveApiKey: '¿Tienes una clave API?',
-       intro:
-@@ -3689,6 +3702,11 @@ export const esOverrides = {
-     markAllRead: 'Marcar todo como leído'
-   },
+@@ -3691,2 +3705,7 @@ export const esOverrides = {
    composer: {
-+    nextPrompt: "Siguiente prompt",
-+    autocomplete: "Autocompletar",
-+    suggestPrompt: "Sugerir prompt",
-+    promptSuggestionHint: "Generar una vez con un modelo pequeño. Solo al pulsar; nunca envía.",
-+    noPromptSuggestion: "Esta vez no hay sugerencia.",
++    nextPrompt: 'Siguiente prompt',
++    autocomplete: 'Autocompletar',
++    suggestPrompt: 'Sugerir prompt',
++    promptSuggestionHint: 'Generar una vez con un modelo pequeño. Solo al pulsar; nunca envía.',
++    noPromptSuggestion: 'Esta vez no hay sugerencia.',
      message: 'Mensaje',
-     wakingProfile: profile => `Despertando ${profile}…`,
-     placeholderStarting: 'Iniciando Hermes...',
+@@ -3857,4 +3876,3 @@ export const esOverrides = {
+     editingQueuedInComposer: 'Editando turno en cola en el compositor',
+-    restoredDraftNotice: 'Se restauró tu mensaje sin enviar',
+-    restoredDraftUndo: 'Deshacer',
++    ...composerDraftCopy['es'],
+     queueEdit: 'Editar',
 diff --git a/apps/desktop/src/i18n/fr.ts b/apps/desktop/src/i18n/fr.ts
-index 3585156c94de02148be30e4c1a925e8c6fa827af..52ab62632915951587424cc4dd90723c56473afd 100644
+index 3585156c..098c4596 100644
 --- a/apps/desktop/src/i18n/fr.ts
 +++ b/apps/desktop/src/i18n/fr.ts
-@@ -2208,6 +2208,19 @@ export const frOverrides = {
-       }
-     },
+@@ -1,4 +1,5 @@
+-// health: allow FILE_LINES -- locale data: translated copy for the usage-window plan UI (allowance gauges, Large/Free tags, the limit card), one key per string
+ import { defineFieldCopy } from '@/app/settings/field-copy'
+ 
++// health: allow FILE_LINES -- locale data: translated copy for the usage-window plan UI (allowance gauges, Large/Free tags, the limit card), one key per string
++import { composerDraftCopy } from './composer-draft-copy'
+ import { defineLocale, type TranslationOverrides } from './define-locale'
+@@ -2210,2 +2211,15 @@ export const frOverrides = {
      providers: {
 +      usage: {
 +        title: 'Utilisation par compte',
@@ -13908,27 +15558,32 @@ index 3585156c94de02148be30e4c1a925e8c6fa827af..52ab62632915951587424cc4dd90723c
 +        description: 'Les données sont par compte. Actualiser consulte les quotas sans lancer de modèle.'
 +      },
        connectAccount: 'Connecter un compte',
-       haveApiKey: 'Vous avez une clé API ?',
-       intro:
-@@ -3705,6 +3718,11 @@ export const frOverrides = {
-     markAllRead: 'Tout marquer comme lu'
-   },
+@@ -3707,2 +3721,7 @@ export const frOverrides = {
    composer: {
-+    nextPrompt: "Prochain prompt",
-+    autocomplete: "Compléter",
-+    suggestPrompt: "Suggérer un prompt",
-+    promptSuggestionHint: "Générer une fois avec un petit modèle, uniquement au clic. Aucun envoi.",
-+    noPromptSuggestion: "Aucune suggestion cette fois.",
++    nextPrompt: 'Prochain prompt',
++    autocomplete: 'Compléter',
++    suggestPrompt: 'Suggérer un prompt',
++    promptSuggestionHint: 'Générer une fois avec un petit modèle, uniquement au clic. Aucun envoi.',
++    noPromptSuggestion: 'Aucune suggestion cette fois.',
      message: 'Message',
-     wakingProfile: profile => `Réveil de ${profile}…`,
-     placeholderStarting: 'Démarrage de Hermes…',
+@@ -3874,4 +3893,3 @@ export const frOverrides = {
+     editingQueuedInComposer: "Modification du tour en file d'attente dans le compositeur",
+-    restoredDraftNotice: 'Votre message non envoyé a été restauré',
+-    restoredDraftUndo: 'Annuler',
++    ...composerDraftCopy['fr'],
+     queueEdit: 'Modifier',
 diff --git a/apps/desktop/src/i18n/ja.ts b/apps/desktop/src/i18n/ja.ts
-index 07e8081c56ce631e946418e10f4395ecdd9f6c53..1a9e7d1e2e714bba49a0ee91260efe67d1bcd83e 100644
+index 07e8081c..d53a443f 100644
 --- a/apps/desktop/src/i18n/ja.ts
 +++ b/apps/desktop/src/i18n/ja.ts
-@@ -1156,6 +1156,19 @@ export const jaOverrides = {
-     model: jaModelSettings,
-     localModels: jaLocalModels,
+@@ -1,4 +1,5 @@
+-// health: allow FILE_LINES -- locale data: translated copy for the usage-window plan UI (allowance gauges, Large/Free tags, the limit card), one key per string
+ import { defineFieldCopy } from '@/app/settings/field-copy'
+ 
++// health: allow FILE_LINES -- locale data: translated copy for the usage-window plan UI (allowance gauges, Large/Free tags, the limit card), one key per string
++import { composerDraftCopy } from './composer-draft-copy'
+ import { defineLocale, type TranslationOverrides } from './define-locale'
+@@ -1158,2 +1159,15 @@ export const jaOverrides = {
      providers: {
 +      usage: {
 +        title: 'アカウント使用状況',
@@ -13944,27 +15599,32 @@ index 07e8081c56ce631e946418e10f4395ecdd9f6c53..1a9e7d1e2e714bba49a0ee91260efe67
 +        description: 'アカウント別の情報です。更新はモデルを実行せずに残量を確認します。'
 +      },
        connectAccount: 'アカウントを接続',
-       haveApiKey: 'API キーをお持ちですか？',
-       intro:
-@@ -2247,6 +2260,11 @@ export const jaOverrides = {
-   },
- 
+@@ -2249,2 +2263,7 @@ export const jaOverrides = {
    composer: {
-+    nextPrompt: "次のプロンプト",
-+    autocomplete: "入力補完",
-+    suggestPrompt: "プロンプトを提案",
-+    promptSuggestionHint: "クリック時だけ小型モデルで1回生成します。自動送信はしません。",
-+    noPromptSuggestion: "今回は提案がありません。",
++    nextPrompt: '次のプロンプト',
++    autocomplete: '入力補完',
++    suggestPrompt: 'プロンプトを提案',
++    promptSuggestionHint: 'クリック時だけ小型モデルで1回生成します。自動送信はしません。',
++    noPromptSuggestion: '今回は提案がありません。',
      message: 'メッセージ',
-     wakingProfile: profile => `${profile} を起動中…`,
-     placeholderStarting: 'Hermes を起動中...',
+@@ -2401,4 +2420,3 @@ export const jaOverrides = {
+     editingQueuedInComposer: 'コンポーザーでキュー済みターンを編集中',
+-    restoredDraftNotice: '未送信のメッセージを復元しました',
+-    restoredDraftUndo: '元に戻す',
++    ...composerDraftCopy['ja'],
+     queueEdit: '編集',
 diff --git a/apps/desktop/src/i18n/ru.ts b/apps/desktop/src/i18n/ru.ts
-index f18bf35b8cb991c3b69a393c0816bdb7c26615b9..9106708e2b70b42c7a85131d99fccdc609756505 100644
+index f18bf35b..bb92d4e3 100644
 --- a/apps/desktop/src/i18n/ru.ts
 +++ b/apps/desktop/src/i18n/ru.ts
-@@ -1285,6 +1285,19 @@ export const ruOverrides = {
-     },
-     model: ruModelSettings,
+@@ -1,4 +1,5 @@
+-// health: allow FILE_LINES -- locale data: translated copy for the usage-window plan UI (allowance gauges, Large/Free tags, the limit card), one key per string
+ import { defineFieldCopy } from '@/app/settings/field-copy'
+ 
++// health: allow FILE_LINES -- locale data: translated copy for the usage-window plan UI (allowance gauges, Large/Free tags, the limit card), one key per string
++import { composerDraftCopy } from './composer-draft-copy'
+ import { defineLocale, type TranslationOverrides } from './define-locale'
+@@ -1287,2 +1288,15 @@ export const ruOverrides = {
      providers: {
 +      usage: {
 +        title: 'Использование аккаунтов',
@@ -13980,27 +15640,34 @@ index f18bf35b8cb991c3b69a393c0816bdb7c26615b9..9106708e2b70b42c7a85131d99fccdc6
 +        description: 'Данные по каждому аккаунту. Обновление проверяет квоты без запуска модели.'
 +      },
        connectAccount: 'Подключить аккаунт',
-       haveApiKey: 'Ввести API-ключ вместо этого?',
-       intro:
-@@ -2525,6 +2538,11 @@ export const ruOverrides = {
-     markAllRead: 'Отметить все как прочитанные'
-   },
+@@ -2527,2 +2541,7 @@ export const ruOverrides = {
    composer: {
-+    nextPrompt: "Следующий запрос",
-+    autocomplete: "Дополнение",
-+    suggestPrompt: "Предложить запрос",
-+    promptSuggestionHint: "Одна генерация небольшой моделью по нажатию. Автоотправки нет.",
-+    noPromptSuggestion: "В этот раз предложений нет.",
++    nextPrompt: 'Следующий запрос',
++    autocomplete: 'Дополнение',
++    suggestPrompt: 'Предложить запрос',
++    promptSuggestionHint: 'Одна генерация небольшой моделью по нажатию. Автоотправки нет.',
++    noPromptSuggestion: 'В этот раз предложений нет.',
      message: 'Сообщение',
-     wakingProfile: profile => `Пробуждаем ${profile}…`,
-     placeholderStarting: 'Запуск Hermes...',
+@@ -2680,4 +2699,3 @@ export const ruOverrides = {
+     editingQueuedInComposer: 'Редактирование хода в очереди в композере',
+-    restoredDraftNotice: 'Восстановлено ваше неотправленное сообщение',
+-    restoredDraftUndo: 'Отменить',
++    ...composerDraftCopy['ru'],
+     queueEdit: 'Изменить',
 diff --git a/apps/desktop/src/i18n/types.ts b/apps/desktop/src/i18n/types.ts
-index 0f2e489af4f39fa0571f7d4880bc24e501b7707c..ebd3320be3a7b0e0fcf3136bc74e1b3dfe368d0a 100644
+index 0f2e489a..6c8d87e4 100644
 --- a/apps/desktop/src/i18n/types.ts
 +++ b/apps/desktop/src/i18n/types.ts
-@@ -1670,6 +1670,19 @@ catalog: CatalogTranslations
-       }
-     }
+@@ -11,2 +11,3 @@ import type { TipId } from '@/lib/tips/catalog'
+ 
++import type { ComposerDraftCopy } from './composer-draft-copy'
+ import type { AppTourTranslations } from './types_app_tour'
+@@ -96,3 +97,3 @@ export interface Translations extends NoticeTranslations {
+   connectors: ConnectorCardTranslations
+-catalog: CatalogTranslations
++  catalog: CatalogTranslations
+   connectorsPage: {
+@@ -1672,2 +1673,15 @@ catalog: CatalogTranslations
      providers: {
 +      usage: {
 +        title: string
@@ -14016,36 +15683,42 @@ index 0f2e489af4f39fa0571f7d4880bc24e501b7707c..ebd3320be3a7b0e0fcf3136bc74e1b3d
 +        description: string
 +      }
        connectAccount: string
-       haveApiKey: string
-       intro: string
-@@ -2878,6 +2891,11 @@ catalog: CatalogTranslations
-   }
+@@ -2879,3 +2893,8 @@ catalog: CatalogTranslations
  
-   composer: {
+-  composer: {
++  composer: ComposerDraftCopy & {
 +    nextPrompt: string
 +    autocomplete: string
 +    suggestPrompt: string
 +    promptSuggestionHint: string
 +    noPromptSuggestion: string
      message: string
-     wakingProfile: (profile: string) => string
-     placeholderStarting: string
+@@ -2944,4 +2963,2 @@ catalog: CatalogTranslations
+     editingQueuedInComposer: string
+-    restoredDraftNotice: string
+-    restoredDraftUndo: string
+     /** The local-setup offer above the input after the first finished task. */
 diff --git a/apps/desktop/src/i18n/zh-hant_chat.ts b/apps/desktop/src/i18n/zh-hant_chat.ts
-index ef37846d4fc98d02d057d359430655bbc641cb95..df4a46c573bd0b2afc7eae1ae4a1521b538af96b 100644
+index ef37846d..dcb4b622 100644
 --- a/apps/desktop/src/i18n/zh-hant_chat.ts
 +++ b/apps/desktop/src/i18n/zh-hant_chat.ts
-@@ -2,6 +2,11 @@ import type { TranslationOverrides } from './define-locale'
- 
- export const zhHantChat = {
+@@ -1 +1,2 @@
++import { composerDraftCopy } from './composer-draft-copy'
+ import type { TranslationOverrides } from './define-locale'
+@@ -4,2 +5,7 @@ export const zhHantChat = {
    composer: {
-+    nextPrompt: "下一則提示",
-+    autocomplete: "補全提示",
-+    suggestPrompt: "建議提示",
-+    promptSuggestionHint: "僅在點擊時以小模型產生一次，不會自動傳送。",
-+    noPromptSuggestion: "本次沒有建議。",
++    nextPrompt: '下一則提示',
++    autocomplete: '補全提示',
++    suggestPrompt: '建議提示',
++    promptSuggestionHint: '僅在點擊時以小模型產生一次，不會自動傳送。',
++    noPromptSuggestion: '本次沒有建議。',
      message: '訊息',
-     wakingProfile: profile => `正在喚醒 ${profile}…`,
-     placeholderStarting: '正在啟動 Hermes...',
+@@ -155,4 +161,3 @@ export const zhHantChat = {
+     editingQueuedInComposer: '在輸入框中編輯排隊回合',
+-    restoredDraftNotice: '已還原你未送出的訊息',
+-    restoredDraftUndo: '復原',
++    ...composerDraftCopy['zh-hant_chat'],
+     queueEdit: '編輯',
 diff --git a/apps/desktop/src/i18n/zh-hant_settings.ts b/apps/desktop/src/i18n/zh-hant_settings.ts
 index 467cca6dbbc154c4bb36d7ef51d4db2899837390..41f932805aad1ba60f58e92adc7772d388541cb9 100644
 --- a/apps/desktop/src/i18n/zh-hant_settings.ts
@@ -14071,12 +15744,17 @@ index 467cca6dbbc154c4bb36d7ef51d4db2899837390..41f932805aad1ba60f58e92adc7772d3
        haveApiKey: '改用 API 金鑰？',
        intro: '使用訂閱登入，無需複製 API 金鑰。Hermes 會在應用程式中為您完成瀏覽器登入。',
 diff --git a/apps/desktop/src/i18n/zh.ts b/apps/desktop/src/i18n/zh.ts
-index 485376eb48b050c6f428dbc52c44b1f0f65158a2..3fe086e549d9008f0b0bad5b33618af977a3868d 100644
+index 485376eb..28dc3814 100644
 --- a/apps/desktop/src/i18n/zh.ts
 +++ b/apps/desktop/src/i18n/zh.ts
-@@ -1829,6 +1829,19 @@ export const zhOverrides = {
-       }
-     },
+@@ -1,4 +1,5 @@
+-// health: allow FILE_LINES -- locale data: translated copy for the usage-window plan UI (allowance gauges, Large/Free tags, the limit card), one key per string
+ import { defineFieldCopy } from '@/app/settings/field-copy'
+ 
++// health: allow FILE_LINES -- locale data: translated copy for the usage-window plan UI (allowance gauges, Large/Free tags, the limit card), one key per string
++import { composerDraftCopy } from './composer-draft-copy'
+ import { defineLocale, type TranslationOverrides } from './define-locale'
+@@ -1831,2 +1832,15 @@ export const zhOverrides = {
      providers: {
 +      usage: {
 +        title: '账户用量',
@@ -14092,20 +15770,20 @@ index 485376eb48b050c6f428dbc52c44b1f0f65158a2..3fe086e549d9008f0b0bad5b33618af9
 +        description: '按账户显示。刷新仅查询配额，不调用模型。'
 +      },
        connectAccount: '连接账号',
-       haveApiKey: '改用 API 密钥？',
-       intro: '使用订阅登录，无需复制 API 密钥。Hermes 会在应用中为你完成浏览器登录。',
-@@ -3161,6 +3174,11 @@ export const zhOverrides = {
-   },
- 
+@@ -3163,2 +3177,7 @@ export const zhOverrides = {
    composer: {
-+    nextPrompt: "下一条提示",
-+    autocomplete: "补全提示",
-+    suggestPrompt: "建议提示",
-+    promptSuggestionHint: "仅在点击时用小模型生成一次，不会自动发送。",
-+    noPromptSuggestion: "本次没有建议。",
++    nextPrompt: '下一条提示',
++    autocomplete: '补全提示',
++    suggestPrompt: '建议提示',
++    promptSuggestionHint: '仅在点击时用小模型生成一次，不会自动发送。',
++    noPromptSuggestion: '本次没有建议。',
      message: '消息',
-     wakingProfile: profile => `正在唤醒 ${profile}…`,
-     placeholderStarting: '正在启动 Hermes…',
+@@ -3323,4 +3342,3 @@ export const zhOverrides = {
+     editingQueuedInComposer: '正在输入框中编辑排队回合',
+-    restoredDraftNotice: '已恢复你未发送的消息',
+-    restoredDraftUndo: '撤销',
++    ...composerDraftCopy['zh'],
+     queueEdit: '编辑',
 diff --git a/apps/desktop/src/lib/answer-cards.test.ts b/apps/desktop/src/lib/answer-cards.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..03e416be09afd9277bbe4029c83dcef2b0dc072d
@@ -14246,6 +15924,397 @@ index 8a25234103515a207973163b1587fb59e7609a9a..34eb1d722a939edc573f588915eff732
    'log',
    'logs',
    'markdown',
+diff --git a/apps/desktop/src/lib/composer-draft-lifecycle.test.ts b/apps/desktop/src/lib/composer-draft-lifecycle.test.ts
+new file mode 100644
+index 00000000..dd578d14
+--- /dev/null
++++ b/apps/desktop/src/lib/composer-draft-lifecycle.test.ts
+@@ -0,0 +1,123 @@
++import { beforeEach, expect, it, vi } from 'vitest'
++
++beforeEach(() => {
++  localStorage.clear()
++  vi.resetModules()
++})
++
++it('renames local owned drafts and retry identities without moving remote or unassigned copies', async () => {
++  const store = await import('@/store/composer')
++  const retry = await import('@/store/composer-draft-retry')
++  const { migrateTilesForProfile } = await import('@/store/session-states')
++  const local = { connectionId: 'local', profile: 'work' }
++  const remote = { connectionId: 'other-source', profile: 'work' }
++  const renamed = { connectionId: 'local', profile: 'review' }
++  store.stashSessionDraft('shared-history', 'Local draft', [], local)
++  store.stashSessionDraft('shared-history', 'Remote draft', [], remote)
++  store.stashSessionDraft('shared-history', 'Unassigned draft', [])
++  retry.writeDraftRetry('shared-history', retry.draftRetry('local-send', 'Local draft', []), local)
++  retry.writeDraftRetry('retry-only', retry.draftRetry('uncertain-send', 'Other words', []), local)
++  migrateTilesForProfile('work', 'review')
++  store.reloadPersistedDrafts()
++
++  expect(store.takeSessionDraft('shared-history', renamed).text).toBe('Local draft')
++  expect(store.takeSessionDraft('shared-history', local).text).toBe('')
++  expect(retry.readDraftRetry('shared-history', renamed)?.id).toBe('local-send')
++  expect(retry.readDraftRetry('retry-only', renamed)?.id).toBe('uncertain-send')
++  expect(retry.readDraftRetry('retry-only', local)).toBeUndefined()
++  expect(store.takeSessionDraft('shared-history', remote).text).toBe('Remote draft')
++  expect(store.takeSessionDraft('shared-history').text).toBe('Unassigned draft')
++})
++
++it('deletes only exact owner-route drafts and retries when its profile is removed', async () => {
++  const store = await import('@/store/composer')
++  const retry = await import('@/store/composer-draft-retry')
++  const { dropTilesForProfile } = await import('@/store/session-states')
++  const removed = { connectionId: 'source-a', profile: 'work', targetProfile: 'backend-a' }
++  const alias = { ...removed, targetProfile: 'backend-b' }
++  const remote = { ...removed, connectionId: 'source-b' }
++
++  for (const owner of [removed, alias, remote]) {
++    store.stashSessionDraft('shared-history', owner.targetProfile + owner.connectionId, [], owner)
++    retry.writeDraftRetry('shared-history', retry.draftRetry('send-' + owner.targetProfile, 'words', []), owner)
++  }
++
++  store.stashSessionDraft('shared-history', 'Keep unassigned', [])
++  dropTilesForProfile('work', removed)
++  store.reloadPersistedDrafts()
++
++  expect(store.takeSessionDraft('shared-history', removed).text).toBe('')
++  expect(retry.readDraftRetry('shared-history', removed)).toBeUndefined()
++  expect(store.takeSessionDraft('shared-history', alias).text).toBe('backend-bsource-a')
++  expect(store.takeSessionDraft('shared-history', remote).text).toBe('backend-asource-b')
++  expect(store.takeSessionDraft('shared-history').text).toBe('Keep unassigned')
++})
++
++it('keeps a source draft recoverable if profile migration cannot persist its destination', async () => {
++  const store = await import('@/store/composer')
++  const { migrateTilesForProfile } = await import('@/store/session-states')
++  const owner = { connectionId: 'local', profile: 'work' }
++  store.stashSessionDraft('shared-history', 'Keep durable words', [], owner)
++
++  const write = vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => {
++    throw new Error('Storage full')
++  })
++
++  migrateTilesForProfile('work', 'review')
++  write.mockRestore()
++  vi.resetModules()
++  const fresh = await import('@/store/composer')
++
++  expect(fresh.takeSessionDraft('shared-history', owner).text).toBe('Keep durable words')
++})
++
++it('prefers native runtime owner over a same-id cached row, and preserves explicit target aliases', async () => {
++  const { setApiRequestConnection, setApiRequestProfile } = await import('@/api/client')
++  const { $sessions } = await import('@/store/session')
++  const { recordSessionEventScope } = await import('@/store/session-states')
++  const { sessionDraftOwner } = await import('@/store/session-draft-owner')
++  setApiRequestConnection('source-a')
++  setApiRequestProfile('default')
++  $sessions.set([{ id: 'live-original', connection_id: 'source-a', profile: 'work' } as never])
++  recordSessionEventScope({ session_id: 'live-original', connectionId: 'source-a', profile: 'default' })
++
++  expect(sessionDraftOwner('live-original')).toEqual({ connectionId: 'source-a', profile: 'default' })
++  const alias = { connectionId: 'source-b', profile: 'display-name', targetProfile: 'backend-name' }
++  expect(sessionDraftOwner('live-original', alias)).toEqual(alias)
++  setApiRequestConnection(null)
++  setApiRequestProfile(null)
++})
++
++it('keeps the original durable scope when a lineage rekey cannot persist the destination', async () => {
++  const store = await import('@/store/composer')
++  const owner = { connectionId: 'local', profile: 'work' }
++  store.stashSessionDraft('old-tip', 'Durable lineage words', [], owner)
++
++  const write = vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => {
++    throw new Error('Storage full')
++  })
++
++  const moved = store.migrateSessionDraft('old-tip', 'lineage-root', owner)
++  expect(write).toHaveBeenCalled()
++  write.mockRestore()
++  vi.resetModules()
++  const fresh = await import('@/store/composer')
++
++  expect(moved).toBe(false)
++  expect(fresh.takeSessionDraft('old-tip', owner).text).toBe('Durable lineage words')
++})
++
++it('moves an uncertain-send identity with its owned raw lineage scope and keeps other owners unchanged', async () => {
++  const store = await import('@/store/composer')
++  const retry = await import('@/store/composer-draft-retry')
++  const owner = { connectionId: 'source-a', profile: 'work' }
++  const other = { connectionId: 'source-b', profile: 'work' }
++  store.stashSessionDraft('old-tip', 'Uncertain words', [], owner)
++  retry.writeDraftRetry('old-tip', retry.draftRetry('uncertain-lineage-send', 'Uncertain words', []), owner)
++  retry.writeDraftRetry('old-tip', retry.draftRetry('other-owner-send', 'Other words', []), other)
++
++  expect(store.migrateSessionDraft('old-tip', 'lineage-root', owner)).toBe(true)
++  expect(retry.readDraftRetry('lineage-root', owner)?.id).toBe('uncertain-lineage-send')
++  expect(retry.readDraftRetry('old-tip', owner)).toBeUndefined()
++  expect(retry.readDraftRetry('old-tip', other)?.id).toBe('other-owner-send')
++})
+diff --git a/apps/desktop/src/lib/composer-draft-owner.test.ts b/apps/desktop/src/lib/composer-draft-owner.test.ts
+new file mode 100644
+index 00000000..574b3f48
+--- /dev/null
++++ b/apps/desktop/src/lib/composer-draft-owner.test.ts
+@@ -0,0 +1,210 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
++
++const originalOwner = { connectionId: 'source-a', profile: 'default' }
++const workOwner = { connectionId: 'source-a', profile: 'work' }
++
++beforeEach(() => {
++  localStorage.clear()
++  vi.resetModules()
++})
++
++afterEach(() => {
++  localStorage.clear()
++  vi.resetModules()
++})
++
++describe('owner-scoped draft persistence between native windows', () => {
++  it('updates a saved scope without scanning all browser storage keys', async () => {
++    const store = await import('@/store/composer')
++    store.stashSessionDraft('shared-history', 'First words', [], originalOwner)
++    const scan = vi.spyOn(window.localStorage, 'key')
++    store.stashSessionDraft('shared-history', 'Edited words', [], originalOwner)
++
++    expect(scan).not.toHaveBeenCalled()
++    expect(store.takeSessionDraft('shared-history', originalOwner).text).toBe('Edited words')
++    scan.mockRestore()
++  })
++
++  it('applies a single-owner storage event without rescanning or clearing another owner', async () => {
++    const store = await import('@/store/composer')
++    const { ownedDraftKey } = await import('@/store/composer-draft-owner')
++    store.stashSessionDraft('shared-history', 'Keep original words', [], originalOwner)
++    const scan = vi.spyOn(window.localStorage, 'key')
++    window.dispatchEvent(
++      new StorageEvent('storage', {
++        key: ownedDraftKey('shared-history', workOwner),
++        newValue: JSON.stringify({ text: 'Other window words', updatedAt: Date.now() })
++      })
++    )
++
++    expect(scan).not.toHaveBeenCalled()
++    expect(store.takeSessionDraft('shared-history', originalOwner).text).toBe('Keep original words')
++    expect(store.takeSessionDraft('shared-history', workOwner).text).toBe('Other window words')
++    scan.mockRestore()
++  })
++
++  it('cannot overwrite another owner from an older window snapshot', async () => {
++    const first = await import('@/store/composer')
++    first.stashSessionDraft('shared-history', 'First draft', [], originalOwner)
++    vi.resetModules()
++    const second = await import('@/store/composer')
++    second.stashSessionDraft('shared-history', 'Other owner draft', [], workOwner)
++    first.stashSessionDraft('shared-history', 'Updated first draft', [], originalOwner)
++    second.reloadPersistedDrafts()
++
++    expect(second.takeSessionDraft('shared-history', workOwner).text).toBe('Other owner draft')
++    expect(second.takeSessionDraft('shared-history', originalOwner).text).toBe('Updated first draft')
++  })
++
++  it('distinguishes connections and backend target profiles', async () => {
++    const store = await import('@/store/composer')
++    const remote = { ...workOwner, connectionId: 'source-b' }
++    const alias = { ...workOwner, targetProfile: 'review' }
++    store.stashSessionDraft('shared-history', 'Local work', [], workOwner)
++    store.stashSessionDraft('shared-history', 'Remote work', [], remote)
++    store.stashSessionDraft('shared-history', 'Alias work', [], alias)
++    store.reloadPersistedDrafts()
++
++    expect(store.takeSessionDraft('shared-history', workOwner).text).toBe('Local work')
++    expect(store.takeSessionDraft('shared-history', remote).text).toBe('Remote work')
++    expect(store.takeSessionDraft('shared-history', alias).text).toBe('Alias work')
++  })
++
++  it('keeps legacy ids opaque even when they look like an owned storage key', async () => {
++    const store = await import('@/store/composer')
++    const { ownedDraftKey } = await import('@/store/composer-draft-owner')
++    const opaque = ownedDraftKey('shared-history', originalOwner)!
++    store.stashSessionDraft(opaque, 'Legacy title', [])
++    store.stashSessionDraft('shared-history', 'Owned title', [], originalOwner)
++    store.reloadPersistedDrafts()
++
++    expect(store.takeSessionDraft(opaque).text).toBe('Legacy title')
++    expect(store.takeSessionDraft('shared-history', originalOwner).text).toBe('Owned title')
++    expect(store.draftTitleFor(opaque)).toBe('Legacy title')
++    expect(store.draftTitleFor('shared-history', originalOwner)).toBe('Owned title')
++  })
++
++  it('retains fifty saved scopes per owner without pruning another owner or legacy data', async () => {
++    const store = await import('@/store/composer')
++    store.stashSessionDraft('legacy-history', 'Keep legacy', [])
++    store.stashSessionDraft('shared-history', 'Keep work owner', [], workOwner)
++
++    for (let i = 0; i < 51; i++) {
++      store.stashSessionDraft(`history-${i}`, `Draft ${i}`, [], originalOwner)
++    }
++
++    store.reloadPersistedDrafts()
++
++    expect(store.takeSessionDraft('history-0', originalOwner).text).toBe('')
++    expect(store.takeSessionDraft('history-50', originalOwner).text).toBe('Draft 50')
++    expect(store.stashedDraftScopes(originalOwner)).toHaveLength(50)
++    expect(store.stashedDraftScopes(originalOwner).every(id => id.startsWith('history-'))).toBe(true)
++    expect(store.takeSessionDraft('shared-history', workOwner).text).toBe('Keep work owner')
++    expect(store.takeSessionDraft('legacy-history').text).toBe('Keep legacy')
++  })
++
++  it('preserves attachment-only and unsaved drafts during reload', async () => {
++    const store = await import('@/store/composer')
++    const attachment = { id: 'file-one', kind: 'file' as const, label: 'Original file' }
++    store.stashSessionDraft('attachment-history', '', [attachment], originalOwner)
++    attachment.label = 'Mutated caller'
++    store.stashSessionDraft('shared-history', 'Saved text', [], originalOwner)
++
++    const write = vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => {
++      throw new Error('Storage full')
++    })
++
++    store.stashSessionDraft('shared-history', 'Unsaved edited text', [], originalOwner)
++    write.mockRestore()
++    store.reloadPersistedDrafts()
++
++    expect(store.takeSessionDraft('attachment-history', originalOwner).attachments[0]?.label).toBe('Original file')
++    expect(store.takeSessionDraft('attachment-history', workOwner).attachments).toEqual([])
++    expect(store.takeSessionDraft('shared-history', originalOwner).text).toBe('Unsaved edited text')
++  })
++
++  it('keeps a valid memory draft if its stored record becomes unreadable', async () => {
++    const store = await import('@/store/composer')
++    const { ownedDraftKey } = await import('@/store/composer-draft-owner')
++    store.stashSessionDraft('shared-history', 'Keep valid memory', [], originalOwner)
++    localStorage.setItem(ownedDraftKey('shared-history', originalOwner)!, '{invalid')
++    store.reloadPersistedDrafts()
++
++    expect(store.takeSessionDraft('shared-history', originalOwner).text).toBe('Keep valid memory')
++  })
++
++  it('restores an unowned draft only through an explicit copy without overwriting a target', async () => {
++    const store = await import('@/store/composer')
++    store.stashSessionDraft('shared-history', 'Recoverable legacy words', [])
++    expect(store.restoreUnassignedSessionDraft('shared-history', workOwner)).toBe(true)
++    expect(store.takeSessionDraft('shared-history', workOwner).text).toBe('Recoverable legacy words')
++    expect(store.takeSessionDraft('shared-history').text).toBe('Recoverable legacy words')
++    expect(store.restoreUnassignedSessionDraft('shared-history', workOwner)).toBe(false)
++    expect(store.restoreUnassignedSessionDraft('shared-history', undefined)).toBe(false)
++  })
++
++  it('scopes fresh-session adoption and gone-session undo by owner', async () => {
++    const store = await import('@/store/composer')
++    store.stashSessionDraft(null, 'Original fresh words', [], originalOwner)
++    store.stashSessionDraft(null, 'Work fresh words', [], workOwner)
++    store.announceNewSessionDraftKey('shared-history', originalOwner)
++    expect(store.adoptNewSessionDraft('shared-history', workOwner)).toBe(false)
++    expect(store.adoptNewSessionDraft('shared-history', originalOwner)).toBe(true)
++    expect(store.takeSessionDraft('shared-history', originalOwner).text).toBe('Original fresh words')
++    expect(store.takeSessionDraft(null, workOwner).text).toBe('Work fresh words')
++    store.announceGoneSessionDraft('shared-history', originalOwner)
++    expect(store.adoptGoneSessionDraft(workOwner)).toBe(false)
++    expect(store.adoptGoneSessionDraft(originalOwner)).toBe(true)
++    store.clearSessionDraft(null, workOwner)
++    expect(store.$restoredDraftNotice.get()?.owner).toEqual(originalOwner)
++    expect(store.undoRestoredDraft('Original fresh words', workOwner)).toBe(false)
++    expect(store.undoRestoredDraft('Original fresh words', originalOwner)).toBe(true)
++    expect(store.takeSessionDraft('shared-history', originalOwner).text).toBe('Original fresh words')
++  })
++
++  it('keeps two same-ID owner drafts separate through storage reload', async () => {
++    const first = await import('@/store/composer')
++    first.stashSessionDraft('shared-history', 'Original owner draft', [], originalOwner)
++    vi.resetModules()
++    const second = await import('@/store/composer')
++
++    expect(second.takeSessionDraft('shared-history', workOwner).text).toBe('')
++    second.stashSessionDraft('shared-history', 'Work owner draft', [], workOwner)
++    first.reloadPersistedDrafts()
++
++    expect(first.takeSessionDraft('shared-history', originalOwner).text).toBe('Original owner draft')
++    expect(second.takeSessionDraft('shared-history', workOwner).text).toBe('Work owner draft')
++  })
++
++  it('does not let another owner clear the original owner draft', async () => {
++    const first = await import('@/store/composer')
++    first.stashSessionDraft('shared-history', 'Keep original draft', [], originalOwner)
++    vi.resetModules()
++    const second = await import('@/store/composer')
++    second.clearSessionDraft('shared-history', workOwner)
++    first.reloadPersistedDrafts()
++
++    expect(first.takeSessionDraft('shared-history', originalOwner).text).toBe('Keep original draft')
++  })
++
++  it('still synchronizes two windows of the same owner', async () => {
++    const first = await import('@/store/composer')
++    first.stashSessionDraft('shared-history', 'Initial original draft', [], originalOwner)
++    vi.resetModules()
++    const second = await import('@/store/composer')
++    expect(second.takeSessionDraft('shared-history', originalOwner).text).toBe('Initial original draft')
++    second.stashSessionDraft('shared-history', 'Updated original draft', [], originalOwner)
++    first.reloadPersistedDrafts()
++
++    expect(first.takeSessionDraft('shared-history', originalOwner).text).toBe('Updated original draft')
++  })
++
++  it('keeps an unowned legacy draft recoverable without assigning it to another owner', async () => {
++    const store = await import('@/store/composer')
++    store.stashSessionDraft('shared-history', 'Unowned legacy draft', [])
++
++    expect(store.takeSessionDraft('shared-history', workOwner).text).toBe('')
++    store.stashSessionDraft('shared-history', 'Owned work draft', [], workOwner)
++    expect(store.takeSessionDraft('shared-history').text).toBe('Unowned legacy draft')
++  })
++})
+diff --git a/apps/desktop/src/lib/composer-draft-retry-owner.test.ts b/apps/desktop/src/lib/composer-draft-retry-owner.test.ts
+new file mode 100644
+index 00000000..eb4432c1
+--- /dev/null
++++ b/apps/desktop/src/lib/composer-draft-retry-owner.test.ts
+@@ -0,0 +1,40 @@
++import { beforeEach, describe, expect, it, vi } from 'vitest'
++
++const original = { connectionId: 'source-a', profile: 'default' }
++const work = { connectionId: 'source-a', profile: 'work' }
++
++beforeEach(() => {
++  localStorage.clear()
++  vi.resetModules()
++})
++
++describe('uncertain draft send identity ownership', () => {
++  it('does not offer another owner the original submission id', async () => {
++    const retry = await import('@/store/composer-draft-retry')
++    const snapshot = retry.draftRetry('submission-original', 'Original words', [])
++    retry.writeDraftRetry('shared-history', snapshot, original)
++
++    expect(retry.readDraftRetry('shared-history', work)).toBeUndefined()
++    expect(retry.readDraftRetry('shared-history', original)).toEqual(snapshot)
++  })
++
++  it('does not clear another owner identity and retains same-owner reload', async () => {
++    const first = await import('@/store/composer-draft-retry')
++    const snapshot = first.draftRetry('submission-work', 'Work words', [])
++    first.writeDraftRetry('shared-history', snapshot, work)
++    first.writeDraftRetry('shared-history', undefined, original)
++    vi.resetModules()
++    const second = await import('@/store/composer-draft-retry')
++
++    expect(second.readDraftRetry('shared-history', work)).toEqual(snapshot)
++  })
++
++  it('keeps unowned legacy identity separate instead of guessing a new owner', async () => {
++    const retry = await import('@/store/composer-draft-retry')
++    const legacy = retry.draftRetry('submission-legacy', 'Legacy words', [])
++    retry.writeDraftRetry('shared-history', legacy)
++
++    expect(retry.readDraftRetry('shared-history', original)).toBeUndefined()
++    expect(retry.readDraftRetry('shared-history')).toEqual(legacy)
++  })
++})
 diff --git a/apps/desktop/src/lib/keybinds/builtin-app-action.test.ts b/apps/desktop/src/lib/keybinds/builtin-app-action.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..6558f842b19d4b1087b5476c172afed0f8861003
@@ -14295,6 +16364,189 @@ index 4c55cbc72f7b514788c0297bae23a9a1124140d4..1cb52d4271837a0495f381bec5418b56
      return refuse(pluginId, 'unavailable', `${label} cannot run yet: the app shell is not ready.`)
    }
  
+diff --git a/apps/desktop/src/lib/session-ref-live-owner.test.ts b/apps/desktop/src/lib/session-ref-live-owner.test.ts
+new file mode 100644
+index 00000000..d90888f4
+--- /dev/null
++++ b/apps/desktop/src/lib/session-ref-live-owner.test.ts
+@@ -0,0 +1,177 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
++
++import { setApiRequestConnection, setApiRequestProfile, setSessionOwnerResolver } from '@/api/client'
++import { openSession } from '@/app/open-session'
++import { openSessionRef } from '@/components/assistant-ui/directive-text'
++import { notifyError } from '@/store/notifications'
++import { $activeSessionId, $selectedStoredSessionId, $sessions } from '@/store/session'
++import { $sessionTiles, clearAllSessionStates, recordSessionEventScope } from '@/store/session-states'
++
++vi.mock('@/store/notifications', () => ({ notifyError: vi.fn() }))
++
++const desktop = window as unknown as { hermesDesktop?: Window['hermesDesktop'] }
++const originalBridge = desktop.hermesDesktop
++const openWindow = vi.fn().mockResolvedValue({ ok: true })
++const originalOwner = { connectionId: 'source-a', profile: 'default' }
++
++beforeEach(() => {
++  clearAllSessionStates()
++  $sessionTiles.set([])
++  $activeSessionId.set(null)
++  $selectedStoredSessionId.set('reader')
++  $sessions.set([])
++  setApiRequestConnection('source-a')
++  setApiRequestProfile('default')
++  setSessionOwnerResolver(() => undefined)
++  openWindow.mockClear()
++  vi.mocked(notifyError).mockClear()
++  desktop.hermesDesktop = { openSessionWindow: openWindow } as unknown as Window['hermesDesktop']
++})
++
++afterEach(() => {
++  clearAllSessionStates()
++  $sessionTiles.set([])
++  $sessions.set([])
++  $activeSessionId.set(null)
++  $selectedStoredSessionId.set(null)
++  setApiRequestConnection(null)
++  setApiRequestProfile(null)
++  setSessionOwnerResolver(null)
++
++  if (originalBridge) {
++    desktop.hermesDesktop = originalBridge
++  } else {
++    delete desktop.hermesDesktop
++  }
++})
++
++describe('references preserve already-open history ownership', () => {
++  it('opens the other owner separately without retargeting a live tile', async () => {
++    const tile = { storedSessionId: 'shared-history', runtimeId: 'live-original', ownerRoute: originalOwner }
++    $sessionTiles.set([tile])
++
++    openSessionRef('work/shared-history')
++
++    await vi.waitFor(() =>
++      expect(openWindow).toHaveBeenCalledWith('shared-history', {
++        connectionId: 'source-a',
++        profile: 'work',
++        watch: undefined
++      })
++    )
++    expect($sessionTiles.get()).toEqual([tile])
++    expect($selectedStoredSessionId.get()).toBe('reader')
++  })
++
++  it('keeps an existing main session while opening the other profile', async () => {
++    $selectedStoredSessionId.set('shared-history')
++    $activeSessionId.set('main-original')
++
++    openSessionRef('work/shared-history')
++
++    await vi.waitFor(() =>
++      expect(openWindow).toHaveBeenCalledWith('shared-history', {
++        connectionId: 'source-a',
++        profile: 'work',
++        watch: undefined
++      })
++    )
++    expect($activeSessionId.get()).toBe('main-original')
++    expect($selectedStoredSessionId.get()).toBe('shared-history')
++  })
++
++  it('preserves the explicitly requested owner for an ordinary pop-out', async () => {
++    openSession('new-history', () => undefined, 'window', {
++      workspaceMode: 'sessions',
++      ownerRoute: { connectionId: 'source-a', profile: 'work' }
++    })
++
++    await vi.waitFor(() =>
++      expect(openWindow).toHaveBeenCalledWith('new-history', {
++        connectionId: 'source-a',
++        profile: 'work',
++        watch: undefined
++      })
++    )
++  })
++
++  it('distinguishes same-profile histories on different connections', async () => {
++    const tile = {
++      storedSessionId: 'shared-history',
++      runtimeId: 'remote-original',
++      ownerRoute: { connectionId: 'source-b', profile: 'work' }
++    }
++
++    $sessionTiles.set([tile])
++
++    openSessionRef('work/shared-history')
++
++    await vi.waitFor(() =>
++      expect(openWindow).toHaveBeenCalledWith('shared-history', {
++        connectionId: 'source-a',
++        profile: 'work',
++        watch: undefined
++      })
++    )
++    expect($sessionTiles.get()).toEqual([tile])
++  })
++
++  it('preserves legacy profile-only ownership when opening separately', async () => {
++    setApiRequestConnection(null)
++    const tile = { storedSessionId: 'shared-history', runtimeId: 'legacy-original', ownerProfile: 'default' }
++    $sessionTiles.set([tile])
++
++    openSessionRef('work/shared-history')
++
++    await vi.waitFor(() =>
++      expect(openWindow).toHaveBeenCalledWith('shared-history', {
++        connectionId: null,
++        profile: 'work',
++        watch: undefined
++      })
++    )
++    expect($sessionTiles.get()).toEqual([tile])
++  })
++
++  it('leaves the live session intact and reports when the window bridge is unavailable', async () => {
++    delete desktop.hermesDesktop
++    const tile = { storedSessionId: 'shared-history', runtimeId: 'live-original', ownerRoute: originalOwner }
++    $sessionTiles.set([tile])
++
++    openSessionRef('work/shared-history')
++
++    await vi.waitFor(() => expect(notifyError).toHaveBeenCalledTimes(1))
++    expect($sessionTiles.get()).toEqual([tile])
++    expect(openWindow).not.toHaveBeenCalled()
++  })
++
++  it('uses the live runtime owner ahead of a conflicting same-ID cached row', async () => {
++    $selectedStoredSessionId.set('shared-history')
++    $activeSessionId.set('main-original')
++    $sessions.set([{ id: 'shared-history', connection_id: 'source-a', profile: 'work' } as never])
++    recordSessionEventScope({ session_id: 'main-original', connectionId: 'source-a', profile: 'default' })
++
++    openSessionRef('work/shared-history')
++
++    await vi.waitFor(() =>
++      expect(openWindow).toHaveBeenCalledWith('shared-history', {
++        connectionId: 'source-a',
++        profile: 'work',
++        watch: undefined
++      })
++    )
++    expect($activeSessionId.get()).toBe('main-original')
++  })
++
++  it('focuses a same-owner tile without creating a duplicate window', async () => {
++    const tile = { storedSessionId: 'shared-history', runtimeId: 'live-original', ownerRoute: originalOwner }
++    $sessionTiles.set([tile])
++
++    openSessionRef('default/shared-history')
++
++    await vi.waitFor(() => expect($sessionTiles.get()).toEqual([expect.objectContaining(tile)]))
++    await new Promise(resolve => setTimeout(resolve, 20))
++    expect(openWindow).not.toHaveBeenCalled()
++    expect($selectedStoredSessionId.get()).toBe('reader')
++  })
++})
 diff --git a/apps/desktop/src/lib/session-ref-routing.test.ts b/apps/desktop/src/lib/session-ref-routing.test.ts
 new file mode 100644
 index 00000000..f22e4672
@@ -19797,6 +22049,1091 @@ index 0000000000000000000000000000000000000000..85a4417258514779393b97603bf1d62e
 +    </section>
 +  )
 +}
+diff --git a/apps/desktop/src/sdk/composer-owner.test.ts b/apps/desktop/src/sdk/composer-owner.test.ts
+new file mode 100644
+index 00000000..2c84fb0f
+--- /dev/null
++++ b/apps/desktop/src/sdk/composer-owner.test.ts
+@@ -0,0 +1,56 @@
++import { afterEach, expect, it } from 'vitest'
++
++import { setApiRequestConnection, setApiRequestProfile } from '@/api/client'
++import { clearSessionDraft, stashSessionDraft } from '@/store/composer'
++import { $activeSessionId, $selectedStoredSessionId, $sessions } from '@/store/session'
++import { clearAllSessionStates, recordSessionEventScope } from '@/store/session-states'
++
++import { composerHost } from './composer'
++
++const id = 'sdk-owned-history'
++const original = { connectionId: 'source-a', profile: 'default' }
++const work = { connectionId: 'source-a', profile: 'work' }
++
++afterEach(() => {
++  clearAllSessionStates()
++  $sessions.set([])
++  $activeSessionId.set(null)
++  $selectedStoredSessionId.set(null)
++
++  for (const owner of [original, work, undefined]) {
++    clearSessionDraft(id, owner)
++  }
++
++  setApiRequestConnection(null)
++  setApiRequestProfile(null)
++})
++
++it('uses the displayed runtime owner for an unmounted persisted-stash fallback', async () => {
++  setApiRequestConnection('source-a')
++  setApiRequestProfile('default')
++  $activeSessionId.set('sdk-live-original')
++  $selectedStoredSessionId.set(id)
++  $sessions.set([{ id, profile: 'work', connection_id: 'source-a' } as never])
++  recordSessionEventScope({ session_id: 'sdk-live-original', connectionId: 'source-a', profile: 'default' })
++  stashSessionDraft(id, 'Original unsent words', [], original)
++  stashSessionDraft(id, 'Other owner words', [], work)
++
++  await expect(composerHost.getDraft(id)).resolves.toBe('Original unsent words')
++})
++
++it('does not reveal legacy unassigned text through the plugin fallback', async () => {
++  stashSessionDraft(id, 'Unassigned private words', [])
++
++  await expect(composerHost.getDraft(id)).resolves.toBeNull()
++})
++
++it('captures fallback ownership before waiting for a mounted composer response', async () => {
++  setApiRequestConnection('source-a')
++  setApiRequestProfile('default')
++  stashSessionDraft(id, 'Original fallback words', [], original)
++  stashSessionDraft(id, 'Other fallback words', [], work)
++  const pending = composerHost.getDraft(id)
++  setApiRequestProfile('work')
++
++  await expect(pending).resolves.toBe('Original fallback words')
++})
+diff --git a/apps/desktop/src/sdk/composer.ts b/apps/desktop/src/sdk/composer.ts
+index 565db368..ac4bf2bd 100644
+--- a/apps/desktop/src/sdk/composer.ts
++++ b/apps/desktop/src/sdk/composer.ts
+@@ -11,2 +11,3 @@ import { freshDraftScope, takeSessionDraft } from '@/store/composer'
+ import { $activeSessionId, $selectedStoredSessionId } from '@/store/session'
++import { sessionDraftOwner } from '@/store/session-draft-owner'
+ import { $sessionStates } from '@/store/session-states'
+@@ -72,2 +73,4 @@ export const composerHost = {
+     const { ids, stored } = resolveComposerAddress(sessionId)
++    const ownerId = sessionId === $selectedStoredSessionId.get() ? $activeSessionId.get() || sessionId : sessionId
++    const owner = sessionDraftOwner(ownerId)
+ 
+@@ -85,3 +88,3 @@ export const composerHost = {
+ 
+-    return takeSessionDraft(stored).text || null
++    return takeSessionDraft(stored, owner).text || null
+   },
+diff --git a/apps/desktop/src/sdk/index.test.ts b/apps/desktop/src/sdk/index.test.ts
+index 24bf8b26..79cefb61 100644
+--- a/apps/desktop/src/sdk/index.test.ts
++++ b/apps/desktop/src/sdk/index.test.ts
+@@ -322,3 +322,3 @@ describe('host.composer draft facade', () => {
+ 
+-    stashSessionDraft('sess-stash', 'stashed draft', [])
++    stashSessionDraft('sess-stash', 'stashed draft', [], 'default')
+     // The stash is keyed by the durable id; a plugin holding the runtime id
+@@ -326,3 +326,3 @@ describe('host.composer draft facade', () => {
+     publishSessionState('rt-stash', createClientSessionState('stored-stash'))
+-    stashSessionDraft('stored-stash', 'runtime-addressed', [])
++    stashSessionDraft('stored-stash', 'runtime-addressed', [], 'default')
+ 
+diff --git a/apps/desktop/src/store/composer-draft-lifecycle.ts b/apps/desktop/src/store/composer-draft-lifecycle.ts
+new file mode 100644
+index 00000000..f31f3ad0
+--- /dev/null
++++ b/apps/desktop/src/store/composer-draft-lifecycle.ts
+@@ -0,0 +1,93 @@
++import { clearSessionDraft, ownedDraftScopes, stashSessionDraft, takeSessionDraft } from './composer'
++import { draftOwnerKey, type OwnedDraftScope } from './composer-draft-owner'
++import { ownedDraftRetryScopes, readDraftRetry, writeDraftRetry } from './composer-draft-retry'
++import { dropStatusDrawersForProfile, migrateStatusDrawersForProfile } from './composer-status-drawer'
++import type { SessionOwnerScope } from './session-request-router'
++
++const scopes = () => [
++  ...new Map(
++    [...ownedDraftScopes(), ...ownedDraftRetryScopes()].map(scope => [
++      JSON.stringify([scope.ownerKey, scope.scope]),
++      scope
++    ])
++  ).values()
++]
++
++const profileKey = (value?: string) => value?.trim() || 'default'
++
++function renamedOwner(owner: NonNullable<SessionOwnerScope>, from: string, to: string): NonNullable<SessionOwnerScope> {
++  if (typeof owner === 'string') {
++    return owner === from ? to : owner
++  }
++
++  if (owner.connectionId && owner.connectionId !== 'local') {
++    return owner
++  }
++
++  return {
++    ...owner,
++    profile: owner.profile === from ? to : owner.profile,
++    targetProfile: (owner.targetProfile || owner.profile) === from ? to : owner.targetProfile || owner.profile
++  }
++}
++
++function migrateDraft(scope: OwnedDraftScope, destination: NonNullable<SessionOwnerScope>): void {
++  if (draftOwnerKey(scope.owner) === draftOwnerKey(destination)) {
++    return
++  }
++
++  const source = takeSessionDraft(scope.scope, scope.owner)
++  const target = takeSessionDraft(scope.scope, destination)
++  const retry = readDraftRetry(scope.scope, scope.owner)
++  const targetRetry = readDraftRetry(scope.scope, destination)
++
++  // A rename must never overwrite an existing draft or a different uncertain send.
++  if (target.text || target.attachments.length || (targetRetry && targetRetry.id !== retry?.id)) {
++    return
++  }
++
++  if (!stashSessionDraft(scope.scope, source.text, source.attachments, destination)) {
++    return
++  }
++
++  if (retry && !writeDraftRetry(scope.scope, retry, destination)) {
++    return
++  }
++
++  clearSessionDraft(scope.scope, scope.owner)
++  writeDraftRetry(scope.scope, undefined, scope.owner)
++}
++
++export function migrateComposerStateForProfile(from: string, to: string): void {
++  migrateStatusDrawersForProfile(from, to)
++
++  for (const scope of scopes()) {
++    migrateDraft(scope, renamedOwner(scope.owner, from, to))
++  }
++}
++
++export function dropComposerStateForProfile(
++  profile: string,
++  route?: { connectionId?: string; profile?: string; targetProfile?: string },
++  ambientConnection = 'local'
++): void {
++  dropStatusDrawersForProfile(profile, route)
++  const connection = route?.connectionId?.trim() || ambientConnection
++
++  for (const scope of scopes()) {
++    const owner = scope.owner
++    const ownerConnection = typeof owner === 'string' ? 'local' : owner.connectionId || 'local'
++    const ownerProfile = typeof owner === 'string' ? owner : owner.profile
++    const ownerTarget = typeof owner === 'string' ? owner : owner.targetProfile || owner.profile
++
++    const matchesProfile = route
++      ? profileKey(ownerProfile) === profileKey(route.profile) &&
++        (!route.targetProfile || profileKey(ownerTarget) === profileKey(route.targetProfile))
++      : profileKey(ownerProfile) === profile || profileKey(ownerTarget) === profile
++
++    if (ownerConnection === connection && matchesProfile) {
++      clearSessionDraft(scope.scope, owner)
++      writeDraftRetry(scope.scope, undefined, owner)
++    }
++  }
++}
+diff --git a/apps/desktop/src/store/composer-draft-owner.ts b/apps/desktop/src/store/composer-draft-owner.ts
+new file mode 100644
+index 00000000..4a721ad5
+--- /dev/null
++++ b/apps/desktop/src/store/composer-draft-owner.ts
+@@ -0,0 +1,162 @@
++import type { SessionOwnerScope } from './session-request-router'
++
++export const OWNED_DRAFT_STORAGE_PREFIX = 'hermes:composer-draft:v4:'
++export const MAX_PERSISTED_DRAFTS = 50
++
++type OwnerTuple = [string | null, string, string]
++
++const profileKey = (profile: string | undefined) => profile?.trim() || 'default'
++
++export function draftOwnerKey(owner: SessionOwnerScope): string | undefined {
++  if (owner == null) {
++    return undefined
++  }
++
++  const parts: OwnerTuple =
++    typeof owner === 'string'
++      ? [null, profileKey(owner), profileKey(owner)]
++      : [owner.connectionId.trim(), profileKey(owner.profile), profileKey(owner.targetProfile ?? owner.profile)]
++
++  return JSON.stringify(parts)
++}
++
++export function draftIdentityKey(scope: string, owner: SessionOwnerScope): string | undefined {
++  const ownerKey = draftOwnerKey(owner)
++
++  return ownerKey === undefined ? undefined : JSON.stringify([ownerKey, scope])
++}
++
++export function ownedDraftKey(scope: string, owner: SessionOwnerScope): string | undefined {
++  const identity = draftIdentityKey(scope, owner)
++
++  return identity === undefined ? undefined : OWNED_DRAFT_STORAGE_PREFIX + identity
++}
++
++export interface OwnedDraftScope {
++  ownerKey: string
++  scope: string
++  owner: NonNullable<SessionOwnerScope>
++}
++
++export function parseOwnedDraftKey(key: string): OwnedDraftScope | undefined {
++  if (!key.startsWith(OWNED_DRAFT_STORAGE_PREFIX)) {
++    return undefined
++  }
++
++  try {
++    const parts: unknown = JSON.parse(key.slice(OWNED_DRAFT_STORAGE_PREFIX.length))
++
++    if (!Array.isArray(parts) || parts.length !== 2 || typeof parts[0] !== 'string' || typeof parts[1] !== 'string') {
++      return undefined
++    }
++
++    const owner: unknown = JSON.parse(parts[0])
++
++    if (
++      !Array.isArray(owner) ||
++      owner.length !== 3 ||
++      (owner[0] !== null && typeof owner[0] !== 'string') ||
++      typeof owner[1] !== 'string' ||
++      typeof owner[2] !== 'string'
++    ) {
++      return undefined
++    }
++
++    const [connectionId, profile, targetProfile] = owner as OwnerTuple
++
++    // Legacy profile-only owners never have a distinct backend alias.
++    if (connectionId === null && profile !== targetProfile) {
++      return undefined
++    }
++
++    return {
++      ownerKey: parts[0],
++      scope: parts[1],
++      owner: connectionId === null ? profile : { connectionId, profile, targetProfile }
++    }
++  } catch {
++    return undefined
++  }
++}
++
++interface StoredOwnedDraft {
++  key: string
++  text: string
++  updatedAt: number
++}
++
++/** Invalid values remain in storage and cannot erase a valid in-memory copy. */
++export function loadOwnedDraftTexts(): { entries: StoredOwnedDraft[]; observedKeys: Set<string> } | undefined {
++  try {
++    const entries: StoredOwnedDraft[] = []
++    const observedKeys = new Set<string>()
++
++    for (let i = 0; i < window.localStorage.length; i++) {
++      const key = window.localStorage.key(i)
++
++      if (!key || !parseOwnedDraftKey(key)) {
++        continue
++      }
++
++      observedKeys.add(key)
++      const value = readOwnedDraftValue(window.localStorage.getItem(key))
++
++      if (value) {
++        entries.push({ key, ...value })
++      }
++    }
++
++    return { entries: entries.sort((a, b) => a.updatedAt - b.updatedAt), observedKeys }
++  } catch {
++    return undefined
++  }
++}
++
++export function readOwnedDraftValue(value: string | null): { text: string; updatedAt: number } | undefined {
++  try {
++    const parsed = JSON.parse(value ?? 'null') as { text?: unknown; updatedAt?: unknown } | null
++
++    return parsed && typeof parsed.text === 'string'
++      ? { text: parsed.text, updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0 }
++      : undefined
++  } catch {
++    return undefined
++  }
++}
++
++/** Independent keys make a stale window unable to overwrite another owner's edits. */
++export function persistOwnedDraftText(key: string, text: string): { saved: boolean; retired: string[] } {
++  try {
++    const existed = window.localStorage.getItem(key) !== null
++
++    if (!text) {
++      window.localStorage.removeItem(key)
++
++      return { saved: true, retired: [] }
++    }
++
++    window.localStorage.setItem(key, JSON.stringify({ text, updatedAt: Date.now() }))
++
++    // Updating a draft is the hot typing path; scan retention only for a newly saved scope.
++    return { saved: true, retired: existed ? [] : retireOldOwnedDrafts(key) }
++  } catch {
++    return { saved: false, retired: [] }
++  }
++}
++
++function retireOldOwnedDrafts(currentKey: string): string[] {
++  const owner = parseOwnedDraftKey(currentKey)?.ownerKey
++  const rows = loadOwnedDraftTexts()?.entries.filter(row => parseOwnedDraftKey(row.key)?.ownerKey === owner) ?? []
++  const excess = Math.max(0, rows.length - MAX_PERSISTED_DRAFTS)
++
++  const retired = rows
++    .filter(row => row.key !== currentKey)
++    .slice(0, excess)
++    .map(row => row.key)
++
++  for (const key of retired) {
++    window.localStorage.removeItem(key)
++  }
++
++  return retired
++}
+diff --git a/apps/desktop/src/store/composer-draft-retry.ts b/apps/desktop/src/store/composer-draft-retry.ts
+index ef73e26c..74bd8667 100644
+--- a/apps/desktop/src/store/composer-draft-retry.ts
++++ b/apps/desktop/src/store/composer-draft-retry.ts
+@@ -3,2 +3,9 @@ import { sanitizeComposerInput } from '@/lib/composer-input-sanitize'
+ import { type ComposerAttachment, freshDraftScope } from './composer'
++import {
++  draftIdentityKey,
++  OWNED_DRAFT_STORAGE_PREFIX,
++  type OwnedDraftScope,
++  parseOwnedDraftKey
++} from './composer-draft-owner'
++import type { SessionOwnerScope } from './session-request-router'
+ 
+@@ -17,2 +24,3 @@ export interface ComposerDraftRetry {
+ const RETRY_PREFIX = 'hermes:composer-draft-retry:v1:'
++const OWNED_RETRY_PREFIX = 'hermes:composer-draft-retry:v2:'
+ 
+@@ -44,5 +52,15 @@ const scopeKey = (scope: string | null | undefined) => scope?.trim() || freshDra
+ 
+-export function readDraftRetry(scope: string | null | undefined): ComposerDraftRetry | undefined {
++const retryStorageKey = (scope: string | null | undefined, owner: SessionOwnerScope): string => {
++  const raw = scopeKey(scope)
++  const identity = draftIdentityKey(raw, owner)
++
++  return identity === undefined ? RETRY_PREFIX + raw : OWNED_RETRY_PREFIX + identity
++}
++
++export function readDraftRetry(
++  scope: string | null | undefined,
++  owner?: SessionOwnerScope
++): ComposerDraftRetry | undefined {
+   try {
+-    const parsed: unknown = JSON.parse(window.localStorage.getItem(RETRY_PREFIX + scopeKey(scope)) || 'null')
++    const parsed: unknown = JSON.parse(window.localStorage.getItem(retryStorageKey(scope, owner)) || 'null')
+     const retry = parsed as ComposerDraftRetry | null
+@@ -57,12 +75,58 @@ export function readDraftRetry(scope: string | null | undefined): ComposerDraftR
+ 
+-export function writeDraftRetry(scope: string | null | undefined, retry: ComposerDraftRetry | undefined): void {
++export function writeDraftRetry(
++  scope: string | null | undefined,
++  retry: ComposerDraftRetry | undefined,
++  owner?: SessionOwnerScope
++): boolean {
+   try {
+     if (retry) {
+-      window.localStorage.setItem(RETRY_PREFIX + scopeKey(scope), JSON.stringify(retry))
++      window.localStorage.setItem(retryStorageKey(scope, owner), JSON.stringify(retry))
+     } else {
+-      window.localStorage.removeItem(RETRY_PREFIX + scopeKey(scope))
++      window.localStorage.removeItem(retryStorageKey(scope, owner))
+     }
++
++    return true
+   } catch {
+-    // Best-effort like the draft text itself: without it a reload sends the words as new.
++    // Preserve the old record when a profile migration cannot save the new identity.
++    return false
+   }
+ }
++
++/** Includes orphan retry keys left by an interrupted reload; never treats legacy keys as owned. */
++export function ownedDraftRetryScopes(): OwnedDraftScope[] {
++  try {
++    const result: OwnedDraftScope[] = []
++
++    for (let i = 0; i < window.localStorage.length; i++) {
++      const key = window.localStorage.key(i)
++
++      if (key?.startsWith(OWNED_RETRY_PREFIX)) {
++        const scope = parseOwnedDraftKey(OWNED_DRAFT_STORAGE_PREFIX + key.slice(OWNED_RETRY_PREFIX.length))
++
++        if (scope) {
++          result.push(scope)
++        }
++      }
++    }
++
++    return result
++  } catch {
++    return []
++  }
++}
++
++/** Copy before rekeying the draft; the caller retires the source only after both writes succeed. */
++export function copyDraftRetry(from: string | null | undefined, to: string, owner?: SessionOwnerScope): boolean {
++  const source = readDraftRetry(from, owner)
++  const target = readDraftRetry(to, owner)
++
++  if (!source) {
++    return target === undefined
++  }
++
++  if (target && target.id !== source.id) {
++    return false
++  }
++
++  return writeDraftRetry(to, source, owner)
++}
+diff --git a/apps/desktop/src/store/composer.ts b/apps/desktop/src/store/composer.ts
+index 2c4c553b..1d6cf5e1 100644
+--- a/apps/desktop/src/store/composer.ts
++++ b/apps/desktop/src/store/composer.ts
+@@ -6,3 +6,15 @@ import { persistString, storedString } from '@/lib/storage'
+ 
++import {
++  draftOwnerKey,
++  loadOwnedDraftTexts,
++  MAX_PERSISTED_DRAFTS,
++  OWNED_DRAFT_STORAGE_PREFIX,
++  ownedDraftKey,
++  parseOwnedDraftKey,
++  persistOwnedDraftText,
++  readOwnedDraftValue
++} from './composer-draft-owner'
++import { copyDraftRetry, writeDraftRetry } from './composer-draft-retry'
+ import { recordDislike, recordFriction } from './desktop-metrics'
++import type { SessionOwnerScope } from './session-request-router'
+ 
+@@ -242,4 +254,2 @@ export const SESSION_DRAFTS_STORAGE_KEY = 'hermes:composer-drafts:v3'
+ export const NEW_SESSION_DRAFT_KEY = '__new__'
+-const MAX_PERSISTED_DRAFTS = 50
+-const EMPTY_SESSION_DRAFT: SessionDraft = { attachments: [], text: '' }
+ 
+@@ -283,3 +293,9 @@ export const isFreshDraftScope = (key: string | null | undefined): boolean =>
+ // active fresh bucket instead of the shared legacy one.
+-const draftKey = (scope: string | null | undefined) => scope?.trim() || freshDraftScope()
++const draftKey = (scope: string | null | undefined, owner?: SessionOwnerScope) => {
++  const raw = scope?.trim() || freshDraftScope()
++
++  return ownedDraftKey(raw, owner) ?? raw
++}
++
++const hasDraftOwner = (owner: SessionOwnerScope) => owner != null
+ 
+@@ -290,2 +306,3 @@ export interface RestoredDraftNotice {
+   fromKey: string
++  owner?: SessionOwnerScope
+   /** The text as restored — Undo only applies while the draft still equals it. */
+@@ -301,3 +318,3 @@ const cloneDraft = (draft: SessionDraft): SessionDraft => ({
+ 
+-function loadPersistedDraftTexts(): [string, SessionDraft][] {
++function loadPersistedDraftTexts(): [string, SessionDraft][] | undefined {
+   try {
+@@ -309,8 +326,13 @@ function loadPersistedDraftTexts(): [string, SessionDraft][] {
+ 
+-    return Object.entries(JSON.parse(raw) as Record<string, string>).map(([key, text]) => [
+-      key,
+-      { attachments: [], text }
+-    ])
++    const values: unknown = JSON.parse(raw)
++
++    if (!values || typeof values !== 'object' || Array.isArray(values)) {
++      return undefined
++    }
++
++    return Object.entries(values)
++      .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
++      .map(([key, text]) => [key, { attachments: [], text }])
+   } catch {
+-    return []
++    return undefined
+   }
+@@ -318,3 +340,15 @@ function loadPersistedDraftTexts(): [string, SessionDraft][] {
+ 
+-const draftsBySession = new Map<string, SessionDraft>(loadPersistedDraftTexts())
++const initialLegacyDrafts = loadPersistedDraftTexts() ?? []
++const initialOwnedDrafts = loadOwnedDraftTexts()
++const draftsBySession = new Map<string, SessionDraft>(initialLegacyDrafts)
++
++const ownedDraftsBySession = new Map<string, SessionDraft>(
++  initialOwnedDrafts?.entries.map(row => [row.key, { text: row.text, attachments: [] }])
++)
++
++const legacyPersistedKeys = new Set(initialLegacyDrafts.map(([key]) => key))
++const ownedPersistedKeys = new Set(initialOwnedDrafts?.observedKeys)
++const unsavedLegacyKeys = new Set<string>()
++const unsavedOwnedKeys = new Set<string>()
++const draftsFor = (owner: SessionOwnerScope) => (hasDraftOwner(owner) ? ownedDraftsBySession : draftsBySession)
+ 
+@@ -333,13 +367,15 @@ export function patchMainComposerAttachmentOccurrence(
+ 
+-  for (const [key, draft] of draftsBySession) {
+-    const index = attachmentOccurrenceIndex(draft.attachments, expected)
++  for (const map of [draftsBySession, ownedDraftsBySession]) {
++    for (const [key, draft] of map) {
++      const index = attachmentOccurrenceIndex(draft.attachments, expected)
+ 
+-    if (index < 0) {
+-      continue
+-    }
++      if (index < 0) {
++        continue
++      }
+ 
+-    const attachments = [...draft.attachments]
+-    attachments[index] = { ...attachments[index]!, ...patch }
+-    draftsBySession.set(key, { ...draft, attachments })
+-    updated = true
++      const attachments = [...draft.attachments]
++      attachments[index] = { ...attachments[index]!, ...patch }
++      map.set(key, { ...draft, attachments })
++      updated = true
++    }
+   }
+@@ -368,11 +404,20 @@ export const $draftTitles = atom<Record<string, string>>(
+ 
++export const $ownedDraftTitles = atom<Record<string, string>>(
++  Object.fromEntries([...ownedDraftsBySession].map(([key, draft]) => [key, deriveDraftTitle(draft.text)]))
++)
++
+ /** Read one draft's title out of the map — for a `useStoreSelector`, so a tab
+  *  repaints on its OWN rename rather than on every draft's. */
+-export const draftTitleIn = (titles: Record<string, string>, scope: string | null | undefined): string =>
+-  titles[draftKey(scope)] ?? ''
++export const draftTitleIn = (
++  titles: Record<string, string>,
++  scope: string | null | undefined,
++  owner?: SessionOwnerScope
++): string => titles[draftKey(scope, owner)] ?? ''
+ 
+-export const draftTitleFor = (scope: string | null | undefined): string => draftTitleIn($draftTitles.get(), scope)
++export const draftTitleFor = (scope: string | null | undefined, owner?: SessionOwnerScope): string =>
++  draftTitleIn((hasDraftOwner(owner) ? $ownedDraftTitles : $draftTitles).get(), scope, owner)
+ 
+-function publishDraftTitle(key: string, title: string): void {
+-  const current = $draftTitles.get()
++function publishDraftTitle(key: string, title: string, owned = false): void {
++  const atom = owned ? $ownedDraftTitles : $draftTitles
++  const current = atom.get()
+ 
+@@ -390,3 +435,3 @@ function publishDraftTitle(key: string, title: string): void {
+ 
+-  $draftTitles.set(next)
++  atom.set(next)
+ }
+@@ -405,26 +450,102 @@ function publishDraftTitle(key: string, title: string): void {
+  */
+-export function reloadPersistedDrafts(): void {
+-  const incoming = new Map(loadPersistedDraftTexts())
++function mergePersistedDrafts(
++  map: Map<string, SessionDraft>,
++  entries: [string, SessionDraft][],
++  observed: Set<string>,
++  persisted: Set<string>,
++  unsaved: Set<string>,
++  owned: boolean
++): void {
++  for (const [key, draft] of entries) {
++    if (unsaved.has(key)) {
++      continue
++    }
+ 
+-  for (const [key, draft] of incoming) {
+-    const local = draftsBySession.get(key)
+-    draftsBySession.set(key, local?.attachments.length ? { ...local, text: draft.text } : draft)
+-    publishDraftTitle(key, deriveDraftTitle(draft.text))
++    const local = map.get(key)
++    map.set(key, local?.attachments.length ? { ...local, text: draft.text } : draft)
++    publishDraftTitle(key, deriveDraftTitle(draft.text), owned)
+   }
+ 
+-  // A key that vanished from storage was cleared (sent) in the other window.
+-  for (const key of [...draftsBySession.keys()]) {
+-    if (!incoming.has(key)) {
+-      draftsBySession.delete(key)
+-      publishDraftTitle(key, '')
++  for (const key of map.keys()) {
++    if (persisted.has(key) && !observed.has(key) && !unsaved.has(key)) {
++      map.delete(key)
++      publishDraftTitle(key, '', owned)
+     }
+   }
++
++  persisted.clear()
++
++  for (const key of observed) {
++    persisted.add(key)
++  }
++}
++
++export function reloadPersistedDrafts(): void {
++  const legacy = loadPersistedDraftTexts()
++
++  if (legacy) {
++    mergePersistedDrafts(
++      draftsBySession,
++      legacy,
++      new Set(legacy.map(([key]) => key)),
++      legacyPersistedKeys,
++      unsavedLegacyKeys,
++      false
++    )
++  }
++
++  const owned = loadOwnedDraftTexts()
++
++  if (owned) {
++    mergePersistedDrafts(
++      ownedDraftsBySession,
++      owned.entries.map(row => [row.key, { text: row.text, attachments: [] }]),
++      owned.observedKeys,
++      ownedPersistedKeys,
++      unsavedOwnedKeys,
++      true
++    )
++  }
++}
++
++function syncOwnedDraftFromStorage(key: string, raw: string | null): void {
++  if (!parseOwnedDraftKey(key) || unsavedOwnedKeys.has(key)) {
++    return
++  }
++
++  const value = readOwnedDraftValue(raw)
++
++  if (raw !== null && !value) {
++    return
++  }
++
++  if (value) {
++    const local = ownedDraftsBySession.get(key)
++    ownedDraftsBySession.set(key, { text: value.text, attachments: local?.attachments ?? [] })
++    ownedPersistedKeys.add(key)
++  } else {
++    ownedDraftsBySession.delete(key)
++    ownedPersistedKeys.delete(key)
++  }
++
++  publishDraftTitle(key, deriveDraftTitle(value?.text ?? ''), true)
+ }
+ 
+-// localStorage `storage` events fire across Electron BrowserWindows of the
+-// same origin, so the other window's write is the sync signal.
+ if (typeof window !== 'undefined') {
+   window.addEventListener('storage', event => {
+-    if (event.key === SESSION_DRAFTS_STORAGE_KEY) {
+-      reloadPersistedDrafts()
++    if (event.key?.startsWith(OWNED_DRAFT_STORAGE_PREFIX)) {
++      syncOwnedDraftFromStorage(event.key, event.newValue)
++    } else if (event.key === SESSION_DRAFTS_STORAGE_KEY) {
++      const legacy = loadPersistedDraftTexts()
++
++      if (legacy) {
++        mergePersistedDrafts(
++          draftsBySession,
++          legacy,
++          new Set(legacy.map(([key]) => key)),
++          legacyPersistedKeys,
++          unsavedLegacyKeys,
++          false
++        )
++      }
+     }
+@@ -473,3 +594,3 @@ export function onComposerDraftSyncRequest(handler: (detail: ComposerDraftSyncDe
+ 
+-function persistDraftTexts() {
++function persistDraftTexts(): boolean {
+   try {
+@@ -485,4 +606,6 @@ function persistDraftTexts() {
+     }
++
++    return true
+   } catch {
+-    // Best-effort only — quota/private-mode must never break typing.
++    return false
+   }
+@@ -490,13 +613,21 @@ function persistDraftTexts() {
+ 
+-export function stashSessionDraft(scope: string | null | undefined, text: string, attachments: ComposerAttachment[]) {
+-  const key = draftKey(scope)
+-
+-  // Delete-then-set keeps MRU order for MAX_PERSISTED_DRAFTS eviction.
+-  draftsBySession.delete(key)
++export function stashSessionDraft(
++  scope: string | null | undefined,
++  text: string,
++  attachments: ComposerAttachment[],
++  owner?: SessionOwnerScope
++) {
++  const key = draftKey(scope, owner)
++  const owned = hasDraftOwner(owner)
++  const map = draftsFor(owner)
++  const unsaved = owned ? unsavedOwnedKeys : unsavedLegacyKeys
++  const persisted = owned ? ownedPersistedKeys : legacyPersistedKeys
++  map.delete(key)
+ 
+   if (text.trim() || attachments.length > 0) {
+-    draftsBySession.set(key, cloneDraft({ attachments, text }))
+-  } else if (isFreshDraftScope(key)) {
+-    // The fresh draft was sent or emptied — a restore notice has nothing left
+-    // to undo.
++    map.set(key, cloneDraft({ attachments, text }))
++  } else if (
++    isFreshDraftScope(scope?.trim() || freshDraftScope()) &&
++    draftOwnerKey($restoredDraftNotice.get()?.owner) === draftOwnerKey(owner)
++  ) {
+     $restoredDraftNotice.set(null)
+@@ -504,21 +635,86 @@ export function stashSessionDraft(scope: string | null | undefined, text: string
+ 
+-  persistDraftTexts()
+-  publishDraftTitle(key, deriveDraftTitle(text))
++  const result = owned ? persistOwnedDraftText(key, text) : { saved: persistDraftTexts(), retired: [] }
++
++  if (result.saved) {
++    unsaved.delete(key)
++
++    if (text) {
++      persisted.add(key)
++    } else {
++      persisted.delete(key)
++    }
++  } else {
++    unsaved.add(key)
++  }
++
++  for (const retired of result.retired) {
++    if (!map.get(retired)?.attachments.length) {
++      map.delete(retired)
++    }
++
++    persisted.delete(retired)
++    publishDraftTitle(retired, '', true)
++  }
++
++  publishDraftTitle(key, deriveDraftTitle(text), owned)
++
++  return result.saved
+ }
+ 
+-export function takeSessionDraft(scope: string | null | undefined): SessionDraft {
+-  const stashed = draftsBySession.get(draftKey(scope))
++export function takeSessionDraft(scope: string | null | undefined, owner?: SessionOwnerScope): SessionDraft {
++  const stashed = draftsFor(owner).get(draftKey(scope, owner))
+ 
+-  return stashed ? cloneDraft(stashed) : EMPTY_SESSION_DRAFT
++  return stashed ? cloneDraft(stashed) : { attachments: [], text: '' }
+ }
+ 
+-export const clearSessionDraft = (scope: string | null | undefined) => stashSessionDraft(scope, '', [])
++export const clearSessionDraft = (scope: string | null | undefined, owner?: SessionOwnerScope) =>
++  stashSessionDraft(scope, '', [], owner)
+ 
+-/**
+- * Stored draft scopes that hold content, excluding the new-chat key. The
+- * dead-session prune sweeps these to discard drafts whose sessions no longer
+- * exist on the backend; the new-chat draft is never a session reference.
+- */
+-export function stashedDraftScopes(): string[] {
+-  return [...draftsBySession.keys()].filter(key => key !== NEW_SESSION_DRAFT_KEY)
++/** Raw backend ids only; the owner namespace never escapes into a session RPC. */
++export function stashedDraftScopes(owner?: SessionOwnerScope): string[] {
++  if (!hasDraftOwner(owner)) {
++    return [...draftsBySession.keys()].filter(key => key !== NEW_SESSION_DRAFT_KEY)
++  }
++
++  const ownerKey = draftOwnerKey(owner)
++
++  return [...ownedDraftsBySession.keys()].flatMap(key => {
++    const parsed = parseOwnedDraftKey(key)
++
++    return parsed && parsed.ownerKey === ownerKey && !isFreshDraftScope(parsed.scope) ? [parsed.scope] : []
++  })
++}
++
++/** Exact owner identities only; draft contents remain private to the normal read API. */
++export function ownedDraftScopes() {
++  return [...ownedDraftsBySession.keys()].flatMap(key => {
++    const scope = parseOwnedDraftKey(key)
++
++    return scope ? [scope] : []
++  })
++}
++
++/** Only availability may be displayed before the user chooses an owner for legacy text. */
++export function hasUnassignedSessionDraft(scope: string | null | undefined): boolean {
++  const draft = draftsBySession.get(draftKey(scope))
++
++  return Boolean(draft?.text.trim() || draft?.attachments.length)
++}
++
++/** Legacy ownership is unknown: only an explicit restore action may copy its content. */
++export function restoreUnassignedSessionDraft(scope: string | null | undefined, owner: SessionOwnerScope): boolean {
++  if (!hasDraftOwner(owner)) {
++    return false
++  }
++
++  const source = takeSessionDraft(scope)
++  const target = takeSessionDraft(scope, owner)
++
++  if ((!source.text.trim() && !source.attachments.length) || target.text.trim() || target.attachments.length) {
++    return false
++  }
++
++  stashSessionDraft(scope, source.text, source.attachments, owner)
++
++  return true
+ }
+@@ -535,5 +731,10 @@ export function stashedDraftScopes(): string[] {
+  */
+-export function migrateSessionDraft(fromKey: string | null | undefined, toKey: string | null | undefined): boolean {
+-  const from = draftKey(fromKey)
+-  const to = draftKey(toKey)
++export function migrateSessionDraft(
++  fromKey: string | null | undefined,
++  toKey: string | null | undefined,
++  owner?: SessionOwnerScope
++): boolean {
++  const from = draftKey(fromKey, owner)
++  const to = draftKey(toKey, owner)
++  const map = draftsFor(owner)
+ 
+@@ -543,3 +744,3 @@ export function migrateSessionDraft(fromKey: string | null | undefined, toKey: s
+ 
+-  const source = draftsBySession.get(from)
++  const source = map.get(from)
+ 
+@@ -549,3 +750,3 @@ export function migrateSessionDraft(fromKey: string | null | undefined, toKey: s
+ 
+-  const dest = draftsBySession.get(to)
++  const dest = map.get(to)
+ 
+@@ -555,4 +756,8 @@ export function migrateSessionDraft(fromKey: string | null | undefined, toKey: s
+ 
+-  stashSessionDraft(toKey, source.text, source.attachments)
+-  clearSessionDraft(fromKey)
++  if (!copyDraftRetry(fromKey, toKey, owner) || !stashSessionDraft(toKey, source.text, source.attachments, owner)) {
++    return false
++  }
++
++  clearSessionDraft(fromKey, owner)
++  writeDraftRetry(fromKey, undefined, owner)
+ 
+@@ -561,2 +766,13 @@ export function migrateSessionDraft(fromKey: string | null | undefined, toKey: s
+ 
++/** Move a compression lineage's known aliases onto its unchanged raw durable scope. */
++export function migrateSessionDrafts(
++  fromKeys: readonly (string | null | undefined)[],
++  toKey: string,
++  owner?: SessionOwnerScope
++): void {
++  for (const from of new Set(fromKeys)) {
++    migrateSessionDraft(from, toKey, owner)
++  }
++}
++
+ /**
+@@ -571,14 +787,19 @@ export function migrateSessionDraft(fromKey: string | null | undefined, toKey: s
+  */
+-let announcedNewSessionDraftKey: string | null = null
++const announcedNewSessionDraftKeys = new Map<string, string>()
++const announcementOwner = (owner: SessionOwnerScope) => draftOwnerKey(owner) ?? '__legacy__'
+ 
+-export function announceNewSessionDraftKey(toKey: string | null | undefined): void {
+-  announcedNewSessionDraftKey = toKey?.trim() || null
++export function announceNewSessionDraftKey(toKey: string | null | undefined, owner?: SessionOwnerScope): void {
++  const key = announcementOwner(owner)
++
++  if (toKey?.trim()) {
++    announcedNewSessionDraftKeys.set(key, toKey.trim())
++  } else {
++    announcedNewSessionDraftKeys.delete(key)
++  }
+ }
+ 
+-/** Consume the announcement; move the `__new__` draft when it names `toKey`.
+- *  True when the announcement named `toKey` (the caller hands the rest of the
+- *  pre-session chat over), even if there was no draft text to move. */
+-export function adoptNewSessionDraft(toKey: string | null | undefined): boolean {
+-  const announced = announcedNewSessionDraftKey
+-  announcedNewSessionDraftKey = null
++export function adoptNewSessionDraft(toKey: string | null | undefined, owner?: SessionOwnerScope): boolean {
++  const key = announcementOwner(owner)
++  const announced = announcedNewSessionDraftKeys.get(key)
++  announcedNewSessionDraftKeys.delete(key)
+ 
+@@ -588,3 +809,3 @@ export function adoptNewSessionDraft(toKey: string | null | undefined): boolean
+ 
+-  migrateSessionDraft(null, toKey)
++  migrateSessionDraft(null, toKey, owner)
+ 
+@@ -611,29 +832,20 @@ export function adoptNewSessionDraft(toKey: string | null | undefined): boolean
+  */
+-let announcedGoneSessionDraftKey: string | null = null
++const announcedGoneSessionDraftKeys = new Map<string, string>()
+ 
+-export function announceGoneSessionDraft(fromKey: string | null | undefined): void {
+-  announcedGoneSessionDraftKey = fromKey?.trim() || null
+-}
+-
+-/**
+- * Consume the announcement when a composer enters the fresh-draft scope.
+- * Moves the dead key's draft into the `__new__` bucket and publishes the
+- * notice. Declines (no notice) when nothing was announced, the key holds no
+- * text, or the user is already composing a new chat — never clobber what
+- * they are typing. Keyed on the announcement, not on the composer observing
+- * an id → fresh transition: the composer can remount across the drop (a
+- * loading route mounts no composer), so the dead scope may never have been
+- * this instance's previous scope.
+- */
+-export function adoptGoneSessionDraft(): boolean {
+-  const announced = announcedGoneSessionDraftKey
+-  announcedGoneSessionDraftKey = null
++export function announceGoneSessionDraft(fromKey: string | null | undefined, owner?: SessionOwnerScope): void {
++  const key = announcementOwner(owner)
+ 
+-  if (!announced) {
+-    return false
++  if (fromKey?.trim()) {
++    announcedGoneSessionDraftKeys.set(key, fromKey.trim())
++  } else {
++    announcedGoneSessionDraftKeys.delete(key)
+   }
++}
+ 
+-  const source = draftsBySession.get(draftKey(announced))
++export function adoptGoneSessionDraft(owner?: SessionOwnerScope): boolean {
++  const key = announcementOwner(owner)
++  const announced = announcedGoneSessionDraftKeys.get(key)
++  announcedGoneSessionDraftKeys.delete(key)
+ 
+-  if (!source?.text.trim()) {
++  if (!announced) {
+     return false
+@@ -641,5 +853,6 @@ export function adoptGoneSessionDraft(): boolean {
+ 
+-  const dest = draftsBySession.get(freshDraftScope())
++  const source = takeSessionDraft(announced, owner)
++  const dest = takeSessionDraft(null, owner)
+ 
+-  if (dest && (dest.text.trim() || dest.attachments.length > 0)) {
++  if (!source.text.trim() || dest.text.trim() || dest.attachments.length) {
+     return false
+@@ -647,6 +860,5 @@ export function adoptGoneSessionDraft(): boolean {
+ 
+-  const { attachments, text } = source
+-  stashSessionDraft(null, text, attachments)
+-  clearSessionDraft(announced)
+-  $restoredDraftNotice.set({ fromKey: announced, text })
++  stashSessionDraft(null, source.text, source.attachments, owner)
++  clearSessionDraft(announced, owner)
++  $restoredDraftNotice.set({ fromKey: announced, text: source.text, ...(hasDraftOwner(owner) ? { owner } : {}) })
+ 
+@@ -655,3 +867,7 @@ export function adoptGoneSessionDraft(): boolean {
+ 
+-export function dismissRestoredDraftNotice(): void {
++export function dismissRestoredDraftNotice(owner?: SessionOwnerScope): void {
++  if (draftOwnerKey($restoredDraftNotice.get()?.owner) !== draftOwnerKey(owner)) {
++    return
++  }
++
+   recordFriction('notice_dismissed', 'restored_draft')
+@@ -667,4 +883,9 @@ export function dismissRestoredDraftNotice(): void {
+  */
+-export function undoRestoredDraft(liveText: string): boolean {
++export function undoRestoredDraft(liveText: string, owner?: SessionOwnerScope): boolean {
+   const notice = $restoredDraftNotice.get()
++
++  if (draftOwnerKey(notice?.owner) !== draftOwnerKey(owner)) {
++    return false
++  }
++
+   $restoredDraftNotice.set(null)
+@@ -675,5 +896,5 @@ export function undoRestoredDraft(liveText: string): boolean {
+ 
+-  const current = draftsBySession.get(freshDraftScope())
+-  stashSessionDraft(notice.fromKey, notice.text, current?.attachments ?? [])
+-  clearSessionDraft(null)
++  const current = takeSessionDraft(null, owner)
++  stashSessionDraft(notice.fromKey, notice.text, current.attachments, owner)
++  clearSessionDraft(null, owner)
+   recordDislike('undo', 'restored_draft')
+diff --git a/apps/desktop/src/store/dead-session-prune.test.ts b/apps/desktop/src/store/dead-session-prune.test.ts
+index b09a0ac8..cd96135b 100644
+--- a/apps/desktop/src/store/dead-session-prune.test.ts
++++ b/apps/desktop/src/store/dead-session-prune.test.ts
+@@ -115,3 +115,3 @@ describe('__runDeadSessionPrunePass', () => {
+ 
+-  it('discards drafts for dead sessions but never the new-chat draft', async () => {
++  it('preserves unassigned drafts without probing a guessed owner, including the new-chat draft', async () => {
+     $sessions.set([row('unrelated')])
+@@ -123,3 +123,4 @@ describe('__runDeadSessionPrunePass', () => {
+ 
+-    expect(takeSessionDraft('dead-draft-session').text).toBe('')
++    expect(takeSessionDraft('dead-draft-session').text).toBe('stale text')
++    expect(getSessionMock).not.toHaveBeenCalled()
+     expect(takeSessionDraft('__new__').text).toBe('brand new')
+diff --git a/apps/desktop/src/store/dead-session-prune.ts b/apps/desktop/src/store/dead-session-prune.ts
+index e396b468..06ab3cb1 100644
+--- a/apps/desktop/src/store/dead-session-prune.ts
++++ b/apps/desktop/src/store/dead-session-prune.ts
+@@ -4,4 +4,3 @@
+  *
+- * Pins (`hermes.desktop.pinnedSessions`), composer drafts
+- * (`hermes:composer-drafts:v3`) and queued prompts
++ * Pins (`hermes.desktop.pinnedSessions`) and queued prompts
+  * (`hermes.desktop.composerQueue.v1`) are keyed by session id and re-asserted
+@@ -13,2 +12,6 @@
+  *
++ * Drafts are user content: unassigned legacy drafts have no provable owner,
++ * and owned drafts have bounded retention plus explicit profile cleanup. Neither
++ * is deleted by a guessed session-owner probe.
++ *
+  * This module sweeps for dead ids after the sidebar list has spoken. A session
+@@ -23,3 +26,2 @@ import { getSession } from '@/hermes'
+ import { mapPool } from '@/lib/pool'
+-import { clearSessionDraft, stashedDraftScopes } from '@/store/composer'
+ import { $queuedPromptsBySession, clearQueuedPrompts } from '@/store/composer-queue'
+@@ -142,8 +144,2 @@ function collectCandidates(): string[] {
+ 
+-  for (const scope of stashedDraftScopes()) {
+-    if (!covered.has(scope)) {
+-      candidates.add(scope)
+-    }
+-  }
+-
+   for (const key of Object.keys($queuedPromptsBySession.get())) {
+@@ -181,6 +177,2 @@ function dropDeadId(id: string): void {
+   // localStorage write a no-op clear would still perform.
+-  if (stashedDraftScopes().includes(id)) {
+-    clearSessionDraft(id)
+-  }
+-
+   if ($queuedPromptsBySession.get()[id]?.length) {
 diff --git a/apps/desktop/src/store/focus-sidebar-toggle.test.ts b/apps/desktop/src/store/focus-sidebar-toggle.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..880967adee5f9ee6ad21c6d81be0a7d73b78fdf3
@@ -19888,6 +23225,57 @@ index 0046d47826fe8c53df69858c9b22999ab8717597..c750a6537775a6f6450f159696861e44
  
  export interface SessionControlDispatch {
    display: string | null
+diff --git a/apps/desktop/src/store/session-draft-owner.ts b/apps/desktop/src/store/session-draft-owner.ts
+new file mode 100644
+index 00000000..0b20496c
+--- /dev/null
++++ b/apps/desktop/src/store/session-draft-owner.ts
+@@ -0,0 +1,26 @@
++import { resolveOwnerNow } from '@/api/client'
++
++import type { SessionOwnerScope } from './session-request-router'
++import { knownOwnerForSession, runtimeSessionOwner } from './session-states'
++
++/** Explicit surface route, then native runtime owner, then durable ownership, then the current new-chat route. */
++export function sessionDraftOwner(
++  sessionId: string | null | undefined,
++  explicit?: SessionOwnerScope
++): SessionOwnerScope {
++  const known = explicit ?? runtimeSessionOwner(sessionId) ?? knownOwnerForSession(sessionId)
++
++  if (known != null) {
++    return typeof known === 'object' ? { ...known } : known
++  }
++
++  const ambient = resolveOwnerNow()
++  const profile = ambient.profile || 'default'
++
++  return ambient.connectionId ? { connectionId: ambient.connectionId, profile } : profile
++}
++
++/** Creation already captured these fields before its first await. */
++export function createdDraftOwner(route: SessionOwnerScope, profile: string): SessionOwnerScope {
++  return route ?? profile
++}
+diff --git a/apps/desktop/src/store/session-states.ts b/apps/desktop/src/store/session-states.ts
+index c5b38a21..321d9a9a 100644
+--- a/apps/desktop/src/store/session-states.ts
++++ b/apps/desktop/src/store/session-states.ts
+@@ -41,3 +41,3 @@ import type { SessionInfo } from '@/types/hermes'
+ 
+-import { dropStatusDrawersForProfile, migrateStatusDrawersForProfile } from './composer-status-drawer'
++import { dropComposerStateForProfile, migrateComposerStateForProfile } from './composer-draft-lifecycle'
+ import { registryConnectionKind } from './connection-registry-state'
+@@ -2753,3 +2753,3 @@ export function dropTilesForProfile(
+   dropPreviewArtifactsForProfile(name, route)
+-  dropStatusDrawersForProfile(name, route)
++  dropComposerStateForProfile(name, route, tileConnectionId || LOCAL_CONNECTION_ID)
+   // Route fields go through the SAME canonicalization as `name` below — a
+@@ -2899,3 +2899,3 @@ export function migrateTilesForProfile(oldProfile: string, newProfile: string):
+   migratePreviewArtifactsForProfile(from, to)
+-  migrateStatusDrawersForProfile(from, to)
++  migrateComposerStateForProfile(from, to)
+   // Sibling family: the rail's profile-keyed buckets move with the rename, or
 diff --git a/apps/desktop/src/store/voice-prefs.test.ts b/apps/desktop/src/store/voice-prefs.test.ts
 index 0181240ccdc7ce44bd659205841d913308995a0e..32aacc38fd9647a86fe174fd65ad22c5a20ae41a 100644
 --- a/apps/desktop/src/store/voice-prefs.test.ts
@@ -19910,6 +23298,41 @@ index 0181240ccdc7ce44bd659205841d913308995a0e..32aacc38fd9647a86fe174fd65ad22c5
  
        if (fails) {
          write.mockImplementation(() => {
+diff --git a/apps/desktop/src/store/windows.ts b/apps/desktop/src/store/windows.ts
+index b46d5b42..1b0cc548 100644
+--- a/apps/desktop/src/store/windows.ts
++++ b/apps/desktop/src/store/windows.ts
+@@ -1,2 +1,3 @@
+ import { notifyError } from './notifications'
++import type { SessionOwnerRoute } from './session-request-router'
+ 
+@@ -228,3 +229,3 @@ export async function openSessionInNewWindow(
+   sessionId: string,
+-  opts?: { watch?: boolean; parentSessionId?: null | string }
++  opts?: { watch?: boolean; parentSessionId?: null | string; ownerRoute?: SessionOwnerRoute; ownerProfile?: string }
+ ): Promise<void> {
+@@ -236,11 +237,14 @@ export async function openSessionInNewWindow(
+   // static import here would drag it into every page that opens windows.
+-  const [{ $activeGatewayProfile, normalizeProfileKey }, { resolveSessionOwner }, { isSessionOwnerRoute }] =
+-    await Promise.all([
+-      import('./profile'),
+-      import('@/app/session/hooks/use-session-actions/utils'),
+-      import('./session-request-router')
+-    ])
++  const [{ $activeGatewayProfile, normalizeProfileKey }, { isSessionOwnerRoute }] = await Promise.all([
++    import('./profile'),
++    import('./session-request-router')
++  ])
+ 
+   await runWindowOpen(async () => {
+-    const owner = await resolveSessionOwner(opts?.parentSessionId || sessionId)
++    const owner =
++      opts?.ownerRoute ??
++      opts?.ownerProfile ??
++      (await import('@/app/session/hooks/use-session-actions/utils').then(({ resolveSessionOwner }) =>
++        resolveSessionOwner(opts?.parentSessionId || sessionId)
++      ))
+ 
 diff --git a/apps/desktop/src/types/hermes.ts b/apps/desktop/src/types/hermes.ts
 index 927c98b200234f54756b368f9152cdd706686957..deb9bb1668642d5ceca0b3469240eb38a7b03f0d 100644
 --- a/apps/desktop/src/types/hermes.ts

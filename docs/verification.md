@@ -1,3 +1,44 @@
+# v0.7.38: owner-safe history windows and composer drafts
+
+Opening another profile's same-ID history could leave the first runtime bound
+while changing its displayed owner. Separate windows also shared draft keys.
+Explicit history owners are now checked before route or read-marker changes.
+Conflicting owners open through the existing native window bridge; repeated
+same-owner links focus the existing window. Original histories remain bound.
+
+Draft text and retry identity use connection, profile, target profile and
+session ownership. Debounce, teardown, reload, undo, prepared-image recovery,
+SDK fallback and deferred send results retain the editor's captured owner.
+Lineage/profile moves retain the source if destination storage fails. Storage
+events and updates touch one key; retention scans occur when adding a saved
+scope and never prune another owner's drafts. Unassigned legacy drafts stay
+separate and require explicit recovery into an empty editor. No automatic
+submission or model request is added. Attachments remain memory-only.
+
+The final related UI selection passed **30 files /496 tests**, zero failures
+and zero retries, with frozen source hashes checked before and after. The
+native window-registry selection separately passed **one file /24 tests**.
+Native TypeScript/build checks passed; scoped health has no findings. Lint
+has zero errors and seven previously existing warnings. These selections
+are separate evidence and are not a summed universal test count.
+
+Both Linux and macOS received the exact 55-path combined history/draft
+cohort before publication (47 paths in the latest draft change). Rebuilt,
+installed native applications passed ten isolated interaction checkpoints on
+each platform, including same-ID owner windows, draft isolation, reload,
+reopen and duplicate-window prevention. Both Mac launch locations have the
+same locally signed package; this is ad-hoc signing, not notarization. The
+existing memory admission threshold was met without lowering it. The screen
+was not unlocked and the original Mac Gateway was not started.
+
+All fixtures use private synthetic homes with zero provider inference. No
+original human session, real worker adoption, causal production usage, cache,
+RAM or latency saving is inferred. No dependency, tool, RPC, quota, model,
+provider or paid-fallback change is included. Raw histories, screenshots,
+host details and credentials remain private.
+
+---
+
 # v0.7.37: session links keep their profile and source
 
 A named-profile history link could resolve the correct title but open a

@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **759-path** Legion source, interface and optimization alternative
+This is the complete **821-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -82,6 +82,26 @@ with the existing Vitest runner, then run the full native TypeScript check and D
 build. Test and packaging tools must already be admitted by the native package manager.
 Do not use a running user's renderer or provider account as a test fixture.
 
+## Owner-safe history and draft recovery
+
+A link with an explicit connection/profile opens that owner's retained history.
+If a same-ID conversation is already open for another owner, the native app
+opens a separate window instead of retargeting the original runtime. Repeated
+same-owner links reuse the existing window. An unavailable window bridge
+reports an error and leaves the original window intact.
+
+Unsent text and uncertain-send retry identity are isolated by connection,
+profile, target profile and session. Reloading or closing a window restores
+only that owner's saved text. Retention is capped at 50 saved scopes per owner;
+updates do not scan every saved draft. Attachments remain memory-only.
+
+Older unassigned drafts are retained separately, never attributed to the current
+profile automatically. When an unassigned draft exists and the editor is empty,
+use the recovery notice to copy it into the current editor. Review the content
+before sending. Recovery never sends automatically and keeps the original.
+Profile rename and compression lineage transfers preserve the source if writing
+the destination fails. Keep existing quotas and disable paid fallback as before.
+
 ## First-use interface checks
 
 1. Open **All features → Plugins**. The bundled Desktop **Kanban** plugin is intentionally
@@ -112,7 +132,7 @@ After two synthetic scanner fixtures were clarified, their two files were separa
 rerun: **33 passed**. Those cases overlap the broad selection and must not be added to it.
 
 Native clean-base apply, installed-byte verification, reverse and reapply passed for
-all 667 paths on **Linux and macOS**. These are source compatibility results, not a
+all 667 paths in the original baseline on **Linux and macOS**. These are source compatibility results, not a
 claim that the entire Python/UI suite ran on macOS. Linux rendered checks use the fresh
 built source-mode Electron application and its actual backend in a separate synthetic
 home, with only localhost model metadata and zero inference. The 11 interaction checkpoints include explicit Kanban opt-in, upstream-card navigation,
