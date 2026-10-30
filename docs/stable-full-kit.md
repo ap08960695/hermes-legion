@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **838-path** Legion source, interface and optimization alternative
+This is the complete **839-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -204,3 +204,23 @@ its normal test display (or the documented native headless display setup).
 The public test checks 320/580-pixel layouts and refuses inference; separate
 native package acceptance also covers 900 pixels and saved history. Original
 application processes and worker adoption are separate from this test.
+
+
+## Import-free plugin source windows
+
+Entry-point and directory metadata probes consume at most their existing 8,192
+character window instead of decoding an entire source file first. They still do
+not import or execute plugin code. Explicit kinds, provider markers, text
+encoding and failure behavior retain the existing contracts; no new source
+cache can hide an edited file or a permission change.
+
+The added resource regression runs with the existing prepared test environment:
+
+```sh
+cd "$HERMES_CHECKOUT"
+HERMES_TEST_FILE_RETRIES=0 scripts/run_tests.sh tests/hermes_cli/test_plugin_source_window.py
+```
+
+The test reads actual temporary source files through the real classifier. Large
+source allocation measurements and four existing bundled manifests are recorded
+separately in the verification note. No production RSS or token saving is inferred.

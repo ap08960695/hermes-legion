@@ -1,3 +1,19 @@
+# v0.7.42 — Bound import-free plugin source reads
+
+Entry-point and directory plugin classification looked at only the first 8,192 characters but read and decoded the entire Python file before taking that slice. Both paths now use the existing source reader with a bounded text read. No source code is imported or executed during classification.
+
+Plugin kind, explicit overrides, the detection-window boundary, UTF-8 BOM handling, invalid-byte replacement, universal newlines, cached-source resolution, missing-file behavior and existing slicing semantics are preserved. No manifest cache, tool/schema, prompt prefix, model, quota, dependency, database or paid fallback is changed.
+
+Two real-file resource regressions fail before the repair. The main offline selection passes four files and 95 cases; the separate discovery/registration/launcher integration selection passes four files and 105 cases, with zero failures or retries. Scoped Ruff and source health pass. Native acceptance against the actual installed source and production Python passes six checks on each of Linux and macOS. Four actual bundled manifest projections also match before and after, with their source files unchanged. These are scoped checks, not a universal suite result.
+
+A matched, warmed native classification benchmark uses a 4,194,370-byte synthetic source and five samples per path. Directory classification median traced Python allocation peak falls from 8,524,553 to 152,573 bytes; median operation time changes from 2.644 to 0.209 milliseconds. Entry-point classification changes from 8,524,058 to 151,039 bytes and 2.431 to 0.114 milliseconds. The inspected source window remains 8,192 characters and the classification is unchanged. This measures the fixed large-file fixture, not process RSS, overall production startup, model usage or typical small-plugin speed.
+
+Two reviewed source/test paths were installed locally on both hosts before publication, with target-only rollback and exact file metadata restoration. The full 839-path kit passes native apply/reverse/reapply and installed-parity checks on both hosts; the sole non-byte-identical path is an existing private Python comment with the same parsed syntax tree. The accepted native Desktop images remain unchanged because this repair changes Python metadata reads only. Original Gateway processes and workers are not restarted, and cached original-process adoption is not inferred.
+
+All new tests and measurements make zero model calls. Existing stop, profile, project, provider and quota gates remain unchanged. This source release contains English guides and neutral templates, with no private conversations, live boards, credentials, screenshots or private Git history.
+
+---
+
 # v0.7.41 — Clear compact-window navigation
 
 Fix a real CSS cascade defect that made short navigation words break inside the word at a 320-pixel window width. The normal spacing rule now comes before the existing narrow-window override. No new state, request, dependency or navigation route is added.

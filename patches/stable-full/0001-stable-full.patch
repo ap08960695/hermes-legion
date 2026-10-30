@@ -33798,7 +33798,7 @@ index 0a9e8e50bbd803f37da25192628891008c8dce7e..87100e53975b7cb32866c39f0a817e33
          module.__package__ = module_name
          module.__path__ = [str(plugin_dir)]  # type: ignore[attr-defined]
 diff --git a/hermes_cli/plugins_manifest.py b/hermes_cli/plugins_manifest.py
-index 95419c36..f3e3aa90 100644
+index 95419c36..bcc1354d 100644
 --- a/hermes_cli/plugins_manifest.py
 +++ b/hermes_cli/plugins_manifest.py
 @@ -12,2 +12,3 @@ import re
@@ -33810,7 +33810,18 @@ index 95419c36..f3e3aa90 100644
 -from utils import fast_safe_load
 +from utils import load_yaml_file_readonly
  from hermes_cli.plugin_capabilities import parse_declared_capabilities as _parse_declared_capabilities
-@@ -538,3 +539,5 @@ def parse_manifest_file(
+@@ -293,3 +294,4 @@ def _read_source_from_origin(origin: Optional[str], limit: int = 8192) -> str:
+             return ""
+-        return Path(origin).read_text(encoding="utf-8-sig", errors="replace")[:limit]
++        with Path(origin).open(encoding="utf-8-sig", errors="replace") as stream:
++            return stream.read(limit)[:limit]
+     except Exception:
+@@ -522,3 +524,3 @@ def _manifest_kind(data: Mapping, key: str, plugin_dir: Path) -> str:
+         with suppress(Exception):
+-            source_text = init_file.read_text(errors="replace", encoding="utf-8-sig")[:8192]
++            source_text = _read_source_from_origin(str(init_file))
+             detected = _detect_kind_from_source(source_text)
+@@ -538,3 +540,5 @@ def parse_manifest_file(
              return None
 -        data = fast_safe_load(manifest_file.read_text(encoding="utf-8-sig")) or {}
 +        # The native file reader invalidates on edits/replacement. Its shared value
@@ -56506,6 +56517,99 @@ index 00000000..6ab0fb02
 +    assert manager._ownership_ledger[manifest.name] == [survivor]
 +    survivor.dispose()
 +    assert manager._ownership_ledger == {}
+diff --git a/tests/hermes_cli/test_plugin_source_window.py b/tests/hermes_cli/test_plugin_source_window.py
+new file mode 100644
+index 00000000..97157e85
+--- /dev/null
++++ b/tests/hermes_cli/test_plugin_source_window.py
+@@ -0,0 +1,87 @@
++"""Import-free plugin classification must consume only its source window."""
++
++import importlib.util
++import sys
++from pathlib import Path
++
++import pytest
++
++from hermes_cli.plugins_discovery import _classify_entrypoint_value_kind
++from hermes_cli.plugins_manifest import _read_source_from_origin, parse_manifest_file
++
++
++def _meter_source(monkeypatch, target):
++    opened = Path.open
++    consumed = []
++
++    class Meter:
++        def __init__(self, stream):
++            self.stream = stream
++
++        def __enter__(self):
++            return self
++
++        def __exit__(self, *args):
++            return self.stream.__exit__(*args)
++
++        def read(self, *args, **kwargs):
++            text = self.stream.read(*args, **kwargs)
++            consumed.append(len(text))
++            return text
++
++    def observe(path, *args, **kwargs):
++        stream = opened(path, *args, **kwargs)
++        return Meter(stream) if path == target else stream
++
++    monkeypatch.setattr(Path, "open", observe)
++    return consumed
++
++
++@pytest.mark.parametrize("route", ["entrypoint", "directory"])
++def test_kind_detection_does_not_materialize_the_source_body(tmp_path, monkeypatch, route):
++    name = "bounded_plugin_source_fixture"
++    plugin = tmp_path / name
++    plugin.mkdir()
++    source = plugin / "__init__.py"
++    source.write_text("# register_memory_provider\nraise RuntimeError('must not import')\n#" + "x" * (4 * 1024**2))
++    manifest = plugin / "plugin.yaml"
++    manifest.write_text("name: bounded-source\n")
++    monkeypatch.syspath_prepend(str(tmp_path))
++    consumed = _meter_source(monkeypatch, source)
++
++    if route == "entrypoint":
++        kind = _classify_entrypoint_value_kind(name + ":register")
++    else:
++        kind = parse_manifest_file(manifest, plugin, "user", "").kind
++
++    assert kind == "exclusive"
++    assert name not in sys.modules, "metadata discovery must not execute plugin source"
++    assert consumed and sum(consumed) <= 8192, "classification must not read the unexamined body"
++
++
++@pytest.mark.parametrize("limit, expected", [(0, ""), (2, "ก\n"), (6, "ก\né�ab"), (-2, "ก\né�")])
++def test_source_window_preserves_decoding_newlines_and_slices(tmp_path, limit, expected):
++    source = tmp_path / "unicode_source.py"
++    source.write_bytes(b"\xef\xbb\xbf" + "ก\r\né".encode() + b"\xffab")
++    cached = importlib.util.cache_from_source(str(source))
++
++    assert _read_source_from_origin(str(source), limit) == expected
++    assert _read_source_from_origin(cached, limit) == expected
++
++
++@pytest.mark.parametrize("declared, before_marker, expected", [(False, 8192, "standalone"), (False, 8169, "standalone"), (False, 8168, "exclusive"), (True, 0, "backend")])
++def test_kind_window_boundary_and_explicit_override(tmp_path, declared, before_marker, expected):
++    plugin = tmp_path / "provider"
++    plugin.mkdir()
++    (plugin / "__init__.py").write_text(" " * before_marker + "register_memory_provider")
++    manifest = plugin / "plugin.yaml"
++    manifest.write_text("name: window-boundary\n" + ("kind: backend\n" if declared else ""))
++
++    assert parse_manifest_file(manifest, plugin, "user", "").kind == expected
++
++
++def test_missing_or_non_python_source_remains_unclassified(tmp_path):
++    assert _read_source_from_origin(str(tmp_path / "missing.py")) == ""
++    other = tmp_path / "provider.txt"
++    other.write_text("register_memory_provider")
++    assert _read_source_from_origin(str(other)) == ""
 diff --git a/tests/hermes_cli/test_profile_config_cache_release.py b/tests/hermes_cli/test_profile_config_cache_release.py
 new file mode 100644
 index 00000000..2feb7609
