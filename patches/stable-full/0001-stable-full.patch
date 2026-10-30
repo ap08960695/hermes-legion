@@ -66625,6 +66625,122 @@ index 0000000000000000000000000000000000000000..4fc86427dc650b98b23a55094a28d81b
 +        second = pool.submit(emit, 'b')
 +        assert (first.result(timeout=5), second.result(timeout=5)) == ('a', 'b')
 +    assert attributed_payload('task', None) is None
+diff --git a/tests/tools/test_kanban_show_bounded_read.py b/tests/tools/test_kanban_show_bounded_read.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..0d565ba871fb37cd5b3548a1ebd63b5ab6a17dda
+--- /dev/null
++++ b/tests/tools/test_kanban_show_bounded_read.py
+@@ -0,0 +1,110 @@
++"""Compact status reads must not materialize a card's entire history."""
++import json
++import sqlite3
++
++import pytest
++
++
++@pytest.fixture
++def history_card(tmp_path, monkeypatch):
++    from hermes_cli import kanban_db as kb, kanban_db_connect as kbc
++
++    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
++    monkeypatch.setenv("HERMES_KANBAN_DB", str(tmp_path / "board.db"))
++    monkeypatch.delenv("HERMES_KANBAN_TASK", raising=False)
++    monkeypatch.delenv("HERMES_SESSION_ID", raising=False)
++    monkeypatch.setattr("tools.async_delegation._current_origin_session_id", lambda: None)
++    kb.init_db()
++    with kbc.connect() as conn:
++        task = kb.create_task(conn, title="History read budget", assignee="worker")
++        other = kb.create_task(conn, title="Another card", assignee="worker")
++        for number in range(90):
++            stamp = 2_000_000_000 + number // 3
++            kind = ("heartbeat" if number % 4 == 0 else "completed" if number % 7 == 0
++                    else "blocked" if number % 9 == 0 else "claimed")
++            conn.execute(
++                "INSERT INTO task_comments(task_id,author,body,created_at) VALUES(?,?,?,?)",
++                (task, "worker", f"note-{number:03d}:" + "x" * 4096, stamp),
++            )
++            conn.execute(
++                "INSERT INTO task_events(task_id,kind,payload,created_at) VALUES(?,?,?,?)",
++                (task, kind, json.dumps({"sequence": number}), stamp),
++            )
++            conn.execute(
++                "INSERT INTO task_runs(task_id,profile,status,started_at,ended_at,"
++                "outcome,summary,metadata) VALUES(?,?,?,?,?,?,?,?)",
++                (task, "worker", "done", stamp, stamp, "completed", f"run-{number:03d}",
++                 json.dumps({"artifact": f"artifact-{number:03d}", "audit": "x" * 4096})),
++            )
++        kb.add_comment(conn, other, "worker", "Other-card evidence must stay isolated")
++    return task
++
++
++@pytest.mark.parametrize("summary", [False, True])
++def test_compact_registry_read_has_a_history_row_budget(history_card, monkeypatch, summary):
++    from hermes_cli import kanban_db_connect as kbc
++    from tools import kanban_tools  # register the native tool
++    from tools.registry import registry
++
++    original = kbc.connect
++    materialized = []
++
++    def connect(*args, **kwargs):
++        conn = original(*args, **kwargs)
++
++        def row_factory(cursor, values):
++            names = {column[0] for column in cursor.description}
++            if {"task_id", "author", "body"} <= names or {"step_key", "metadata"} <= names or {"kind", "payload"} <= names:
++                materialized.append(1)
++            return sqlite3.Row(cursor, values)
++
++        conn.row_factory = row_factory
++        return conn
++
++    monkeypatch.setattr(kbc, "connect", connect)
++    result = json.loads(registry.dispatch("kanban_show", {"task_id": history_card, "summary": summary}))
++    assert "error" not in result
++    if summary:
++        assert result["runs"] == 90
++        assert [row["body"][:9] for row in result["last_comments"]] == ["note-087:", "note-088:", "note-089:"]
++        assert json.loads(result["last_failure"]["payload"])["sequence"] == 81
++        assert json.loads(result["last_completion"]["payload"])["sequence"] == 77
++    else:
++        assert result["compact_view"]["comments_total"] == 90
++        assert result["compact_view"]["runs_total"] == 90
++        assert [run["summary"] for run in result["runs"]] == ["run-087", "run-088", "run-089"]
++        assert result["comments"][0]["body"].startswith("note-078:")
++        assert "truncated" in result["comments"][0]["body"]
++        assert [row["payload"]["sequence"] for row in result["events"]] == [70, 71, 73, 74, 75, 77, 78, 79, 81, 82, 83, 85, 86, 87, 89]
++    assert len(materialized) <= 65, "Compact reads loaded historical rows that are never returned"
++
++
++def test_explicit_full_registry_read_preserves_old_evidence(history_card):
++    from tools import kanban_tools  # register the native tool
++    from tools.registry import registry
++
++    result = json.loads(registry.dispatch("kanban_show", {"task_id": history_card, "full": True}))
++    assert len(result["comments"]) == 90
++    assert len(result["runs"]) == 90
++    assert result["comments"][0]["body"] == "note-000:" + "x" * 4096
++    assert result["runs"][0]["metadata"]["artifact"] == "artifact-000"
++    assert result["worker_context"]
++
++
++def test_bounded_history_works_readonly_without_ending_an_outer_transaction(history_card):
++    from contextlib import closing
++    from hermes_cli import kanban_db as kb
++    from tools.kanban_show_read import show_payload
++
++    with closing(sqlite3.connect(kb.kanban_db_path().resolve().as_uri() + "?mode=ro", uri=True)) as conn:
++        conn.row_factory = sqlite3.Row
++        task = kb.get_task(conn, history_card)
++        result = show_payload(kb, conn, task, full=False, summary=False)
++        assert result["compact_view"]["comments_total"] == 90
++        assert not conn.in_transaction
++        conn.execute("BEGIN")
++        result = show_payload(kb, conn, task, full=False, summary=True)
++        assert result["runs"] == 90
++        assert conn.in_transaction
++        assert conn.total_changes == 0
++        conn.rollback()
 diff --git a/tests/tools/test_kanban_show_efficiency.py b/tests/tools/test_kanban_show_efficiency.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..19761e537c69e317b8eba80bfff597c6eda4d677
@@ -72889,6 +73005,87 @@ index 0000000000000000000000000000000000000000..d2988273314317267910a4e11aaebeed
 +        for key in list(_SEEN):
 +            if key[0] == home and key[2] == session_id:
 +                del _SEEN[key]
+diff --git a/tools/kanban_show_read.py b/tools/kanban_show_read.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..9e748457c6451760a48eb1baf3a739f2ec7085ed
+--- /dev/null
++++ b/tools/kanban_show_read.py
+@@ -0,0 +1,75 @@
++"""Bound history materialization before applying the existing status projections."""
++from contextlib import contextmanager
++
++
++@contextmanager
++def _read_snapshot(conn):
++    # Counts and the recent rows must describe the same WAL snapshot. A savepoint
++    # also works on read-only boards and preserves a caller's outer transaction.
++    conn.execute("SAVEPOINT hermes_show_read")
++    try:
++        yield
++    finally:
++        conn.execute("RELEASE hermes_show_read")
++
++
++def _recent(conn, task_id, table, timestamp, convert, limit):
++    rows = conn.execute(
++        f"SELECT * FROM {table} WHERE task_id = ? "
++        f"ORDER BY {timestamp} DESC, id DESC LIMIT ?", (task_id, limit),
++    ).fetchall()
++    return [convert(row) for row in reversed(rows)]
++
++
++def _history(kb, conn, task_id, full):
++    from tools import kanban_tools as tool
++
++    if full:
++        return {
++            "comments": kb.list_comments(conn, task_id),
++            "events": kb.list_events(conn, task_id)[-50:],
++            "runs": kb.list_runs(conn, task_id),
++        }, None
++    specs = {
++        "comments": ("task_comments", "created_at", kb.Comment.from_row, tool._SHOW_COMPACT_COMMENTS),
++        "events": ("task_events", "created_at", kb.Event.from_row, 50),
++        "runs": ("task_runs", "started_at", kb.Run.from_row, tool._SHOW_COMPACT_RUNS),
++    }
++    with _read_snapshot(conn):
++        totals = {
++            name: conn.execute(f"SELECT count(*) FROM {specs[name][0]} WHERE task_id = ?", (task_id,)).fetchone()[0]
++            for name in ("comments", "runs")
++        }
++        history = {
++            name: _recent(conn, task_id, *spec) for name, spec in specs.items()
++        }
++    return history, totals
++
++
++def show_payload(kb, conn, task, *, full, summary):
++    """Keep the old view, while decoding only rows that can appear in that view."""
++    from tools import kanban_tools as tool
++
++    task_id = task.id
++    history, totals = _history(kb, conn, task_id, full)
++    payload = {
++        "task": tool._fields(task, tool._TASK_FIELDS),
++        "parents": kb.parent_ids(conn, task_id),
++        "unsatisfied_parents": [
++            {"id": pid, "status": status} for pid, status in kb.unsatisfied_parents(conn, task_id)
++        ],
++        "children": kb.child_ids(conn, task_id),
++        "comments": [tool._fields(row, tool._COMMENT_FIELDS) for row in history["comments"]],
++        "events": [tool._fields(row, tool._EVENT_FIELDS) for row in history["events"]],
++        "runs": [tool._fields(row, tool._RUN_FIELDS) for row in history["runs"]],
++    }
++    if full:
++        payload["worker_context"] = kb.build_worker_context(conn, task_id)
++        return payload
++    if summary:
++        result = tool._summary_show_payload(payload)
++        result["runs"] = totals["runs"]
++        return result
++    result = tool._compact_show_payload(payload)
++    result["compact_view"].update(comments_total=totals["comments"], runs_total=totals["runs"])
++    return result
 diff --git a/tools/kanban_skill_preflight.py b/tools/kanban_skill_preflight.py
 new file mode 100644
 index 0000000..148acf3
@@ -72922,21 +73119,31 @@ index 0000000..148acf3
 +            or str(name).rstrip("/").split("/")[-1] in have]
 +    return kept, [name for name in skills if name not in kept]
 diff --git a/tools/kanban_tools.py b/tools/kanban_tools.py
-index c8b64c09..8d988d0a 100644
+index c8b64c095c30a5d8f599869cace132d47d05654e..d9818c1043dcfe6ea42e8d0e7ed5ba8cac1d6295 100644
 --- a/tools/kanban_tools.py
 +++ b/tools/kanban_tools.py
-@@ -12,2 +12,3 @@ import json
+@@ -10,6 +10,7 @@ from __future__ import annotations
+ import functools
+ import json
  import logging
 +import math
  import os
-@@ -26,3 +27,5 @@ from tools.kanban_tools_schemas import (
+ import time
+ from contextlib import contextmanager
+@@ -24,7 +25,9 @@ from tools.kanban_tools_schemas import (
+     KANBAN_ATTACH_URL_SCHEMA, KANBAN_ATTACHMENTS_SCHEMA, KANBAN_BLOCK_SCHEMA, KANBAN_COMMENT_SCHEMA,
+     KANBAN_COMPLETE_SCHEMA, KANBAN_CREATE_SCHEMA, KANBAN_HEARTBEAT_SCHEMA, KANBAN_LINK_SCHEMA,
      KANBAN_LIST_SCHEMA, KANBAN_REQUEST_CHANGES_SCHEMA, KANBAN_REQUEST_REVIEW_SCHEMA,
 -    KANBAN_SCHEDULE_SCHEMA, KANBAN_SHOW_SCHEMA, KANBAN_UNBLOCK_SCHEMA)
 +    KANBAN_SCHEDULE_SCHEMA, KANBAN_SHOW_SCHEMA, KANBAN_UNBLOCK_SCHEMA,
 +    KANBAN_REASSIGN_SCHEMA, KANBAN_UNLINK_SCHEMA, KANBAN_EXTEND_RUNTIME_SCHEMA, KANBAN_CONTINUE_SCHEMA,
 +    KANBAN_ARCHIVE_SCHEMA)
  
-@@ -152,2 +155,15 @@ def _persisted_identity() -> str:
+ logger = logging.getLogger(__name__)
+ 
+@@ -150,6 +153,19 @@ def _persisted_identity() -> str:
+     return current_profile_name("worker") or "worker"
+ 
  
 +def _unescape_json(out):
 +    """Local patch 18: re-emit handler JSON with ensure_ascii=False. Thai card text escaped as \\uXXXX costs
@@ -72952,14 +73159,22 @@ index c8b64c09..8d988d0a 100644
 +
 +
  def _kanban_handler(tool_name: str) -> Callable:
-@@ -167,3 +183,5 @@ def _kanban_handler(tool_name: str) -> Callable:
+     """Wrap a handler so every failure is a structured tool error. ``ValueError``
+     (invalid board slug, DB validation such as cycle/self-link, ``AttachmentTooLarge``)
+@@ -165,7 +181,9 @@ def _kanban_handler(tool_name: str) -> Callable:
+                 _check(not unknown,
+                        f"{tool_name}: unknown parameter(s): {', '.join(unknown)}. "
                         f"Valid parameters: {', '.join(sorted(properties))}. Nothing changed.")
 -                return fn(args, **kw)
 +                from hermes_cli.kanban_event_origin import event_origin
 +                with event_origin(args.get("task_id"), _self_notification_target(tool_name)):
 +                    return _unescape_json(fn(args, **kw))
              except _Reject as e:
-@@ -178,2 +196,23 @@ def _kanban_handler(tool_name: str) -> Callable:
+                 return e.args[0]
+             except Exception as e:
+@@ -176,6 +194,27 @@ def _kanban_handler(tool_name: str) -> Callable:
+     return deco
+ 
  
 +def _self_notification_target(tool_name: str) -> Optional[dict]:
 +    """Attribute explicit interactive lifecycle commands, never worker outcomes."""
@@ -72983,18 +73198,30 @@ index c8b64c09..8d988d0a 100644
 +
 +
  def _reject_delegated_child_mutation(tool_name: str) -> None:
-@@ -423,3 +462,3 @@ _TASK_FIELDS = tuple(
+     """A delegate_task child shares the parent's process, so inherited HERMES_KANBAN_*
+     env is not proof of ownership: it may report findings but must not mutate."""
+@@ -421,7 +460,7 @@ def _opt_int(value: Any, default: Optional[int] = None) -> Optional[int]:
+ _TASK_FIELDS = tuple(
+     "id title body assignee status tenant priority workspace_kind workspace_path created_by "
      "created_at started_at completed_at result current_run_id model_override "
 -    "provider_override completion_contract last_failure_error".split())
 +    "provider_override reasoning_effort completion_contract last_failure_error".split())
  _TASK_SUMMARY_FIELDS = tuple(
-@@ -432,3 +471,4 @@ _ATTACHMENT_FIELDS = tuple(
+     "id title assignee status priority tenant workspace_kind workspace_path project_id created_by "
+     "created_at started_at completed_at current_run_id model_override provider_override".split())
+@@ -430,7 +469,8 @@ _COMMENT_FIELDS = ("author", "body", "created_at")
+ _EVENT_FIELDS = ("kind", "payload", "created_at", "run_id")
+ _ATTACHMENT_FIELDS = tuple(
      "id filename content_type size uploaded_by stored_path created_at".split())
 -_CREATED_FIELDS = ("status", "workspace_kind", "workspace_path", "project_id")
 +_CREATED_FIELDS = ("status", "workspace_kind", "workspace_path", "project_id",
 +                   "model_override", "provider_override", "reasoning_effort")
  
-@@ -555,3 +595,7 @@ def register_current_worker_from_env() -> bool:
+ 
+ def _fields(obj: Any, names: tuple[str, ...]) -> dict[str, Any]:
+@@ -553,7 +593,11 @@ def register_current_worker_from_env() -> bool:
+     try:
+         from hermes_cli import kanban_db_dispatch as kbd
          with _board(None, quiet_close=True) as (_kb, conn):
 -            return kbd.adopt_worker_pid(conn, tid, run_id, os.getpid())
 +            adopted = kbd.adopt_worker_pid(conn, tid, run_id, os.getpid())
@@ -73003,7 +73230,11 @@ index c8b64c09..8d988d0a 100644
 +                register(conn, tid, run_id)
 +            return adopted
      except Exception:
-@@ -659,4 +703,149 @@ def inject_new_comments_from_env(agent: Any) -> bool:
+         logger.debug("kanban worker registration for %s failed", tid, exc_info=True)
+         return True
+@@ -657,8 +701,153 @@ def inject_new_comments_from_env(agent: Any) -> bool:
+         return False
+ 
  
 +# local patch 05: an orchestrator calling kanban_show on a long-lived card used to receive 25-140k chars
 +# (all comments, all runs, worker_context). Orchestrators now get a compact view unless full=true.
@@ -73153,31 +73384,44 @@ index c8b64c09..8d988d0a 100644
 +
 +
  @_kanban_handler("kanban_show")
-@@ -678,3 +867,3 @@ def _handle_show(args: dict, **kw) -> str:
+ def _handle_show(args: dict, **kw) -> str:
+     """Full task state: row, parents, children, comments, runs, last 50 events."""
+@@ -676,26 +865,17 @@ def _handle_show(args: dict, **kw) -> str:
+         })
+     with _board(args.get("board")) as (kb, conn):
          task = _existing_task(kb, conn, tid)
 -        return json.dumps({
-+        payload = {
-             "task": _fields(task, _TASK_FIELDS),
-@@ -690,4 +879,11 @@ def _handle_show(args: dict, **kw) -> str:
-             "runs": [_fields(r, _RUN_FIELDS) for r in kb.list_runs(conn, tid)],
+-            "task": _fields(task, _TASK_FIELDS),
+-            "parents": kb.parent_ids(conn, tid),
+-            # Non-terminal parents; on a running card this means the dependency
+-            # gate is not holding it and kanban_complete will refuse.
+-            "unsatisfied_parents": [
+-                {"id": pid, "status": status} for pid, status in kb.unsatisfied_parents(conn, tid)],
+-            "children": kb.child_ids(conn, tid),
+-            "comments": [_fields(c, _COMMENT_FIELDS) for c in kb.list_comments(conn, tid)],
+-            # Capped; full log via CLI.
+-            "events": [_fields(e, _EVENT_FIELDS) for e in kb.list_events(conn, tid)[-50:]],
+-            "runs": [_fields(r, _RUN_FIELDS) for r in kb.list_runs(conn, tid)],
 -            # Same string build_worker_context hands the dispatcher at spawn time.
 -            "worker_context": kb.build_worker_context(conn, tid)})
-+        }
-+        if _parse_bool_arg(args, "full"):
-+            payload["worker_context"] = kb.build_worker_context(conn, tid)
-+        # local patch 22: workers get the compact view too. Their full payload repeated
-+        # worker_context (already in the spawn prompt) and every comment: ~20 KB per call.
-+        if not _parse_bool_arg(args, "full"):
-+            payload = (_summary_show_payload(payload) if _parse_bool_arg(args, "summary")
-+                       else _compact_show_payload(payload))
++        from tools.kanban_show_read import show_payload
++        payload = show_payload(
++            kb, conn, task, full=_parse_bool_arg(args, "full"), summary=_parse_bool_arg(args, "summary"),
++        )
 +        return _show_once(tid, args, json.dumps(payload))
  
-@@ -697,3 +893,3 @@ def _handle_list(args: dict, **kw) -> str:
+ 
+ @_kanban_handler("kanban_list")
+ def _handle_list(args: dict, **kw) -> str:
      """Task summaries with the same core filters as the CLI."""
 -    _require_orchestrator_tool("kanban_list")
 +    # local patch 05: kanban_list is read-only, workers may call it (duplicate checks); unblock stays orchestrator-only.
      include_archived = _parse_bool_arg(args, "include_archived")
-@@ -899,3 +1095,9 @@ def _handle_request_review(args: dict, **kw) -> str:
+     limit = args.get("limit")
+     try:
+@@ -897,7 +1077,13 @@ def _handle_request_review(args: dict, **kw) -> str:
+                f"reviewer profile {reviewer!r} is not installed. "
+                f"Installed profiles: {', '.join(list_profile_names())}")
      with _board(args.get("board")) as (kb, conn):
 -        _goal_gate("kanban_request_review", kb.get_task(conn, tid), tid, summary)
 +        task = kb.get_task(conn, tid)
@@ -73188,7 +73432,11 @@ index c8b64c09..8d988d0a 100644
 +        if reviewer and reviewer in ("orchestra-captain", getattr(task, "assignee", None)):
 +            reviewer = "reviewer-gpt"
          try:
-@@ -1101,6 +1303,3 @@ def _handle_create(args: dict, **kw) -> str:
+             ok, fail_reason = kb.request_review(
+                 conn, tid, summary=summary, metadata=metadata, reviewer=reviewer,
+@@ -1099,10 +1285,7 @@ def _handle_create(args: dict, **kw) -> str:
+     assignee = args.get("assignee")
+     _check(assignee, "assignee is required — name the profile that should execute this "
                       "task (the dispatcher will only spawn tasks with an assignee)")
 -    # Workspace sharing is always explicit: omitted fields mean a fresh scratch workspace
 -    # even for a dispatcher-spawned creator (reusing the parent's path would let a child
@@ -73196,11 +73444,15 @@ index c8b64c09..8d988d0a 100644
 -    # to inherit implicitly (the DB turns it into a fresh per-task worktree).
 +    # Omitted workspace means fresh scratch; only project identity may be inherited.
      workspace_kind, workspace_path = args.get("workspace_kind"), args.get("workspace_path")
-@@ -1112,2 +1311,3 @@ def _handle_create(args: dict, **kw) -> str:
+     # See #67567. ``project=""`` is an explicit "no project" (no ``or`` collapse, #106342).
+     project_id = args["project"] if "project" in args else args.get("project_id")
+@@ -1110,9 +1293,15 @@ def _handle_create(args: dict, **kw) -> str:
+     triage, skills, goal_mode = (
+         _parse_bool_arg(args, "triage"), _coerce_str_list(args.get("skills"), "skills", "skill names"),
          _parse_bool_arg(args, "goal_mode"))
 +    skills, _dropped_skills = _skills_available_for(str(assignee or ""), skills)
      model_override, provider_override = args.get("model"), args.get("provider")
-@@ -1115,2 +1315,7 @@ def _handle_create(args: dict, **kw) -> str:
+     _check(model_override or not provider_override, "'provider' requires 'model' to be set as well")
      parents = _coerce_str_list(args.get("parents") or [], "parents", "task ids")
 +    _fit = _tool_fit_error(str(assignee), str(title), str(args.get("body") or ""))
 +    _check(_fit is None, _fit or "")
@@ -73208,7 +73460,11 @@ index c8b64c09..8d988d0a 100644
 +                          or _default_runtime_seconds(str(assignee), str(title), str(args.get("body") or "")))
 +    _runtime = max(_requested_runtime, _runtime_floor(str(assignee)))
      with _board(args.get("board")) as (kb, conn):
-@@ -1129,2 +1334,14 @@ def _handle_create(args: dict, **kw) -> str:
+         from gateway.session_context import get_session_env
+         from tools.async_delegation import _current_origin_session_id
+@@ -1127,11 +1316,24 @@ def _handle_create(args: dict, **kw) -> str:
+                       or (self_task.session_id if self_task else None)
+                       or _persisted_session_id(_current_origin_session_id())
                        or _persisted_session_id(get_session_env("HERMES_SESSION_ID", "")))
 +        # local patch 23: the Captain is not dispatchable, so a worker card assigned to it sits in todo
 +        # indefinitely. Keep the note as a comment on the worker's own card instead.
@@ -73223,7 +73479,7 @@ index c8b64c09..8d988d0a 100644
 +                f"saved as a comment on your task {self_tid}. Mention it under 'ต่อไป:' in your completion "
 +                "summary; the Captain decides follow-up cards."))
          if project_id is None and workspace_kind is None and workspace_path is None:
-@@ -1132,4 +1349,5 @@ def _handle_create(args: dict, **kw) -> str:
+             if self_task is not None and self_task.project_id:
                  project_id, project_source_task_id = self_task.project_id, self_task.id
 -        new_tid = kb.create_task(
 -            conn, title=str(title).strip(), body=args.get("body"), assignee=str(assignee),
@@ -73231,14 +73487,22 @@ index c8b64c09..8d988d0a 100644
 +        new_tid = create_planned_task(
 +            conn, plan_task=args.get("plan_task"), plan_step=args.get("plan_step"), replan_of=args.get("replan_of"), title=str(title).strip(), body=args.get("body"), assignee=str(assignee),
              parents=tuple(parents), tenant=args.get("tenant") or os.environ.get("HERMES_TENANT"),
-@@ -1143,4 +1361,5 @@ def _handle_create(args: dict, **kw) -> str:
+             priority=_opt_int(args.get("priority"), 0),
+             workspace_kind=workspace_kind, workspace_path=workspace_path, project_id=project_id,
+@@ -1141,8 +1343,9 @@ def _handle_create(args: dict, **kw) -> str:
+             project_source_task_id=project_source_task_id, triage=triage,
+             creator_task_id=self_tid,
              idempotency_key=args.get("idempotency_key"),
 -            max_runtime_seconds=_opt_int(args.get("max_runtime_seconds")), skills=skills,
 +            max_runtime_seconds=_runtime, skills=skills,
              model_override=model_override, provider_override=provider_override,
 +            reasoning_effort=args.get("reasoning_effort"),
              goal_mode=goal_mode, goal_max_turns=_opt_int(args.get("goal_max_turns")),
-@@ -1152,3 +1371,10 @@ def _handle_create(args: dict, **kw) -> str:
+             completion_contract=args.get("completion_contract"),
+             initial_status=str(args.get("initial_status") or "running"),
+@@ -1150,7 +1353,14 @@ def _handle_create(args: dict, **kw) -> str:
+         landed = _fields(kb.get_task(conn, new_tid), _CREATED_FIELDS)
+         wait = [e for e in kb.list_events(conn, new_tid) if e.kind == "dependency_wait"]
          gate = {"gated": True, "gated_by": wait[-1].payload["parent"]} if wait else {"gated": False}
 +        _warns = _oversize_warnings(str(args.get("body") or ""))
 +        if _dropped_skills:
@@ -73249,7 +73513,11 @@ index c8b64c09..8d988d0a 100644
 +                   **({"warnings": _warns} if _warns else {}),
 +                   **({"runtime_raised_from": _requested_runtime} if _runtime != _requested_runtime else {}),
                     subscribed=_maybe_auto_subscribe(conn, new_tid))
-@@ -1273,2 +1499,20 @@ def _handle_unblock(args: dict, **kw) -> str:
+ 
+ 
+@@ -1271,6 +1481,24 @@ def _handle_unblock(args: dict, **kw) -> str:
+         return _ok(task_id=tid, **_fields(kb.get_task(conn, tid), ("status",)))
+ 
  
 +@_kanban_handler("kanban_archive")
 +def _handle_archive(args: dict, **kw) -> str:
@@ -73270,7 +73538,11 @@ index c8b64c09..8d988d0a 100644
 +
 +
  @_kanban_handler("kanban_link")
-@@ -1290,2 +1534,213 @@ def _handle_link(args: dict, **kw) -> str:
+ def _handle_link(args: dict, **kw) -> str:
+     """Add a parent→child dependency edge after the fact (cycles/self-links/running
+@@ -1288,10 +1516,222 @@ def _handle_link(args: dict, **kw) -> str:
+                    **({"gated_by": parent_id} if gated else {}))
+ 
  
 +# --- local patch 06: orchestrator board management (reassign / unlink / extend / continue) ---
 +
@@ -73484,13 +73756,17 @@ index c8b64c09..8d988d0a 100644
 +
 +
  # --- Registration (order preserved: it is the order tools appear in the schema) ---
-@@ -1293,3 +1748,4 @@ def _handle_link(args: dict, **kw) -> str:
+ 
  # kanban_list / kanban_unblock route the board and are hidden from task workers.
 -_ORCHESTRATOR_TOOLS = frozenset({"kanban_list", "kanban_unblock"})
 +_ORCHESTRATOR_TOOLS = frozenset({"kanban_unblock", "kanban_reassign", "kanban_unlink", "kanban_extend_runtime", "kanban_continue",
 +                                 "kanban_archive"})
  _TOOLS = (
-@@ -1309,3 +1765,8 @@ _TOOLS = (
+     ("kanban_show", KANBAN_SHOW_SCHEMA, _handle_show, "📋"),
+     ("kanban_list", KANBAN_LIST_SCHEMA, _handle_list, "📋"),
+@@ -1307,7 +1747,12 @@ _TOOLS = (
+     ("kanban_attachments", KANBAN_ATTACHMENTS_SCHEMA, _handle_attachments, "📎"),
+     ("kanban_create", KANBAN_CREATE_SCHEMA, _handle_create, "➕"),
      ("kanban_unblock", KANBAN_UNBLOCK_SCHEMA, _handle_unblock, "▶"),
 -    ("kanban_link", KANBAN_LINK_SCHEMA, _handle_link, "🔗"))
 +    ("kanban_link", KANBAN_LINK_SCHEMA, _handle_link, "🔗"),
@@ -73500,6 +73776,8 @@ index c8b64c09..8d988d0a 100644
 +    ("kanban_continue", KANBAN_CONTINUE_SCHEMA, _handle_continue, "➡"),
 +    ("kanban_archive", KANBAN_ARCHIVE_SCHEMA, _handle_archive, "🗄"))
  
+ for _name, _sch, _handler, _emoji in _TOOLS:
+     _gate = _check_kanban_orchestrator_mode if _name in _ORCHESTRATOR_TOOLS else _check_kanban_mode
 diff --git a/tools/kanban_tools_schemas.py b/tools/kanban_tools_schemas.py
 index ec5a72610e075f300d5493c9e1f71d18f21d83de..d38195358a49647edcc75530f62aef3d1693add0 100644
 --- a/tools/kanban_tools_schemas.py

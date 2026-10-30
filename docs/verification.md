@@ -1,3 +1,23 @@
+# v0.7.40 — Read only the visible Kanban history window
+
+`kanban_show` compact and summary views previously fetched every comment, event and run from SQLite, decoded the entire run metadata history, and only then discarded older entries. Long-lived cards paid this memory and latency cost even for a short status reply.
+
+The read path now fetches only the existing visible history window through the existing task indexes. Counts and recent rows share a read snapshot that also works on a read-only board and preserves an outer transaction. Comment clipping, ordering (including equal timestamps), latest-event window, heartbeat filtering, total counts, evidence metadata and explicit `full=true` behavior are unchanged. No database migration, new index, tool/schema, prompt, model, quota, cache policy, dependency or paid fallback is introduced.
+
+## Verification and measurements
+
+Two registry/SQLite resource regressions failed before the repair. The final related selection passed 12 files and 117 tests with zero failures or retries, covering compact/summary/full output, read-only nested transactions, descendant scope, redaction, output budgets, unknown fields, parent completion fences and unchanged request diagnostics. Scoped lint and source health pass. The same five native acceptance checks pass against actual installed source on Linux and macOS using their existing production Python.
+
+A matched native registry benchmark used 2,000 synthetic entries in each history table and five samples per mode. Compact reads materialized 65 history rows instead of 6,001. Median traced Python allocation peak fell from 52,658,868 to 229,767 bytes; median instrumented operation time fell from 70.628 to 1.818 milliseconds. Summary reads likewise retain their original output and total counts. These measurements describe that fixed fixture and Python allocations, not process RSS, a production daily workload, model token savings or universal UI latency.
+
+All eight before/after payload comparisons match, including compact and summary reads of three genuinely completed prior private workflow cards. Those small real cards showed no meaningful speed gain and slightly more fixed bookkeeping; the repair targets scaling with long history. Existing board contents remained unchanged, and no model call was made by the new tests or measurements.
+
+A separate analysis of an already completed provider-backed private graph found 34 main diagnostic records across five roles in one installation namespace, with all 19 worker records bound to their task/run. Main-call usage reported 552,925 input and 471,552 cached tokens (85.28%). Compatible analyst/ACTION requests match route, key, common-prefix, options and tools fingerprints in all 30 cross-role pairs. Declared-account evidence is unknown, and matching request fields plus cached tokens do not establish authenticated account identity or the server's cross-bot cache origin. Auxiliary usage is incomplete; this short synthetic window is not a matched 24-hour before/after comparison or causal usage-saving claim. Raw identifiers, request content and private records are not published.
+
+Three reviewed source/test paths were installed locally on both hosts before publication, preserving existing private comments, file metadata and compact target-only rollback. Fresh installed-process acceptance is verified. Original Gateway processes and workers were not restarted; adoption inside an already cached original Gateway is not inferred. Existing Desktop packages remain the separately accepted v0.7.39 renderer, since this repair changes Python reads only. Existing stop/project/provider gates, quota settings and protected services remain unchanged.
+
+---
+
 # v0.7.39 — Durable drafts, bounded history and native bot controls
 
 Accepted send settlement now preserves newer editor input. An earlier rejected or unconfirmed message remains separately recoverable in the existing bounded, owner-isolated store. Recovery is explicit, requires an empty matching editor and never sends. An unchanged manual retry retains its original submission identity; ambiguous delivery is never automatically replayed. Text survives reload; attachments remain memory-only and must be reattached after reload.
