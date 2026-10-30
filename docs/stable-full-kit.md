@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **839-path** Legion source, interface and optimization alternative
+This is the complete **843-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -224,3 +224,26 @@ HERMES_TEST_FILE_RETRIES=0 scripts/run_tests.sh tests/hermes_cli/test_plugin_sou
 The test reads actual temporary source files through the real classifier. Large
 source allocation measurements and four existing bundled manifests are recorded
 separately in the verification note. No production RSS or token saving is inferred.
+
+
+## Auxiliary usage and cached input
+
+Native Codex/Claude auxiliary responses retain reported cache read/write and
+reasoning counters when projected onto the existing Chat Completions contract.
+Claude cache buckets are separate from uncached input; their sum is its prompt
+total. Billing-provider identity does not select the shape of an already
+normalized response. A fully cached call still contributes one call count;
+reasoning is already included in output, and excluded MoA work is not counted
+a second time.
+
+Run the regression with the existing prepared offline environment:
+
+```sh
+cd "$HERMES_CHECKOUT"
+HERMES_TEST_FILE_RETRIES=0 scripts/run_tests.sh tests/agent/test_auxiliary_usage_buckets.py
+```
+
+Only fixed provider-response fixtures are used; no inference or pricing lookup
+is requested. The verification note distinguishes these arithmetic checks from
+actual provider cache evidence. Existing historical omissions are not invented
+or backfilled, and a larger corrected usage total does not imply more calls.

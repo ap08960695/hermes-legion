@@ -172,8 +172,19 @@ index 1d8e485170d5da132a6a8ab3017cade1e2dc09a9..24c0912cdc50c31f728e99f55e3c7eea
      # Routing proxies name the deployment they served in a response header (#54864).
      from agent.served_model import install_served_model_capture
      install_served_model_capture(agent, client)
+diff --git a/agent/aux_accounting.py b/agent/aux_accounting.py
+index df0e1b1c..36dee500 100644
+--- a/agent/aux_accounting.py
++++ b/agent/aux_accounting.py
+@@ -68,3 +68,5 @@ def record_aux_usage(
+ 
+-        usage = with_served_service_tier(normalize_usage(raw_usage, provider=provider), response)
++        # Native auxiliary adapters already return Chat Completions usage. The
++        # billing provider must not reinterpret that projection as its wire shape.
++        usage = with_served_service_tier(normalize_usage(raw_usage, api_mode="chat_completions"), response)
+         if not (
 diff --git a/agent/auxiliary_client.py b/agent/auxiliary_client.py
-index 88f1fa59..ffa83cfd 100644
+index 88f1fa59..762ae733 100644
 --- a/agent/auxiliary_client.py
 +++ b/agent/auxiliary_client.py
 @@ -1171,4 +1171,5 @@ class _CodexStreamGuard:
@@ -259,12 +270,26 @@ index 88f1fa59..ffa83cfd 100644
 +                from agent.compression_main_context import CompressionMainContextStopped
 +                raise CompressionMainContextStopped() from None
              if guard.timed_out.is_set():
-@@ -2611,3 +2626,3 @@ def _record_route_info(
+@@ -1801,10 +1816,5 @@ class _AnthropicCompletionsAdapter:
+         _nr = get_transport("anthropic_messages").normalize_response(response, strip_tool_prefix=self._is_oauth)
+-        usage = None
+-        if hasattr(response, "usage") and response.usage:
+-            prompt_tokens = getattr(response.usage, "input_tokens", 0) or 0
+-            completion_tokens = getattr(response.usage, "output_tokens", 0) or 0
+-            usage = SimpleNamespace(
+-                prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+-                total_tokens=getattr(response.usage, "total_tokens", 0) or (prompt_tokens + completion_tokens),
+-            )
++        from agent.auxiliary_usage import chat_usage_from_native
++
++        usage = chat_usage_from_native(getattr(response, "usage", None), api_mode="anthropic_messages")
+         # ToolCall already duck-types as OpenAI shape via properties.
+@@ -2611,3 +2621,3 @@ def _record_route_info(
  def _relay_auxiliary_metadata(
 -    *, provider: str | None = None, api_mode: str | None = None
 +    *, provider: str | None = None, api_mode: str | None = None, body: dict[str, Any] | None = None
  ) -> tuple[str, str, dict[str, Any]] | None:
-@@ -2616,2 +2631,7 @@ def _relay_auxiliary_metadata(
+@@ -2616,2 +2626,7 @@ def _relay_auxiliary_metadata(
          return None
 +    # local patch 16: aux clients for Responses providers (Codex/xAI OAuth) are chat-completions
 +    # adapters, so Relay sees a ``messages`` body. Labelling it codex_responses made Relay's
@@ -272,38 +297,38 @@ index 88f1fa59..ffa83cfd 100644
 +    if isinstance(body, dict) and "messages" in body and "input" not in body:
 +        api_mode = "chat_completions"
      attempt_count = int(context.get("attempt_count") or 0)
-@@ -2644,3 +2664,3 @@ def _relay_sync_completion(
+@@ -2644,3 +2659,3 @@ def _relay_sync_completion(
      callback = create or (lambda request: _create_with_progress(client, request, task))
 -    route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode)
 +    route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode, body=kwargs)
      # Isolate only the provider callback so the owning thread can unwind its lease/DB
-@@ -2677,3 +2697,3 @@ async def _relay_async_completion(
+@@ -2677,3 +2692,3 @@ async def _relay_async_completion(
      callback = create or (lambda request: _acreate_with_progress(client, request))
 -    route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode)
 +    route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode, body=kwargs)
      if route is None:
-@@ -2706,4 +2726,4 @@ def _relay_sync_stream(
+@@ -2706,4 +2721,4 @@ def _relay_sync_stream(
      # rewritten) the real conversation; applying it to `kwargs` would hand Relay an empty one.
 -    create = lambda request: client.chat.completions.create(**bypass_chat_sdk_request_transform(request, client))
 -    route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode)
 +    create = lambda request: client.chat.completions.create(**bypass_chat_sdk_request_transform(request, client))  # noqa: E731
 +    route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode, body=kwargs)
      if route is None:
-@@ -2764,3 +2784,3 @@ def set_runtime_main(
+@@ -2764,3 +2779,3 @@ def set_runtime_main(
      api_key: Any = "", api_mode: str = "", auth_mode: str = "", session_id: str = "",
 -    cache_scope: str = "",
 +    cache_scope: str = "", compression_context: Any = None,
  ) -> contextvars.Token:
-@@ -2786,2 +2806,3 @@ def set_runtime_main(
+@@ -2786,2 +2801,3 @@ def set_runtime_main(
          "cache_scope": (cache_scope or "").strip(),
 +        "compression_context": compression_context,
      }
-@@ -3106,3 +3127,3 @@ _MAIN_RUNTIME_FIELDS = ("provider", "model", "base_url", "api_key", "api_mode",
+@@ -3106,3 +3122,3 @@ _MAIN_RUNTIME_FIELDS = ("provider", "model", "base_url", "api_key", "api_mode",
  _MAIN_RUNTIME_CONTEXT_FIELDS = _MAIN_RUNTIME_FIELDS + (
 -    "requested_provider", "session_id", "cache_scope",
 +    "requested_provider", "session_id", "cache_scope", "compression_context",
  )
-@@ -3126,2 +3147,7 @@ def _normalize_main_runtime(main_runtime: Optional[dict[str, Any]]) -> dict[str,
+@@ -3126,2 +3142,7 @@ def _normalize_main_runtime(main_runtime: Optional[dict[str, Any]]) -> dict[str,
          value = main_runtime.get(field)
 +        if field == "compression_context":
 +            from agent.compression_main_context import MainCompressionContext
@@ -311,7 +336,7 @@ index 88f1fa59..ffa83cfd 100644
 +                normalized[field] = value
 +            continue
          if field == "api_key" and callable(value) and not isinstance(value, str):
-@@ -6020,2 +6046,15 @@ def _get_cached_client(
+@@ -6020,2 +6041,15 @@ def _get_cached_client(
      """
 +    if task == "compression":
 +        compression_cfg = _get_auxiliary_task_config(task)
@@ -327,7 +352,7 @@ index 88f1fa59..ffa83cfd 100644
 +            raise CompressionMainContextStopped()
 +        return resolve_bound_compression(compression_runtime, model, async_mode=async_mode)
      # A bare llama.cpp alias keys on the live local endpoint: a restarted server (new port/key)
-@@ -6798,2 +6837,9 @@ def _build_call_kwargs(
+@@ -6798,2 +6832,9 @@ def _build_call_kwargs(
      from agent.opencode_affinity import merge_session_affinity_headers
 +    from agent.reasoning_limits import configured_limits, current_reasoning_limits, limit_wire_request
 +    from hermes_cli.config import load_config_readonly
@@ -337,13 +362,13 @@ index 88f1fa59..ffa83cfd 100644
 +    kwargs = limit_wire_request(kwargs, limits, model,
 +                                'anthropic_messages' if projection.messages_wire else 'chat_completions')
      return merge_session_affinity_headers(kwargs, provider, base_url, _runtime_main_value("session_id") or None)
-@@ -7417,2 +7463,5 @@ def _resolve_call_client(
+@@ -7417,2 +7458,5 @@ def _resolve_call_client(
          if client is None:
 +            # A selected Codex advisor is not interchangeable with a rescue model.
 +            if task == "moa_reference" and _normalize_aux_provider(resolved_provider) == "openai-codex":
 +                raise AuxiliaryClientUnavailable("Selected Codex MoA advisor is unavailable; fallback is disabled.")
              # Explicit provider with no credentials: honor the task fallback_chain before
-@@ -7936,2 +7985,10 @@ def _aux_recovery_ladder(
+@@ -7936,2 +7980,10 @@ def _aux_recovery_ladder(
      Raises the narrowed ``first_err`` when exhausted (after evicting a connection-poisoned client)."""
 +    if task == "compression" and (
 +        getattr(client, "_main_compression_context_bound", False)
@@ -354,23 +379,23 @@ index 88f1fa59..ffa83cfd 100644
 +    if task == "moa_reference" and _normalize_aux_provider(resolved_provider) == "openai-codex":
 +        raise first_err
      tag = " (async)" if async_mode else ""
-@@ -8115,2 +8172,4 @@ def _should_retry_same_provider(task: Optional[str], exc: Exception, tag: str) -
+@@ -8115,2 +8167,4 @@ def _should_retry_same_provider(task: Optional[str], exc: Exception, tag: str) -
      to fallback."""
 +    if task == "compression" and "same_main_context" in _get_auxiliary_task_config(task):
 +        return False
      if not _is_transient_transport_error(exc):
-@@ -8213,2 +8272,4 @@ def _call_llm_impl(
+@@ -8213,2 +8267,4 @@ def _call_llm_impl(
          except Exception as transient_err:
 +            if getattr(client, "_main_compression_context_bound", False):
 +                raise
              if not _should_retry_same_provider(task, transient_err, ""):
-@@ -8354,4 +8415,3 @@ async def _async_call_llm_impl(
+@@ -8354,4 +8410,3 @@ async def _async_call_llm_impl(
      try:
 -        # Retry ONCE on the same provider for a transient blip before fallback (see call_llm()).
 -        # (PR #16587)
 +        # At most one retry, honoring the sync budget and main-client ownership gate.
          _force_stream_async = _provider_requires_stream(request_provider, req.base_info or req.resolved_base_url)
-@@ -8372,4 +8432,5 @@ async def _async_call_llm_impl(
+@@ -8372,4 +8427,5 @@ async def _async_call_llm_impl(
          except Exception as transient_err:
 -            # The async Codex adapter wraps the sync stream via to_thread: same TimeoutError here.
 -            if not _should_retry_same_provider(task, transient_err, " (async)"):
@@ -406,6 +431,24 @@ index 00000000..565fdb8e
 +    if not supported:
 +        return None
 +    return {'effort': clamp_effort(config.get('effort') or 'medium', supported), 'summary': 'auto'}
+diff --git a/agent/auxiliary_codex_response.py b/agent/auxiliary_codex_response.py
+index dc77ad48..e0ad35b0 100644
+--- a/agent/auxiliary_codex_response.py
++++ b/agent/auxiliary_codex_response.py
+@@ -45,10 +45,5 @@ def _parse_codex_final_response(
+     tool_calls_raw = message.tool_calls
+-    usage = None
+-    resp_usage = getattr(final, "usage", None)
+-    if resp_usage:
+-        def _u(key: str) -> int:
+-            return getattr(resp_usage, key, 0) or (resp_usage.get(key, 0) if isinstance(resp_usage, dict) else 0)
+-        usage = SimpleNamespace(
+-            prompt_tokens=_u("input_tokens"), completion_tokens=_u("output_tokens"),
+-            total_tokens=_u("total_tokens"))
++    from agent.auxiliary_usage import chat_usage_from_native
++
++    usage = chat_usage_from_native(getattr(final, "usage", None), api_mode="codex_responses")
+     return text_parts, tool_calls_raw, usage, finish_reason
 diff --git a/agent/auxiliary_reasoning_floor.py b/agent/auxiliary_reasoning_floor.py
 index 748003e1..515f7182 100644
 --- a/agent/auxiliary_reasoning_floor.py
@@ -443,6 +486,35 @@ index 748003e1..515f7182 100644
 +        base_url, model,
 +    ) and not _catalog_marks_mandatory(
          provider, base_url, model,
+diff --git a/agent/auxiliary_usage.py b/agent/auxiliary_usage.py
+new file mode 100644
+index 00000000..920dce08
+--- /dev/null
++++ b/agent/auxiliary_usage.py
+@@ -0,0 +1,23 @@
++"""Project native auxiliary usage onto the Chat Completions consumer contract."""
++
++from types import SimpleNamespace
++from typing import Any
++
++
++def chat_usage_from_native(raw_usage: Any, *, api_mode: str) -> Any:
++    """Keep cache/reasoning buckets while converting native prompt accounting."""
++    if not raw_usage:
++        return None
++    from agent.usage_pricing import normalize_usage
++
++    usage = normalize_usage(raw_usage, api_mode=api_mode)
++    return SimpleNamespace(
++        prompt_tokens=usage.prompt_tokens,
++        completion_tokens=usage.output_tokens,
++        total_tokens=usage.total_tokens,
++        prompt_tokens_details=SimpleNamespace(
++            cached_tokens=usage.cache_read_tokens,
++            cache_write_tokens=usage.cache_write_tokens,
++        ),
++        completion_tokens_details=SimpleNamespace(reasoning_tokens=usage.reasoning_tokens),
++    )
 diff --git a/agent/cache_change_evidence.py b/agent/cache_change_evidence.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..7972af6c0aececd154b3dfb4d338616e9d472a68
@@ -43247,6 +43319,130 @@ index 00000000..97832196
 +    assert known_reasoning_floor(explicit, 'custom', host, 'gpt-6.1-sol', 'approval') is explicit
 +    assert known_reasoning_floor(disabled, 'custom', host, 'gpt-6.1-terra', 'approval') is disabled
 +    assert known_reasoning_floor(disabled, 'custom', 'https://api.openai.com/v1', 'gpt-4o', 'approval') is disabled
+diff --git a/tests/agent/test_auxiliary_usage_buckets.py b/tests/agent/test_auxiliary_usage_buckets.py
+new file mode 100644
+index 00000000..a669d787
+--- /dev/null
++++ b/tests/agent/test_auxiliary_usage_buckets.py
+@@ -0,0 +1,118 @@
++"""Native auxiliary adapters must retain the usage their accounting consumers need."""
++
++from copy import deepcopy
++from types import SimpleNamespace
++
++import pytest
++
++from agent.aux_accounting import record_aux_usage, reset_accounting_context, set_accounting_context
++from agent.auxiliary_client import _AnthropicCompletionsAdapter, _CodexCompletionsAdapter
++from agent.auxiliary_hooks import _usage_summary
++from hermes_state import SessionDB
++
++
++def _adapter_response(route):
++    calls = []
++    if route.startswith("codex"):
++        raw = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120,
++               "input_tokens_details": {"cached_tokens": 60, "cache_write_tokens": 10},
++               "output_tokens_details": {"reasoning_tokens": 7}}
++        usage = raw if route == "codex-dict" else SimpleNamespace(
++            **{**raw, "input_tokens_details": SimpleNamespace(**raw["input_tokens_details"]),
++               "output_tokens_details": SimpleNamespace(**raw["output_tokens_details"])})
++        final = SimpleNamespace(status="completed", usage=usage, output=[SimpleNamespace(
++            type="message", role="assistant", phase="final_answer", status="completed",
++            content=[SimpleNamespace(type="output_text", text="auxiliary answer")])])
++
++        def create(**kwargs):
++            calls.append(kwargs)
++            return final
++
++        adapter = _CodexCompletionsAdapter(SimpleNamespace(responses=SimpleNamespace(create=create)), "offline-aux")
++    else:
++        usage = SimpleNamespace(input_tokens=100, output_tokens=20,
++                                cache_read_input_tokens=80, cache_creation_input_tokens=40)
++        final = SimpleNamespace(content=[SimpleNamespace(type="text", text="auxiliary answer")],
++                                stop_reason="end_turn", usage=usage)
++
++        class Stream:
++            def __enter__(self):
++                return self
++
++            def __exit__(self, *args):
++                return False
++
++            def __iter__(self):
++                yield SimpleNamespace(type="message_stop")
++
++            def get_final_message(self):
++                return final
++
++        def create(**kwargs):
++            calls.append(kwargs)
++            return Stream() if route == "anthropic-stream" else final
++
++        messages = SimpleNamespace(**{"stream" if route == "anthropic-stream" else "create": create})
++        adapter = _AnthropicCompletionsAdapter(SimpleNamespace(messages=messages), "offline-aux")
++    before = deepcopy(vars(usage) if isinstance(usage, SimpleNamespace) else usage)
++    response = adapter.create(messages=[{"role": "user", "content": "offline fixture"}])
++    assert (vars(usage) if isinstance(usage, SimpleNamespace) else usage) == before
++    assert len(calls) == 1, "normalizing usage must not retry the provider"
++    assert response.choices[0].message.content == "auxiliary answer"
++    assert response.choices[0].finish_reason == "stop"
++    return response
++
++
++@pytest.mark.parametrize("route", ["codex-object", "codex-dict", "anthropic-stream", "anthropic-object"])
++def test_native_adapter_cache_buckets_survive_the_existing_auxiliary_hook(route):
++    response = _adapter_response(route)
++    summary = _usage_summary(response)
++    expected = (30, 20, 60, 10, 7, 100, 120) if route.startswith("codex") else (100, 20, 80, 40, 0, 220, 240)
++
++    assert tuple(summary[k] for k in (
++        "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
++        "reasoning_tokens", "prompt_tokens", "total_tokens")) == expected
++    assert (response.usage.prompt_tokens, response.usage.total_tokens) == expected[-2:]
++
++
++@pytest.mark.parametrize("provider", ["anthropic", "openai-codex", "openrouter"])
++def test_chat_shaped_auxiliary_usage_reaches_native_session_accounting(tmp_path, monkeypatch, provider):
++    monkeypatch.setattr("agent.usage_pricing.estimate_usage_cost", lambda *a, **kw: SimpleNamespace(amount_usd=None))
++    response = SimpleNamespace(model="offline-aux", usage=SimpleNamespace(
++        prompt_tokens=100, completion_tokens=20, total_tokens=120,
++        prompt_tokens_details=SimpleNamespace(cached_tokens=60, cache_write_tokens=10),
++        completion_tokens_details=SimpleNamespace(reasoning_tokens=7)))
++    with SessionDB(tmp_path / "state.db") as db:
++        db.create_session("usage-fixture", source="cli")
++        token = set_accounting_context(db, "usage-fixture")
++        try:
++            record_aux_usage(response, "compression", provider=provider)
++        finally:
++            reset_accounting_context(token)
++        with db._read_ctx() as conn:
++            rows = conn.execute(
++                "SELECT input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,reasoning_tokens,"
++                "api_call_count,billing_provider FROM session_model_usage WHERE session_id=? AND task=?",
++                ("usage-fixture", "compression")).fetchall()
++
++    assert [tuple(row) for row in rows] == [(30, 20, 60, 10, 7, 1, provider)]
++
++
++def test_fully_cached_anthropic_auxiliary_call_is_not_dropped(tmp_path, monkeypatch):
++    monkeypatch.setattr("agent.usage_pricing.estimate_usage_cost", lambda *a, **kw: SimpleNamespace(amount_usd=None))
++    response = SimpleNamespace(model="offline-aux", usage=SimpleNamespace(
++        prompt_tokens=100, completion_tokens=0,
++        prompt_tokens_details=SimpleNamespace(cached_tokens=100)))
++    with SessionDB(tmp_path / "state.db") as db:
++        db.create_session("usage-fixture", source="cli")
++        token = set_accounting_context(db, "usage-fixture")
++        try:
++            record_aux_usage(response, "title_generation", provider="anthropic")
++        finally:
++            reset_accounting_context(token)
++        with db._read_ctx() as conn:
++            rows = conn.execute(
++                "SELECT input_tokens,output_tokens,cache_read_tokens,api_call_count FROM session_model_usage "
++                "WHERE session_id=? AND task=?", ("usage-fixture", "title_generation")).fetchall()
++
++    assert [tuple(row) for row in rows] == [(0, 0, 100, 1)]
 diff --git a/tests/agent/test_cache_change_evidence.py b/tests/agent/test_cache_change_evidence.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..84bc89c2f066a93106f51d5e7ede13012e48384b

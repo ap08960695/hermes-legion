@@ -1,3 +1,23 @@
+# v0.7.43 — Preserve auxiliary cache usage and account for Claude calls
+
+Native Codex and Anthropic auxiliary adapters projected provider usage onto Chat Completions but dropped cache-read, cache-write and reasoning details. Anthropic prompt totals also omitted its separately reported cache buckets. The ambient auxiliary accountant then interpreted that already-converted result as native Anthropic usage, losing ordinary counters or dropping a fully cached call.
+
+Both adapters now share the existing canonical usage normalizer and emit the Chat Completions detail fields their existing hooks consume. Session accounting reads that chat-shaped result independently of the billing-provider label; billing routes remain unchanged. Reported reasoning stays a subset of output, not an additional total. Fully cached calls still count once. Excluded MoA tasks remain excluded to avoid double accounting.
+
+Six regressions fail before the repair. The main offline selection passes four files and 50 cases; the separate adapter/effort/pricing integration selection passes three files and 309 cases, without failures or retries. Source health has no new findings. Scoped Ruff is clean outside the large existing auxiliary-client file, whose single unrelated unused-noqa finding is identical before and after and is not suppressed.
+
+Actual installed production Python on Linux and macOS each passes six native checks with the real installed OpenAI ResponseUsage and Anthropic Usage types, native adapters, hooks and a temporary SessionDB. The provider-response boundary supplies fixed offline responses; remote pricing lookup returns unknown. No provider inference or pricing request is made. Answer content, completion gates, source payloads, billing-provider labels and one-attempt behavior remain intact.
+
+For a hand-checked Codex fixture, 100 prompt tokens comprise 30 uncached, 60 cache-read and 10 cache-write tokens; 20 output tokens include seven reasoning tokens. A Claude fixture retains 100 uncached, 80 cache-read and 40 cache-write tokens, so its prompt total is 220 rather than 100. A completely cached 100-token call is retained with one call count. These are accounting examples, not newly measured provider cache hits or usage savings.
+
+A read-only audit of an already completed private graph finds 39 physical requests and 34 recorded session calls. This repair does not prove the cause of those five missing historical records and cannot reconstruct discarded provider cache details. Old zeros are not evidence of cache misses. Displayed usage can rise as previously omitted reported buckets are counted; that does not itself mean more requests. No past usage row is backfilled or repriced.
+
+Five reviewed source/test paths were installed on both hosts before publication, with exact file metadata restoration and target-only rollback. The full 843-path source kit passes native apply/reverse/reapply and installed-parity checks on both hosts, except for one pre-existing private Python comment with an equivalent parsed syntax tree. The accepted native Desktop images are unchanged because no renderer runtime changes. Original Gateways and workers are not restarted; cached original-process adoption remains separate.
+
+No prompt, tool/schema, model, reasoning setting, quota, dependency, account, cache policy or paid fallback is changed. All new checks use zero model calls. The English source artifact excludes private conversations, live boards, screenshots, credentials and private Git history.
+
+---
+
 # v0.7.42 — Bound import-free plugin source reads
 
 Entry-point and directory plugin classification looked at only the first 8,192 characters but read and decoded the entire Python file before taking that slice. Both paths now use the existing source reader with a bounded text read. No source code is imported or executed during classification.
