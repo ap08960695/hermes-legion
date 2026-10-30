@@ -1,3 +1,17 @@
+# v0.7.41 — Clear compact-window navigation
+
+Fix a real CSS cascade defect that made short navigation words break inside the word at a 320-pixel window width. The normal spacing rule now comes before the existing narrow-window override. No new state, request, dependency or navigation route is added.
+
+The native regression failed before the repair and passes after it. The related Desktop selection passes eight files and 36 tests; the separate native E2E selection passes one test. Scoped lint and all three TypeScript projects pass. These are separate selections, not a universal test total.
+
+The actual installed Linux app and both installed macOS launch locations each pass nine native interaction checks at widths of 900, 580 and 320 pixels: short labels, Settings through All features, retained-chat history and scoped roster synchronization. Both native package builds pass; the Mac image passes strict local signature verification. Mac signing is local ad-hoc signing, not notarization. All new UI tests use private synthetic homes and make zero provider inference requests.
+
+The full 838-path source kit passes native apply/reverse/reapply checks on both hosts. Source parity is exact except for one pre-existing private Python comment whose parsed syntax tree matches. No original Gateway or worker is restarted, no screen is unlocked, and original emergency-stop, project, provider and quota gates remain unchanged. No paid fallback or model call is added. Original-user adoption and causal production RAM, usage, cache or latency gains are not claimed.
+
+This release contains source patches, English guides and neutral templates, not private accounts, chat histories, live boards, screenshots or prebuilt application images.
+
+---
+
 # v0.7.40 — Read only the visible Kanban history window
 
 `kanban_show` compact and summary views previously fetched every comment, event and run from SQLite, decoded the entire run metadata history, and only then discarded older entries. Long-lived cards paid this memory and latency cost even for a short status reply.

@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **837-path** Legion source, interface and optimization alternative
+This is the complete **838-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -182,3 +182,25 @@ draft/history flow passes twelve interaction steps. Both platforms pass a separa
 17-step rich-content, bot-control and navigation selection, including both Mac launch
 locations. These private synthetic checks do not establish original-user adoption
 or production token/RAM savings. See the versioned verification record for scope.
+
+
+## Compact-window navigation regression
+
+Normal spacing must not override the existing narrow-window rule. Short labels
+(Chat, Work, Bots and Hub) stay on one line; longer labels may wrap. Settings
+remains reachable through All features, and History remains visible. The repair
+does not change profiles, open a prompt or submit work.
+
+After the existing native Desktop build, run the added E2E regression using the
+already prepared, pinned test tools (no dependency installation):
+
+```sh
+cd "$HERMES_CHECKOUT/apps/desktop"
+npm exec --offline --no -- playwright test e2e/core/focus-navigation-layout.spec.ts
+```
+
+The core harness supplies a private home and local mock catalog. Linux needs
+its normal test display (or the documented native headless display setup).
+The public test checks 320/580-pixel layouts and refuses inference; separate
+native package acceptance also covers 900 pixels and saved history. Original
+application processes and worker adoption are separate from this test.
