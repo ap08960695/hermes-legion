@@ -1,3 +1,27 @@
+# v0.7.39 — Durable drafts, bounded history and native bot controls
+
+Accepted send settlement now preserves newer editor input. An earlier rejected or unconfirmed message remains separately recoverable in the existing bounded, owner-isolated store. Recovery is explicit, requires an empty matching editor and never sends. An unchanged manual retry retains its original submission identity; ambiguous delivery is never automatically replayed. Text survives reload; attachments remain memory-only and must be reattached after reload.
+
+Input-history browsing retires inactive cursors instead of keeping every visited session. Shortened history cannot return undefined text. Losing history restores the original draft. A transient runtime replacement retains browsing only for the same explicit owner and durable conversation; changing owner or conversation retires the cursor.
+
+Expanded rich-content viewers now expose an accessible name using the existing trigger label. Routed relay roster, outbox and reply controls consume their already-validated profile selector before strict payload checks. Cross-profile tickets, capability checks, retired-owner fences and unknown-field refusal remain intact. Generated workflow clients describe the requested effort and effective limit already emitted by the runtime; no model or limit is changed.
+
+## Verification
+
+The draft/history selection passed 39 files and 621 cases. The separate rich-content selection passed 22 files and 190 cases, and the native-control/generated-contract selection passed six files and 28 cases, all without failures or retries. These are separate scoped selections, not a combined universal test count.
+
+The installed Linux app passed twelve draft/history interaction steps, including replay-gap reattachment, keyboard traversal, original-draft recovery, rejected-send conflict handling, reload and an explicit original-ID retry. The current installed Linux app and both current macOS launch locations then each passed a separate 17-step native selection: stored Markdown/table/code/math/Mermaid rendering, named diagram zoom and Escape, bot creation cancellation without an introduction, read-only effort metadata, actual dependency ancestry, Settings navigation/close/Escape and compact-window history. Scoped relay roster synchronization produced zero RPC refusals. The current Mac package passed all five native preparation/typecheck/stamp/build/package steps and local code-signature verification before installation. This is local ad-hoc signing, not notarization.
+
+Both hosts received the full 835-path source cohort before publication. Native parity checks found 834 byte-identical paths and one pre-existing comment-only Python difference with an equivalent parsed syntax tree. Full native apply/reverse/reapply acceptance passed on both hosts. The 180-file companion inventory and 81 offline companion tests pass.
+
+A five-sample native-Node microbenchmark of 1,000 synthetic session visits reduced retained inactive cursors from 1,000 to zero, serialized state from 46,891 to two bytes and median store-operation time from 106.526 to 0.971 milliseconds. This measures the store fixture, not process RSS, production latency or token savings.
+
+A separate read-only native check retrieved an existing real maintenance conversation more than three weeks old through both session READ and exact-title DISCOVERY. Its two original messages and metadata remained unchanged. This proves stored retrieval, not autonomous long-interval Captain recall.
+
+All new native UI checks used private synthetic homes with zero provider inference. The existing Mac memory floor was met without lowering it or stopping other applications. The screen was not unlocked; original Gateway processes and workers were not restarted. Original-user adoption, causal production usage/RAM/cache/latency gains and cross-bot cache sharing remain unproven. No account, provider, model, quota, dependency or paid fallback is added. Raw histories, private host/project identifiers, credentials and screenshots are excluded from the public artifact.
+
+---
+
 # v0.7.38: owner-safe history windows and composer drafts
 
 Opening another profile's same-ID history could leave the first runtime bound

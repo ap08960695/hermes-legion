@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **821-path** Legion source, interface and optimization alternative
+This is the complete **835-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -93,7 +93,9 @@ reports an error and leaves the original window intact.
 Unsent text and uncertain-send retry identity are isolated by connection,
 profile, target profile and session. Reloading or closing a window restores
 only that owner's saved text. Retention is capped at 50 saved scopes per owner;
-updates do not scan every saved draft. Attachments remain memory-only.
+updates do not scan every saved draft. Attachments remain memory-only. Accepted sends
+never clear a newer draft after the clicked text was already consumed. External
+submissions do not own or clear the editor draft.
 
 Older unassigned drafts are retained separately, never attributed to the current
 profile automatically. When an unassigned draft exists and the editor is empty,
@@ -168,3 +170,15 @@ python3 "$LEGION_ROOT/scripts/verify_checkout.py" "$HERMES_CHECKOUT" --phase bas
 This source reversal is not a live database restore. Keep the compact source/application
 rollback until original-session acceptance; retire only owned, inactive staging after
 its evidence is durable. Do not keep redundant full copies merely to repeat a test.
+
+
+The draft/history repair retains an earlier unconfirmed message separately when the
+editor has newer input. Restore is manual, into an empty matching owner, and never
+sends; an unchanged explicit retry retains the original identity. Inactive history
+cursors are retired. Browsing survives a transient runtime reattachment only for the
+same owner and durable conversation, including when its loaded history shrinks.
+Current source and native packages are installed on Linux and macOS. The Linux
+draft/history flow passes twelve interaction steps. Both platforms pass a separate
+17-step rich-content, bot-control and navigation selection, including both Mac launch
+locations. These private synthetic checks do not establish original-user adoption
+or production token/RAM savings. See the versioned verification record for scope.

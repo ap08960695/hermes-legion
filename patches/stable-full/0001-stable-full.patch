@@ -4649,6 +4649,15 @@ index 0000000000000000000000000000000000000000..af15d905c7e8b2cc526192fcf6b940cb
 +        key=stream.read(33)
 +    if len(key)!=32:raise ValueError('incomplete existing diagnostic key')
 +    return key
+diff --git a/apps/desktop/DESIGN.md b/apps/desktop/DESIGN.md
+index 3026147d..a78d3c7d 100644
+--- a/apps/desktop/DESIGN.md
++++ b/apps/desktop/DESIGN.md
+@@ -127,2 +127,4 @@ Reduced motion settles immediately without retaining empty clearance.
+ 
++`Zoomable` (`src/components/ui/zoomable.tsx`) names its expanded dialog from the same label as its trigger. The title is visually hidden so diagram geometry stays unchanged; zoom, copy and dismissal remain local viewer actions.
++
+ ## Window background behavior
 diff --git a/apps/desktop/e2e/answer-cards-layout.spec.ts b/apps/desktop/e2e/answer-cards-layout.spec.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..d80ca0a6a3a135101147dae5c0f63f9cf5809a1a
@@ -6197,17 +6206,20 @@ index 5444cce0efe3c6a46be3e6dd64f58371b26f8e3f..8046b16a21e5056a15f0e9eb4c17a866
        )}
 diff --git a/apps/desktop/src/app/chat/composer/draft-recovery.tsx b/apps/desktop/src/app/chat/composer/draft-recovery.tsx
 new file mode 100644
-index 00000000..2246e78c
+index 00000000..1393bf8d
 --- /dev/null
 +++ b/apps/desktop/src/app/chat/composer/draft-recovery.tsx
-@@ -0,0 +1,39 @@
+@@ -0,0 +1,69 @@
 +import { useStore } from '@nanostores/react'
 +
-+import { isFreshDraftScope } from '@/store/composer'
++import { freshDraftScope, isFreshDraftScope } from '@/store/composer'
++import { draftOwnerKey } from '@/store/composer-draft-owner'
++import { draftRetry } from '@/store/composer-draft-retry'
 +import type { SessionOwnerScope } from '@/store/session-request-router'
 +
 +import type { useComposerDraft } from './hooks/use-composer-draft'
 +import { RestoredDraftNotice } from './restored-draft-notice'
++import { RetainedSendNotice } from './retained-send-notice'
 +import { useComposerScope } from './scope'
 +import { UnassignedDraftNotice } from './unassigned-draft-notice'
 +
@@ -6228,6 +6240,33 @@ index 00000000..2246e78c
 +        canRestore={() => !draft.syncDraftFromEditor().trim() && composer.attachments.$attachments.get().length === 0}
 +        empty={!draft.hasText && attachments.length === 0}
 +        onRestored={draft.loadIntoComposer}
++        owner={owner}
++        scope={scope}
++      />
++      <RetainedSendNotice
++        canRestore={() => {
++          const same =
++            (draft.draftScopeRef.current || freshDraftScope()) === (scope || freshDraftScope()) &&
++            draftOwnerKey(draft.draftOwnerRef.current) === draftOwnerKey(owner)
++
++          if (!same || draft.syncDraftFromEditor().trim() || composer.attachments.$attachments.get().length) {
++            return false
++          }
++
++          draft.stashAt(scope, '', [], owner)
++
++          return true
++        }}
++        empty={!draft.hasText && attachments.length === 0}
++        onRestored={(text, restored, id) => {
++          draft.loadIntoComposer(text, restored)
++
++          if (id) {
++            draft.rememberDraftRetry(scope, draftRetry(id, text, restored), owner)
++          } else {
++            draft.takeDraftRetry(text, restored)
++          }
++        }}
 +        owner={owner}
 +        scope={scope}
 +      />
@@ -6358,12 +6397,92 @@ index 00000000..9b045561
 +
 +  return { stashAt, rememberDraftRetry, takeDraftRetry }
 +}
+diff --git a/apps/desktop/src/app/chat/composer/hooks/composer-draft-restore.ts b/apps/desktop/src/app/chat/composer/hooks/composer-draft-restore.ts
+new file mode 100644
+index 00000000..fb21c284
+--- /dev/null
++++ b/apps/desktop/src/app/chat/composer/hooks/composer-draft-restore.ts
+@@ -0,0 +1,74 @@
++import type { RefObject } from 'react'
++
++import { translateNow } from '@/i18n'
++import { type ComposerAttachment, freshDraftScope, takeSessionDraft } from '@/store/composer'
++import { draftOwnerKey } from '@/store/composer-draft-owner'
++import { type ComposerDraftRetry, draftRetry, writeDraftRetry } from '@/store/composer-draft-retry'
++import { retainRejectedDraft } from '@/store/composer-rejected-drafts'
++import { notifyError } from '@/store/notifications'
++import type { SessionOwnerScope } from '@/store/session-request-router'
++
++export interface ComposerDraftRestoreArgs {
++  draftScopeRef: RefObject<string | null>
++  draftOwnerRef?: RefObject<SessionOwnerScope>
++  readCurrentDraft?: () => { text: string; attachments: ComposerAttachment[] }
++  stashAt: (scope: string | null, text?: string, attachments?: ComposerAttachment[], owner?: SessionOwnerScope) => void
++  rememberDraftRetry?: (scope: string | null, retry: ComposerDraftRetry, owner?: SessionOwnerScope) => void
++  loadIntoComposer: (text: string, attachments: ComposerAttachment[]) => void
++}
++
++/** Capture before awaiting: only an empty editor may receive the earlier input. */
++export function createComposerDraftRestorer(args: ComposerDraftRestoreArgs) {
++  return (
++    scope: string | null | (() => string),
++    text: string,
++    attachments: ComposerAttachment[],
++    owner: SessionOwnerScope = args.draftOwnerRef?.current,
++    submissionId?: string
++  ) => {
++    const captured = typeof owner === 'object' && owner ? { ...owner } : owner
++    const source = typeof scope === 'function' ? scope : scope || freshDraftScope()
++
++    return () => {
++      const target = typeof source === 'function' ? source() : source
++
++      const sameEditor =
++        (args.draftScopeRef.current || freshDraftScope()) === target &&
++        draftOwnerKey(args.draftOwnerRef?.current) === draftOwnerKey(captured)
++
++      const current = (sameEditor ? args.readCurrentDraft?.() : undefined) ?? takeSessionDraft(target, captured)
++
++      if (current.text.trim() || current.attachments.length) {
++        if (sameEditor) {
++          args.stashAt(target, current.text, current.attachments, captured ?? null)
++        }
++
++        if (!retainRejectedDraft(target, text, attachments, captured, submissionId)) {
++          notifyError(
++            new Error('Could not persist the retained message: storage failure'),
++            translateNow('composer.retainedSendRestore')
++          )
++        }
++
++        return
++      }
++
++      args.stashAt(target, text, attachments, captured ?? null)
++
++      if (submissionId) {
++        const retry = draftRetry(submissionId, text, attachments)
++
++        // A background restore cannot publish retry state into the foreground editor.
++        if (sameEditor && args.rememberDraftRetry) {
++          args.rememberDraftRetry(target, retry, captured ?? null)
++        } else {
++          writeDraftRetry(target, retry, captured)
++        }
++      }
++
++      if (sameEditor) {
++        args.loadIntoComposer(text, attachments)
++      }
++    }
++  }
++}
 diff --git a/apps/desktop/src/app/chat/composer/hooks/composer-submit-dispatch.test.ts b/apps/desktop/src/app/chat/composer/hooks/composer-submit-dispatch.test.ts
 new file mode 100644
-index 00000000..3ef82d05
+index 00000000..66fe8024
 --- /dev/null
 +++ b/apps/desktop/src/app/chat/composer/hooks/composer-submit-dispatch.test.ts
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,141 @@
 +import { afterEach, expect, it, vi } from 'vitest'
 +
 +import { clearSessionDraft, rotateFreshDraftKey, stashSessionDraft, takeSessionDraft } from '@/store/composer'
@@ -6404,6 +6523,8 @@ index 00000000..3ef82d05
 +  })
 +
 +  stashSessionDraft(first, 'Original fresh send', [], owner)
++  // The actual typed submit path consumes the clicked draft synchronously.
++  clearSessionDraft(first, owner)
 +  send('Original fresh send')
 +  rawScope.current = next
 +  const actualNext = rotateFreshDraftKey()
@@ -6420,28 +6541,103 @@ index 00000000..3ef82d05
 +  expect(loaded).not.toHaveBeenCalled()
 +  clearSessionDraft(actualNext, owner)
 +})
++
++it.each([false, true])('preserves a newer same-owner draft after admission (hidden: %s)', async hidden => {
++  let accept!: () => void
++
++  const pending = new Promise<boolean>(resolve => {
++    accept = () => resolve(true)
++  })
++
++  const ownerRef = { current: owner }
++  const loaded = vi.fn()
++
++  const send = createComposerSubmitDispatch({
++    draftScopeRef: { current: first },
++    draftOwnerRef: ownerRef,
++    onSubmit: () => pending,
++    stashAt: (scope, text = '', attachments = [], captured) => stashSessionDraft(scope, text, attachments, captured),
++    loadIntoComposer: loaded
++  })
++
++  // Typed callers already cleared the editor before dispatch. Hidden callers
++  // never own its text. A user can type a follow-up while admission is pending.
++  send(hidden ? 'Machine setup note' : 'First submitted message', undefined, hidden ? 'hidden' : undefined)
++  stashSessionDraft(first, 'Keep my next unsent question', [], owner)
++  accept()
++  await pending
++  await Promise.resolve()
++
++  expect(takeSessionDraft(first, owner).text).toBe('Keep my next unsent question')
++  expect(loaded).not.toHaveBeenCalled()
++})
++
++it('an external accepted submit never consumes the editor draft it did not submit', async () => {
++  stashSessionDraft(first, 'Unrelated work in progress', [], owner)
++
++  const send = createComposerSubmitDispatch({
++    draftScopeRef: { current: first },
++    draftOwnerRef: { current: owner },
++    onSubmit: () => true,
++    stashAt: () => {
++      throw new Error('accepted request cannot restore')
++    },
++    loadIntoComposer: () => {
++      throw new Error('accepted request cannot repaint')
++    }
++  })
++
++  send('Text supplied by another surface')
++  await Promise.resolve()
++  await Promise.resolve()
++  expect(takeSessionDraft(first, owner).text).toBe('Unrelated work in progress')
++})
++
++it('keeps a newer live draft when the earlier send is rejected', async () => {
++  const stored = 'conflicting-send-draft'
++  let settle!: (value: boolean) => void
++
++  const pending = new Promise<boolean>(resolve => {
++    settle = resolve
++  })
++
++  const live = { text: '', attachments: [] }
++  const loaded = vi.fn()
++
++  const send = createComposerSubmitDispatch({
++    draftScopeRef: { current: stored },
++    draftOwnerRef: { current: owner },
++    onSubmit: () => pending,
++    readCurrentDraft: () => live,
++    stashAt: (scope, text = '', attachments = [], captured) => stashSessionDraft(scope, text, attachments, captured),
++    loadIntoComposer: loaded
++  })
++
++  send('Earlier message')
++  live.text = 'Keep my newer unsent message'
++  stashSessionDraft(stored, live.text, [], owner)
++  settle(false)
++  await pending
++  await Promise.resolve()
++
++  expect(takeSessionDraft(stored, owner).text).toBe('Keep my newer unsent message')
++  expect(loaded).not.toHaveBeenCalled()
++  clearSessionDraft(stored, owner)
++})
 diff --git a/apps/desktop/src/app/chat/composer/hooks/composer-submit-dispatch.ts b/apps/desktop/src/app/chat/composer/hooks/composer-submit-dispatch.ts
 new file mode 100644
-index 00000000..d753ea55
+index 00000000..9546c12b
 --- /dev/null
 +++ b/apps/desktop/src/app/chat/composer/hooks/composer-submit-dispatch.ts
-@@ -0,0 +1,95 @@
-+import type { RefObject } from 'react'
-+
-+import { clearSessionDraft, type ComposerAttachment, isFreshDraftScope } from '@/store/composer'
-+import { draftOwnerKey } from '@/store/composer-draft-owner'
-+import { type ComposerDraftRetry, draftRetry } from '@/store/composer-draft-retry'
-+import type { SessionOwnerScope } from '@/store/session-request-router'
+@@ -0,0 +1,92 @@
++import { type ComposerAttachment, freshDraftScope, isFreshDraftScope } from '@/store/composer'
 +
 +import type { ChatBarProps } from '../types'
 +
-+interface SubmitDispatchArgs {
-+  draftScopeRef: RefObject<string | null>
-+  draftOwnerRef?: RefObject<SessionOwnerScope>
++import { type ComposerDraftRestoreArgs, createComposerDraftRestorer } from './composer-draft-restore'
++
++interface SubmitDispatchArgs extends ComposerDraftRestoreArgs {
 +  onSubmit: ChatBarProps['onSubmit']
-+  stashAt: (scope: string | null, text?: string, attachments?: ComposerAttachment[], owner?: SessionOwnerScope) => void
-+  rememberDraftRetry?: (scope: string | null, retry: ComposerDraftRetry, owner?: SessionOwnerScope) => void
-+  loadIntoComposer: (text: string, attachments: ComposerAttachment[]) => void
 +}
 +
 +/** Send settlement belongs to the clicked editor, even after owner/scope navigation commits. */
@@ -6451,8 +6647,18 @@ index 00000000..d753ea55
 +  onSubmit,
 +  stashAt,
 +  rememberDraftRetry,
++  readCurrentDraft,
 +  loadIntoComposer
 +}: SubmitDispatchArgs) {
++  const restoreDraft = createComposerDraftRestorer({
++    draftScopeRef,
++    draftOwnerRef,
++    stashAt,
++    rememberDraftRetry,
++    readCurrentDraft,
++    loadIntoComposer
++  })
++
 +  const dispatchSubmit = (
 +    text: string,
 +    attachments?: ComposerAttachment[],
@@ -6463,7 +6669,7 @@ index 00000000..d753ea55
 +    // (`__new__:<uuid>`), but the submit contract spells "no session yet" as
 +    // null. Keep the raw lifecycle key separately: a later fresh chat must not
 +    // become the destination of this send settlement.
-+    const submittedDraftScope = target?.storedSessionId ?? draftScopeRef.current
++    const submittedDraftScope = target?.storedSessionId ?? draftScopeRef.current ?? freshDraftScope()
 +    const submittedScope = isFreshDraftScope(submittedDraftScope) ? null : submittedDraftScope
 +
 +    // Freeze owner at the click: pending navigation must not re-home success or rejection.
@@ -6488,18 +6694,7 @@ index 00000000..d753ea55
 +    // message that repeats an uncertain send, in this pane or another, is its own turn.
 +    const submissionId = target?.submission_id ?? crypto.randomUUID()
 +
-+    const restore = () => {
-+      stashAt(restoreScope, text, submittedAttachments, submittedOwner ?? null)
-+      // Restored with its identity: Enter on this exact draft retries the same send.
-+      rememberDraftRetry?.(restoreScope, draftRetry(submissionId, text, submittedAttachments), submittedOwner ?? null)
-+
-+      if (
-+        draftScopeRef.current === restoreScope &&
-+        draftOwnerKey(draftOwnerRef?.current) === draftOwnerKey(submittedOwner)
-+      ) {
-+        loadIntoComposer(text, submittedAttachments)
-+      }
-+    }
++    const restore = restoreDraft(() => restoreScope, text, submittedAttachments, submittedOwner ?? null, submissionId)
 +
 +    // A hidden submit is machine text (a setup note, never something the user
 +    // typed), so a rejection drops it instead of loading it into the draft.
@@ -6515,7 +6710,13 @@ index 00000000..d753ea55
 +        ...(displayKind ? { displayKind } : {})
 +      })
 +    )
-+      .then(accepted => void (accepted === false ? rejected() : clearSessionDraft(submittedDraftScope, submittedOwner)))
++      .then(accepted => {
++        // Typed callers clear at the click. External sends do not own the
++        // editor; admission must never erase text written while awaiting it.
++        if (accepted === false) {
++          rejected()
++        }
++      })
 +      .catch(rejected)
 +  }
 +
@@ -6986,8 +7187,177 @@ index 00000000..442e4c54
 +
 +  return sessionDraftOwner(id)
 +}
+diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-placeholder.history.test.tsx b/apps/desktop/src/app/chat/composer/hooks/use-composer-placeholder.history.test.tsx
+new file mode 100644
+index 00000000..0a5e15aa
+--- /dev/null
++++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-placeholder.history.test.tsx
+@@ -0,0 +1,67 @@
++import { cleanup, renderHook } from '@testing-library/react'
++import { afterEach, beforeEach, expect, it, vi } from 'vitest'
++
++import { $perSessionBrowse, browseBackward, browseForward, isBrowsingHistory } from '@/store/composer-input-history'
++
++import { useComposerPlaceholder } from './use-composer-placeholder'
++
++const copy = vi.hoisted(() => ({
++  composer: {
++    newSessionPlaceholders: ['Start'],
++    followUpPlaceholders: ['Continue'],
++    placeholderStarting: 'Starting',
++    placeholderReconnecting: 'Reconnecting'
++  }
++}))
++
++vi.mock('@/i18n', () => ({ useI18n: () => ({ t: copy }) }))
++
++const props = {
++  disabled: false,
++  reconnecting: false,
++  sessionId: 'runtime-a' as string | null,
++  historyScope: 'same-owner-and-durable-chat'
++}
++
++beforeEach(() => $perSessionBrowse.set({}))
++afterEach(cleanup)
++
++it('preserves browsing through a transient detach and reattach of the same owner and conversation', () => {
++  const view = renderHook(value => useComposerPlaceholder(value), { initialProps: props })
++  browseBackward('runtime-a', 'Keep my original draft', ['Third', 'Second', 'First'])
++  browseBackward('runtime-a', '', ['Third', 'Second', 'First'])
++  view.rerender({ ...props, sessionId: null })
++  expect(isBrowsingHistory('runtime-a')).toBe(true)
++  view.rerender(props)
++  expect(browseForward('runtime-a', ['Only retained question'])).toEqual({
++    text: 'Only retained question',
++    returnedToPresent: false
++  })
++  expect(browseForward('runtime-a', ['Only retained question'])).toEqual({
++    text: 'Keep my original draft',
++    returnedToPresent: true
++  })
++})
++
++it('moves an active cursor to a replacement runtime only for the same durable owner scope', () => {
++  const view = renderHook(value => useComposerPlaceholder(value), { initialProps: props })
++  browseBackward('runtime-a', 'Keep my original draft', ['Earlier question'])
++  view.rerender({ ...props, sessionId: null })
++  view.rerender({ ...props, sessionId: 'runtime-b' })
++  expect(isBrowsingHistory('runtime-a')).toBe(false)
++  expect(browseForward('runtime-b', ['Earlier question'])).toEqual({
++    text: 'Keep my original draft',
++    returnedToPresent: true
++  })
++})
++
++it.each(['another-owner-same-chat', 'same-owner-another-chat'])(
++  'retires old browse state when the actual editor identity changes (%s)',
++  historyScope => {
++    const view = renderHook(value => useComposerPlaceholder(value), { initialProps: props })
++    browseBackward('runtime-a', 'Old private draft', ['Earlier question'])
++    view.rerender({ ...props, historyScope })
++    expect(isBrowsingHistory('runtime-a')).toBe(false)
++    expect(browseForward('runtime-a', ['Other chat question'])).toBeNull()
++  }
++)
+diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-placeholder.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-placeholder.ts
+index 8d1bf8c1..a9483dd3 100644
+--- a/apps/desktop/src/app/chat/composer/hooks/use-composer-placeholder.ts
++++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-placeholder.ts
+@@ -3,3 +3,6 @@ import { useEffect, useRef, useState } from 'react'
+ import { useI18n } from '@/i18n'
+-import { resetBrowseState } from '@/store/composer-input-history'
++import { freshDraftScope } from '@/store/composer'
++import { draftIdentityKey } from '@/store/composer-draft-owner'
++import { migrateBrowseState, resetBrowseState } from '@/store/composer-input-history'
++import type { SessionOwnerScope } from '@/store/session-request-router'
+ 
+@@ -11,4 +14,9 @@ interface UseComposerPlaceholderOptions {
+   sessionId: null | string | undefined
++  historyScope?: string
+ }
+ 
++/** Uses the same explicit owner and fresh-draft identity as the draft store. */
++export const composerHistoryScope = (scope: string | null | undefined, owner: SessionOwnerScope) =>
++  draftIdentityKey(scope || freshDraftScope(), owner)
++
+ /**
+@@ -20,3 +28,8 @@ interface UseComposerPlaceholderOptions {
+  */
+-export function useComposerPlaceholder({ disabled, reconnecting, sessionId }: UseComposerPlaceholderOptions): string {
++export function useComposerPlaceholder({
++  disabled,
++  reconnecting,
++  sessionId,
++  historyScope
++}: UseComposerPlaceholderOptions): string {
+   const { t } = useI18n()
+@@ -29,3 +42,3 @@ export function useComposerPlaceholder({ disabled, reconnecting, sessionId }: Us
+ 
+-  const prevSessionIdRef = useRef(sessionId)
++  const previousRef = useRef({ sessionId, historyScope, lastRuntime: sessionId })
+ 
+@@ -33,6 +46,15 @@ export function useComposerPlaceholder({ disabled, reconnecting, sessionId }: Us
+   useEffect(() => {
+-    const prev = prevSessionIdRef.current
+-    prevSessionIdRef.current = sessionId
++    const previous = previousRef.current
++    const sameConversation = historyScope !== undefined && previous.historyScope === historyScope
++
++    if (sameConversation) {
++      migrateBrowseState(previous.lastRuntime, sessionId)
++      previousRef.current = { sessionId, historyScope, lastRuntime: sessionId ?? previous.lastRuntime }
++
++      return
++    }
++
++    previousRef.current = { sessionId, historyScope, lastRuntime: sessionId }
+ 
+-    if (prev === sessionId) {
++    if (previous.sessionId === sessionId && previous.historyScope === historyScope) {
+       return
+@@ -42,3 +64,3 @@ export function useComposerPlaceholder({ disabled, reconnecting, sessionId }: Us
+     // starter we showed instead of swapping to a follow-up under the user.
+-    if (prev == null && sessionId) {
++    if (previous.sessionId == null && sessionId && previous.historyScope === historyScope) {
+       return
+@@ -46,5 +68,5 @@ export function useComposerPlaceholder({ disabled, reconnecting, sessionId }: Us
+ 
+-    resetBrowseState(prev)
++    resetBrowseState(previous.lastRuntime)
+     setRestingPlaceholder(pickPlaceholder(sessionId ? followUpPlaceholders : newSessionPlaceholders))
+-  }, [followUpPlaceholders, newSessionPlaceholders, sessionId])
++  }, [followUpPlaceholders, historyScope, newSessionPlaceholders, sessionId])
+ 
+diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.restore-scoping.test.tsx b/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.restore-scoping.test.tsx
+index b43a453c..23f32b4e 100644
+--- a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.restore-scoping.test.tsx
++++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.restore-scoping.test.tsx
+@@ -596 +596,22 @@ it('a new identical message never adopts an unconfirmed send; the restored draft
+ })
++
++it('keeps DOM input that has not reached the animation-frame draft mirror when a send fails', async () => {
++  let decline!: (accepted: boolean) => void
++  const onSubmit = vi.fn<ChatBarProps['onSubmit']>(() =>
++    new Promise<boolean>(resolve => {
++      decline = resolve
++    })
++  )
++  stashSessionDraft('stored-B', 'Earlier message', [])
++  seed({ onSubmit })
++  act(() => handles.submit.submitDraft())
++  expect(onSubmit).toHaveBeenCalledTimes(1)
++  const editor = handles.draft.editorRef.current!
++  editor.textContent = 'Keep my newer unsent message'
++  expect(handles.draft.draftRef.current).toBe('')
++  await act(async () => decline(false))
++  expect(editorText()).toBe('Keep my newer unsent message')
++  flushDraft()
++  expect(takeSessionDraft('stored-B').text.trim()).toBe('Keep my newer unsent message')
++  expect(onSubmit).toHaveBeenCalledTimes(1)
++})
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.ts
-index c9ad1304..447a289d 100644
+index c9ad1304..371a59b8 100644
 --- a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.ts
 +++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.ts
 @@ -10,9 +10,4 @@ import type { BusyInputMode } from '@/store/busy-input-mode'
@@ -6999,23 +7369,24 @@ index c9ad1304..447a289d 100644
 -  isFreshDraftScope
 -} from '@/store/composer'
 -import { type ComposerDraftRetry, draftRetry } from '@/store/composer-draft-retry'
-+import { type ComposerAttachment, freezeComposerTransportPayload } from '@/store/composer'
++import { type ComposerAttachment, freezeComposerTransportPayload, freshDraftScope } from '@/store/composer'
 +import { type ComposerDraftRetry } from '@/store/composer-draft-retry'
  import { resetBrowseState } from '@/store/composer-input-history'
 @@ -23,2 +18,3 @@ import { answerParkedCard, skipParkedCards, yieldParkedCardsToMessage } from '@/
  import { hasBlockingPromptRequest } from '@/store/prompts'
 +import type { SessionOwnerScope } from '@/store/session-request-router'
  
-@@ -31,2 +27,4 @@ import type { ChatBarProps } from '../types'
+@@ -31,2 +27,5 @@ import type { ChatBarProps } from '../types'
  
++import { createComposerDraftRestorer } from './composer-draft-restore'
 +import { createComposerSubmitDispatch } from './composer-submit-dispatch'
 +
  interface UseComposerSubmitArgs {
-@@ -39,2 +37,3 @@ interface UseComposerSubmitArgs {
+@@ -39,2 +38,3 @@ interface UseComposerSubmitArgs {
    disabled: boolean
 +  draftOwnerRef?: RefObject<SessionOwnerScope>
    draftScopeRef: RefObject<string | null>
-@@ -56,5 +55,5 @@ interface UseComposerSubmitArgs {
+@@ -56,5 +56,5 @@ interface UseComposerSubmitArgs {
    setComposerText: (value: string) => void
 -  stashAt: (scope: string | null, text?: string, attachments?: ComposerAttachment[]) => void
 +  stashAt: (scope: string | null, text?: string, attachments?: ComposerAttachment[], owner?: SessionOwnerScope) => void
@@ -7023,11 +7394,11 @@ index c9ad1304..447a289d 100644
 -  rememberDraftRetry?: (scope: string | null, retry: ComposerDraftRetry) => void
 +  rememberDraftRetry?: (scope: string | null, retry: ComposerDraftRetry, owner?: SessionOwnerScope) => void
    takeDraftRetry?: (text: string, attachments: ComposerAttachment[]) => ComposerDraftRetry | undefined
-@@ -80,2 +79,3 @@ export function useComposerSubmit({
+@@ -80,2 +80,3 @@ export function useComposerSubmit({
    draftScopeRef,
 +  draftOwnerRef,
    draftRef,
-@@ -106,66 +106,10 @@ export function useComposerSubmit({
+@@ -106,78 +107,29 @@ export function useComposerSubmit({
  
 -  // Shared send primitive: fire onSubmit, and if the gateway rejects (accepted
 -  // === false) or throws, re-stash the draft so the words survive. Repaint it
@@ -7093,15 +7464,71 @@ index c9ad1304..447a289d 100644
 -      .then(accepted => void (accepted === false ? rejected() : clearSessionDraft(submittedScope)))
 -      .catch(rejected)
 -  }
+-
+-  // External "submit this prompt" requests (e.g. the review pane's agent-ship
+-  // button) route through the same send path. Match both the composer target
+-  // and the exact visible surface captured at click time — every tile stays
+-  // mounted, and a session can be rendered in more than one pane.
+-  //
+-  // Busy: a request from a card the user just clicked must not be dropped
+-  // because the agent is mid-sentence — that gap is exactly when they click.
+-  // Steer the live turn (the same stop-and-correct a typed message gets), and
+-  // if the turn has already ended, or a steer is not possible, queue it so it
+-  // runs next. This holds for hidden setup notes and for visible messages a
+-  // button sends on the user's behalf alike.
++  // The input's animation-frame mirror may still precede the latest native edit.
++  const readCurrentDraft = () => ({
++    text: editorRef.current ? composerPlainText(editorRef.current) : draftRef.current,
++    attachments: scope.attachments.$attachments.get()
++  })
++
 +  const dispatchSubmit = createComposerSubmitDispatch({
 +    draftScopeRef,
 +    draftOwnerRef,
 +    onSubmit,
 +    stashAt,
 +    rememberDraftRetry,
++    readCurrentDraft,
 +    loadIntoComposer
 +  })
++
++  const restoreDraft = createComposerDraftRestorer({
++    draftScopeRef,
++    draftOwnerRef,
++    stashAt,
++    rememberDraftRetry,
++    loadIntoComposer,
++    readCurrentDraft
++  })
++
++  // External requests match the captured target and visible surface: mounted panes can share a session.
++  // While busy, steer or enqueue instead of dropping the user's click; hidden notes retain their kind.
+   const externalSubmitRef = useRef({ busy, dispatchSubmit, onSteer, onSteerHidden })
+@@ -328,11 +280,3 @@ export function useComposerSubmit({
+     // Like dispatchSubmit's restore: an answer that never reached the backend gives the words back.
+-    const answeredScope = draftScopeRef.current
+-
+-    const restore = () => {
+-      stashAt(answeredScope, text, [])
+-
+-      if (draftScopeRef.current === answeredScope) {
+-        loadIntoComposer(text, [])
+-      }
+-    }
++    const restore = restoreDraft(draftScopeRef.current, text, [])
  
+@@ -464,3 +408,4 @@ export function useComposerSubmit({
+ 
+-    const submittedScope = activeQueueSessionKeyRef.current
++    const submittedScope = draftScopeRef.current || freshDraftScope()
++    const restore = restoreDraft(submittedScope, frozen.displayText, [], draftOwnerRef?.current ?? null)
+ 
+@@ -477,4 +422,3 @@ export function useComposerSubmit({
+       if (!activeQueueSessionKey) {
+-        loadIntoComposer(frozen.displayText, [])
+-        stashAt(submittedScope, frozen.displayText, [])
++        restore()
+       } else if (canonical) {
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-undo.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-undo.ts
 index 72f891f6..c2b5b3d8 100644
 --- a/apps/desktop/src/app/chat/composer/hooks/use-composer-undo.ts
@@ -7125,30 +7552,40 @@ index 72f891f6..c2b5b3d8 100644
 +
    const snapshot = useCallback((): ComposerSnapshot => {
 diff --git a/apps/desktop/src/app/chat/composer/index.tsx b/apps/desktop/src/app/chat/composer/index.tsx
-index aee9bf96..8c94d999 100644
+index aee9bf96..5fe1cf32 100644
 --- a/apps/desktop/src/app/chat/composer/index.tsx
 +++ b/apps/desktop/src/app/chat/composer/index.tsx
 @@ -63,2 +63,3 @@ import { ComposerControls } from './controls'
  import { ComposerDirectiveActions } from './directive-actions'
 +import { ComposerDraftRecovery } from './draft-recovery'
  import { COMPOSER_DROP_ACTIVE_CLASS, COMPOSER_DROP_FADE_CLASS } from './drop-affordance'
-@@ -72,3 +73,5 @@ import { useComposerDrop } from './hooks/use-composer-drop'
+@@ -72,4 +73,6 @@ import { useComposerDrop } from './hooks/use-composer-drop'
  import { useComposerEscCancel } from './hooks/use-composer-esc-cancel'
 +import { useComposerFilePaste } from './hooks/use-composer-file-paste'
  import { useComposerMetrics } from './hooks/use-composer-metrics'
+-import { useComposerPlaceholder } from './hooks/use-composer-placeholder'
 +import { useComposerDraftOwner } from './hooks/use-composer-owner'
- import { useComposerPlaceholder } from './hooks/use-composer-placeholder'
++import { composerHistoryScope, useComposerPlaceholder } from './hooks/use-composer-placeholder'
+ import { useComposerPopout } from './hooks/use-composer-popout'
 @@ -92,4 +95,4 @@ import { chipTypedPathOnSpace, pathifyRefs } from './path-refs'
  import { PreparedImageRecovery } from './prepared-image-recovery'
 +import { PromptPredictionControls } from './prompt-prediction'
  import { renderComposerQueueSlot, useComposerQueueScopeKey } from './queue-slot'
 -import { RestoredDraftNotice } from './restored-draft-notice'
  import {
-@@ -181,2 +184,3 @@ export function ChatBar({
+@@ -174,6 +177,3 @@ export function ChatBar({
+   const textDirection = useForcedTextDirection()
+-  // The turn is parked on the user (clarify / approval / sudo / secret). Esc must
+-  // not interrupt it — there's nothing actively running to stop, and stopping
+-  // would discard a question the user may want to come back to. The blocking
+-  // prompt owns its own dismissal (Skip, Reject, dialog close).
++  // Parked user prompts own dismissal; Esc must not discard an unanswered request.
+   const awaitingInput = useStore(scope.$awaitingInput)
+@@ -181,2 +181,3 @@ export function ChatBar({
    const activeQueueSessionKey = useComposerQueueScopeKey(queueSessionKey, sessionId, freshDraftKey)
 +  const draftOwner = useComposerDraftOwner(sessionId, undefined, activeQueueSessionKey)
    const { collapsed: statusDrawerCollapsed, toggle: toggleStatusDrawer } = useStatusDrawer(activeQueueSessionKey)
-@@ -279,2 +283,11 @@ export function ChatBar({
+@@ -279,2 +280,11 @@ export function ChatBar({
    // and threads it in so the draft↔queue coupling is an explicit dep, not a tangle.
 +  const draft = useComposerDraft({
 +    activeQueueSessionKey,
@@ -7160,11 +7597,11 @@ index aee9bf96..8c94d999 100644
 +  })
 +
    const {
-@@ -282,3 +295,2 @@ export function ChatBar({
+@@ -282,3 +292,2 @@ export function ChatBar({
      clearDraft,
 -    draftScopeRef,
      draftRef,
-@@ -296,8 +308,7 @@ export function ChatBar({
+@@ -296,8 +305,7 @@ export function ChatBar({
      setComposerText,
 -    stashAt,
 -    syncDraftFromEditor,
@@ -7176,14 +7613,14 @@ index aee9bf96..8c94d999 100644
    useComposerScreenshot({ sessionKey: activeQueueSessionKey, focusKey, onAttachImageBlob })
 +  const pasteFiles = useComposerFilePaste({ disabled: inputDisabled, onAttachDroppedItems, target: scope.target })
  
-@@ -306,4 +317,5 @@ export function ChatBar({
+@@ -306,4 +314,5 @@ export function ChatBar({
    // path below banks its pre-edit state through `recordUndoPoint`.
 -  const { recordUndoPoint, redo, resetUndoHistory, undo, withUndoPoint } = useComposerUndo({
 +  const { recordUndoPoint, redo, undo, withUndoPoint } = useComposerUndo({
      editorRef,
 +    scopeKey: JSON.stringify([activeQueueSessionKey, draft.ownerIdentity]),
      syncDraftFromEditor
-@@ -332,8 +344,2 @@ export function ChatBar({
+@@ -332,8 +341,2 @@ export function ChatBar({
  
 -  // Prior history belongs to the draft that just left — undoing into another
 -  // conversation's text is worse than having none.
@@ -7192,7 +7629,7 @@ index aee9bf96..8c94d999 100644
 -  }, [activeQueueSessionKey, resetUndoHistory])
 -
    // "Add URL" dialog — open/value state, autofocus, and submit (host onAddUrl or
-@@ -417,17 +423,11 @@ export function ChatBar({
+@@ -417,17 +420,11 @@ export function ChatBar({
    const { queueDraft, steerDraft, submitDraft } = useComposerSubmit({
 +    ...draft,
      busyInputMode,
@@ -7211,7 +7648,7 @@ index aee9bf96..8c94d999 100644
      inputDisabled,
 -    loadIntoComposer,
      // The submit engine's only cancel call is the Stop-button branch (busy +
-@@ -441,7 +441,3 @@ export function ChatBar({
+@@ -441,16 +438,13 @@ export function ChatBar({
      queuedPrompts,
 -    sessionId,
 -    setComposerText,
@@ -7220,7 +7657,23 @@ index aee9bf96..8c94d999 100644
 -    takeDraftRetry
 +    sessionId
    })
-@@ -563,2 +559,8 @@ export function ChatBar({
+ 
+-  // Resting / reconnecting / starting placeholder text, re-rolled only on a real
+-  // conversation change.
+-  const placeholder = useComposerPlaceholder({ disabled, reconnecting, sessionId })
++  const placeholder = useComposerPlaceholder({
++    disabled,
++    reconnecting,
++    sessionId,
++    historyScope: composerHistoryScope(activeQueueSessionKey, draftOwner)
++  })
+ 
+-  // Trigger / completion engine: @// detection, the adapter-driven item list,
+-  // popover selection, and chip insertion. The keydown nav block below consumes
+-  // this API; keyup uses triggerKeyConsumedRef to skip its refresh.
++  // Shared completion engine; keyup skips refresh for keys its keydown handler consumed.
+   const {
+@@ -563,2 +557,8 @@ export function ChatBar({
    const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
 +    if (pasteFiles(event.clipboardData)) {
 +      event.preventDefault()
@@ -7229,7 +7682,7 @@ index aee9bf96..8c94d999 100644
 +    }
 +
      const imageBlobs = extractClipboardImageBlobs(event.clipboardData)
-@@ -1148,2 +1150,19 @@ export function ChatBar({
+@@ -1148,2 +1148,19 @@ export function ChatBar({
        onToggleAutoSpeak={handleToggleAutoSpeak}
 +      promptSuggestion={
 +        <PromptPredictionControls
@@ -7249,18 +7702,18 @@ index aee9bf96..8c94d999 100644
 +        />
 +      }
        state={state}
-@@ -1231,2 +1250,3 @@ export function ChatBar({
+@@ -1231,2 +1248,3 @@ export function ChatBar({
        <ComposerDirectiveActions editorRef={editorRef} />
 +
        {/* assistant-ui requires ComposerPrimitive.Input somewhere in the tree
-@@ -1305,4 +1325,5 @@ export function ChatBar({
+@@ -1305,4 +1323,5 @@ export function ChatBar({
                  loadIntoComposer(text, restored)
 -                rememberDraftRetry(activeQueueSessionKey, draftRetry(id, text, restored))
 +                rememberDraftRetry(activeQueueSessionKey, draftRetry(id, text, restored), draftOwner)
                }}
 +              owner={draftOwner}
                request={requestBusyConfig}
-@@ -1487,7 +1508,3 @@ export function ChatBar({
+@@ -1487,7 +1506,3 @@ export function ChatBar({
                    <ContribSlot area={COMPOSER_AREAS.top} />
 -                  <RestoredDraftNotice
 -                    freshDraft={activeQueueSessionKey === null}
@@ -8173,6 +8626,183 @@ index 609a4d3c..355b3a6e 100644
 -          onClick={dismissRestoredDraftNotice}
 +          onClick={() => dismissRestoredDraftNotice(owner)}
            type="button"
+diff --git a/apps/desktop/src/app/chat/composer/retained-send-notice.test.tsx b/apps/desktop/src/app/chat/composer/retained-send-notice.test.tsx
+new file mode 100644
+index 00000000..e8ce0356
+--- /dev/null
++++ b/apps/desktop/src/app/chat/composer/retained-send-notice.test.tsx
+@@ -0,0 +1,74 @@
++import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
++import { useState } from 'react'
++import { afterEach, expect, it } from 'vitest'
++
++import { clearSessionDraft, ownedDraftScopes, stashSessionDraft, takeSessionDraft } from '@/store/composer'
++import { readDraftRetry } from '@/store/composer-draft-retry'
++import { retainedRejectedDrafts, retainRejectedDraft } from '@/store/composer-rejected-drafts'
++
++import { RetainedSendNotice } from './retained-send-notice'
++
++const owner = { connectionId: 'retained-notice', profile: 'work' }
++const scope = 'retained-notice-session'
++
++function Harness({ occupied = false }: { occupied?: boolean }) {
++  const [restored, setRestored] = useState('')
++
++  return (
++    <>
++      <RetainedSendNotice
++        canRestore={() => !occupied}
++        empty={!occupied}
++        onRestored={text => setRestored(text)}
++        owner={owner}
++        scope={scope}
++      />
++      <output>{restored}</output>
++    </>
++  )
++}
++
++afterEach(() => {
++  cleanup()
++
++  for (const row of ownedDraftScopes()) {
++    clearSessionDraft(row.scope, row.owner)
++  }
++
++  window.localStorage.clear()
++})
++
++it('keeps saved input separate until an explicit restore into an empty editor', () => {
++  retainRejectedDraft(scope, 'Earlier input', [], owner, 'retained-id')
++  const { container } = render(<Harness />)
++  expect(takeSessionDraft(scope, owner).text).toBe('')
++  fireEvent.click(container.querySelector('summary')!)
++  fireEvent.click(screen.getByRole('button', { name: 'Restore message' }))
++  expect(container.querySelector('output')?.textContent).toBe('Earlier input')
++  expect(takeSessionDraft(scope, owner).text).toBe('Earlier input')
++  expect(readDraftRetry(scope, owner)?.id).toBe('retained-id')
++  expect(retainedRejectedDrafts(scope, owner)).toEqual([])
++})
++
++it('never replaces an occupied editor or exposes another owner recovery', () => {
++  stashSessionDraft(scope, 'Current input', [], owner)
++  retainRejectedDraft(scope, 'Earlier input', [], owner, 'retained-id')
++  retainRejectedDraft(scope, 'Other owner private input', [], { ...owner, profile: 'other' }, 'other-id')
++  const { container } = render(<Harness occupied />)
++  fireEvent.click(container.querySelector('summary')!)
++  fireEvent.click(screen.getByRole('button', { name: 'Restore message' }))
++  expect(takeSessionDraft(scope, owner).text).toBe('Current input')
++  expect(container.textContent).not.toContain('Other owner private input')
++  expect(retainedRejectedDrafts(scope, owner)).toHaveLength(1)
++})
++
++it('removes a recovery affordance when the existing draft store retires that entry', () => {
++  retainRejectedDraft(scope, 'Earlier input', [], owner, 'retained-id')
++  const { container } = render(<Harness />)
++  act(() => {
++    for (let index = 0; index < 50; index++) {
++      stashSessionDraft('other-' + index, 'Other input', [], owner)
++    }
++  })
++  expect(container.querySelector('[data-slot="composer-retained-send"]')).toBeNull()
++})
+diff --git a/apps/desktop/src/app/chat/composer/retained-send-notice.tsx b/apps/desktop/src/app/chat/composer/retained-send-notice.tsx
+new file mode 100644
+index 00000000..5bf5baef
+--- /dev/null
++++ b/apps/desktop/src/app/chat/composer/retained-send-notice.tsx
+@@ -0,0 +1,91 @@
++import { Button } from '@/components/ui/button'
++import { useI18n } from '@/i18n'
++import { useSessionSlice } from '@/lib/use-session-slice'
++import type { ComposerAttachment } from '@/store/composer'
++import {
++  $retainedSendScopes,
++  discardRejectedDraft,
++  readRetainedSend,
++  restoreRejectedDraft,
++  retainedSendGroup
++} from '@/store/composer-rejected-drafts'
++import { notifyError } from '@/store/notifications'
++import type { SessionOwnerScope } from '@/store/session-request-router'
++
++interface Props {
++  scope: string | null
++  owner: SessionOwnerScope
++  empty: boolean
++  canRestore: () => boolean
++  onRestored: (text: string, attachments: ComposerAttachment[], id?: string) => void
++}
++
++/** A user gesture copies saved input; this surface never submits or drains it. */
++export function RetainedSendNotice({ scope, owner, empty, canRestore, onRestored }: Props) {
++  const { t } = useI18n()
++  const copy = t.composer
++  const rows = useSessionSlice($retainedSendScopes, retainedSendGroup(scope, owner))
++  const entries = rows.flatMap(row => readRetainedSend(row.scope, owner) ?? [])
++
++  if (!entries.length) {
++    return null
++  }
++
++  return (
++    <details className="text-xs text-muted-foreground" data-slot="composer-retained-send">
++      <summary className="cursor-pointer">
++        {copy.retainedSendNotice} ({entries.length})
++      </summary>
++      {entries.map(entry => (
++        <div className="flex items-center gap-2 py-1" key={entry.scope}>
++          <span className="min-w-0 flex-1 truncate">
++            {entry.text || entry.attachments.map(item => item.label).join(', ')}
++          </span>
++          {entry.attachmentCount > entry.attachments.length && <span>{copy.retainedSendMissingAttachments}</span>}
++          <Button
++            disabled={!empty}
++            onClick={() => {
++              if (!canRestore()) {
++                return
++              }
++
++              const restored = restoreRejectedDraft(entry.scope, scope, owner)
++
++              if (restored) {
++                onRestored(restored.text, restored.attachments, restored.id)
++
++                if (!restored.saved) {
++                  notifyError(
++                    new Error('Could not persist the restored message: storage failure'),
++                    copy.retainedSendRestore
++                  )
++                }
++              }
++            }}
++            size="sm"
++            type="button"
++            variant="ghost"
++          >
++            {copy.retainedSendRestore}
++          </Button>
++          <Button
++            aria-label={copy.retainedSendDiscard}
++            onClick={() => {
++              if (!discardRejectedDraft(entry.scope, owner)) {
++                notifyError(
++                  new Error('Could not discard the retained message: storage failure'),
++                  copy.retainedSendDiscard
++                )
++              }
++            }}
++            size="sm"
++            type="button"
++            variant="ghost"
++          >
++            ×
++          </Button>
++        </div>
++      ))}
++    </details>
++  )
++}
 diff --git a/apps/desktop/src/app/chat/composer/scope.tsx b/apps/desktop/src/app/chat/composer/scope.tsx
 index 85871fcf..8b8d998b 100644
 --- a/apps/desktop/src/app/chat/composer/scope.tsx
@@ -15260,6 +15890,50 @@ index 81a8dce948384a21ccbf5e43d00dafe38e012565..88600e09d6b5a5bb09f2aae32dc87d4a
          className
        )}
        data-slot="command-list"
+diff --git a/apps/desktop/src/components/ui/zoomable.test.tsx b/apps/desktop/src/components/ui/zoomable.test.tsx
+index a276dd89..b0f097fb 100644
+--- a/apps/desktop/src/components/ui/zoomable.test.tsx
++++ b/apps/desktop/src/components/ui/zoomable.test.tsx
+@@ -1,2 +1,2 @@
+-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
++import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+ import { afterEach, describe, expect, it } from 'vitest'
+@@ -17,3 +17,4 @@ describe('Zoomable', () => {
+     fireEvent.click(screen.getByRole('button', { name: 'Open diagram' }))
+-    expect(screen.getByTestId('overlay')).toBeTruthy()
++    const dialog = screen.getByRole('dialog', { name: 'Open diagram' })
++    expect(within(dialog).getByTestId('overlay')).toBeTruthy()
+   })
+diff --git a/apps/desktop/src/components/ui/zoomable.tsx b/apps/desktop/src/components/ui/zoomable.tsx
+index 7d1c2ea4..dd2ca05e 100644
+--- a/apps/desktop/src/components/ui/zoomable.tsx
++++ b/apps/desktop/src/components/ui/zoomable.tsx
+@@ -4,3 +4,3 @@ import { type ReactNode, useEffect, useRef, useState } from 'react'
+ 
+-import { Dialog, DialogContent } from '@/components/ui/dialog'
++import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
+ import { Tip } from '@/components/ui/tooltip'
+@@ -52,3 +52,3 @@ export function Zoomable({ children, overlay, onCopy, label = 'Open full view',
+       {open && (
+-        <ZoomPanViewer onCopy={onCopy} onOpenChange={setOpen} open={open}>
++        <ZoomPanViewer label={label} onCopy={onCopy} onOpenChange={setOpen} open={open}>
+           {overlay ?? children}
+@@ -62,2 +62,3 @@ function ZoomPanViewer({
+   children,
++  label,
+   onCopy,
+@@ -67,2 +68,3 @@ function ZoomPanViewer({
+   children: ReactNode
++  label: string
+   onCopy?: () => Promise<void> | void
+@@ -87,2 +89,3 @@ function ZoomPanViewer({
+       <DialogContent
++        aria-describedby={undefined}
+         bodyClassName="flex min-h-0 flex-1 flex-col gap-0 overflow-hidden p-0"
+@@ -91,2 +94,3 @@ function ZoomPanViewer({
+       >
++        <DialogTitle className="sr-only">{label}</DialogTitle>
+         <div
 diff --git a/apps/desktop/src/hermes.ts b/apps/desktop/src/hermes.ts
 index 4a1fd216cab155c4ea62120db72c9f3884a797a3..8d2b9520fc0e5eabae81e5b8697651c28bcc6485 100644
 --- a/apps/desktop/src/hermes.ts
@@ -15319,11 +15993,16 @@ index b4abecce80226bcb01c69351937bec2f75b1f666..4f09257dd01bc2bc977b9e757377b106
        intro: 'سجل الدخول باشتراكك دون نسخ مفتاح API. يشغّل Hermes تسجيل الدخول من المتصفح لك داخل التطبيق.',
 diff --git a/apps/desktop/src/i18n/composer-draft-copy.ts b/apps/desktop/src/i18n/composer-draft-copy.ts
 new file mode 100644
-index 00000000..c751c6c4
+index 00000000..a7ad1b1e
 --- /dev/null
 +++ b/apps/desktop/src/i18n/composer-draft-copy.ts
-@@ -0,0 +1,69 @@
+@@ -0,0 +1,110 @@
 +export interface ComposerDraftCopy {
++  retainedSendNotice: string
++  retainedSendRestore: string
++  retainedSendDiscard: string
++  retainedSendMissingAttachments: string
++
 +  unassignedDraftNotice: string
 +  unassignedDraftRestore: string
 +  restoredDraftNotice: string
@@ -15332,6 +16011,10 @@ index 00000000..c751c6c4
 +
 +export const composerDraftCopy = {
 +  en: {
++    retainedSendNotice: 'An earlier send could not be confirmed. Your current draft is unchanged.',
++    retainedSendRestore: 'Restore message',
++    retainedSendDiscard: 'Discard saved message',
++    retainedSendMissingAttachments: 'Reattach missing files before sending.',
 +    unassignedDraftNotice:
 +      'An older unsent draft has no recorded owner. Restore it here only if it belongs to this chat.',
 +    unassignedDraftRestore: 'Restore draft',
@@ -15339,6 +16022,10 @@ index 00000000..c751c6c4
 +    restoredDraftUndo: 'Undo'
 +  },
 +  de: {
++    retainedSendNotice: 'Eine frühere Sendung konnte nicht bestätigt werden. Ihr aktueller Entwurf bleibt unverändert.',
++    retainedSendRestore: 'Nachricht wiederherstellen',
++    retainedSendDiscard: 'Gespeicherte Nachricht verwerfen',
++    retainedSendMissingAttachments: 'Fehlende Dateien vor dem Senden erneut anhängen.',
 +    unassignedDraftNotice:
 +      'Ein älterer ungesendeter Entwurf hat keinen gespeicherten Besitzer. Stellen Sie ihn hier nur wieder her, wenn er zu diesem Chat gehört.',
 +    unassignedDraftRestore: 'Entwurf wiederherstellen',
@@ -15346,6 +16033,10 @@ index 00000000..c751c6c4
 +    restoredDraftUndo: 'Rückgängig'
 +  },
 +  es: {
++    retainedSendNotice: 'No se pudo confirmar un envío anterior. Tu borrador actual no ha cambiado.',
++    retainedSendRestore: 'Restaurar mensaje',
++    retainedSendDiscard: 'Descartar mensaje guardado',
++    retainedSendMissingAttachments: 'Adjunta los archivos que faltan antes de enviar.',
 +    unassignedDraftNotice:
 +      'Un borrador anterior sin enviar no tiene propietario registrado. Restáuralo aquí solo si pertenece a este chat.',
 +    unassignedDraftRestore: 'Restaurar borrador',
@@ -15353,6 +16044,10 @@ index 00000000..c751c6c4
 +    restoredDraftUndo: 'Deshacer'
 +  },
 +  fr: {
++    retainedSendNotice: 'Un envoi précédent n’a pas pu être confirmé. Votre brouillon actuel est inchangé.',
++    retainedSendRestore: 'Restaurer le message',
++    retainedSendDiscard: 'Supprimer le message enregistré',
++    retainedSendMissingAttachments: 'Joignez les fichiers manquants avant l’envoi.',
 +    unassignedDraftNotice:
 +      'Un ancien brouillon non envoyé ne possède pas de propriétaire enregistré. Restaurez-le ici uniquement si cette conversation lui correspond.',
 +    unassignedDraftRestore: 'Restaurer le brouillon',
@@ -15360,6 +16055,10 @@ index 00000000..c751c6c4
 +    restoredDraftUndo: 'Annuler'
 +  },
 +  ja: {
++    retainedSendNotice: '以前の送信を確認できませんでした。現在の下書きは変更されていません。',
++    retainedSendRestore: 'メッセージを復元',
++    retainedSendDiscard: '保存したメッセージを破棄',
++    retainedSendMissingAttachments: '送信前に不足しているファイルを再添付してください。',
 +    unassignedDraftNotice:
 +      '以前の未送信下書きには所有者の記録がありません。このチャットの下書きである場合のみ、ここに復元してください。',
 +    unassignedDraftRestore: '下書きを復元',
@@ -15367,6 +16066,10 @@ index 00000000..c751c6c4
 +    restoredDraftUndo: '元に戻す'
 +  },
 +  ru: {
++    retainedSendNotice: 'Предыдущую отправку не удалось подтвердить. Текущий черновик не изменён.',
++    retainedSendRestore: 'Восстановить сообщение',
++    retainedSendDiscard: 'Удалить сохранённое сообщение',
++    retainedSendMissingAttachments: 'Перед отправкой прикрепите недостающие файлы.',
 +    unassignedDraftNotice:
 +      'У старого неотправленного черновика не указан владелец. Восстановите его здесь, только если он относится к этому чату.',
 +    unassignedDraftRestore: 'Восстановить черновик',
@@ -15374,18 +16077,30 @@ index 00000000..c751c6c4
 +    restoredDraftUndo: 'Отменить'
 +  },
 +  zh: {
++    retainedSendNotice: '无法确认先前的发送。当前草稿保持不变。',
++    retainedSendRestore: '恢复消息',
++    retainedSendDiscard: '丢弃已保存消息',
++    retainedSendMissingAttachments: '发送前请重新附加缺失的文件。',
 +    unassignedDraftNotice: '旧的未发送草稿没有记录所属会话。仅当它属于此聊天时，才在此恢复。',
 +    unassignedDraftRestore: '恢复草稿',
 +    restoredDraftNotice: '已恢复你未发送的消息',
 +    restoredDraftUndo: '撤销'
 +  },
 +  'zh-hant_chat': {
++    retainedSendNotice: '無法確認先前的傳送。目前草稿保持不變。',
++    retainedSendRestore: '還原訊息',
++    retainedSendDiscard: '捨棄已儲存訊息',
++    retainedSendMissingAttachments: '傳送前請重新附加遺失的檔案。',
 +    unassignedDraftNotice: '舊的未傳送草稿沒有記錄所屬對話。僅當它屬於此聊天時，才在此還原。',
 +    unassignedDraftRestore: '還原草稿',
 +    restoredDraftNotice: '已還原你未送出的訊息',
 +    restoredDraftUndo: '復原'
 +  },
 +  ar_chat: {
++    retainedSendNotice: 'تعذر تأكيد إرسال سابق. مسودتك الحالية لم تتغير.',
++    retainedSendRestore: 'استعادة الرسالة',
++    retainedSendDiscard: 'حذف الرسالة المحفوظة',
++    retainedSendMissingAttachments: 'أعد إرفاق الملفات المفقودة قبل الإرسال.',
 +    unassignedDraftNotice: 'لا توجد ملكية مسجلة لمسودة قديمة غير مرسلة. استعدها هنا فقط إذا كانت تخص هذه المحادثة.',
 +    unassignedDraftRestore: 'استعادة المسودة',
 +    restoredDraftNotice: 'تمت استعادة رسالتك غير المُرسلة',
@@ -16314,6 +17029,251 @@ index 00000000..eb4432c1
 +    expect(retry.readDraftRetry('shared-history', original)).toBeUndefined()
 +    expect(retry.readDraftRetry('shared-history')).toEqual(legacy)
 +  })
++})
+diff --git a/apps/desktop/src/lib/composer-input-history-retention.test.ts b/apps/desktop/src/lib/composer-input-history-retention.test.ts
+new file mode 100644
+index 00000000..c01fb513
+--- /dev/null
++++ b/apps/desktop/src/lib/composer-input-history-retention.test.ts
+@@ -0,0 +1,66 @@
++import { beforeEach, expect, it } from 'vitest'
++
++import {
++  $perSessionBrowse,
++  browseBackward,
++  browseForward,
++  isBrowsingHistory,
++  resetBrowseState
++} from '@/store/composer-input-history'
++
++beforeEach(() => $perSessionBrowse.set({}))
++
++it('retires finished browse cursors instead of retaining every visited session', () => {
++  browseBackward('still-browsing', 'Keep this draft', ['Earlier question'])
++
++  for (let index = 0; index < 1000; index++) {
++    const id = 'visited-' + index
++    browseBackward(id, '', ['Earlier question'])
++    resetBrowseState(id)
++  }
++
++  expect(Object.keys($perSessionBrowse.get())).toEqual(['still-browsing'])
++  expect(browseForward('still-browsing', ['Earlier question'])).toEqual({
++    text: 'Keep this draft',
++    returnedToPresent: true
++  })
++  expect(Object.keys($perSessionBrowse.get())).toEqual([])
++})
++
++it('does not allocate an inactive cursor for a forward request with no active browse', () => {
++  expect(browseForward('never-browsed', ['Earlier question'])).toBeNull()
++  expect(Object.keys($perSessionBrowse.get())).toEqual([])
++})
++
++it('stays within a newly shortened live history instead of returning undefined text', () => {
++  browseBackward('history-trimmed', 'Keep my draft', ['Fourth', 'Third', 'Second', 'First'])
++  browseBackward('history-trimmed', '', ['Fourth', 'Third', 'Second', 'First'])
++  browseBackward('history-trimmed', '', ['Fourth', 'Third', 'Second', 'First'])
++  expect(browseForward('history-trimmed', ['Only retained question'])).toEqual({
++    text: 'Only retained question',
++    returnedToPresent: false
++  })
++  expect(browseForward('history-trimmed', ['Only retained question'])).toEqual({
++    text: 'Keep my draft',
++    returnedToPresent: true
++  })
++})
++
++it.each(['backward', 'forward'])('restores the original draft when live history disappears (%s)', direction => {
++  browseBackward('history-gone', 'Original draft', ['Earlier question'])
++
++  const result =
++    direction === 'backward'
++      ? browseBackward('history-gone', 'Earlier question', [])
++      : browseForward('history-gone', [])?.text
++
++  expect(result).toBe('Original draft')
++  expect(isBrowsingHistory('history-gone')).toBe(false)
++  expect(Object.keys($perSessionBrowse.get())).toEqual([])
++})
++
++it('rebases an out-of-range backward cursor onto the oldest remaining question', () => {
++  browseBackward('history-trimmed', '', ['Fourth', 'Third', 'Second'])
++  browseBackward('history-trimmed', '', ['Fourth', 'Third', 'Second'])
++  expect(browseBackward('history-trimmed', '', ['Only retained question'])).toBe('Only retained question')
++})
+diff --git a/apps/desktop/src/lib/composer-rejected-drafts.test.ts b/apps/desktop/src/lib/composer-rejected-drafts.test.ts
+new file mode 100644
+index 00000000..d5acd18b
+--- /dev/null
++++ b/apps/desktop/src/lib/composer-rejected-drafts.test.ts
+@@ -0,0 +1,167 @@
++import { batch } from 'nanostores'
++import { afterEach, expect, it, vi } from 'vitest'
++
++import {
++  clearSessionDraft,
++  migrateSessionDraft,
++  ownedDraftScopes,
++  reloadPersistedDrafts,
++  stashSessionDraft,
++  takeSessionDraft
++} from '@/store/composer'
++import { dropComposerStateForProfile, migrateComposerStateForProfile } from '@/store/composer-draft-lifecycle'
++import { draftOwnerKey, ownedDraftKey } from '@/store/composer-draft-owner'
++import { readDraftRetry } from '@/store/composer-draft-retry'
++import {
++  discardRejectedDraft,
++  restoreRejectedDraft,
++  retainedRejectedDrafts,
++  retainRejectedDraft
++} from '@/store/composer-rejected-drafts'
++
++const owner = { connectionId: 'retained-send', profile: 'work' }
++const other = { ...owner, profile: 'other' }
++const target = 'owned-session'
++
++afterEach(() => {
++  vi.restoreAllMocks()
++
++  for (const row of ownedDraftScopes()) {
++    clearSessionDraft(row.scope, row.owner)
++  }
++
++  window.localStorage.clear()
++})
++
++it('retains failed input separately from both a newer draft and another owner', () => {
++  stashSessionDraft(target, 'Next message', [], owner)
++  stashSessionDraft(target, 'Other owner message', [], other)
++  retainRejectedDraft(target, 'Earlier message', [], owner, 'earlier-send')
++  expect(takeSessionDraft(target, owner).text).toBe('Next message')
++  expect(takeSessionDraft(target, other).text).toBe('Other owner message')
++  expect(retainedRejectedDrafts(target, other)).toEqual([])
++  expect(retainedRejectedDrafts('another-session', owner)).toEqual([])
++  expect(retainedRejectedDrafts(target, owner).map(row => row.text)).toEqual(['Earlier message'])
++})
++
++it('restores only into an empty target and keeps the original explicit retry identity', () => {
++  retainRejectedDraft(target, 'Earlier message', [], owner, 'earlier-send')
++  const [saved] = retainedRejectedDrafts(target, owner)
++  stashSessionDraft(target, 'Newer message', [], owner)
++  expect(restoreRejectedDraft(saved.scope, target, owner)).toBeUndefined()
++  expect(retainedRejectedDrafts(target, owner)).toHaveLength(1)
++  clearSessionDraft(target, owner)
++  expect(restoreRejectedDraft(saved.scope, target, owner)?.saved).toBe(true)
++  expect(takeSessionDraft(target, owner).text).toBe('Earlier message')
++  expect(readDraftRetry(target, owner)?.id).toBe('earlier-send')
++  expect(retainedRejectedDrafts(target, owner)).toEqual([])
++})
++
++it('keeps recovery when quota prevents the destination from being persisted', () => {
++  retainRejectedDraft(target, 'Earlier message', [], owner, 'earlier-send')
++  const [saved] = retainedRejectedDrafts(target, owner)
++  const original = window.localStorage.setItem.bind(window.localStorage)
++  vi.spyOn(window.localStorage, 'setItem').mockImplementation((key, value) => {
++    if (key === ownedDraftKey(target, owner)) {
++      throw new DOMException('Full', 'QuotaExceededError')
++    }
++
++    original(key, value)
++  })
++  expect(restoreRejectedDraft(saved.scope, target, owner)?.saved).toBe(false)
++  expect(retainedRejectedDrafts(target, owner).map(row => row.id)).toEqual(['earlier-send'])
++})
++
++it('respects the 50-draft owner budget without retiring the editor being protected', () => {
++  vi.spyOn(Date, 'now').mockReturnValue(1)
++  stashSessionDraft(target, 'Current draft', [], owner)
++
++  for (let index = 0; index < 49; index++) {
++    stashSessionDraft('older-' + index, 'Older draft', [], owner)
++  }
++
++  retainRejectedDraft(target, 'Earlier message', [], owner, 'earlier-send')
++  expect(takeSessionDraft(target, owner).text).toBe('Current draft')
++  expect(ownedDraftScopes().filter(row => row.ownerKey === draftOwnerKey(owner))).toHaveLength(50)
++  expect(retainedRejectedDrafts(target, owner)).toHaveLength(1)
++})
++
++it('keeps one recovery for a repeated refusal of the same explicit send', () => {
++  retainRejectedDraft(target, 'Earlier message', [], owner, 'earlier-send')
++  retainRejectedDraft(target, 'Earlier message', [], owner, 'earlier-send')
++  reloadPersistedDrafts()
++  expect(retainedRejectedDrafts(target, owner)).toHaveLength(1)
++  const [saved] = retainedRejectedDrafts(target, owner)
++  expect(discardRejectedDraft(saved.scope, owner)).toBe(true)
++  expect(retainedRejectedDrafts(target, owner)).toEqual([])
++})
++
++it('does not enumerate saved storage when an ordinary draft is edited', () => {
++  stashSessionDraft(target, 'First version', [], owner)
++  const enumerate = vi.spyOn(window.localStorage, 'key')
++
++  for (let index = 0; index < 100; index++) {
++    stashSessionDraft(target, 'Edited version ' + index, [], owner)
++  }
++  expect(enumerate).not.toHaveBeenCalled()
++  expect(takeSessionDraft(target, owner).text).toBe('Edited version 99')
++})
++
++it('carries retained input along an explicit session lineage transfer', () => {
++  retainRejectedDraft('prior-tip', 'Earlier message', [], owner, 'earlier-send')
++  batch(() => migrateSessionDraft('prior-tip', 'durable-root', owner))
++  expect(retainedRejectedDrafts('prior-tip', owner)).toEqual([])
++  expect(retainedRejectedDrafts('durable-root', owner).map(row => row.id)).toEqual(['earlier-send'])
++})
++
++it('follows native profile rename and removal without crossing connections', () => {
++  const local = { connectionId: 'local', profile: 'rename-from' }
++  const remote = { connectionId: 'remote', profile: 'rename-from' }
++  retainRejectedDraft(target, 'Local input', [], local, 'local-send')
++  retainRejectedDraft(target, 'Remote input', [], remote, 'remote-send')
++  migrateComposerStateForProfile('rename-from', 'rename-to')
++  expect(retainedRejectedDrafts(target, { ...local, profile: 'rename-to' }).map(row => row.text)).toEqual([
++    'Local input'
++  ])
++  expect(retainedRejectedDrafts(target, remote).map(row => row.text)).toEqual(['Remote input'])
++  dropComposerStateForProfile('rename-to', { connectionId: 'local', profile: 'rename-to' })
++  expect(retainedRejectedDrafts(target, { ...local, profile: 'rename-to' })).toEqual([])
++  expect(retainedRejectedDrafts(target, remote)).toHaveLength(1)
++})
++
++it('honors another window clearing its persisted draft storage', () => {
++  retainRejectedDraft(target, 'Earlier message', [], owner, 'earlier-send')
++  window.localStorage.clear()
++  window.dispatchEvent(new StorageEvent('storage', { key: null }))
++  expect(retainedRejectedDrafts(target, owner)).toEqual([])
++})
++
++it('keeps the original recovery when a lineage destination cannot be persisted', () => {
++  retainRejectedDraft('prior-tip', 'Earlier message', [], owner, 'earlier-send')
++  const write = window.localStorage.setItem.bind(window.localStorage)
++  vi.spyOn(window.localStorage, 'setItem').mockImplementation((key, value) => {
++    if (key.includes('durable-root')) {
++      throw new DOMException('Full', 'QuotaExceededError')
++    }
++    write(key, value)
++  })
++  migrateSessionDraft('prior-tip', 'durable-root', owner)
++  expect(retainedRejectedDrafts('prior-tip', owner).map(row => row.text)).toEqual(['Earlier message'])
++  const original = retainedRejectedDrafts('prior-tip', owner)[0]
++  expect(window.localStorage.getItem(ownedDraftKey(original.scope, owner)!)).toContain('Earlier message')
++})
++
++it('protects both the recovery source and a newer editor during a bounded lineage move', () => {
++  vi.spyOn(Date, 'now').mockReturnValue(1)
++  stashSessionDraft('durable-root', 'Newer editor', [], owner)
++  retainRejectedDraft('prior-tip', 'Earlier message', [], owner, 'earlier-send')
++
++  for (let index = 0; index < 48; index++) {
++    stashSessionDraft('other-' + index, 'Older draft', [], owner)
++  }
++  batch(() => migrateSessionDraft('prior-tip', 'durable-root', owner))
++  expect(takeSessionDraft('durable-root', owner).text).toBe('Newer editor')
++  expect(retainedRejectedDrafts('prior-tip', owner)).toEqual([])
++  expect(retainedRejectedDrafts('durable-root', owner).map(row => row.text)).toEqual(['Earlier message'])
++  expect(ownedDraftScopes().filter(row => row.ownerKey === draftOwnerKey(owner)).length).toBeLessThanOrEqual(50)
 +})
 diff --git a/apps/desktop/src/lib/keybinds/builtin-app-action.test.ts b/apps/desktop/src/lib/keybinds/builtin-app-action.test.ts
 new file mode 100644
@@ -22244,10 +23204,10 @@ index 00000000..f31f3ad0
 +}
 diff --git a/apps/desktop/src/store/composer-draft-owner.ts b/apps/desktop/src/store/composer-draft-owner.ts
 new file mode 100644
-index 00000000..4a721ad5
+index 00000000..50205a47
 --- /dev/null
 +++ b/apps/desktop/src/store/composer-draft-owner.ts
-@@ -0,0 +1,162 @@
+@@ -0,0 +1,166 @@
 +import type { SessionOwnerScope } from './session-request-router'
 +
 +export const OWNED_DRAFT_STORAGE_PREFIX = 'hermes:composer-draft:v4:'
@@ -22375,7 +23335,11 @@ index 00000000..4a721ad5
 +}
 +
 +/** Independent keys make a stale window unable to overwrite another owner's edits. */
-+export function persistOwnedDraftText(key: string, text: string): { saved: boolean; retired: string[] } {
++export function persistOwnedDraftText(
++  key: string,
++  text: string,
++  preserveKeys: readonly string[] = []
++): { saved: boolean; retired: string[] } {
 +  try {
 +    const existed = window.localStorage.getItem(key) !== null
 +
@@ -22388,19 +23352,19 @@ index 00000000..4a721ad5
 +    window.localStorage.setItem(key, JSON.stringify({ text, updatedAt: Date.now() }))
 +
 +    // Updating a draft is the hot typing path; scan retention only for a newly saved scope.
-+    return { saved: true, retired: existed ? [] : retireOldOwnedDrafts(key) }
++    return { saved: true, retired: existed ? [] : retireOldOwnedDrafts(key, preserveKeys) }
 +  } catch {
 +    return { saved: false, retired: [] }
 +  }
 +}
 +
-+function retireOldOwnedDrafts(currentKey: string): string[] {
++function retireOldOwnedDrafts(currentKey: string, preserveKeys: readonly string[]): string[] {
 +  const owner = parseOwnedDraftKey(currentKey)?.ownerKey
 +  const rows = loadOwnedDraftTexts()?.entries.filter(row => parseOwnedDraftKey(row.key)?.ownerKey === owner) ?? []
 +  const excess = Math.max(0, rows.length - MAX_PERSISTED_DRAFTS)
 +
 +  const retired = rows
-+    .filter(row => row.key !== currentKey)
++    .filter(row => row.key !== currentKey && !preserveKeys.includes(row.key))
 +    .slice(0, excess)
 +    .map(row => row.key)
 +
@@ -22509,8 +23473,365 @@ index ef73e26c..74bd8667 100644
 +
 +  return writeDraftRetry(to, source, owner)
 +}
+diff --git a/apps/desktop/src/store/composer-input-history.ts b/apps/desktop/src/store/composer-input-history.ts
+index 36bd81d2..7fce0f9d 100644
+--- a/apps/desktop/src/store/composer-input-history.ts
++++ b/apps/desktop/src/store/composer-input-history.ts
+@@ -24,3 +24,3 @@ const $perSessionBrowse = atom<Record<string, SessionBrowseState>>({})
+ function ensure(sessionId: string): SessionBrowseState {
+-  const all = { ...$perSessionBrowse.get() }
++  const all = $perSessionBrowse.get()
+   let s = all[sessionId]
+@@ -29,4 +29,3 @@ function ensure(sessionId: string): SessionBrowseState {
+     s = { cursor: -1, draftSnapshot: '' }
+-    all[sessionId] = s
+-    $perSessionBrowse.set(all)
++    $perSessionBrowse.set({ ...all, [sessionId]: s })
+   }
+@@ -74,3 +73,3 @@ export function deriveUserHistory<T extends { role: string }>(
+  * Returns the text to place in the composer, or null if already at the oldest
+- * entry (or the ring is empty).
++ * entry. If a live ring disappears, restore the saved draft.
+  */
+@@ -81,3 +80,3 @@ export function browseBackward(
+ ): string | null {
+-  if (!valid(sessionId) || history.length === 0) {
++  if (!valid(sessionId)) {
+     return null
+@@ -85,2 +84,6 @@ export function browseBackward(
+ 
++  if (history.length === 0) {
++    return browseForward(sessionId, history)?.text ?? null
++  }
++
+   const s = ensure(sessionId)
+@@ -90,2 +93,5 @@ export function browseBackward(
+     s.cursor = 0
++  } else if (s.cursor >= history.length) {
++    // The caller's live window can shrink while this cursor remains active.
++    s.cursor = history.length - 1
+   } else if (s.cursor < history.length - 1) {
+@@ -113,5 +119,5 @@ export function browseForward(
+ 
+-  const s = ensure(sessionId)
++  const s = $perSessionBrowse.get()[sessionId]
+ 
+-  if (s.cursor === -1) {
++  if (!s || s.cursor === -1) {
+     return null
+@@ -119,4 +125,4 @@ export function browseForward(
+ 
+-  if (s.cursor > 0) {
+-    s.cursor -= 1
++  if (history.length > 0 && s.cursor > 0) {
++    s.cursor = Math.min(s.cursor, history.length) - 1
+     persist()
+@@ -128,5 +134,3 @@ export function browseForward(
+   const text = s.draftSnapshot
+-  s.cursor = -1
+-  s.draftSnapshot = ''
+-  persist()
++  resetBrowseState(sessionId)
+ 
+@@ -141,3 +145,3 @@ export function resetBrowseState(sessionId: string | null | undefined) {
+ 
+-  const all = { ...$perSessionBrowse.get() }
++  const all = $perSessionBrowse.get()
+   const existing = all[sessionId]
+@@ -148,4 +152,22 @@ export function resetBrowseState(sessionId: string | null | undefined) {
+ 
+-  all[sessionId] = { cursor: -1, draftSnapshot: '' }
+-  $perSessionBrowse.set(all)
++  const remaining = { ...all }
++  delete remaining[sessionId]
++  $perSessionBrowse.set(remaining)
++}
++
++/** The caller has proved the owner and durable conversation are unchanged. */
++export function migrateBrowseState(from: string | null | undefined, to: string | null | undefined): void {
++  if (!valid(from) || !valid(to) || from === to) {
++    return
++  }
++
++  const all = $perSessionBrowse.get()
++
++  if (!all[from] || all[to]) {
++    return
++  }
++
++  const next = { ...all, [to]: all[from] }
++  delete next[from]
++  $perSessionBrowse.set(next)
+ }
+diff --git a/apps/desktop/src/store/composer-rejected-drafts.ts b/apps/desktop/src/store/composer-rejected-drafts.ts
+new file mode 100644
+index 00000000..ba5ffac6
+--- /dev/null
++++ b/apps/desktop/src/store/composer-rejected-drafts.ts
+@@ -0,0 +1,261 @@
++import { atom } from 'nanostores'
++
++import {
++  clearSessionDraft,
++  type ComposerAttachment,
++  freshDraftScope,
++  onDraftMutation,
++  ownedDraftScopes,
++  SESSION_DRAFTS_STORAGE_KEY,
++  stashedDraftScopes,
++  stashSessionDraft,
++  takeSessionDraft
++} from './composer'
++import { draftOwnerKey, OWNED_DRAFT_STORAGE_PREFIX, parseOwnedDraftKey } from './composer-draft-owner'
++import { draftRetry, writeDraftRetry } from './composer-draft-retry'
++import type { SessionOwnerScope } from './session-request-router'
++
++const PREFIX = '__new__:retained-send:'
++export const $retainedSendScopes = atom<Record<string, { scope: string }[]>>({})
++export const retainedSendGroup = (origin: string | null, owner: SessionOwnerScope) =>
++  JSON.stringify([draftOwnerKey(owner) ?? null, origin || freshDraftScope()])
++
++interface RetainedSendScope {
++  origin: string
++  id: string
++  retry: boolean
++  attachmentCount: number
++}
++export interface RetainedSend extends RetainedSendScope {
++  scope: string
++  text: string
++  attachments: ComposerAttachment[]
++}
++
++function parse(scope: string): RetainedSendScope | undefined {
++  if (!scope.startsWith(PREFIX)) {
++    return undefined
++  }
++
++  try {
++    const value: unknown = JSON.parse(scope.slice(PREFIX.length))
++
++    if (
++      !Array.isArray(value) ||
++      value.length !== 4 ||
++      typeof value[0] !== 'string' ||
++      typeof value[1] !== 'string' ||
++      typeof value[2] !== 'boolean' ||
++      !Number.isSafeInteger(value[3]) ||
++      value[3] < 0
++    ) {
++      return undefined
++    }
++
++    return { origin: value[0], id: value[1], retry: value[2], attachmentCount: value[3] }
++  } catch {
++    return undefined
++  }
++}
++
++/** Uses the existing owner-isolated, bounded draft store, never an automatic outbox. */
++export function retainRejectedDraft(
++  origin: string,
++  text: string,
++  attachments: ComposerAttachment[],
++  owner: SessionOwnerScope,
++  submissionId?: string
++): boolean {
++  const scope =
++    PREFIX + JSON.stringify([origin, submissionId ?? crypto.randomUUID(), Boolean(submissionId), attachments.length])
++
++  const saved = stashSessionDraft(scope, text, attachments, owner, origin)
++  refresh(scope, owner)
++
++  return saved
++}
++
++export function readRetainedSend(scope: string, owner: SessionOwnerScope): RetainedSend | undefined {
++  const entry = parse(scope)
++
++  if (!entry) {
++    return undefined
++  }
++
++  const draft = takeSessionDraft(scope, owner)
++
++  return draft.text.trim() || draft.attachments.length ? { ...entry, scope, ...draft } : undefined
++}
++
++function refresh(scope: string, owner: SessionOwnerScope): void {
++  const entry = parse(scope)
++
++  if (!entry) {
++    return
++  }
++
++  const key = retainedSendGroup(entry.origin, owner)
++  const current = $retainedSendScopes.get()
++  const rows = (current[key] ?? []).filter(row => row.scope !== scope)
++
++  if (readRetainedSend(scope, owner)) {
++    rows.push({ scope })
++  }
++
++  const next = { ...current }
++
++  if (rows.length) {
++    next[key] = rows
++  } else {
++    delete next[key]
++  }
++
++  $retainedSendScopes.set(next)
++}
++
++export function retainedRejectedDrafts(origin: string | null, owner: SessionOwnerScope): RetainedSend[] {
++  return ($retainedSendScopes.get()[retainedSendGroup(origin, owner)] ?? []).flatMap(
++    row => readRetainedSend(row.scope, owner) ?? []
++  )
++}
++
++export function discardRejectedDraft(scope: string, owner: SessionOwnerScope): boolean {
++  if (!parse(scope)) {
++    return false
++  }
++
++  const previous = takeSessionDraft(scope, owner)
++  const saved = clearSessionDraft(scope, owner)
++
++  if (!saved) {
++    stashSessionDraft(scope, previous.text, previous.attachments, owner)
++  }
++
++  refresh(scope, owner)
++
++  return saved
++}
++
++/** Copy first; an unsaved destination never retires the recoverable source. */
++export function restoreRejectedDraft(scope: string, origin: string | null, owner: SessionOwnerScope) {
++  const entry = parse(scope),
++    target = origin || freshDraftScope()
++
++  const current = takeSessionDraft(target, owner)
++
++  if (!entry || entry.origin !== target || current.text.trim() || current.attachments.length) {
++    return undefined
++  }
++
++  const draft = takeSessionDraft(scope, owner)
++
++  if (!draft.text.trim() && !draft.attachments.length) {
++    return undefined
++  }
++
++  const saved = stashSessionDraft(target, draft.text, draft.attachments, owner, scope)
++
++  const identitySaved =
++    saved &&
++    writeDraftRetry(target, entry.retry ? draftRetry(entry.id, draft.text, draft.attachments) : undefined, owner)
++
++  if (identitySaved) {
++    discardRejectedDraft(scope, owner)
++  }
++
++  return {
++    ...draft,
++    id: entry.retry ? entry.id : undefined,
++    saved: Boolean(identitySaved),
++    missingAttachments: entry.attachmentCount > draft.attachments.length
++  }
++}
++
++// Only retained-key events update this index; normal typing does not enumerate draft storage.
++function refreshMutation(key: string): void {
++  if (!key.includes(PREFIX)) {
++    return
++  }
++
++  if (key.startsWith(PREFIX)) {
++    refresh(key, undefined)
++  } else {
++    const owned = parseOwnedDraftKey(key)
++
++    if (owned) {
++      refresh(owned.scope, owned.owner)
++    }
++  }
++}
++
++/** Lineage moves keep both the original recovery and the current editor until the copy is durable. */
++function rehomeRetainedSend(from: string, to: string): void {
++  const source = parseOwnedDraftKey(from)
++  const target = parseOwnedDraftKey(to)
++
++  if (source?.ownerKey !== target?.ownerKey) {
++    return
++  }
++
++  const owner = source?.owner
++  const origin = target?.scope ?? to
++
++  for (const entry of retainedRejectedDrafts(source?.scope ?? from, owner)) {
++    const scope = PREFIX + JSON.stringify([origin, entry.id, entry.retry, entry.attachmentCount])
++    const existing = takeSessionDraft(scope, owner)
++
++    if (existing.text.trim() || existing.attachments.length) {
++      continue
++    }
++
++    if (stashSessionDraft(scope, entry.text, entry.attachments, owner, [entry.scope, origin])) {
++      discardRejectedDraft(entry.scope, owner)
++    }
++  }
++}
++
++for (const row of ownedDraftScopes()) {
++  refresh(row.scope, row.owner)
++}
++
++for (const scope of stashedDraftScopes()) {
++  refresh(scope, undefined)
++}
++
++onDraftMutation(key => {
++  if (typeof key === 'string') {
++    refreshMutation(key)
++  } else if (key) {
++    rehomeRetainedSend(key.from, key.to)
++  }
++})
++
++if (typeof window !== 'undefined') {
++  window.addEventListener('storage', event => {
++    if (event.key?.startsWith(OWNED_DRAFT_STORAGE_PREFIX) && event.key.includes(PREFIX)) {
++      const row = parseOwnedDraftKey(event.key)
++
++      if (row) {
++        refresh(row.scope, row.owner)
++      }
++    } else if (event.key === null || event.key === SESSION_DRAFTS_STORAGE_KEY) {
++      for (const key of Object.keys($retainedSendScopes.get())) {
++        for (const row of $retainedSendScopes.get()[key] ?? []) {
++          const parts = JSON.parse(key)
++
++          if (event.key === null || parts[0] === null) {
++            const owner =
++              parts[0] === null
++                ? undefined
++                : parseOwnedDraftKey(OWNED_DRAFT_STORAGE_PREFIX + JSON.stringify([parts[0], row.scope]))?.owner
++            refresh(row.scope, owner)
++          }
++        }
++      }
++
++      for (const scope of stashedDraftScopes()) {
++        refresh(scope, undefined)
++      }
++    }
++  })
++}
 diff --git a/apps/desktop/src/store/composer.ts b/apps/desktop/src/store/composer.ts
-index 2c4c553b..1d6cf5e1 100644
+index 2c4c553b..3f806971 100644
 --- a/apps/desktop/src/store/composer.ts
 +++ b/apps/desktop/src/store/composer.ts
 @@ -6,3 +6,15 @@ import { persistString, storedString } from '@/lib/storage'
@@ -22615,8 +23936,26 @@ index 2c4c553b..1d6cf5e1 100644
 +      updated = true
 +    }
    }
-@@ -368,11 +404,20 @@ export const $draftTitles = atom<Record<string, string>>(
+@@ -368,11 +404,38 @@ export const $draftTitles = atom<Record<string, string>>(
  
++type DraftMutation = string | { from: string; to: string }
++const draftMutationListeners = new Set<(change: DraftMutation) => void>()
++
++/** Persistence notifications cannot be coalesced like render state: every retired key matters. */
++export function onDraftMutation(listener: (change: DraftMutation) => void): () => void {
++  draftMutationListeners.add(listener)
++
++  return () => {
++    draftMutationListeners.delete(listener)
++  }
++}
++
++function publishDraftMutation(change: DraftMutation): void {
++  for (const listener of draftMutationListeners) {
++    listener(change)
++  }
++}
++
 +export const $ownedDraftTitles = atom<Record<string, string>>(
 +  Object.fromEntries([...ownedDraftsBySession].map(([key, draft]) => [key, deriveDraftTitle(draft.text)]))
 +)
@@ -22641,12 +23980,12 @@ index 2c4c553b..1d6cf5e1 100644
 +  const atom = owned ? $ownedDraftTitles : $draftTitles
 +  const current = atom.get()
  
-@@ -390,3 +435,3 @@ function publishDraftTitle(key: string, title: string): void {
+@@ -390,3 +453,3 @@ function publishDraftTitle(key: string, title: string): void {
  
 -  $draftTitles.set(next)
 +  atom.set(next)
  }
-@@ -405,26 +450,102 @@ function publishDraftTitle(key: string, title: string): void {
+@@ -405,26 +468,104 @@ function publishDraftTitle(key: string, title: string): void {
   */
 -export function reloadPersistedDrafts(): void {
 -  const incoming = new Map(loadPersistedDraftTexts())
@@ -22747,9 +24086,10 @@ index 2c4c553b..1d6cf5e1 100644
  if (typeof window !== 'undefined') {
    window.addEventListener('storage', event => {
 -    if (event.key === SESSION_DRAFTS_STORAGE_KEY) {
--      reloadPersistedDrafts()
 +    if (event.key?.startsWith(OWNED_DRAFT_STORAGE_PREFIX)) {
 +      syncOwnedDraftFromStorage(event.key, event.newValue)
++    } else if (event.key === null) {
+       reloadPersistedDrafts()
 +    } else if (event.key === SESSION_DRAFTS_STORAGE_KEY) {
 +      const legacy = loadPersistedDraftTexts()
 +
@@ -22764,12 +24104,12 @@ index 2c4c553b..1d6cf5e1 100644
 +        )
 +      }
      }
-@@ -473,3 +594,3 @@ export function onComposerDraftSyncRequest(handler: (detail: ComposerDraftSyncDe
+@@ -473,3 +614,3 @@ export function onComposerDraftSyncRequest(handler: (detail: ComposerDraftSyncDe
  
 -function persistDraftTexts() {
 +function persistDraftTexts(): boolean {
    try {
-@@ -485,4 +606,6 @@ function persistDraftTexts() {
+@@ -485,4 +626,6 @@ function persistDraftTexts() {
      }
 +
 +    return true
@@ -22777,7 +24117,7 @@ index 2c4c553b..1d6cf5e1 100644
 -    // Best-effort only — quota/private-mode must never break typing.
 +    return false
    }
-@@ -490,13 +613,21 @@ function persistDraftTexts() {
+@@ -490,13 +633,22 @@ function persistDraftTexts() {
  
 -export function stashSessionDraft(scope: string | null | undefined, text: string, attachments: ComposerAttachment[]) {
 -  const key = draftKey(scope)
@@ -22788,7 +24128,8 @@ index 2c4c553b..1d6cf5e1 100644
 +  scope: string | null | undefined,
 +  text: string,
 +  attachments: ComposerAttachment[],
-+  owner?: SessionOwnerScope
++  owner?: SessionOwnerScope,
++  preserveScope?: string | readonly string[]
 +) {
 +  const key = draftKey(scope, owner)
 +  const owned = hasDraftOwner(owner)
@@ -22808,11 +24149,17 @@ index 2c4c553b..1d6cf5e1 100644
 +    draftOwnerKey($restoredDraftNotice.get()?.owner) === draftOwnerKey(owner)
 +  ) {
      $restoredDraftNotice.set(null)
-@@ -504,21 +635,86 @@ export function stashSessionDraft(scope: string | null | undefined, text: string
+@@ -504,21 +656,95 @@ export function stashSessionDraft(scope: string | null | undefined, text: string
  
 -  persistDraftTexts()
 -  publishDraftTitle(key, deriveDraftTitle(text))
-+  const result = owned ? persistOwnedDraftText(key, text) : { saved: persistDraftTexts(), retired: [] }
++  const result = owned
++    ? persistOwnedDraftText(
++        key,
++        text,
++        (typeof preserveScope === 'string' ? [preserveScope] : preserveScope)?.map(scope => draftKey(scope, owner))
++      )
++    : { saved: persistDraftTexts(), retired: [] }
 +
 +  if (result.saved) {
 +    unsaved.delete(key)
@@ -22833,9 +24180,12 @@ index 2c4c553b..1d6cf5e1 100644
 +
 +    persisted.delete(retired)
 +    publishDraftTitle(retired, '', true)
++    publishDraftMutation(retired)
 +  }
 +
 +  publishDraftTitle(key, deriveDraftTitle(text), owned)
++
++  publishDraftMutation(key)
 +
 +  return result.saved
  }
@@ -22908,7 +24258,7 @@ index 2c4c553b..1d6cf5e1 100644
 +
 +  return true
  }
-@@ -535,5 +731,10 @@ export function stashedDraftScopes(): string[] {
+@@ -535,5 +761,10 @@ export function stashedDraftScopes(): string[] {
   */
 -export function migrateSessionDraft(fromKey: string | null | undefined, toKey: string | null | undefined): boolean {
 -  const from = draftKey(fromKey)
@@ -22922,17 +24272,19 @@ index 2c4c553b..1d6cf5e1 100644
 +  const to = draftKey(toKey, owner)
 +  const map = draftsFor(owner)
  
-@@ -543,3 +744,3 @@ export function migrateSessionDraft(fromKey: string | null | undefined, toKey: s
+@@ -543,3 +774,5 @@ export function migrateSessionDraft(fromKey: string | null | undefined, toKey: s
  
 -  const source = draftsBySession.get(from)
++  publishDraftMutation({ from, to })
++
 +  const source = map.get(from)
  
-@@ -549,3 +750,3 @@ export function migrateSessionDraft(fromKey: string | null | undefined, toKey: s
+@@ -549,3 +782,3 @@ export function migrateSessionDraft(fromKey: string | null | undefined, toKey: s
  
 -  const dest = draftsBySession.get(to)
 +  const dest = map.get(to)
  
-@@ -555,4 +756,8 @@ export function migrateSessionDraft(fromKey: string | null | undefined, toKey: s
+@@ -555,4 +788,8 @@ export function migrateSessionDraft(fromKey: string | null | undefined, toKey: s
  
 -  stashSessionDraft(toKey, source.text, source.attachments)
 -  clearSessionDraft(fromKey)
@@ -22943,7 +24295,7 @@ index 2c4c553b..1d6cf5e1 100644
 +  clearSessionDraft(fromKey, owner)
 +  writeDraftRetry(fromKey, undefined, owner)
  
-@@ -561,2 +766,13 @@ export function migrateSessionDraft(fromKey: string | null | undefined, toKey: s
+@@ -561,2 +798,13 @@ export function migrateSessionDraft(fromKey: string | null | undefined, toKey: s
  
 +/** Move a compression lineage's known aliases onto its unchanged raw durable scope. */
 +export function migrateSessionDrafts(
@@ -22957,7 +24309,7 @@ index 2c4c553b..1d6cf5e1 100644
 +}
 +
  /**
-@@ -571,14 +787,19 @@ export function migrateSessionDraft(fromKey: string | null | undefined, toKey: s
+@@ -571,14 +819,19 @@ export function migrateSessionDraft(fromKey: string | null | undefined, toKey: s
   */
 -let announcedNewSessionDraftKey: string | null = null
 +const announcedNewSessionDraftKeys = new Map<string, string>()
@@ -22986,20 +24338,20 @@ index 2c4c553b..1d6cf5e1 100644
 +  const announced = announcedNewSessionDraftKeys.get(key)
 +  announcedNewSessionDraftKeys.delete(key)
  
-@@ -588,3 +809,3 @@ export function adoptNewSessionDraft(toKey: string | null | undefined): boolean
+@@ -588,3 +841,3 @@ export function adoptNewSessionDraft(toKey: string | null | undefined): boolean
  
 -  migrateSessionDraft(null, toKey)
 +  migrateSessionDraft(null, toKey, owner)
  
-@@ -611,29 +832,20 @@ export function adoptNewSessionDraft(toKey: string | null | undefined): boolean
+@@ -611,29 +864,20 @@ export function adoptNewSessionDraft(toKey: string | null | undefined): boolean
   */
 -let announcedGoneSessionDraftKey: string | null = null
-+const announcedGoneSessionDraftKeys = new Map<string, string>()
- 
+-
 -export function announceGoneSessionDraft(fromKey: string | null | undefined): void {
 -  announcedGoneSessionDraftKey = fromKey?.trim() || null
 -}
--
++const announcedGoneSessionDraftKeys = new Map<string, string>()
+ 
 -/**
 - * Consume the announcement when a composer enters the fresh-draft scope.
 - * Moves the dead key's draft into the `__new__` bucket and publishes the
@@ -23034,7 +24386,7 @@ index 2c4c553b..1d6cf5e1 100644
 -  if (!source?.text.trim()) {
 +  if (!announced) {
      return false
-@@ -641,5 +853,6 @@ export function adoptGoneSessionDraft(): boolean {
+@@ -641,5 +885,6 @@ export function adoptGoneSessionDraft(): boolean {
  
 -  const dest = draftsBySession.get(freshDraftScope())
 +  const source = takeSessionDraft(announced, owner)
@@ -23043,7 +24395,7 @@ index 2c4c553b..1d6cf5e1 100644
 -  if (dest && (dest.text.trim() || dest.attachments.length > 0)) {
 +  if (!source.text.trim() || dest.text.trim() || dest.attachments.length) {
      return false
-@@ -647,6 +860,5 @@ export function adoptGoneSessionDraft(): boolean {
+@@ -647,6 +892,5 @@ export function adoptGoneSessionDraft(): boolean {
  
 -  const { attachments, text } = source
 -  stashSessionDraft(null, text, attachments)
@@ -23053,7 +24405,7 @@ index 2c4c553b..1d6cf5e1 100644
 +  clearSessionDraft(announced, owner)
 +  $restoredDraftNotice.set({ fromKey: announced, text: source.text, ...(hasDraftOwner(owner) ? { owner } : {}) })
  
-@@ -655,3 +867,7 @@ export function adoptGoneSessionDraft(): boolean {
+@@ -655,3 +899,7 @@ export function adoptGoneSessionDraft(): boolean {
  
 -export function dismissRestoredDraftNotice(): void {
 +export function dismissRestoredDraftNotice(owner?: SessionOwnerScope): void {
@@ -23062,7 +24414,7 @@ index 2c4c553b..1d6cf5e1 100644
 +  }
 +
    recordFriction('notice_dismissed', 'restored_draft')
-@@ -667,4 +883,9 @@ export function dismissRestoredDraftNotice(): void {
+@@ -667,4 +915,9 @@ export function dismissRestoredDraftNotice(): void {
   */
 -export function undoRestoredDraft(liveText: string): boolean {
 +export function undoRestoredDraft(liveText: string, owner?: SessionOwnerScope): boolean {
@@ -23073,7 +24425,7 @@ index 2c4c553b..1d6cf5e1 100644
 +  }
 +
    $restoredDraftNotice.set(null)
-@@ -675,5 +896,5 @@ export function undoRestoredDraft(liveText: string): boolean {
+@@ -675,5 +928,5 @@ export function undoRestoredDraft(liveText: string): boolean {
  
 -  const current = draftsBySession.get(freshDraftScope())
 -  stashSessionDraft(notice.fromKey, notice.text, current?.attachments ?? [])
@@ -23347,12 +24699,10 @@ index 927c98b200234f54756b368f9152cdd706686957..deb9bb1668642d5ceca0b3469240eb38
     *  present on hits backed by a rich row (the search endpoint fills it).
     *  Used to order unloaded hits honestly; falls back to session_started. */
 diff --git a/apps/shared/src/gateway-contract.generated.ts b/apps/shared/src/gateway-contract.generated.ts
-index 57a5f6d6774588963334c22dccc5a7101a80b7ed..16e3e032d651bdcc265efbd277a9cc8f2c21da43 100644
+index 57a5f6d6..e8dff2a1 100644
 --- a/apps/shared/src/gateway-contract.generated.ts
 +++ b/apps/shared/src/gateway-contract.generated.ts
-@@ -810,6 +810,30 @@ export interface SharedMetricsDesktopActionDay {
- export interface SharedMetricsDesktopDailyResult {
-   recorded: boolean
+@@ -812,2 +812,26 @@ export interface SharedMetricsDesktopDailyResult {
  }
 +export interface AccountUsageParams {
 +  profile?: string | null
@@ -23379,21 +24729,13 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..16e3e032d651bdcc265efbd277a9cc8f
 +  scope: 'account' | 'model'
 +}
  export interface ModelOptionsParams {
-   profile?: string | null
-   session_id?: string | null
-@@ -1002,6 +1026,9 @@ export interface SessionControlParams {
- export interface SessionControlArgs {
-   text?: string | null
+@@ -1004,2 +1028,5 @@ export interface SessionControlArgs {
    index?: number | null
 +  title?: string | null
 +  contract?: GoalContractSnapshot | null
 +  expected_revision?: string | null
  }
- export interface SessionControlResult {
-   control: SessionControlSnapshot
-@@ -2431,6 +2458,43 @@ export interface SubagentTailResult {
-   text?: string
-   truncated?: boolean
+@@ -2433,2 +2460,41 @@ export interface SubagentTailResult {
  }
 +export interface ProfileWorkflowGetParams {
 +  profile?: string | null
@@ -23418,6 +24760,8 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..16e3e032d651bdcc265efbd277a9cc8f
 +  model: string
 +  effort: string
 +  supported_efforts: string[]
++  requested_effort?: string
++  effort_limit?: string | null
 +}
 +export interface ProfileWorkflowConfigureParams {
 +  profile?: string | null
@@ -23433,72 +24777,44 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..16e3e032d651bdcc265efbd277a9cc8f
 +  effort?: string
 +}
  /** ``methods_projects._projects_payload``: every project (archived included) + the active id. */
- export interface ProjectsPayload {
-   projects: ProjectInfo[]
-@@ -6055,6 +6119,8 @@ export type ConnectorErrorReason = 'INVALID_PARAMS' | 'NOT_OWNER' | 'UNSUPPORTED
- 
- // ── Client→server methods ──
+@@ -6057,2 +6123,4 @@ export type ConnectorErrorReason = 'INVALID_PARAMS' | 'NOT_OWNER' | 'UNSUPPORTED
  export interface RpcMethods {
 +  /** Read per-account quota snapshots. Only refresh=true queries readonly credential-scoped quota endpoints. */
 +  'account.usage': { params: AccountUsageParams; result: AccountUsageResult }
    /** Registry-wide background process summary for ``/agents``. */
-   'agents.list': { params: AgentsListParams; result: AgentsListResult }
-   /** Replay the approvals still waiting on this session (reconnect / polling). */
-@@ -6351,6 +6417,10 @@ export interface RpcMethods {
-   'profiles.list': { params: ProfilesListParams; result: ProfilesListResult }
-   /** Store or clear a profile asset (avatar) atomically. */
+@@ -6353,2 +6421,6 @@ export interface RpcMethods {
    'profiles.set_asset': { params: ProfilesSetAssetParams; result: ProfilesSetAssetResult }
 +  /** Role-specific THINK/ACTION configuration; linkage is not dispatch readiness. */
 +  'profiles.workflow.configure': { params: ProfileWorkflowConfigureParams; result: ProfileWorkflowResult }
 +  /** Role-specific THINK/ACTION configuration; linkage is not dispatch readiness. */
 +  'profiles.workflow.get': { params: ProfileWorkflowGetParams; result: ProfileWorkflowResult }
    /** Structured project facts for a cwd so UIs don't re-sniff the workspace. */
-   'project.facts': { params: ProjectFactsParams; result: ProjectFactsResult }
-   /** Attach a folder to a project (optionally as its primary path). */
-@@ -6574,6 +6644,7 @@ export interface RpcMethods {
- }
- export type RpcMethod = keyof RpcMethods
+@@ -6576,2 +6648,3 @@ export type RpcMethod = keyof RpcMethods
  export const RPC_METHODS = [
 +  'account.usage',
    'agents.list',
-   'approval.pending',
-   'approval.received',
-@@ -6722,6 +6793,8 @@ export const RPC_METHODS = [
-   'profiles.get_asset',
-   'profiles.list',
+@@ -6724,2 +6797,4 @@ export const RPC_METHODS = [
    'profiles.set_asset',
 +  'profiles.workflow.configure',
 +  'profiles.workflow.get',
    'project.facts',
-   'projects.add_folder',
-   'projects.archive',
-@@ -6870,6 +6943,10 @@ export interface CanonicalRpcMethods {
-   /** Native-owner only: admit the dispatcher's current claim on a kanban task. */
-   'kanban.run': { params: KanbanRunParams; result: KanbanRunResult }
+@@ -6872,2 +6947,6 @@ export interface CanonicalRpcMethods {
    'profiles.list': { params: CanonicalProfilesParams; result: CanonicalProfilesResult }
 +  /** Profile-scoped bot workflow configuration with an expected-revision fence. */
 +  'profiles.workflow.configure': { params: ProfileWorkflowConfigureParams; result: ProfileWorkflowResult }
 +  /** Profile-scoped bot workflow configuration with an expected-revision fence. */
 +  'profiles.workflow.get': { params: ProfileWorkflowGetParams; result: ProfileWorkflowResult }
    /** Retire a still-queued admission; a started one is unaffected. */
-   'prompt.cancel': { params: PromptCancelParams; result: AdmissionStatus }
-   /** Current receipt of one admission the caller submitted (or controls). */
-@@ -6939,6 +7016,8 @@ export const CANONICAL_RPC_METHODS = [
-   'image.attach_bytes',
-   'kanban.run',
+@@ -6941,2 +7020,4 @@ export const CANONICAL_RPC_METHODS = [
    'profiles.list',
 +  'profiles.workflow.configure',
 +  'profiles.workflow.get',
    'prompt.cancel',
-   'prompt.receipt',
-   'prompt.replace_queued',
 diff --git a/apps/shared/src/gateway-contract.openrpc.json b/apps/shared/src/gateway-contract.openrpc.json
-index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..45d08f48fd621384b717ef4c4655562f969b2350 100644
+index 0e7e02c8..1299e608 100644
 --- a/apps/shared/src/gateway-contract.openrpc.json
 +++ b/apps/shared/src/gateway-contract.openrpc.json
-@@ -6,6 +6,24 @@
-     "description": "Generated from tui_gateway/contracts by scripts/gen_gateway_contracts.py."
-   },
+@@ -8,2 +8,20 @@
    "methods": [
 +    {
 +      "name": "account.usage",
@@ -23519,11 +24835,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..45d08f48fd621384b717ef4c4655562f
 +      }
 +    },
      {
-       "name": "agents.list",
-       "summary": "Registry-wide background process summary for ``/agents``.",
-@@ -2670,6 +2688,42 @@
-         }
-       }
+@@ -2672,2 +2690,38 @@
      },
 +    {
 +      "name": "profiles.workflow.configure",
@@ -23562,11 +24874,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..45d08f48fd621384b717ef4c4655562f
 +      }
 +    },
      {
-       "name": "project.facts",
-       "summary": "Structured project facts for a cwd so UIs don't re-sniff the workspace.",
-@@ -4785,6 +4839,164 @@
-         "title": "AccountOwner",
-         "type": "object"
+@@ -4787,2 +4841,160 @@
        },
 +      "AccountQuotaWindow": {
 +        "additionalProperties": false,
@@ -23727,11 +25035,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..45d08f48fd621384b717ef4c4655562f
 +        "type": "object"
 +      },
        "ActiveIdResult": {
-         "additionalProperties": false,
-         "properties": {
-@@ -7281,6 +7493,62 @@
-         "title": "BillingStepUpVerificationPayload",
-         "type": "object"
+@@ -7283,2 +7495,75 @@
        },
 +      "BotModelSelection": {
 +        "additionalProperties": false,
@@ -23778,6 +25082,23 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..45d08f48fd621384b717ef4c4655562f
 +            },
 +            "title": "Supported Efforts",
 +            "type": "array"
++          },
++          "requested_effort": {
++            "default": "",
++            "title": "Requested Effort",
++            "type": "string"
++          },
++          "effort_limit": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Effort Limit"
 +          }
 +        },
 +        "required": [
@@ -23790,11 +25111,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..45d08f48fd621384b717ef4c4655562f
 +        "type": "object"
 +      },
        "BotRelayDeliverParams": {
-         "additionalProperties": false,
-         "description": "``profile`` here is the TARGET profile on this gateway (also what the desktop route wrapper adds).",
-@@ -7497,6 +7765,46 @@
-         "title": "BotRelayRosterSyncResult",
-         "type": "object"
+@@ -7499,2 +7784,42 @@
        },
 +      "BotWorkflow": {
 +        "additionalProperties": false,
@@ -23837,11 +25154,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..45d08f48fd621384b717ef4c4655562f
 +        "type": "object"
 +      },
        "BrowserAction": {
-         "enum": [
-           "status",
-@@ -29616,6 +29924,149 @@
-         "title": "ProfileWorkerSession",
-         "type": "object"
+@@ -29618,2 +29943,145 @@
        },
 +      "ProfileWorkflowConfigureParams": {
 +        "additionalProperties": false,
@@ -23987,11 +25300,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..45d08f48fd621384b717ef4c4655562f
 +        "type": "object"
 +      },
        "ProfilesConfigureApplied": {
-         "additionalProperties": false,
-         "description": "Per-section outcome; only the sections the request carried are present.",
-@@ -36094,6 +36545,41 @@
-             ],
-             "default": null,
+@@ -36096,2 +36564,37 @@
              "title": "Index"
 +          },
 +          "title": {
@@ -24029,11 +25338,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..45d08f48fd621384b717ef4c4655562f
 +            "default": null,
 +            "title": "Expected Revision"
            }
-         },
-         "title": "SessionControlArgs",
-@@ -48129,6 +48615,42 @@
-         }
-       }
+@@ -48131,2 +48634,38 @@
      },
 +    {
 +      "name": "profiles.workflow.configure",
@@ -24072,8 +25377,6 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..45d08f48fd621384b717ef4c4655562f
 +      }
 +    },
      {
-       "name": "prompt.cancel",
-       "summary": "Retire a still-queued admission; a started one is unaffected.",
 diff --git a/docs/legion/bounded-retry-policy.md b/docs/legion/bounded-retry-policy.md
 new file mode 100644
 index 0000000000000000000000000000000000000000..f109b3556f0986a3aef44ac3b24d6b90a5129e28
@@ -25150,18 +26453,25 @@ index 0000000000000000000000000000000000000000..04868875b5317ae995baac923e434c7d
 +    return {'profiles.workflow.get': partial(_get, connection),
 +            'profiles.workflow.configure': partial(_configure, connection)}
 diff --git a/gateway/session_controls.py b/gateway/session_controls.py
-index 65887575dec12b3ddb9f859ebe56156264ea120e..d321c3ec28f00bdc9e4ba5f89a5557d8af3bfa4d 100644
+index 65887575..b9d01891 100644
 --- a/gateway/session_controls.py
 +++ b/gateway/session_controls.py
-@@ -232,6 +232,8 @@ class AuthorityConnection:
-         handlers['session.control'] = partial(control, self)
-         from gateway.session_onboarding import handlers as onboarding_handlers
+@@ -93,3 +93,4 @@ _PROFILE_IMPLICIT = frozenset({'session.create', 'session.list', 'session.info',
+                                'session.interrupt', 'session.events.since', 'session.mutate', 'session.stats',
+-                               'approval.respond', 'clarify.respond'})
++                               'approval.respond', 'clarify.respond', 'bot_relay.roster.sync',
++                               'bot_relay.outbox.drain', 'bot_relay.reply'})
+ 
+@@ -234,2 +235,4 @@ class AuthorityConnection:
          handlers.update(onboarding_handlers(self))
 +        from gateway.session_bot_workflow import handlers as workflow_handlers
 +        handlers.update(workflow_handlers(self))
          return handlers
- 
-     async def dispatch(self, request):
+@@ -269,3 +272,3 @@ class AuthorityConnection:
+                 return await routed.dispatch(request)
+-            # Our own home: the scope is implicit for the strict session verbs, which refuse
++            # Our own home: the scope is implicit for strict session/relay verbs, which refuse
+             # unknown keys; every other handler validates ``profile`` itself.
 diff --git a/gateway/session_group_controls.py b/gateway/session_group_controls.py
 index 0f0b80d2..aea2965c 100644
 --- a/gateway/session_group_controls.py
@@ -47499,6 +48809,102 @@ index daeeece18ae7a6663844b8d24da1a7950dc43ffd..8d6b8de8d0c033cd256a74ff52d0391b
          stale._last_activity_ts = _t.time() - 5.0
          runner._agent_cache["s-stale"] = (stale, "sig")
  
+diff --git a/tests/gateway/test_bot_relay_profile_selector.py b/tests/gateway/test_bot_relay_profile_selector.py
+new file mode 100644
+index 00000000..d7c418f1
+--- /dev/null
++++ b/tests/gateway/test_bot_relay_profile_selector.py
+@@ -0,0 +1,90 @@
++"""Desktop relay selectors are routed before strict payload validation, without inference."""
++import asyncio
++import json
++from pathlib import Path
++from types import SimpleNamespace
++
++import pytest
++
++from gateway.session_controls import AuthorityConnection
++from hermes_state import SessionDB
++from tools.bot_relay import read_remote_roster, relay_root, write_remote_roster
++
++
++@pytest.fixture
++def connections(tmp_path, monkeypatch):
++    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
++    root = tmp_path / '.hermes'
++    root.mkdir()
++    monkeypatch.setenv('HERMES_HOME', str(root))
++    homes = [root, root / 'profiles' / 'work']
++    authorities = []
++    for home in homes:
++        home.mkdir(parents=True, exist_ok=True)
++        (home / 'config.yaml').write_text('{}')
++        db = SessionDB(home / 'state.db')
++        authorities.append(SimpleNamespace(profile_id=str(home), instance_id='owner', db=db,
++                                           events={}, sessions={}))
++    runner = SimpleNamespace(session_authorities=authorities)
++    for authority in authorities:
++        authority.runner = runner
++    def connect(*, host=True, capabilities=None):
++        identity = {'user_id': 'owner', 'profile_scope': 'host' if host else 'profile'}
++        if capabilities is not None:
++            identity['capabilities'] = capabilities
++        connection = AuthorityConnection(authorities[0], object(), identity)
++        return connection
++
++    yield homes, connect
++    for authority in authorities:
++        authority.db.close()
++
++
++def call(connection, method, **params):
++    return asyncio.run(connection.dispatch({'id': 1, 'method': method, 'params': params}))
++
++
++@pytest.mark.parametrize('profile,index', [('default', 0), ('work', 1)])
++def test_routed_roster_clear_retires_only_the_selected_homes_peers(connections, profile, index):
++    homes, connect = connections
++    row = {'profile': 'peer', 'handle': 'peer', 'connection_id': 'other'}
++    for home in homes:
++        assert write_remote_roster(home, [row]) == 1
++
++    reply = call(connect(), 'bot_relay.roster.sync', profile=profile, agents=[])
++
++    assert reply.get('result') == {'count': 0}, reply
++    assert read_remote_roster(homes[index]) == []
++    assert read_remote_roster(homes[1 - index])[0]['handle'] == 'peer'
++
++
++@pytest.mark.parametrize('method,params,expected', [
++    ('bot_relay.outbox.drain', {}, {'envelopes': []}),
++    ('bot_relay.reply', {'id': 'f' * 32, 'reply': 'ACK'}, {'ok': True}),
++])
++def test_other_relay_controls_accept_their_own_profile_selector(connections, method, params, expected):
++    homes, connect = connections
++
++    reply = call(connect(), method, profile='default', **params)
++
++    assert reply.get('result') == expected, reply
++    if method == 'bot_relay.reply':
++        saved = json.loads((relay_root(homes[0]) / 'replies' / (params['id'] + '.json')).read_text())
++        assert saved['reply'] == 'ACK'
++
++
++@pytest.mark.parametrize('profile,host,capabilities,extra,reason', [
++    ('work', False, None, {}, 'profile_mismatch'),
++    ('missing', True, None, {}, 'profile_mismatch'),
++    ('default', True, ['session:read'], {}, 'permission_denied'),
++    ('default', True, None, {'unexpected': True}, 'invalid_params'),
++])
++def test_selector_support_keeps_scope_capability_and_payload_fences(connections, profile, host, capabilities,
++                                                                   extra, reason):
++    homes, connect = connections
++
++    reply = call(connect(host=host, capabilities=capabilities), 'bot_relay.roster.sync',
++                 profile=profile, agents=[], **extra)
++
++    assert reply.get('error', {}).get('message') == reason, reply
++    assert all(not relay_root(home).exists() for home in homes)
 diff --git a/tests/gateway/test_bot_workflow_controls.py b/tests/gateway/test_bot_workflow_controls.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..f07634bc87256357ef07e0718ea1d56ff6cd99d8
@@ -74546,21 +75952,15 @@ index a7346e3f0a6d57a6ea1eeb0a05517eb943b737d0..da2738697b6257c235c147bd6f5b3662
  
  class SessionControlParams(ProfileParams):
 diff --git a/tui_gateway/contracts/profiles_vault_complete_foreign_subagents.py b/tui_gateway/contracts/profiles_vault_complete_foreign_subagents.py
-index 79519693dd5fba61c15cb2f19cfef03bd64f647f..943d1c91aa79338bf630d11058c0169e1056543b 100644
+index 79519693..41a708fd 100644
 --- a/tui_gateway/contracts/profiles_vault_complete_foreign_subagents.py
 +++ b/tui_gateway/contracts/profiles_vault_complete_foreign_subagents.py
-@@ -16,7 +16,7 @@ from pydantic import Field
- from .base import JsonValue, Params, Result, WireEnum
- from .common import OpenModel, ProfileParams, SessionParams, SubagentStatus
+@@ -18,3 +18,3 @@ from .common import OpenModel, ProfileParams, SessionParams, SubagentStatus
  from .config_free_tier_control import ModelOptionProvider
 -from .registry import method
 +from .registry import canonical_method, method
  
- # ── completions / paste / model keys (methods_complete) ───────────────────────────────────────
- 
-@@ -698,3 +698,51 @@ class SubagentTailResult(Result):
- 
- method("subagent.tail", params=SubagentIdParams, result=SubagentTailResult,
+@@ -700 +700,51 @@ method("subagent.tail", params=SubagentIdParams, result=SubagentTailResult,
         doc="Last 16KB of an owned child's live transcript.")
 +
 +
@@ -74586,6 +75986,8 @@ index 79519693dd5fba61c15cb2f19cfef03bd64f647f..943d1c91aa79338bf630d11058c0169e
 +    model: str
 +    effort: str
 +    supported_efforts: list[str]
++    requested_effort: str = ""
++    effort_limit: str | None = None
 +
 +
 +class ProfileWorkflowConfigureParams(ProfileWorkflowGetParams):
