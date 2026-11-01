@@ -1,3 +1,18 @@
+# v0.8.1 — Usability fixes from a live walkthrough
+
+The packaged Desktop was driven with Playwright under a virtual display against the
+owner's real Hermes home (no settings saved, no cards created). The walkthrough found the
+problems listed in the [kit notes](stable-full-kit.md#usability-update-from-a-user-walkthrough-v081);
+each fix was reviewed independently. The full Desktop Vitest suite passes (1,784 files,
+15,471 tests), the TypeScript checks pass, and the focused Python checks pass. The kit now
+covers 909 paths and was applied to the idle Linux and macOS installations, with the
+Gateway restarted and both Desktop packages rebuilt.
+
+Not verified live: rich chart/mermaid answers, the live bot progress line and THINK/ACTION
+dispatch. The owner's fleet was deliberately paused during this release, so no model turn
+or Kanban dispatch ran; those features rely on their offline tests. Kanban run durations
+were confirmed on real historical runs.
+
 # v0.8.0 — Efficiency, monitoring and delegated goals
 
 This release regenerates the consolidated stable kit (now 877 paths) for upstream

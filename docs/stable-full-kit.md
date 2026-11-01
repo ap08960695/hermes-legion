@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **877-path** Legion source, interface and optimization alternative
+This is the complete **909-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -303,3 +303,28 @@ cd apps/desktop && npx vitest run src/lib/chart-spec.test.ts \
 
 These are offline checks. They show the code paths work; they do not measure a
 production saving, which depends on your workload.
+
+
+## Usability update from a user walkthrough (v0.8.1)
+
+A scripted walkthrough of the real Desktop against a live Hermes home found these
+problems, now fixed:
+
+- **Global pause is visible.** When the emergency stop is engaged, `/api/status` reports
+  `estop: {engaged_at, reason}` (reason only on local connections) and the Desktop shows a
+  persistent strip plus a composer note saying new work is on hold until `hermes resume`.
+  There is no resume button in the app.
+- **Bot roster reports every bot's model, provider and description.** Sibling profiles
+  discovered by the authority gateway previously had these fields hard-coded empty, so
+  128 of 129 bot cards said "not reported". They now come from each profile's cached
+  config and `profile.yaml`.
+- Bots: provider and model fields no longer overlap; filter counts follow the search.
+- Kanban: the new-task assignee picker filters as you type and marks THINK/ACTION bots;
+  the card drawer's Comments/Activity/Runs/Log switcher is a real tab list placed above the
+  long description; the History view uses the full width.
+- Navigation: New chat and History selections highlight the right sidebar item; the
+  Workflow detail panel no longer hides the graph.
+- The floating pet stays below dialogs and away from the composer and status bar.
+- Search hides empty groups and ranks title matches while typing; Catch up explains an
+  empty goal state instead of showing "Not reported".
+- Settings: the long "Applies to" profile list has a filter and a collapsed view.
