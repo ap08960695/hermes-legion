@@ -1,3 +1,36 @@
+# v0.8.0 — Efficiency, monitoring and delegated goals
+
+This release regenerates the consolidated stable kit (now 877 paths) for upstream
+v0.22.5. It was built in a separate development checkout, tested there, applied to the
+owner's idle Linux installation, and the Gateway and packaged Desktop were rebuilt and
+restarted only after the board showed no running or claimed work.
+
+Offline evidence:
+
+- Python: the recorded selection plus the new tests (1469 files) ran with 10 workers:
+  13,660 passed. Every remaining failure also fails on an untouched copy of the previous
+  baseline or passes when re-run alone. The baseline-only failures come from the test
+  host (a live-home I/O guard and a checkout-local `.hermes/bin` path), not from product
+  code. Two gateway files that spawn live processes failed only while another suite was
+  running; both pass alone.
+- Five previously failing baseline checks now pass: two prompt-assembly tests were updated
+  to read the context tier where Legion places the platform hint; the committed prompt
+  snapshot was regenerated in a temporary home; and two conversation-loop tests exposed a
+  real defect, where a failed price lookup re-sent a delivered response. Price lookup
+  failures now record an unknown cost.
+- Desktop: the full Vitest suite passes (1,780 files, 15,454 tests). Eight files that failed on the baseline now pass. Two were product bugs
+  (a stale remembered route survived the settled disk scan; two buttons used native
+  `title=`); the rest were tests whose storage spies never took effect under jsdom or
+  that predated intentional scoped session opening and plugin i18n. TypeScript checks and
+  the native build pass.
+- The Kanban SIGKILL end-to-end scenario no longer needs its two known-gap allowances
+  (#121255, #119618) after the per-attempt start marker.
+
+Operational evidence on the owner's host (not a performance claim for other fleets):
+retention of aged scratch, superseded backups/runtimes and packed reports reduced the
+Hermes home from about 83 GB to 48.5 GB. Per-workload token or latency savings from the
+caches and compact views are not yet measured and are not claimed here.
+
 # v0.7.43 — Preserve auxiliary cache usage and account for Claude calls
 
 Native Codex and Anthropic auxiliary adapters projected provider usage onto Chat Completions but dropped cache-read, cache-write and reasoning details. Anthropic prompt totals also omitted its separately reported cache buckets. The ambient auxiliary accountant then interpreted that already-converted result as native Anthropic usage, losing ordinary counters or dropping a fully cached call.

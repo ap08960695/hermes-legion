@@ -68,6 +68,36 @@ remain. The next attempt refuses existing outputs. Inspect that state rather
 than overwriting or repeating the operation blindly. This helper does not
 automatically delete old backups, run on a timer or change native retention.
 
+## Age out disposable data on a schedule
+
+Worker scratch trees, maintenance backups, side builds and evidence reports grow
+without bound unless something retires them. One measured fleet held 83 GB in its
+Hermes home, of which 34 GB was aged scratch, superseded backups and loose reports.
+`scripts/legion_retention.py` previews (default) or applies a conservative policy:
+
+```sh
+python3 scripts/legion_retention.py --home "$HERMES_HOME"            # preview
+python3 scripts/legion_retention.py --home "$HERMES_HOME" --apply    # perform
+```
+
+| Data | Default rule |
+| --- | --- |
+| `profiles/*/cache/scratch/*` | removed when no file inside changed for 7 days |
+| `profiles/*/attachments`, `profiles/*/lcm-large-outputs` | files older than 14 days |
+| `backups/*` | older than 7 days, but the newest 3 always stay |
+| `side-work/*` | removed when idle for 7 days |
+| `state-snapshots`, `profiles/*/state-snapshots` | newest 3 stay |
+| `reports/*` directories | idle for 3 days: packed into `<dir>.tar.gz` and verified |
+
+Every age and count is an option. Live databases, sessions, skills, memories,
+configs and credentials are never selected. Anything a process of the same user
+holds (working directory, executable, open file or mapping) is kept; on systems
+without `/proc` the helper asks `lsof`, and if neither works it keeps everything.
+Add `--protect PATH` for held rollback points or open-card workspaces. Run it
+from a daily timer (systemd user timer or launchd) after reviewing one preview.
+A timer that someone stopped during an incident stays stopped: include
+"restart the retention timer" in your incident close-out.
+
 ## Verify a compacted snapshot without restoring it live
 
 This command verifies an archive by streaming its bytes without loading the whole

@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **843-path** Legion source, interface and optimization alternative
+This is the complete **877-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -247,3 +247,59 @@ Only fixed provider-response fixtures are used; no inference or pricing lookup
 is requested. The verification note distinguishes these arithmetic checks from
 actual provider cache evidence. Existing historical omissions are not invented
 or backfilled, and a larger corrected usage total does not imply more calls.
+
+
+## Efficiency, monitoring and autonomy update (v0.8.0)
+
+This update keeps the same upstream base and adds these changes to the consolidated kit:
+
+- **Bot monitoring.** The roster's worker detail carries optional `current_tool`,
+  `iteration`/`max_iterations`, `started_at` and input/output token totals taken from
+  the session row the roster already reads; no extra database reads. The Desktop shows
+  them as one icon-led line (tool, step i/max, elapsed, tokens), and Kanban run history
+  shows each run's duration. `profiles.list` no longer violates its own wire contract
+  (`last_activity_description`/`ended_at` were sent but undeclared).
+- **Rich answers.** A `chart` fence and a platform hint that names the existing rich
+  blocks. See [rich answers](rich-answers.md#inline-charts-and-diagram-guidance).
+- **Fewer repeated model calls.** `vision_analyze` caches successful results in memory
+  (256 entries, one hour) keyed by image bytes, prompt and model route; errors and empty
+  results are not stored and a hit is marked `"cached": true`. The compact `kanban_show`
+  view also clips long event payloads and older run fields while keeping the latest run,
+  task body and newest comments intact.
+- **Cacheable compression.** The context compressor sends its fixed instructions before
+  the variable transcript, so providers with prefix caching can reuse them.
+- **Worker exits.** A worker that exits cleanly without a terminal Kanban call and left a
+  final message is held for a decision with that message attached, instead of being
+  respawned blind. The dispatcher writes a `[kanban-worker-start]` marker before each
+  attempt, so an older attempt's `rc=0` trailer is no longer booked for a SIGKILLed
+  attempt and crash diagnostics quote only the attempt that crashed.
+- **Delegated goal decisions.** `goals.delegated_decisions: true` (default `false`) tells
+  the goal judge that in-scope choices are the agent's to make; a verdict that only waits
+  for a user decision is continued with a "decide within authority" note at most twice per
+  goal. Credentials, destructive or out-of-scope actions, spending and reserved
+  publication gates still pause.
+- **Fleet session search.** `session_search` accepts `scope="fleet"` to search the other
+  profiles of the same Hermes home read-only, with per-profile limits and a time budget;
+  each hit names its profile. The default scope is unchanged.
+- **Usage pricing never fails a turn.** A failed cost lookup records an unknown cost
+  instead of turning a delivered response into a failed attempt that re-sends the prompt.
+- Plugin manifests may declare `provides_middleware` without a warning.
+
+Run the focused checks from a patched checkout:
+
+```sh
+cd "$HERMES_CHECKOUT"
+HERMES_TEST_FILE_RETRIES=0 scripts/run_tests.sh \
+  tests/tui_gateway/test_profiles_worker_session_contract.py \
+  tests/tools/test_vision_analysis_content_cache.py tests/tools/test_kanban_show_compact_clip.py \
+  tests/hermes_cli/test_kanban_clean_exit_final_message.py \
+  tests/e2e/core/kanban/test_kanban_worker_sigkill.py \
+  tests/hermes_cli/test_goal_delegated_decisions.py tests/tools/test_session_search_fleet_scope.py \
+  tests/agent/test_context_compressor_prompt_cache_prefix.py \
+  tests/hermes_cli/test_plugin_manifest_provides_middleware.py tests/agent/test_run_agent.py
+cd apps/desktop && npx vitest run src/lib/chart-spec.test.ts \
+  src/plugins/hermes-bots/bot-worker-progress.test.ts src/plugins/kanban/bot-journey
+```
+
+These are offline checks. They show the code paths work; they do not measure a
+production saving, which depends on your workload.

@@ -29,3 +29,27 @@ These are native display components, not an embedded ChatGPT page. Rendering doe
 ## Narrow tiles
 
 Cards choose stacked or side-by-side content from the space available inside the chat tile, rather than the whole window. Images and supplied text stay inside that tile when a preview is also open. This does not change the pane layout or fetch additional images or metadata.
+
+## Inline charts and diagram guidance
+
+A `chart` fenced JSON block renders as an accessible inline SVG chart with no new
+package, network request or model call:
+
+````markdown
+```chart
+{"type": "bar", "title": "Calls per day", "labels": ["Mon", "Tue", "Wed"],
+ "series": [{"name": "calls", "values": [120, 95, 60]}], "unit": "calls"}
+```
+````
+
+`type` is `bar`, `line` or `pie`. The parser accepts at most 12 series and 200
+points, finite numbers only, and series that match the label count. Anything else
+falls back to the original code block, as Mermaid and cards do. Charts follow the
+light/dark theme colours, include a legend and expose each value through a
+tooltip title. Long chart fences stay inline instead of becoming a side artifact.
+
+The Desktop platform hint now names the rich blocks the renderer already
+supports — `mermaid` diagrams, `chart`, `cards`, `<details>` and callouts — and
+asks the model to use them only when they clarify the answer. The hint is static
+text in the cached context tier, so it changes the cached prefix once and does not
+add per-turn cost.
