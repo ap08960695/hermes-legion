@@ -1,3 +1,11 @@
+# v0.8.18 — Avoid discarded recall payloads
+
+One regression failed before repair; 214 related Python tests pass afterward.
+Native Linux/Mac comparisons retain byte-identical answers while loading 19
+payload rows instead of 51 in the adaptive fixture. A fresh simple Linux card
+recovered all three saved codes in three model requests with 19 payload rows.
+All 956 source paths match on both hosts. See [scope and measurements](adaptive-recall-hydration.md).
+
 # v0.8.17 — Stop after a verified blocked handoff
 
 Two regressions failed before repair; 383 related Python tests pass afterward.
