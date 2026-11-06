@@ -2561,3 +2561,15 @@ The two route regressions and the relay-storage integration failed before repair
 ## Historical privacy maintenance (v0.6.53)
 
 Private operational references were removed from two legacy comments throughout reachable history. A private compact Git bundle preserves reversible recovery outside the publication. All original branches/tags and neutral authorship/tagger metadata were retained; corrected objects and release digests differ. Native Git application reconstructed and checked historical source hashes, and Python ASTs matched before/after the comment-only changes. Per-tree release inventories and tagged archive contents were verified independently before publication. See [privacy maintenance](privacy-maintenance.md) for consumer migration and the limits of repository/cache erasure claims. No Hermes runtime, model request, account, quota or existing worker changed for this maintenance. Native behavior test results remain historical and are not relabelled newly rerun.
+
+
+## Missing-skill worker results (v0.8.20)
+
+Known all-missing Kanban preloads now return a structured failed result instead
+of crashing the managed worker into an unknown admission. See
+[missing-skill worker results](missing-skill-worker-results.md) for the failed
+regression, 90 related passing cases, native checks on both hosts and a fresh
+zero-request card. The fixture is blocked by its existing no-retry policy;
+ordinary retry policy, partial preload behavior and unknown crash handling are
+unchanged. All 958 installed targets match on both hosts. Desktop UI and
+continuous production Captain behavior are not newly validated by this change.

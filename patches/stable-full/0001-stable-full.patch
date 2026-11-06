@@ -29500,10 +29500,24 @@ index 30c6ef5d0e342af19c79ede92b013d374f7c2fec..599c6164eed3b6baee89632268a4199e
 +            logging.getLogger(__name__).warning('Hosted room standby read failed (%s)', type(exc).__name__)
  
 diff --git a/gateway/session_kanban.py b/gateway/session_kanban.py
-index 6b89dfa3737d29f613b2fa5320bd5ca444e2b005..76b76a4786b9b846ae955b00f17e32621e9b4322 100644
+index 6b89dfa3737d29f613b2fa5320bd5ca444e2b005..c888d49a6b61831dd38c856bc7690a2b42a0a4c2 100644
 --- a/gateway/session_kanban.py
 +++ b/gateway/session_kanban.py
-@@ -386,5 +386,11 @@ def _run_task_turns(agent, frame, history, context):
+@@ -351,6 +351,11 @@ def worker_exit_code(path, params):
+ def _run_task_turns(agent, frame, history, context):
+-    from agent.skill_commands import build_preloaded_skills_prompt
++    from agent.skill_commands import build_preloaded_skills_prompt, format_missing_skills
+     skills, loaded, missing = build_preloaded_skills_prompt(context['skills'], task_id=agent.session_id)
+     if missing and not loaded:
+-        raise ValueError('kanban_skills_unavailable')
++        # No model turn has started: this is a known setup failure, not a lost worker
++        # whose execution must remain unknown. Return through normal owner settlement.
++        error = (f"Cannot start this card: {format_missing_skills(missing)}. "
++                 "Install or enable the requested skills in the assigned profile before retrying.")
++        return {'failed': True, 'completed': False, 'failure_retryable': False,
++                'failure_reason': 'kanban_skills_unavailable', 'error': error, 'final_response': error}
+     prompt = '\n\n'.join(p for p in (skills, context['context'], frame['text']) if p)
+@@ -386,5 +391,11 @@ def _run_task_turns(agent, frame, history, context):
          return result.get('final_response', '')
 -    run_kanban_goal_loop(task_id=context['task_id'], goal_text=context['goal_text'], run_turn=turn,
 -        task_status_fn=status, block_fn=block, max_turns=context['goal_max_turns'] or DEFAULT_MAX_TURNS,
@@ -52780,6 +52794,83 @@ index 0000000000000000000000000000000000000000..b56e1df2088ed8d7ded862f6b7d20162
 +    finally:
 +        conn.close()
 +        shutil.rmtree(home)
+diff --git a/tests/gateway/test_kanban_missing_skill_result.py b/tests/gateway/test_kanban_missing_skill_result.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..34365184107cbace825530678e3463739970d944
+--- /dev/null
++++ b/tests/gateway/test_kanban_missing_skill_result.py
+@@ -0,0 +1,71 @@
++"""A known missing preload settles as failure rather than an unknown worker crash."""
++import json
++import os
++from contextlib import closing
++
++import pytest
++
++from gateway import session_kanban
++from hermes_cli import kanban_db as kb
++from hermes_cli.kanban_db_connect import connect
++
++
++class Agent:
++    session_id = "missing-skill-fixture"
++
++    def __init__(self):
++        self.prompts = []
++
++    def run_conversation(self, prompt, conversation_history=None):
++        self.prompts.append(prompt)
++        return {"completed": True, "final_response": "fixture turn finished"}
++
++
++@pytest.fixture
++def claimed(tmp_path, monkeypatch):
++    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
++    monkeypatch.setenv("HERMES_KANBAN_HOME", str(tmp_path))
++    monkeypatch.setenv("HERMES_KANBAN_DB", str(tmp_path / "board.db"))
++    monkeypatch.delenv("HERMES_DELEGATED_CHILD_CONTEXT", raising=False)
++    kb.init_db()
++    path = kb.kanban_db_path()
++    with closing(connect(path)) as conn:
++        tid = kb.create_task(conn, title="Required skill fixture", assignee="default")
++        task = kb.claim_task(conn, tid)
++        with kb.write_txn(conn):
++            kb._append_event(conn, tid, "worker_bound", {"pid": os.getpid(), "claim_lock": task.claim_lock},
++                             run_id=task.current_run_id)
++    context = {"db": str(path), "task_id": tid, "run_id": task.current_run_id,
++               "claim_lock": task.claim_lock, "skills": ["absent-fixture-skill"], "context": "fixture", "goal_mode": False}
++    return path, context
++
++
++def test_missing_skill_returns_actionable_failed_result_without_model_turn(claimed):
++    path, context = claimed
++    agent = Agent()
++    result = session_kanban.run_worker_turns(agent, {"text": "fixture", "policy": {"kanban_json": json.dumps(context)}}, [])
++
++    assert result["failed"] is True and result["completed"] is False
++    assert result["failure_retryable"] is False
++    assert result["failure_reason"] == "kanban_skills_unavailable"
++    assert "absent-fixture-skill" in result["final_response"]
++    assert "profile" in result["final_response"] and "skill" in result["error"]
++    assert agent.prompts == []
++    receipt = session_kanban.worker_result(path, context)
++    assert receipt["exit_code"] == 1 and "absent-fixture-skill" in receipt["last_output"]
++
++
++@pytest.mark.parametrize("requested", [[], ["present-fixture-skill"], ["present-fixture-skill", "absent-fixture-skill"]])
++def test_available_preloads_preserve_normal_turn_and_partial_loading_policy(claimed, tmp_path, requested):
++    path, context = claimed
++    skill = tmp_path / "skills" / "present-fixture-skill" / "SKILL.md"
++    skill.parent.mkdir(parents=True)
++    skill.write_text("---\nname: present-fixture-skill\ndescription: Test-only preload\n---\nINLINE_SKILL_CHECKPOINT\n")
++    context["skills"] = requested
++    agent = Agent()
++    result = session_kanban.run_worker_turns(agent, {"text": "fixture", "policy": {"kanban_json": json.dumps(context)}}, [])
++
++    assert result["completed"] is True and len(agent.prompts) == 1
++    if requested:
++        assert "INLINE_SKILL_CHECKPOINT" in agent.prompts[0]
++    assert session_kanban.worker_result(path, context)["exit_code"] == 0
 diff --git a/tests/gateway/test_kanban_multiplex_served_profile_parity.py b/tests/gateway/test_kanban_multiplex_served_profile_parity.py
 index 72d55887cf19b6d83f0d334dec1907be4788682a..951ab834f62eb5d70ac2f5f31399ec5577a67f7e 100644
 --- a/tests/gateway/test_kanban_multiplex_served_profile_parity.py

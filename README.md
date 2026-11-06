@@ -16,12 +16,13 @@ Historical source comments and release payloads received [privacy maintenance](d
 
 - A [compact bot settings editor](docs/desktop-bot-settings.md) that keeps model/effort visible and groups optional appearance controls.
 - Optional [per-model effort ceilings](docs/reasoning-effort-limits.md), with effective/requested effort disclosure and offline request-boundary checks.
-- A consolidated [957-path source and Desktop kit for upstream v0.22.5](docs/stable-full-kit.md), with pinned hashes and a reproducible test selection. It includes the interface, workflow, search, memory/cache, usage, waiting and update-preservation changes as one complete alternative.
+- A consolidated [958-path source and Desktop kit for upstream v0.22.5](docs/stable-full-kit.md), with pinned hashes and a reproducible test selection. It includes the interface, workflow, search, memory/cache, usage, waiting and update-preservation changes as one complete alternative.
 - v0.8.0 adds live bot progress (current tool, step, elapsed, tokens), inline `chart` answers with diagram guidance, a vision result cache, cacheable compression prompts, crash-safe worker attempt markers, opt-in delegated goal decisions and fleet-wide session search. See [the update notes](docs/stable-full-kit.md#efficiency-monitoring-and-autonomy-update-v080).
 - v0.8.10 records [native Desktop and bounded recall acceptance](docs/native-desktop-recall-acceptance.md), without changing the source patch.
 - v0.8.13 [explains settings write failures without exposing private paths](docs/settings-write-errors.md), with native permission-failure recovery checks.
 - v0.8.14 documents an optional [eager search schema for recall workers](docs/recall-tool-policy.md): one native card pair used three requests instead of four, with the source kit unchanged.
 - v0.8.15 [preserves nested settings edits followed by a null section](docs/settings-null-sections.md), matching native storage behavior on Linux and Mac.
+- v0.8.20 [reports missing worker skills as actionable failures](docs/missing-skill-worker-results.md), settling known setup failures without a model request.
 - v0.8.19 [stops workers after scheduling and revision handoffs](docs/scheduled-review-handoffs.md), preserving native landing states and avoiding a follow-up model request.
 - v0.8.18 [loads only returned adaptive recall payloads](docs/adaptive-recall-hydration.md), with byte-identical answers and fewer message bodies materialized.
 - v0.8.17 [stops workers after a verified blocked handoff](docs/blocked-worker-handoff.md), preserving the hold and saving one request in a bounded two-stage card test.
