@@ -328,3 +328,8 @@ problems, now fixed:
 - Search hides empty groups and ranks title matches while typing; Catch up explains an
   empty goal state instead of showing "Not reported".
 - Settings: the long "Applies to" profile list has a filter and a collapsed view.
+
+## Retention companion update (v0.8.2)
+
+This release updates the standalone retention helper and its tests, with no changes to
+the 909-path upstream patch or Desktop assets. See [retention safeguards](storage-and-backups.md#retention-safeguards-v082) and the [verification record](verification.md).

@@ -1,3 +1,20 @@
+# v0.8.2 — Retain in-use data and verify report archives
+
+The companion retention helper repairs protected-descendant handling, stale planning
+observations, incomplete process visibility, and report archive verification. New
+regressions failed before their corresponding repairs. The full companion suite passes
+100 tests on Linux. Native macOS retention tests pass 18 tests and skip one Linux-only
+process-observation case. These are CPU-only temporary-directory tests; no GPU or model
+inference is involved.
+
+Matching helper bytes were installed on both hosts before publication. The Linux
+scheduled wrapper's read-only preview exits with an explicit incomplete-process-visibility
+result before any cleanup. No production data was removed, and no disk, latency, RAM or
+model-usage savings are claimed for this release. A small native test card was created
+and read back in blocked state with no worker/run; its execution is not yet verified.
+The owner's emergency stop was preserved. Earlier live UX and dispatch gaps below
+remain open. The upstream source kit and Desktop builds are unchanged by this release.
+
 # v0.8.1 — Usability fixes from a live walkthrough
 
 The packaged Desktop was driven with Playwright under a virtual display against the

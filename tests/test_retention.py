@@ -35,7 +35,7 @@ class RetentionTests(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.home = Path(tmp.name)
+        self.home = Path(tmp.name).resolve()
         h = self.home
         make(h / "profiles/dev/cache/scratch/old/a.txt", 10)
         age_dir(h / "profiles/dev/cache/scratch/old", 10)
@@ -91,6 +91,150 @@ class RetentionTests(unittest.TestCase):
         self.assertTrue((self.home / "backups/b3").exists())
         self.assertIn("in use", out)
         self.assertIn("protected", out)
+
+    def test_protected_child_preserves_parent_backup(self):
+        target = self.home / "backups/b4/state.db"
+        self.run_cli("--apply", "--protect", str(target))
+        self.assertTrue(target.exists())
+
+    def test_new_holder_after_preview_preserves_candidate(self):
+        args = type("Args", (), dict(protect=[], now=NOW, scratch_days=7,
+                    keep_days=14, backup_days=7, backup_keep=3,
+                    snapshot_keep=3, report_days=3))()
+        plan = retention.build_plan(self.home, args, set())
+        target = self.home / "backups/b4/state.db"
+        with patch.object(retention, "held_paths", return_value={str(target.resolve())}):
+            retention.apply(plan)
+        self.assertTrue(target.exists())
+
+    def test_modified_source_after_preview_is_kept(self):
+        args = type("Args", (), dict(protect=[], now=NOW, scratch_days=7,
+                    keep_days=14, backup_days=7, backup_keep=3,
+                    snapshot_keep=3, report_days=3))()
+        plan = retention.build_plan(self.home, args, set())
+        target = self.home / "backups/b4/state.db"
+        target.write_text("new data from a resumed job")
+        with patch.object(retention, "held_paths", return_value=set()):
+            retention.apply(plan)
+        self.assertTrue(target.exists())
+        self.assertEqual(target.read_text(), "new data from a resumed job")
+
+    def test_failed_process_observer_is_unknown(self):
+        original = Path.is_dir
+        def without_proc(path):
+            return False if path == Path("/proc") else original(path)
+        failed = type("Result", (), dict(returncode=1, stdout="", stderr="denied"))()
+        with patch.object(Path, "is_dir", without_proc), patch.object(
+                retention.subprocess, "run", return_value=failed):
+            self.assertIsNone(retention.held_paths())
+
+    def test_lsof_file_record_delimiters_preserve_paths(self):
+        original = Path.is_dir
+        def without_proc(path):
+            return False if path == Path("/proc") else original(path)
+        result = type("Result", (), dict(returncode=0, stderr="",
+            stdout="p123\0\nn/tmp/open file\0\nn/tmp/another\0\n"))()
+        process_result = type("Result", (), dict(returncode=0, stderr="",
+            stdout="123 S Fri Nov 6 12:00:00 2026\n"))()
+        with patch.object(Path, "is_dir", without_proc), patch.object(
+                retention.subprocess, "run", side_effect=lambda command, **kw:
+                process_result if command[0] == "ps" else result):
+            self.assertEqual(retention.held_paths(), {"/tmp/open file", "/tmp/another"})
+
+    def test_lsof_omitting_stable_process_is_unknown(self):
+        original = Path.is_dir
+        def without_proc(path):
+            return False if path == Path("/proc") else original(path)
+        process_result = type("Result", (), dict(returncode=0, stderr="",
+            stdout="123 S Fri Nov 6 12:00:00 2026\n456 S Fri Nov 6 12:00:00 2026\n"))()
+        lsof_result = type("Result", (), dict(returncode=0, stderr="",
+            stdout="p123\0\nn/tmp/open\0\n"))()
+        with patch.object(Path, "is_dir", without_proc), patch.object(
+                retention.subprocess, "run", side_effect=lambda command, **kw:
+                process_result if command[0] == "ps" else lsof_result):
+            self.assertIsNone(retention.held_paths())
+
+    def test_lsof_escaped_filename_is_unknown(self):
+        original = Path.is_dir
+        def without_proc(path):
+            return False if path == Path("/proc") else original(path)
+        process_result = type("Result", (), dict(returncode=0, stderr="",
+            stdout="123 S Fri Nov 6 12:00:00 2026\n"))()
+        lsof_result = type("Result", (), dict(returncode=0, stderr="",
+            stdout="p123\0\nn/tmp/line\\nbreak\0\n"))()
+        with patch.object(Path, "is_dir", without_proc), patch.object(
+                retention.subprocess, "run", side_effect=lambda command, **kw:
+                process_result if command[0] == "ps" else lsof_result):
+            self.assertIsNone(retention.held_paths())
+
+    @unittest.skipUnless(Path("/proc").is_dir(), "Linux process observation")
+    def test_partial_proc_visibility_is_unknown(self):
+        original = Path.read_text
+        def deny_maps(path, *args, **kwargs):
+            if str(path) == f"/proc/{os.getpid()}/maps":
+                raise PermissionError("denied")
+            return original(path, *args, **kwargs)
+        with patch.object(Path, "read_text", deny_maps):
+            self.assertTrue(retention.held_paths() is None, "partial observation must remain unknown")
+
+    def test_report_modified_during_archive_is_not_removed(self):
+        entry = self.home / "reports/run1"
+        target = entry / "report.txt"
+        original_add = tarfile.TarFile.add
+        def changing_add(tar, name, *args, **kwargs):
+            result = original_add(tar, name, *args, **kwargs)
+            if Path(name) == entry:
+                target.write_text("new evidence")
+            return result
+        with patch.object(tarfile.TarFile, "add", changing_add):
+            with self.assertRaises((ValueError, OSError)):
+                retention.pack(entry)
+        self.assertEqual(target.read_text(), "new evidence")
+
+    def test_readable_archive_with_wrong_payload_preserves_source(self):
+        entry = self.home / "reports/run1"
+        original = (entry / "report.txt").read_bytes()
+        def wrong_add(tar, name, **kwargs):
+            info = tarfile.TarInfo("run1/report.txt")
+            info.size = 5
+            tar.addfile(info, io.BytesIO(b"wrong"))
+        with patch.object(tarfile.TarFile, "add", wrong_add):
+            with self.assertRaises((ValueError, OSError)):
+                retention.pack(entry)
+        self.assertEqual((entry / "report.txt").read_bytes(), original)
+
+    def test_truncated_gzip_trailer_preserves_source(self):
+        entry = self.home / "reports/run1"
+        verify = retention._verify_archive
+        def truncate_then_verify(archive, source):
+            data = archive.read_bytes()
+            archive.write_bytes(data[:-8])
+            verify(archive, source)
+        with patch.object(retention, "_verify_archive", truncate_then_verify):
+            with self.assertRaises((ValueError, OSError, EOFError)):
+                retention.pack(entry)
+        self.assertTrue((entry / "report.txt").exists())
+
+    def test_nonfinite_age_is_refused_without_changes(self):
+        before = sorted(self.home.rglob("*"))
+        with self.assertRaises(SystemExit) as result:
+            self.run_cli("--apply", "--scratch-days", "nan")
+        self.assertNotEqual(result.exception.code, 0)
+        self.assertEqual(before, sorted(self.home.rglob("*")))
+
+    def test_symlinked_profile_cannot_remove_external_files(self):
+        with tempfile.TemporaryDirectory() as outside:
+            target = make(Path(outside) / "attachments/old.png", 30)
+            (self.home / "profiles/linked").symlink_to(outside, target_is_directory=True)
+            self.run_cli("--apply")
+            self.assertTrue(target.exists())
+
+    def test_workspace_marker_preserves_old_scratch(self):
+        entry = self.home / "profiles/dev/cache/scratch/old"
+        make(entry / ".keep", 10)
+        age_dir(entry, 10)
+        self.run_cli("--apply")
+        self.assertTrue((entry / "a.txt").exists())
 
     def test_unknown_process_state_keeps_everything(self):
         before = sorted(self.home.rglob("*"))

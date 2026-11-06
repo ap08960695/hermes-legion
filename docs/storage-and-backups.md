@@ -98,6 +98,37 @@ from a daily timer (systemd user timer or launchd) after reviewing one preview.
 A timer that someone stopped during an incident stays stopped: include
 "restart the retention timer" in your incident close-out.
 
+## Retention safeguards (v0.8.2)
+
+A protected descendant now preserves its containing directory. Before applying each
+planned action, the helper observes process-held paths again and compares a complete
+metadata fingerprint with the preview. Changed, unreadable, symlinked, special-file,
+`.keep` and Git-marked trees remain in place. Nonfinite retention ages are refused.
+
+Partial Linux process visibility is unknown, so all candidates stay. On macOS, lsof
+warnings/errors, missing stable process IDs, and escaped filenames also retain all
+candidates. The fallback compares process inventories before and after lsof. These
+are conservative point-in-time checks, not a lock against arbitrary future writers.
+A skipped cleanup is not reclaimed space; investigate the visibility gap instead of
+replacing the guard with an empty process list. Explicit `--protect` paths remain
+necessary for durable workspaces and held rollback points that no process has open.
+
+Report packing now uses an exclusive temporary file, compares every archived file's
+SHA-256 and the full inventory with the source, and reads through the gzip checksum
+trailer. It syncs the archive and its directory, publishes without overwriting an
+existing archive, and keeps an unchanged-source check before removal. Source changes,
+archive corruption or new process holders preserve the original. The pack admission
+check reserves the uncompressed source size plus 1 GiB; concurrent writers can still
+consume that space. An interruption after publication can leave both copies: inspect
+and reconcile them explicitly instead of overwriting the archive.
+
+The companion helper was installed with matching bytes on Linux and macOS. It does
+not change the 909-path upstream source kit or Desktop packages. The host-specific
+Linux scheduled wrapper was also changed to use these guards for its removal/packing
+paths and to stop when either process or open-card protection cannot be read. It no
+longer traverses unrelated project worktrees. That private wrapper is not a portable
+installer supplied by this repository.
+
 ## Verify a compacted snapshot without restoring it live
 
 This command verifies an archive by streaming its bytes without loading the whole
