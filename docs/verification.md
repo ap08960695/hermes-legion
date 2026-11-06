@@ -1,3 +1,13 @@
+# v0.8.10 — Native Desktop and saved recall acceptance
+
+Evidence-only release: installed Linux Desktop navigation and stored rich output
+passed at 1280/640 pixels without GPU devices or model calls. A separate simple
+native recall card recovered an answer absent from its prompt and completed in
+16 seconds using four cloud requests, with 68.7% observed cache-read input. One
+earlier fixture failed and used four additional requests. Same-result offline
+query replay read 20 payload rows from the 256-message archive. No whole-system
+savings claim is made. See [the complete scope and limits](native-desktop-recall-acceptance.md).
+
 # v0.8.9 — Forward unified worker progress
 
 Both unified roster paths now carry step, elapsed-time inputs, usage and stored
