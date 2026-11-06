@@ -39,3 +39,40 @@ foreign claims, delegated contexts and wrong process identities. The complete
 patch applies, reverses and reapplies against its pinned base. No GPU was used,
 production queues were not started and the existing Gateway was not restarted.
 This Python-only change does not rebuild or retest the Desktop interface.
+
+## Later native acceptance
+
+A fresh isolated reviewer card loaded the native review skill, read the recorded
+implementation and requested a simple arithmetic correction. Three successful
+provider requests returned the same card to its recorded implementer in `ready`
+state, with the claim cleared and no request after the handoff. The implementer
+was not dispatched. This verifies the revision transition, not a complete new
+implement-review-fix loop. An earlier zero-request missing-skill fixture remains
+retained as a failure; it was not replayed.
+
+A separate fresh pair measured the scheduling path through native managed-worker
+client termination, using a monotonic clock. Both cards parked the same synthetic
+checkpoint and remained scheduled when native dispatch was checked again. The
+comparison used current source with only scheduling removed from the terminal-stop
+map as its baseline, via a read-only fixture overlay; it did not reinstall an old
+release or change production source.
+
+| Measurement | Without schedule fast-stop | Current behavior |
+| --- | ---: | ---: |
+| Physical provider requests | 4 | 3 |
+| Requests after successful scheduling | 1 | 0 |
+| Dispatch to client termination | 20.063 s | 15.093 s |
+| Schedule tool return to client termination | 4.001 s | 0.988 s |
+
+These timings end when the dispatch client's process has exited and its native
+scheduled outcome is available. They are not the lifetime of a persistent Gateway
+worker. Earlier database `ended_at` values mark the durable handoff and can precede
+an extra model request; HTTP response-header timestamps also do not prove that a
+stream has finished. Neither was substituted for the new termination measurement.
+
+This is one ordered pair with uncontrolled provider latency and cache state. It
+shows the observed completion delay and eliminated request for these cards, not
+a general speed forecast or attribution of every elapsed-time difference to the
+patch. The two tests used seven requests total, exposed no Linux GPU devices,
+stopped both private Gateways and preserved the production Gateway and 414
+protected files. No ordinary work or scheduled follow-up phase was started.
