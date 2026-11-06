@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **913-path** Legion source, interface and optimization alternative
+This is the complete **914-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -347,3 +347,10 @@ The search memo now keeps at most 256 entries and a 32 MiB budget for retained P
 keys/responses. Cold entries still use the existing bounded disk tier. Expired payloads
 are released on lookup, including unrelated expired queries. The complete kit contains
 913 paths; see [measurement and limits](search-cache-memory.md).
+
+## Worker monitor readability update (v0.8.5)
+
+Long tool names no longer push step, elapsed time and token facts outside narrow
+roster rows. Facts wrap within the available width, and the existing hover summary
+includes all displayed progress facts. The consolidated kit contains 914 paths.
+See [verification and limits](worker-monitor-readability.md).

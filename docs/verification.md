@@ -1,3 +1,17 @@
+# v0.8.5 — Keep worker progress readable
+
+The prior component fails the tooltip regression and clips progress facts in an
+offline browser fixture at three row widths. The repaired selection passes 62 UI
+tests, renderer TypeScript, scoped lint and source health. The actual component and
+installed CSS keep step, elapsed and token facts inside the row at all three sizes.
+See [worker monitor readability](worker-monitor-readability.md) for the exact scope.
+
+Linux and ARM64 Mac source match the 914-path kit. Both Desktop packages are rebuilt
+and installed, including the Mac Finder copy; packaged frontend assets match their
+compiled output. No app was launched and no worker ran. A small test card remains
+blocked without an assignee, session or run, and owner stops remain intact.
+Original-session adoption and live-worker behavior are not yet verified.
+
 # v0.8.4 — Bound retained search memo memory
 
 Five regressions fail on the prior source. The repaired search/cache selection passes
