@@ -27380,7 +27380,7 @@ index 65887575dec12b3ddb9f859ebe56156264ea120e..b9d01891079d9487b9aa85628194e8f5
 +            # Our own home: the scope is implicit for strict session/relay verbs, which refuse
              # unknown keys; every other handler validates ``profile`` itself.
 diff --git a/gateway/session_group_controls.py b/gateway/session_group_controls.py
-index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..045bee237005da053b34437c0ea05a19f9654b62 100644
+index 0f0b80d208..9fa543c9ee 100644
 --- a/gateway/session_group_controls.py
 +++ b/gateway/session_group_controls.py
 @@ -97,3 +97,4 @@ def _group(authority, actor, method, params, *, host_scope=False):
@@ -27389,12 +27389,30 @@ index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..045bee237005da053b34437c0ea05a19
 +        # An armed standby owner accepts producers without allocating an idle supervisor.
 +        if not (status.get('running') or status.get('armed')) or status.get('stopping'):
              service = None
-@@ -392,3 +393,3 @@ def _profiles(authority, actor, home, params, siblings=()):
+@@ -317,2 +318,3 @@ def _bot_sessions(authority, actor):
+ def _read_bot_sessions(db, subject, operator):
++    from agent.session_activity import bound_activity_description, session_row_progress
+     from hermes_state_local_migration import LEGACY_PREFIX
+@@ -362,3 +364,5 @@ def _read_bot_sessions(db, subject, operator):
+         worker = conn.execute(
+-            f"SELECT id, source, title, COALESCE(last_activity_at, started_at) AS last_active FROM sessions "
++            "SELECT id, source, title, started_at, ended_at, last_activity_description, "
++            "api_call_count, model_config, input_tokens, output_tokens, "
++            "COALESCE(last_activity_at, started_at) AS last_active FROM sessions "
+             f"WHERE COALESCE(source,'') IN ({hidden_sources}) AND archived=0 AND hidden=0 "
+@@ -367,3 +371,5 @@ def _read_bot_sessions(db, subject, operator):
+             fields['worker_session'] = {'id': worker['id'], 'source': (worker['source'] or '').strip().lower(),
+-                                        'title': worker['title'] or '', 'last_active': worker['last_active'] or 0}
++                                        'title': worker['title'] or '', 'last_active': worker['last_active'] or 0,
++                                        'last_activity_description': bound_activity_description(worker['last_activity_description']),
++                                        'ended_at': worker['ended_at'], **session_row_progress(dict(worker))}
+     return fields
+@@ -392,3 +398,3 @@ def _profiles(authority, actor, home, params, siblings=()):
      ``_roster_siblings``' snapshot; a sibling with a reader carries the same session fields."""
 -    from hermes_cli.profiles import _profile_info
 +    from hermes_cli.profiles import _profile_info, _read_config_model
      import hermes_yaml as yaml
-@@ -424,5 +425,8 @@ def _profiles(authority, actor, home, params, siblings=()):
+@@ -424,5 +430,8 @@ def _profiles(authority, actor, home, params, siblings=()):
          seen.add(target.resolve())
 +        # The configured route is the config.yaml model block, memoised on the file's signature, so
 +        # a 5 s poll does not re-parse it; the card shows it as configured, not as a live binding.
@@ -27405,7 +27423,7 @@ index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..045bee237005da053b34437c0ea05a19
 +                 'model': model or '', 'provider': provider or '', 'description': '',
 +                 'display_name': configured, 'skill_count': 0}
          if include_sessions and reach is not None:
-@@ -432,2 +436,3 @@ def _profiles(authority, actor, home, params, siblings=()):
+@@ -432,2 +441,3 @@ def _profiles(authority, actor, home, params, siblings=()):
              entry['display_name'] = str(meta.get('display_name') or configured)
 +            entry['description'] = str(meta.get('description') or '').strip()
              if isinstance(meta.get('ui_meta'), dict):
@@ -49761,6 +49779,44 @@ index 0000000000000000000000000000000000000000..d7c418f16a5aebc23b418dd5e14adace
 +
 +    assert reply.get('error', {}).get('message') == reason, reply
 +    assert all(not relay_root(home).exists() for home in homes)
+diff --git a/tests/gateway/test_bot_roster_worker_session.py b/tests/gateway/test_bot_roster_worker_session.py
+index deedad1bca..b49588c041 100644
+--- a/tests/gateway/test_bot_roster_worker_session.py
++++ b/tests/gateway/test_bot_roster_worker_session.py
+@@ -63,3 +63,7 @@ def test_the_newest_live_worker_is_reported_with_the_contract_fields(db):
+     assert fields['worker_session'] == {'id': 'work-new', 'source': 'kanban',
+-                                        'title': 'Task 9', 'last_active': 3000}, fields['worker_session']
++                                        'title': 'Task 9', 'last_active': 3000,
++                                        'last_activity_description': '', 'ended_at': None,
++                                        'started_at': 3000, 'current_tool': None, 'iteration': 0,
++                                        'max_iterations': None, 'input_tokens': 0,
++                                        'output_tokens': 0}, fields['worker_session']
+     # The conversation fields keep their own contract: the worker never becomes the last session.
+@@ -75,2 +79,24 @@ def test_a_profile_without_workers_reports_none(db):
+ 
++@pytest.mark.parametrize('ended', [None, 2100])
++def test_monitor_progress_and_terminal_boundary_reach_own_and_sibling_rows(db, ended):
++    _session(db, 'work-progress', title='Task', last_active=2000)
++    with db._lock:
++        db._conn.execute(
++            'UPDATE sessions SET started_at=?, ended_at=?, last_activity_description=?, '
++            'api_call_count=?, model_config=?, input_tokens=?, output_tokens=? WHERE id=?',
++            (1900, ended, 'executing tool: kanban_complete', 2, '{"max_iterations": 3}',
++             9000, 314, 'work-progress'))
++    authority = _authority(db)
++    for fields in (_bot_sessions(authority, READER), _sibling_sessions(authority, READER)):
++        worker = fields['worker_session']
++        assert worker['last_activity_description'] == 'executing tool: kanban_complete'
++        assert worker['ended_at'] == ended
++        assert worker['started_at'] == 1900
++        assert worker['current_tool'] == 'kanban_complete'
++        assert worker['iteration'] == 2
++        assert worker['max_iterations'] == 3
++        assert worker['input_tokens'] == 9000
++        assert worker['output_tokens'] == 314
++
++
+ def test_the_own_row_and_a_host_scoped_sibling_row_both_carry_the_worker(db, tmp_path):
 diff --git a/tests/gateway/test_bot_workflow_controls.py b/tests/gateway/test_bot_workflow_controls.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..f07634bc87256357ef07e0718ea1d56ff6cd99d8

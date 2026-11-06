@@ -1,3 +1,13 @@
+# v0.8.9 — Forward unified worker progress
+
+Both unified roster paths now carry step, elapsed-time inputs, usage and stored
+terminal state. Two regressions failed before repair; 36 related tests pass after
+repair. Native checks and 919-path source parity pass on Linux and ARM64 Mac.
+Three isolated simple cards completed using four physical cloud requests, with
+GPU devices unavailable to the test processes. Actual rich-output and monitor
+components render the observed data at three widths. Full Desktop navigation and
+running production-Gateway adoption remain unverified. See [scope and evidence](unified-worker-progress.md).
+
 # v0.8.8 — Bound retained token-estimate memo memory
 
 The token memo now caps retained key/value objects at 32 MiB and keeps the existing
