@@ -1,3 +1,18 @@
+# v0.8.7 — Make offline vision routing checks deterministic
+
+The v0.8.6 adjacent failure was an unseeded catalog assumption: the test expected
+known text-only metadata in a clean offline home where capability was unknown.
+The replacement supplies synthetic raw catalog entries and verifies rejection of
+known text-only models plus acceptance of vision and unknown models. Runtime policy
+is unchanged. Both permissive and restrictive gate mutations are caught.
+
+The combined vision/cache selection passes 147 tests across thirteen files. A
+separate capability selection passes 65 overlapping tests; the installed Linux
+routing file passes eleven. Installed production Python on Linux and ARM64 Mac
+each passes three offline catalog/route checks. Source health, scoped lint and
+companion tests pass; the 916-path kit matches both hosts. No real inference or
+worker execution ran. See [the verification boundary](vision-routing-verification.md).
+
 # v0.8.6 — Keep vision cache reuse within the selected connection
 
 The repaired direct and registered auxiliary-image paths retain separate successful
