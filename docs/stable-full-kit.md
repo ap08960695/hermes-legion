@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **912-path** Legion source, interface and optimization alternative
+This is the complete **913-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -340,3 +340,10 @@ Post-turn goal judges now record auxiliary usage on the owning goal or worker se
 and restore the surrounding accounting context. The complete kit contains 912 paths.
 See [goal usage accounting](goal-usage-accounting.md) for the failure, test evidence and
 runtime-adoption limits. No extra model requests or Desktop rebuilds are introduced.
+
+## Search cache memory update (v0.8.4)
+
+The search memo now keeps at most 256 entries and a 32 MiB budget for retained Python
+keys/responses. Cold entries still use the existing bounded disk tier. Expired payloads
+are released on lookup, including unrelated expired queries. The complete kit contains
+913 paths; see [measurement and limits](search-cache-memory.md).

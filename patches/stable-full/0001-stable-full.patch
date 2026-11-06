@@ -65162,12 +65162,13 @@ index 0000000000000000000000000000000000000000..0371bda90a182e27f3b49cbbc78b4ef7
 +        assert first.get_session(a.session_id)["system_prompt"] == "profile-a compacted prefix"
 diff --git a/tests/tools/test_cache_batch_efficiency.py b/tests/tools/test_cache_batch_efficiency.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..7a9661c2ea0b331407e35f30260693a75b1ad1d3
+index 0000000000000000000000000000000000000000..061fe36c7fea61e90e1c09520a9fb4ac34fc0b30
 --- /dev/null
 +++ b/tests/tools/test_cache_batch_efficiency.py
-@@ -0,0 +1,120 @@
+@@ -0,0 +1,121 @@
 +"""Batch extraction, profile boundaries and cache work amplification regressions."""
 +import asyncio
++from collections import OrderedDict
 +import json
 +from types import SimpleNamespace
 +from unittest.mock import patch
@@ -65249,7 +65250,7 @@ index 0000000000000000000000000000000000000000..7a9661c2ea0b331407e35f30260693a7
 +
 +
 +def test_expiry_does_not_scan_unexpired_values(setup,monkeypatch):
-+    class NoSweep(dict):
++    class NoSweep(OrderedDict):
 +        def items(self):
 +            raise AssertionError('full expiry sweep')
 +    memo=cache.SearchMemo()
@@ -71092,6 +71093,143 @@ index 0000000000000000000000000000000000000000..e4856071ec7d0bc5c899e94416a74f39
 +    del lock
 +    gc.collect()
 +    assert all(ref() is None for ref in refs), "Completed flights must not accumulate locks"
+diff --git a/tests/tools/test_web_search_memory_budget.py b/tests/tools/test_web_search_memory_budget.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..a2db458b0328c2cbc655bef5b1c1370c6316f984
+--- /dev/null
++++ b/tests/tools/test_web_search_memory_budget.py
+@@ -0,0 +1,131 @@
++"""Search traffic must not grow retained RAM without bound or lose disk reuse."""
++import sys
++import json
++from types import SimpleNamespace
++
++import pytest
++
++from tools import web_result_cache as cache
++
++
++@pytest.fixture(autouse=True)
++def isolated(monkeypatch):
++    monkeypatch.setattr(cache, "_web_config", dict)
++
++
++def response(text="value"):
++    return {"success": True, "data": {"web": [{"title": text}]}}
++
++
++def test_entry_pressure_releases_cold_memory_but_preserves_disk_hit(monkeypatch):
++    monkeypatch.setattr(cache, "_SEARCH_MAX_ENTRIES", 2, raising=False)
++    memo = cache.SearchMemo()
++    for query in ("hot", "cold"):
++        memo.store("fixture", query, 5, response(query))
++    assert memo.lookup("fixture", "hot", 5) == response("hot")
++    memo.store("fixture", "new", 5, response("new"))
++    assert len(memo._store) == 2
++    assert memo._key("fixture", "cold", 5) not in memo._store
++    assert memo.lookup("fixture", "cold", 5) == response("cold")
++    # A disk hit stays caller-owned and does not re-grow the memory tier.
++    assert len(memo._store) == 2
++
++
++def test_large_results_cannot_accumulate_past_payload_budget(monkeypatch):
++    monkeypatch.setattr(cache, "_SEARCH_MAX_BYTES", 32_000, raising=False)
++    memo = cache.SearchMemo()
++    for i in range(12):
++        memo.store("fixture", str(i), 5, response(str(i) + "x" * 12_000))
++    retained_text = sum(sys.getsizeof(value[1]["data"]["web"][0]["title"])
++                        for value in memo._store.values())
++    assert retained_text <= 32_000
++    assert memo.lookup("fixture", "11", 5)["data"]["web"][0]["title"].startswith("11")
++
++
++def test_oversize_result_keeps_hot_entries_and_remains_readable_on_disk(monkeypatch):
++    monkeypatch.setattr(cache, "_SEARCH_MAX_BYTES", 8_000, raising=False)
++    memo = cache.SearchMemo()
++    memo.store("fixture", "hot", 5, response())
++    memo.store("fixture", "large", 5, response("x" * 20_000))
++    assert memo._key("fixture", "large", 5) not in memo._store
++    assert memo._key("fixture", "hot", 5) in memo._store
++    assert memo.lookup("fixture", "large", 5) == response("x" * 20_000)
++
++
++def test_lookup_releases_other_expired_payloads_without_another_store(monkeypatch):
++    now = [0.0]
++    monkeypatch.setattr(cache.time, "monotonic", lambda: now[0])
++    monkeypatch.setattr(cache, "ttl_seconds", lambda: 10)
++    memo = cache.SearchMemo()
++    memo.store("fixture", "old", 5, response("old"))
++    now[0] = 5
++    memo.store("fixture", "live", 5, response("live"))
++    now[0] = 10
++    assert memo.lookup("fixture", "live", 5) == response("live")
++    assert memo._key("fixture", "old", 5) not in memo._store
++
++
++def test_replacement_and_clear_release_budget(monkeypatch):
++    monkeypatch.setattr(cache, "_SEARCH_MAX_BYTES", 20_000, raising=False)
++    memo = cache.SearchMemo()
++    for _ in range(20):
++        memo.store("fixture", "same", 5, response("x" * 8_000))
++    memo.store("fixture", "second", 5, response("y" * 8_000))
++    assert len(memo._store) == 2
++    memo.clear()
++    memo.store("fixture", "third", 5, response("z" * 8_000))
++    assert memo.lookup("fixture", "third", 5) == response("z" * 8_000)
++
++
++def test_eviction_does_not_replace_reserved_flight_lock(monkeypatch):
++    monkeypatch.setattr(cache, "_SEARCH_MAX_ENTRIES", 1, raising=False)
++    memo = cache.SearchMemo()
++    reserved = memo.flight_lock("fixture", "old", 5)
++    memo.store("fixture", "old", 5, response())
++    memo.store("fixture", "new", 5, response())
++    assert memo.flight_lock("fixture", "old", 5) is reserved
++    assert memo.lookup("fixture", "old", 5) == response()
++
++
++def test_expiry_metadata_does_not_retain_evicted_large_queries(monkeypatch):
++    monkeypatch.setattr(cache, "_SEARCH_MAX_BYTES", 8_000, raising=False)
++    memo = cache.SearchMemo()
++    for i in range(20):
++        memo.store("fixture", str(i) + "q" * 5_000, 5, response())
++    retained_queries = {id(row[2][2]): row[2][2] for row in memo._expiry}
++    assert sum(sys.getsizeof(query) for query in retained_queries.values()) <= 8_000
++
++
++def test_hits_do_not_duplicate_large_query_objects(monkeypatch):
++    monkeypatch.setattr(cache, "_SEARCH_MAX_BYTES", 8_000, raising=False)
++    memo = cache.SearchMemo()
++    memo.store("fixture", "q" * 5_000, 5, response())
++    assert memo.lookup("fixture", "q" * 5_000, 5) == response()
++    keys = [*memo._store, *getattr(memo, "_sizes", {}), *(row[2] for row in memo._expiry)]
++    queries = {id(key[2]): key[2] for key in keys}
++    assert sum(sys.getsizeof(query) for query in queries.values()) <= 8_000
++
++
++def test_registry_reads_evicted_result_without_a_provider_call(monkeypatch):
++    from agent import web_search_registry
++    from tools import web_tools
++    from tools.registry import registry
++
++    monkeypatch.setattr(cache, "_SEARCH_MAX_ENTRIES", 1, raising=False)
++    memo = cache.SearchMemo()
++    monkeypatch.setattr(cache, "search_memo", memo)
++    memo.store("offline-fixture", "cold", 5, response("preserved"))
++    memo.store("offline-fixture", "new", 5, response("new"))
++
++    def forbidden(*args, **kwargs):
++        pytest.fail("An evicted RAM entry with a fresh disk copy must not call a provider")
++
++    provider = SimpleNamespace(name="offline-fixture", supports_search=lambda: True,
++                               search=forbidden)
++    monkeypatch.setattr(web_tools, "_ensure_web_plugins_loaded", lambda: None)
++    monkeypatch.setattr(web_tools, "_get_search_backend", lambda: provider.name)
++    monkeypatch.setattr(web_search_registry, "get_provider", lambda name: provider)
++    monkeypatch.setattr(web_tools, "_managed_search_fallback", forbidden)
++    monkeypatch.setattr(web_tools, "_rescue_search", forbidden)
++    result = json.loads(registry.dispatch("web_search", {"query": "cold", "limit": 5}))
++    assert result == response("preserved")
 diff --git a/tests/tools/test_web_search_store_contention.py b/tests/tools/test_web_search_store_contention.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..2022a39d18dc4767f30b4b43ccfd218682734454
@@ -76545,7 +76683,7 @@ index c244fd4fa1ea32757b751592b593243b101ef0e2..d8fdec1d2d127ff232063376bf46c530
 +async def _handle_vision_analyze_uncached(image_url: str, question: str, region: Any, task_id: Any):
      # No concurrency gate around the whole analysis — the CPU burst is bounded inside the
 diff --git a/tools/web_result_cache.py b/tools/web_result_cache.py
-index c747f3f30947fd5ef4eb13d5c51e2bb85156e951..a44fdae0b237bad0b2d6490d9b018f5f096c9763 100644
+index c747f3f30947fd5ef4eb13d5c51e2bb85156e951..1f73a007536b56c527a2fd5881aabf3d1204319c 100644
 --- a/tools/web_result_cache.py
 +++ b/tools/web_result_cache.py
 @@ -9,2 +9,4 @@ Lives here, not in tool dispatch, so hits sit *after* every safety check and ski
@@ -76553,26 +76691,60 @@ index c747f3f30947fd5ef4eb13d5c51e2bb85156e951..a44fdae0b237bad0b2d6490d9b018f5f
 +import heapq
 +import itertools
  import hashlib
-@@ -12,2 +14,4 @@ import json
+@@ -12,6 +14,11 @@ import json
  import logging
 +import math
 +import os
  import re
-@@ -15,3 +19,4 @@ import threading
++import sys
+ import threading
  import time
 -from contextlib import suppress
 +import weakref
 +from contextlib import contextmanager, suppress
++from collections import OrderedDict
  from pathlib import Path
-@@ -86,4 +91,6 @@ class SearchMemo:
-         self._store: dict[tuple, tuple[float, dict]] = {}  # key -> (expires_at, response)
+@@ -30,2 +37,4 @@ _INDEX_FILENAME = "extract-index.json"
+ _INDEX_MAX_ENTRIES = 500  # oldest entries evicted past this
++_SEARCH_MAX_ENTRIES = 256
++_SEARCH_MAX_BYTES = 32 * 1024 * 1024  # retained Python keys/responses, not process RSS
+ 
+@@ -79,2 +88,22 @@ def _deep_copy(response: dict) -> dict:
+ 
++def _search_entry_bytes(key: tuple, response: dict) -> int:
++    """Count the copied JSON object's Python footprint, including Unicode/containers."""
++    pending, seen, size = [key, response], set(), 0
++    while pending:
++        value = pending.pop()
++        identity = id(value)
++        if identity in seen:
++            continue
++        seen.add(identity)
++        size += sys.getsizeof(value)
++        if size > _SEARCH_MAX_BYTES:
++            return size
++        if isinstance(value, dict):
++            pending.extend(value.keys())
++            pending.extend(value.values())
++        elif isinstance(value, (list, tuple)):
++            pending.extend(value)
++    return size
++
++
+ class SearchMemo:
+@@ -85,5 +114,9 @@ class SearchMemo:
+     def __init__(self) -> None:
+-        self._store: dict[tuple, tuple[float, dict]] = {}  # key -> (expires_at, response)
++        self._store: OrderedDict[tuple, tuple[float, dict]] = OrderedDict()
++        self._sizes: dict[tuple, int] = {}
++        self._bytes = 0
 +        self._expiry = []
 +        self._expiry_order = itertools.count()
          self._store_lock = threading.Lock()
 -        self._key_locks: dict[tuple, threading.Lock] = {}
 +        self._key_locks: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
  
-@@ -91,5 +98,6 @@ class SearchMemo:
+@@ -91,5 +124,6 @@ class SearchMemo:
      def _key(provider: str, query: str, limit: int) -> tuple:
 -        return (provider, normalize_query(query), bucket_limit(limit))
 +        from hermes_constants import hermes_home_key
@@ -76581,12 +76753,15 @@ index c747f3f30947fd5ef4eb13d5c51e2bb85156e951..a44fdae0b237bad0b2d6490d9b018f5f
 -    def lookup(self, provider: str, query: str, limit: int) -> Optional[dict]:
 +    def lookup(self, provider: str, query: str, limit: int, *, sliced: bool = False) -> Optional[dict]:
          if not cache_enabled():
-@@ -99,7 +107,17 @@ class SearchMemo:
+@@ -98,8 +132,19 @@ class SearchMemo:
+         with self._store_lock:
++            self._expire(time.monotonic())
              hit = self._store.get(key)
 -            if hit is None or time.monotonic() >= hit[0]:
-+            if hit is not None and time.monotonic() >= hit[0]:
-                 self._store.pop(key, None)
-+                hit = None
+-                self._store.pop(key, None)
++            if hit is not None:
++                # Preserve the canonical key shared with sizes and expiry metadata.
++                self._store.move_to_end(key)
 +        if hit is None:
 +            from tools.web_search_disk_cache import lookup
 +            response = lookup(key, ttl_seconds())
@@ -76601,11 +76776,12 @@ index c747f3f30947fd5ef4eb13d5c51e2bb85156e951..a44fdae0b237bad0b2d6490d9b018f5f
 +        """Caller-owned requested subset; original lookup keeps its bucket-sized contract."""
 +        return self.lookup(provider, query, limit, sliced=True)
  
-@@ -110,7 +128,30 @@ class SearchMemo:
+@@ -110,7 +155,55 @@ class SearchMemo:
          key = self._key(provider, query, limit)
 +        # Serialization and profile config reads must not block unrelated cache
 +        # hits or flight reservations. Start TTL when the prepared entry is stored.
 +        copied = _deep_copy(response)
++        size = _search_entry_bytes(key, copied)
 +        ttl = ttl_seconds()
          with self._store_lock:
 -            now = time.monotonic()  # opportunistic expiry sweep bounds memory
@@ -76613,19 +76789,43 @@ index c747f3f30947fd5ef4eb13d5c51e2bb85156e951..a44fdae0b237bad0b2d6490d9b018f5f
 -                del self._store[k]
 -            self._store[key] = (now + ttl_seconds(), _deep_copy(response))
 +            now = time.monotonic()
-+            while self._expiry and self._expiry[0][0] <= now:
-+                exp, _, k = heapq.heappop(self._expiry)
-+                current = self._store.get(k)
-+                if current is not None and current[0] == exp:
-+                    del self._store[k]
-+            self._store[key] = (now + ttl, copied)
-+            heapq.heappush(self._expiry, (now + ttl, next(self._expiry_order), key))
-+            if len(self._expiry) > max(64, 2 * len(self._store)):
-+                self._expiry = [(exp, next(self._expiry_order), k) for k, (exp, _) in self._store.items()]
-+                heapq.heapify(self._expiry)
++            self._expire(now)
++            removed = key in self._store
++            self._discard(key)
++            # Oversized results still reach the disk tier and the caller. They must
++            # not displace every useful small hit merely to be rejected afterwards.
++            if size <= _SEARCH_MAX_BYTES:
++                while self._store and (len(self._store) >= _SEARCH_MAX_ENTRIES
++                                       or self._bytes + size > _SEARCH_MAX_BYTES):
++                    self._discard(next(iter(self._store)))
++                    removed = True
++                self._store[key] = (now + ttl, copied)
++                self._sizes[key] = size
++                self._bytes += size
++                heapq.heappush(self._expiry, (now + ttl, next(self._expiry_order), key))
++            # Tombstones can retain large query strings even after payload eviction.
++            self._compact_expiry(force=removed)
 +
 +        from tools.web_search_disk_cache import store
 +        store(key, copied)
++
++    def _discard(self, key) -> None:
++        self._store.pop(key, None)
++        self._bytes -= self._sizes.pop(key, 0)
++
++    def _expire(self, now: float) -> None:
++        while self._expiry and self._expiry[0][0] <= now:
++            exp, _, key = heapq.heappop(self._expiry)
++            current = self._store.get(key)
++            if current is not None and current[0] == exp:
++                self._discard(key)
++        self._compact_expiry()
++
++    def _compact_expiry(self, *, force=False) -> None:
++        if force or len(self._expiry) > max(64, 2 * len(self._store)):
++            self._expiry = [(exp, next(self._expiry_order), key)
++                            for key, (exp, _) in self._store.items()]
++            heapq.heapify(self._expiry)
 +
 +    @contextmanager
 +    def process_flight(self, provider, query, limit):
@@ -76636,7 +76836,7 @@ index c747f3f30947fd5ef4eb13d5c51e2bb85156e951..a44fdae0b237bad0b2d6490d9b018f5f
 +        with flight(self._key(provider, query, limit)):
 +            yield
  
-@@ -122,8 +163,6 @@ class SearchMemo:
+@@ -122,8 +215,6 @@ class SearchMemo:
              if lock is None:
 -                # Bound the lock table, but never evict a HELD lock: dropping one lets a concurrent
 -                # identical request mint a fresh lock and issue a duplicate paid call. locked() is a
@@ -76649,30 +76849,32 @@ index c747f3f30947fd5ef4eb13d5c51e2bb85156e951..a44fdae0b237bad0b2d6490d9b018f5f
 +                # unused. Weak values retain one lock for every live reservation
 +                # and reclaim it only after the last caller drops its reference.
                  lock = self._key_locks[key] = threading.Lock()
-@@ -135,3 +174,6 @@ class SearchMemo:
+@@ -135,3 +226,8 @@ class SearchMemo:
              self._store.clear()
++            self._sizes.clear()
++            self._bytes = 0
 +            self._expiry.clear()
              self._key_locks.clear()
 +        from tools.web_search_disk_cache import clear
 +        clear()
  
-@@ -141,3 +183,3 @@ search_memo = SearchMemo()
+@@ -141,3 +237,3 @@ search_memo = SearchMemo()
  
 -def slice_search_response(response: dict, limit: int) -> dict:
 +def slice_search_response(response: dict, limit: int, *, copy_always: bool = False) -> dict:
      """Trim a bucketed response's result list down to the caller's limit."""
-@@ -146,4 +188,3 @@ def slice_search_response(response: dict, limit: int) -> dict:
+@@ -146,4 +242,3 @@ def slice_search_response(response: dict, limit: int) -> dict:
          if isinstance(web, list) and len(web) > limit:
 -            out = _deep_copy(response)
 -            out["data"]["web"] = out["data"]["web"][:limit]
 +            out = _deep_copy({**response, "data": {**response["data"], "web": web[:limit]}})
              return out
-@@ -151,3 +192,3 @@ def slice_search_response(response: dict, limit: int) -> dict:
+@@ -151,3 +246,3 @@ def slice_search_response(response: dict, limit: int) -> dict:
          pass
 -    return response
 +    return _deep_copy(response) if copy_always else response
  
-@@ -159,2 +200,30 @@ _index_lock = threading.Lock()
+@@ -159,2 +254,30 @@ _index_lock = threading.Lock()
  
 +@contextmanager
 +def _disk_index_lock():
@@ -76703,7 +76905,7 @@ index c747f3f30947fd5ef4eb13d5c51e2bb85156e951..a44fdae0b237bad0b2d6490d9b018f5f
 +
 +
  def _cache_dir() -> Optional[Path]:
-@@ -177,2 +246,13 @@ def _load_index() -> dict:
+@@ -177,2 +300,13 @@ def _load_index() -> dict:
  
 +def _entry_timestamp(entry: object) -> float:
 +    """Share TTL/eviction parsing; invalid metadata has the oldest eviction priority."""
@@ -76717,7 +76919,7 @@ index c747f3f30947fd5ef4eb13d5c51e2bb85156e951..a44fdae0b237bad0b2d6490d9b018f5f
 +
 +
  def _save_index(index: dict) -> None:
-@@ -183,6 +263,6 @@ def _save_index(index: dict) -> None:
+@@ -183,6 +317,6 @@ def _save_index(index: dict) -> None:
          if len(index) > _INDEX_MAX_ENTRIES:
 -            newest = sorted(index.items(), key=lambda kv: kv[1].get("fetched_at", 0), reverse=True)
 +            newest = sorted(index.items(), key=lambda kv: _entry_timestamp(kv[1]), reverse=True)
@@ -76727,7 +76929,7 @@ index c747f3f30947fd5ef4eb13d5c51e2bb85156e951..a44fdae0b237bad0b2d6490d9b018f5f
 +        # Publish while holding the cross-process merge lock; atomic replacement also
 +        # keeps lock-free readers from observing truncated JSON.
          atomic_json_write(path, index, indent=None)
-@@ -262,7 +342,24 @@ def extract_cache_get(url: str, format: Optional[str] = None, provider: str = ""
+@@ -262,7 +396,24 @@ def extract_cache_get(url: str, format: Optional[str] = None, provider: str = ""
      """Return {'url','title','content'} for a fresh cached page, else None."""
 -    if not _cacheable(url):
 -        return None
@@ -76756,12 +76958,12 @@ index c747f3f30947fd5ef4eb13d5c51e2bb85156e951..a44fdae0b237bad0b2d6490d9b018f5f
 +    # must not turn the TTL comparison into an immortal cache hit.
 +    if not math.isfinite(fetched_at) or (time.time() - fetched_at) >= ttl_seconds():
          return None
-@@ -274,3 +371,3 @@ def extract_cache_get(url: str, format: Optional[str] = None, provider: str = ""
+@@ -274,3 +425,3 @@ def extract_cache_get(url: str, format: Optional[str] = None, provider: str = ""
          content = file_path.read_text(encoding="utf-8-sig")
 -    except Exception:
 +    except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError):
          return None
-@@ -285,18 +382,30 @@ def extract_cache_put(
+@@ -285,18 +436,30 @@ def extract_cache_put(
      ceiling are not cached (serving a capped copy back as if whole would silently lose the tail)."""
 -    if not content or not _cacheable(url):
 -        return

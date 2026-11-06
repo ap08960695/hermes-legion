@@ -1,3 +1,18 @@
+# v0.8.4 — Bound retained search memo memory
+
+Five regressions fail on the prior source. The repaired search/cache selection passes
+75 tests; a separate web/provider/storage selection passes 332 tests. Scoped lint and
+source-health checks pass. Actual installed Linux and macOS source and production
+Python each pass four offline native checks, including registry dispatch to an evicted
+result's real disk copy without a provider call. Configuration, owner stops, and Gateway
+process state remain unchanged. No GPU, inference, dispatch, or service restart is used.
+
+An isolated 512-query fixture retains 72,212,954 traced Python bytes before the fix and
+33,623,906 afterwards (about 53% less). After expiry and a lookup of an unseen query,
+retention changes from 512 entries to zero; the repaired trace is 46,032 bytes. These
+are fixture allocations, not deployed process RSS or a promise of request/latency savings.
+See [search cache memory](search-cache-memory.md) for conditions and tradeoffs.
+
 # v0.8.3 — Attribute post-turn goal judge usage
 
 The current pre-repair source fails five ownership regressions. The focused accounting
