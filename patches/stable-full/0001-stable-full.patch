@@ -70408,6 +70408,124 @@ index 0000000000000000000000000000000000000000..2374066b334051ba5e0c56dc2ca9d483
 +    assert page["content"] == "x" * 512
 +    assert scans == [2_000_000]
 +    conn.close()
+diff --git a/tests/tools/test_vision_analysis_cache_route.py b/tests/tools/test_vision_analysis_cache_route.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..13b3fa1891aa2a957b7b1eb5744cfec3571c7364
+--- /dev/null
++++ b/tests/tools/test_vision_analysis_cache_route.py
+@@ -0,0 +1,112 @@
++"""Content reuse must follow the same runtime route boundary as auxiliary vision."""
++
++import asyncio
++import json
++from unittest.mock import AsyncMock
++
++import pytest
++from openai.types.chat import ChatCompletion
++from PIL import Image
++
++from agent.auxiliary_client import scoped_runtime_main
++from tools import vision_tools as vt
++from tools import vision_request_cache as cache
++from tools.registry import registry
++
++
++def response(text):
++    return ChatCompletion(
++        id="fixture", created=0, model="fixture-model", object="chat.completion",
++        choices=[{"index": 0, "finish_reason": "stop", "message": {
++            "role": "assistant", "content": text,
++        }}],
++    )
++
++
++@pytest.mark.parametrize("entrypoint", ["direct", "registered"])
++@pytest.mark.parametrize("binding", ["runtime", "saved"])
++@pytest.mark.parametrize("change", [
++    {"base_url": "https://second.invalid/v1"},
++    {"api_mode": "responses"},
++    {"auth_mode": "oauth"},
++])
++def test_changed_route_does_not_reuse_previous_analysis(tmp_path, monkeypatch, change, binding, entrypoint):
++    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
++    monkeypatch.setattr(vt, "_ANALYSIS_CACHE", type(vt._ANALYSIS_CACHE)())
++    monkeypatch.setattr(cache, "CACHE", cache.VisionCache())
++    monkeypatch.setattr(vt, "_should_use_native_vision_fast_path", lambda: False)
++    handler = next(e.handler for e in registry.get_all_entries() if e.name == "vision_analyze")
++    image = tmp_path / "image.png"
++    Image.new("RGB", (4, 4), (200, 30, 30)).save(image)
++    # Only the network boundary is replaced; image preparation, context propagation,
++    # response extraction and both cache lookup/store operations remain real.
++    llm = AsyncMock(side_effect=[response("first route"), response("second route")])
++    monkeypatch.setattr(vt, "async_call_llm", llm)
++    route = {"provider": "custom", "model": "fixture-model",
++             "base_url": "https://first.invalid/v1", "api_mode": "chat_completions", "auth_mode": "api_key"}
++
++    async def analyze(runtime):
++        if binding == "saved":
++            model = {**runtime, "default": runtime["model"]}
++            del model["model"]
++            (tmp_path / "config.yaml").write_text(json.dumps({"model": model}))
++        with scoped_runtime_main(runtime if binding == "runtime" else None):
++            if entrypoint == "direct":
++                result = await vt.vision_analyze_tool(str(image), "Describe the image")
++            else:
++                result = await handler({"image_url": str(image), "question": "Describe the image"},
++                                       task_id="fixture-task", session_id="fixture-session")
++            return json.loads(result)
++
++    first = asyncio.run(analyze(route))
++    changed = asyncio.run(analyze({**route, **change}))
++    repeated = asyncio.run(analyze({**route, **change}))
++    restored = asyncio.run(analyze(route))
++    assert first == {"success": True, "analysis": "first route"}
++    assert changed == {"success": True, "analysis": "second route"}
++    assert repeated["success"] is True and repeated["analysis"] == "second route"
++    assert restored["success"] is True and restored["analysis"] == "first route"
++    assert llm.await_count == 2
++
++
++@pytest.mark.parametrize("entrypoint", ["direct", "registered"])
++def test_concurrent_runtime_routes_keep_their_own_reused_results(tmp_path, monkeypatch, entrypoint):
++    from agent.auxiliary_client import _runtime_main_value
++
++    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
++    monkeypatch.setattr(vt, "_ANALYSIS_CACHE", type(vt._ANALYSIS_CACHE)())
++    monkeypatch.setattr(cache, "CACHE", cache.VisionCache())
++    monkeypatch.setattr(vt, "_should_use_native_vision_fast_path", lambda: False)
++    image = tmp_path / "image.png"
++    Image.new("RGB", (4, 4), (200, 30, 30)).save(image)
++    handler = next(e.handler for e in registry.get_all_entries() if e.name == "vision_analyze")
++    calls = []
++
++    async def scenario():
++        both_entered = asyncio.Event()
++
++        async def complete(**kwargs):
++            route = _runtime_main_value("base_url")
++            calls.append(route)
++            if len(calls) == 2:
++                both_entered.set()
++            await asyncio.wait_for(both_entered.wait(), 3)
++            return response(route)
++
++        monkeypatch.setattr(vt, "async_call_llm", complete)
++
++        async def analyze(route):
++            with scoped_runtime_main({"provider": "custom", "model": "fixture-model", "base_url": route}):
++                if entrypoint == "direct":
++                    result = await vt.vision_analyze_tool(str(image), "Describe the image")
++                else:
++                    result = await handler({"image_url": str(image), "question": "Describe the image"},
++                                           task_id="fixture-task", session_id="fixture-session")
++                return json.loads(result)["analysis"]
++
++        routes = ["https://first.invalid/v1", "https://second.invalid/v1"]
++        assert await asyncio.gather(*(analyze(route) for route in routes)) == routes
++        assert await asyncio.gather(*(analyze(route) for route in routes)) == routes
++        assert sorted(calls) == routes
++
++    asyncio.run(scenario())
 diff --git a/tests/tools/test_vision_analysis_content_cache.py b/tests/tools/test_vision_analysis_content_cache.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..8e6d3e6ab6a31146e542530e11785f7e04d19998
@@ -76533,10 +76651,10 @@ index f52fa3d14ec56d1822bb7e393e3a178be6852eb1..f8b03e0358a2bbd9a8783fa593de92d1
          validation_error = best_match(validator_cls(validation_schema).iter_errors(candidate_args))
 diff --git a/tools/vision_request_cache.py b/tools/vision_request_cache.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..32c1a2ab39b6e0d3a03189332961bbebad395321
+index 0000000000000000000000000000000000000000..349b657033f13320255a52203cf00cf61b0ef0e9
 --- /dev/null
 +++ b/tools/vision_request_cache.py
-@@ -0,0 +1,103 @@
+@@ -0,0 +1,105 @@
 +"""Bounded auxiliary vision reuse, isolated by caller and route; no provider calls here."""
 +import asyncio
 +from collections import OrderedDict
@@ -76611,7 +76729,7 @@ index 0000000000000000000000000000000000000000..32c1a2ab39b6e0d3a03189332961bbeb
 +
 +def request_key(image_url, question, region, task_id, *, session_id=None):
 +    """No unbound scope, remote files, credential resolution, prompt logging or disk cache."""
-+    from agent.auxiliary_client import _runtime_main_value, _read_main_model, _read_main_provider
++    from agent.auxiliary_client import _runtime_main_value, _read_main_field, _read_main_model, _read_main_provider
 +    from gateway.session_context import get_session_env
 +    from hermes_constants import get_hermes_home
 +    from hermes_cli.config import load_config_readonly
@@ -76620,14 +76738,16 @@ index 0000000000000000000000000000000000000000..32c1a2ab39b6e0d3a03189332961bbeb
 +    session = session_id or _runtime_main_value('session_id') or get_session_env('HERMES_SESSION_ID', '')
 +    if not task_id or not session or not _is_local_terminal_backend() or not isinstance(image_url, str):
 +        return None
-+    path = image_url[7:] if image_url.startswith('file://') else image_url
++    path = image_url.removeprefix('file://')
 +    if not path or '://' in path:
 +        return None
 +    try:
 +        path = os.path.realpath(os.path.expanduser(path))
 +        stat = os.stat(path)
 +        config = load_config_readonly()
-+        route = {field: _runtime_main_value(field) for field in
++        # The live route wins; a saved connection is also part of the cache boundary.
++        # Read metadata only, without resolving clients or acquiring credentials.
++        route = {field: _read_main_field(field, readonly=True) for field in
 +                 ('provider', 'model', 'base_url', 'api_mode', 'auth_mode')}
 +        route.update(main_model=_read_main_model(), main_provider=_read_main_provider(),
 +                     auxiliary=config.get('auxiliary', {}), legacy_model=os.getenv('AUXILIARY_VISION_MODEL', ''))
@@ -76641,7 +76761,7 @@ index 0000000000000000000000000000000000000000..32c1a2ab39b6e0d3a03189332961bbeb
 +
 +CACHE = VisionCache()
 diff --git a/tools/vision_tools.py b/tools/vision_tools.py
-index c244fd4fa1ea32757b751592b593243b101ef0e2..d8fdec1d2d127ff232063376bf46c530da53ec0a 100644
+index c244fd4fa1ea32757b751592b593243b101ef0e2..55bc25864973ba5c92d4b0935b9292679ef6ac79 100644
 --- a/tools/vision_tools.py
 +++ b/tools/vision_tools.py
 @@ -10,3 +10,6 @@ import base64
@@ -76656,7 +76776,7 @@ index c244fd4fa1ea32757b751592b593243b101ef0e2..d8fdec1d2d127ff232063376bf46c530
 +import re
 +import time
  import uuid
-@@ -832,2 +837,45 @@ async def _call_vision_llm(call_kwargs: dict, empty_log: str, response=None):
+@@ -832,2 +837,47 @@ async def _call_vision_llm(call_kwargs: dict, empty_log: str, response=None):
  
 +# Content-addressed reuse of aux analyses: key = sha256(prepared image bytes) + prompt + route.
 +# Remote/data URLs hash AFTER the download the analysis needs anyway. Only non-empty successes
@@ -76669,10 +76789,12 @@ index c244fd4fa1ea32757b751592b593243b101ef0e2..d8fdec1d2d127ff232063376bf46c530
 +def _analysis_cache_key(image_path: Path, prompt: str, model: Optional[str], crop_offset: dict) -> Optional[str]:
 +    """None when the route or the bytes cannot be identified (then the call is never cached)."""
 +    try:
-+        from agent.auxiliary_client import _read_main_model, _read_main_provider
++        from agent.auxiliary_client import _read_main_field, _read_main_model, _read_main_provider
 +        from hermes_constants import get_hermes_home
 +        identity = [str(get_hermes_home()), model or "", _cfg_auxiliary("vision", default={}) or {},
 +                    _read_main_provider(), _read_main_model(), os.getenv("AUXILIARY_VISION_MODEL", ""),
++                    {field: _read_main_field(field, readonly=True)
++                     for field in ("base_url", "api_mode", "auth_mode")},
 +                    prompt, crop_offset, hashlib.sha256(image_path.read_bytes()).hexdigest()]
 +        return hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode()).hexdigest()
 +    except Exception:
@@ -76702,12 +76824,12 @@ index c244fd4fa1ea32757b751592b593243b101ef0e2..d8fdec1d2d127ff232063376bf46c530
 +
 +
  async def _run_analysis(
-@@ -865,2 +913,4 @@ async def _run_analysis(
+@@ -865,2 +915,4 @@ async def _run_analysis(
              result["scale_note"] = scale_note
 +        if debug_call_data.get("cached"):
 +            result["cached"] = True
          debug_call_data.update(success=True, analysis_length=analysis_length)
-@@ -896,2 +946,8 @@ async def vision_analyze_tool(
+@@ -896,2 +948,8 @@ async def vision_analyze_tool(
          logger.info("Image ready (%.1f KB)", prepared.size_bytes / 1024)
 +        cache_key = await asyncio.to_thread(_analysis_cache_key, prepared.path, prompt, model, prepared.crop_offset)
 +        cached = _analysis_cache_get(cache_key)
@@ -76716,14 +76838,14 @@ index c244fd4fa1ea32757b751592b593243b101ef0e2..d8fdec1d2d127ff232063376bf46c530
 +            debug_call_data["cached"] = True
 +            return cached
          # Send at full resolution first; on a size rejection, downscale and retry.
-@@ -924,3 +980,5 @@ async def vision_analyze_tool(
+@@ -924,3 +982,5 @@ async def vision_analyze_tool(
              call_kwargs, "Vision LLM returned empty content, retrying once", response)
 -        return analysis, _build_scale_note(_scale_info or None, prepared.crop_offset or None)
 +        outcome = (analysis, _build_scale_note(_scale_info or None, prepared.crop_offset or None))
 +        _analysis_cache_put(cache_key, outcome)
 +        return outcome
      return await _run_analysis("image", image_url, user_prompt, model, stage)
-@@ -1012,5 +1070,16 @@ def _configured_aux_model(sections: tuple, env_vars: tuple) -> Optional[str]:
+@@ -1012,5 +1072,16 @@ def _configured_aux_model(sections: tuple, env_vars: tuple) -> Optional[str]:
  
 -async def _handle_vision_analyze(args: dict[str, Any], **kw: Any) -> str:
 +async def _handle_vision_analyze(args: dict[str, Any], **kw: Any):

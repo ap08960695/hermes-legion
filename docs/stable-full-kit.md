@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **914-path** Legion source, interface and optimization alternative
+This is the complete **915-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -354,3 +354,10 @@ Long tool names no longer push step, elapsed time and token facts outside narrow
 roster rows. Facts wrap within the available width, and the existing hover summary
 includes all displayed progress facts. The consolidated kit contains 914 paths.
 See [verification and limits](worker-monitor-readability.md).
+
+## Vision cache route update (v0.8.6)
+
+Both auxiliary vision cache layers include the main connection's endpoint, API mode
+and authentication mode, with context-local values taking precedence over saved
+model settings. Unchanged routes still reuse successful results. The consolidated
+kit contains 915 paths; see [verification and limits](vision-cache-routes.md).

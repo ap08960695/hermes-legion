@@ -1,3 +1,18 @@
+# v0.8.6 — Keep vision cache reuse within the selected connection
+
+The repaired direct and registered auxiliary-image paths retain separate successful
+results after endpoint/API/authentication mode changes. Thirteen new regressions
+fail on the original code; the final focused selection passes 32 tests, including
+concurrent contexts. The adjacent selection passes 112 tests with one reproduced
+pre-existing vision-routing failure, named in [the detailed record](vision-cache-routes.md).
+Scoped lint and source health pass; no full-suite success is claimed.
+
+Installed production Python on Linux and ARM64 Mac each passes twelve offline native
+checks, and the 915-path source kit matches both hosts. Existing UI packages, Gateway
+identity and owner stops are preserved. No GPU, real model, worker launch, dispatch,
+session resume or service restart is used. Runtime adoption and live card acceptance
+remain open.
+
 # v0.8.5 — Keep worker progress readable
 
 The prior component fails the tooltip regression and clips progress facts in an
