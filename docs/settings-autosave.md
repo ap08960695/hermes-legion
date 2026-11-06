@@ -41,6 +41,7 @@ block other config reads/writes until its destination recovers. Routing changes
 must not silently send retained edits to a replacement destination.
 
 Pending edits live in process memory. Forced termination, a crash or power loss
-is not covered. Failure recovery is verified in automated tests, not by native
-network-failure injection. Specialized editors outside the shared config page
+is not covered. Native Linux permission-failure recovery is now verified; see
+[write-error guidance](settings-write-errors.md). Native network-failure injection
+remains unverified. Specialized editors outside the shared config page
 retain their existing save behavior.

@@ -80607,3 +80607,127 @@ index 7d8751f1747c559ccdf7898877a6d37fec7f1002..ad849d65c5ba02bfc580a3027248d19b
 +independent review/apply gates are separate from installing this command.
 +
  `--delivery-mode` controls **how** the notifier reacts to a terminal event. Every subscription is in one of three modes (`notify` is the default and the original behavior):
+diff --git a/hermes_cli/web_routers/config_env.py b/hermes_cli/web_routers/config_env.py
+index 644be8c2cfeab0e4d8909d46f87b39f0f043e462..f2ba22cf47b1687f69860fb4d1366492307d8800 100644
+--- a/hermes_cli/web_routers/config_env.py
++++ b/hermes_cli/web_routers/config_env.py
+@@ -7,2 +7,3 @@ Extracted from ``hermes_cli.web_server``; helpers/state that tests monkeypatch o
+ import contextlib
++import errno
+ import logging
+@@ -143,5 +144,23 @@ async def update_config(
+                 # Ordinary settings saves include merged defaults, not a choice.
+-                save_config(
+-                    merged, preserve_keys={("display", "language")} if preserve_language else None
+-                )
++                try:
++                    save_config(
++                        merged, preserve_keys={("display", "language")} if preserve_language else None
++                    )
++                except OSError as exc:
++                    # Keep paths and exception text in local logs, while giving
++                    # Desktop/dashboard users a recovery step for known faults.
++                    if exc.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
++                        detail = (
++                            "Could not finish saving settings. Check write access to the settings folder "
++                            "on the destination device, then try again."
++                        )
++                    elif exc.errno in (errno.ENOSPC, errno.EDQUOT):
++                        detail = (
++                            "Not enough storage to finish saving settings. Free space or increase the storage "
++                            "quota on the destination device, then try again."
++                        )
++                    else:
++                        raise
++                    _log.exception("PUT /api/config could not finish saving settings")
++                    raise HTTPException(status_code=500, detail=detail) from exc
+         # REST saves bypass the config.set RPC (which re-emits itself), so
+diff --git a/tests/hermes_cli/test_web_config_write_errors.py b/tests/hermes_cli/test_web_config_write_errors.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..8b18eb72a9c071cf87ed386dd72a60960da248a1
+--- /dev/null
++++ b/tests/hermes_cli/test_web_config_write_errors.py
+@@ -0,0 +1,83 @@
++"""Settings write failures explain recovery without disclosing filesystem details."""
++
++import errno
++
++import pytest
++from starlette.testclient import TestClient
++
++import utils
++from hermes_cli import config, web_server
++
++
++@pytest.mark.parametrize(
++    ("error_number", "guidance"),
++    [
++        (errno.EACCES, "write access"),
++        (errno.EPERM, "write access"),
++        (errno.EROFS, "write access"),
++        (errno.ENOSPC, "storage"),
++        (errno.EDQUOT, "storage"),
++        (errno.EIO, "Internal server error"),
++    ],
++)
++def test_failed_settings_write_is_private_and_can_be_retried(
++    _isolate_hermes_home, monkeypatch, error_number, guidance
++):
++    """Catch opaque known failures, exception leaks, or a partial failed save."""
++    path = config.get_config_path()
++    config.atomic_config_replace(
++        path, {"memory": {"memory_char_limit": 2800}, "display": {"language": "en"}}
++    )
++    before = path.read_bytes()
++    client = TestClient(web_server.app)
++    client.headers[web_server._SESSION_HEADER_NAME] = web_server._SESSION_TOKEN
++    patch = {"config": {"memory": {"memory_char_limit": 2900}}}
++
++    def refuse_staging(*_args, **_kwargs):
++        raise OSError(error_number, "private error detail", "/private/user-secret/config.yaml")
++
++    try:
++        with monkeypatch.context() as fault:
++            fault.setattr(utils, "mkstemp_beside", refuse_staging)
++            response = client.put("/api/config", json=patch)
++        assert response.status_code == 500
++        detail = response.json()["detail"]
++        assert guidance in detail
++        assert "private" not in detail and "user-secret" not in detail
++        assert path.read_bytes() == before
++
++        assert client.put("/api/config", json=patch).json() == {"ok": True}
++        saved = config.require_readable_config_before_write(path)
++        assert saved["memory"]["memory_char_limit"] == 2900
++        assert saved["display"]["language"] == "en"
++    finally:
++        client.close()
++
++
++def test_settings_error_does_not_claim_the_file_was_unchanged_after_replace(
++    _isolate_hermes_home, monkeypatch
++):
++    """Cleanup/metadata can fail after replacement; retry must remain safe."""
++    path = config.get_config_path()
++    config.atomic_config_replace(path, {"memory": {"memory_char_limit": 2800}})
++    replace = utils.atomic_replace
++
++    def fail_after_replace(source, destination):
++        replace(source, destination)
++        raise PermissionError(errno.EACCES, "private cleanup failure", str(destination))
++
++    client = TestClient(web_server.app)
++    client.headers[web_server._SESSION_HEADER_NAME] = web_server._SESSION_TOKEN
++    patch = {"config": {"memory": {"memory_char_limit": 2900}}}
++    try:
++        with monkeypatch.context() as fault:
++            fault.setattr(utils, "atomic_replace", fail_after_replace)
++            response = client.put("/api/config", json=patch)
++        assert response.status_code == 500
++        assert "finish" in response.json()["detail"]
++        assert "private" not in response.json()["detail"]
++        assert config.require_readable_config_before_write(path)["memory"]["memory_char_limit"] == 2900
++        assert client.put("/api/config", json=patch).json() == {"ok": True}
++        assert config.require_readable_config_before_write(path)["memory"]["memory_char_limit"] == 2900
++    finally:
++        client.close()

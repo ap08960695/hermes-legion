@@ -1,3 +1,19 @@
+# v0.8.13 — Actionable settings write failures
+
+Known permission, read-only filesystem and storage/quota failures return safe
+recovery guidance. A post-replacement failure does not claim that the file stayed
+unchanged. The native Python selection passes 226 tests; installed Linux failure
+injection confirms the new message, retained edit, held close and successful retry.
+The 952-path kit includes the backend change and regression tests. See
+[scope and limits](settings-write-errors.md).
+
+# v0.8.12 — Preserve settings edits across navigation and close
+
+The native main process owns pending shared-config edits and ordered saves.
+Seventy-two UI/Electron tests and installed Linux Escape/reload/close/quit checks
+pass. The 950-path source kit and native Linux/ARM64 Mac packages were installed
+before publication. See [settings autosave](settings-autosave.md).
+
 # v0.8.11 — Accessible shared settings controls
 
 Shared settings inputs and pickers now use their existing localized field titles
