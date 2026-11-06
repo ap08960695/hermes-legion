@@ -1,3 +1,13 @@
+# v0.8.14 — Scoped recall tool preparation
+
+An optional native config fragment makes the search schema eager for a selected
+recall profile. One isolated pair of simple cards both recovered the correct saved
+answer: four requests with default discovery, three with eager search. Total input
+fell 21.1%, but uncached input only 1.7%; no general latency or billing saving is
+claimed. Offline native setter, readback, scope and rollback checks make no model
+requests. See [the recipe and evidence boundaries](recall-tool-policy.md).
+The 952-path runtime kit is unchanged.
+
 # v0.8.13 — Actionable settings write failures
 
 Known permission, read-only filesystem and storage/quota failures return safe

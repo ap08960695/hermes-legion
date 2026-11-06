@@ -1,5 +1,9 @@
 # Bounded conversation title recall
 
+For dedicated recall workers, an optional [eager search schema recipe](recall-tool-policy.md)
+can avoid a tool-discovery turn. It uses existing native settings and has a separate
+bounded card comparison; the search implementation below is unchanged.
+
 Use native `session_search` to find earlier work and then request the relevant
 anchored messages. A title match should not load a whole long conversation just
 to return a small orientation window.

@@ -13,3 +13,8 @@ For a deterministic demonstration, use `--now 1` with the synthetic snapshots. W
 ## Explicit native fragments
 
 `native/prompt-cache-auto.fragment.json` is an optional native config **merge fragment**, unlike the planning documents above. It contains one setting and must not replace an existing config. Follow [the scoped native recipe](../docs/prompt-cache-policy.md); defaults, routes, accounts, quotas and fallback settings are not modified by opening or exporting this file.
+
+`native/recall-tools.fragment.json` is an optional native merge fragment for a
+dedicated recall profile using the pinned default deferred-tool list. It exposes
+the search schema early. Its list replaces the selected key, so preserve custom
+lists and follow [the scoped recipe and measurement limits](../docs/recall-tool-policy.md).
