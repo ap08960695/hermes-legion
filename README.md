@@ -10,6 +10,8 @@ Historical source comments and release payloads received [privacy maintenance](d
 
 ## What is included
 
+- [Lower diagnostic read memory and latency](docs/diagnostic-read-efficiency.md).
+
 - [Work tracking and independently reviewed delivery](docs/tracked-delivery.md).
 
 - [Refined charts, tables and diagrams](docs/rich-output-presentation.md).
@@ -21,7 +23,7 @@ Historical source comments and release payloads received [privacy maintenance](d
 
 - A [compact bot settings editor](docs/desktop-bot-settings.md) that keeps model/effort visible and groups optional appearance controls.
 - Optional [per-model effort ceilings](docs/reasoning-effort-limits.md), with effective/requested effort disclosure and offline request-boundary checks.
-- A consolidated [973-path source and Desktop kit for upstream v0.22.5](docs/stable-full-kit.md), with pinned hashes and a reproducible test selection. It includes the interface, workflow, search, memory/cache, usage, waiting and update-preservation changes as one complete alternative.
+- A consolidated [974-path source and Desktop kit for upstream v0.22.5](docs/stable-full-kit.md), with pinned hashes and a reproducible test selection. It includes the interface, workflow, search, memory/cache, usage, waiting and update-preservation changes as one complete alternative.
 - v0.8.0 adds live bot progress (current tool, step, elapsed, tokens), inline `chart` answers with diagram guidance, a vision result cache, cacheable compression prompts, crash-safe worker attempt markers, opt-in delegated goal decisions and fleet-wide session search. See [the update notes](docs/stable-full-kit.md#efficiency-monitoring-and-autonomy-update-v080).
 - v0.8.10 records [native Desktop and bounded recall acceptance](docs/native-desktop-recall-acceptance.md), without changing the source patch.
 - v0.8.13 [explains settings write failures without exposing private paths](docs/settings-write-errors.md), with native permission-failure recovery checks.

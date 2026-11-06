@@ -45885,7 +45885,7 @@ index 658ae11c5b9df1bb6c903055177c8bc27e1a24b4..566df6b1480724e4b6a22e36b478edd8
 +          h(RunActivity, { run: r }),
            r.summary
 diff --git a/plugins/kanban/dashboard/plugin_api.py b/plugins/kanban/dashboard/plugin_api.py
-index c38f8e399bdca0d8cf7f5cb1c9ed8e383302e1c8..90a1202c2f6245d00326db5f7e262d55a8591776 100644
+index c38f8e399bdca0d8cf7f5cb1c9ed8e383302e1c8..81e8745fad2c18278fef281fe4de50db833a3787 100644
 --- a/plugins/kanban/dashboard/plugin_api.py
 +++ b/plugins/kanban/dashboard/plugin_api.py
 @@ -18,2 +18,4 @@ import sqlite3
@@ -45908,7 +45908,42 @@ index c38f8e399bdca0d8cf7f5cb1c9ed8e383302e1c8..90a1202c2f6245d00326db5f7e262d55
 +
 +
  def _task_dict(task: kanban_db.Task, *, latest_summary: Optional[str] = None,
-@@ -289,2 +303,27 @@ def _link_tasks(conn: sqlite3.Connection, links: dict[str, list[str]]) -> list[d
+@@ -209,3 +223,4 @@ def _compute_task_diagnostics(conn: sqlite3.Connection, task_ids: Optional[list[
+     """``{task_id: [diagnostic_dict, ...]}`` (tasks with none omitted) via three aggregate
+-    queries (tasks, events, runs) — slurps the board; paginate if profiling shows a hotspot."""
++    queries (tasks, events, runs). Heavy task text and run evidence stay in SQLite;
++    the diagnostic rules only consume the projected state and event payloads."""
+     from hermes_cli.config import load_config
+@@ -215,6 +230,12 @@ def _compute_task_diagnostics(conn: sqlite3.Connection, task_ids: Optional[list[
+     diag_config = kd.config_from_runtime_config(load_config())
++    fields = ("id,assignee,status,created_at,started_at,claim_lock,claim_expires,"
++              "consecutive_failures,last_failure_error,last_heartbeat_at,current_run_id,"
++              "worker_pid,worker_started_at")
++    # Migrated tables can retain legacy values when the modern field is NULL.
++    available = kbc._column_names(conn, "tasks")
++    fields += "".join(f",{name}" for name in ("spawn_failures", "last_spawn_error") if name in available)
+     if task_ids is not None:
+-        rows = conn.execute(f"SELECT * FROM tasks WHERE id IN ({_placeholders(task_ids)})", tuple(task_ids)).fetchall()
++        rows = conn.execute(f"SELECT {fields} FROM tasks WHERE id IN ({_placeholders(task_ids)})", tuple(task_ids)).fetchall()
+     else:
+-        rows = conn.execute("SELECT * FROM tasks WHERE status != 'archived'").fetchall()
++        rows = conn.execute(f"SELECT {fields} FROM tasks WHERE status != 'archived'").fetchall()
+     if not rows:
+@@ -223,6 +244,6 @@ def _compute_task_diagnostics(conn: sqlite3.Connection, task_ids: Optional[list[
+ 
+-    def _rows_by_task(table: str) -> dict[str, list]:
++    def _rows_by_task(table: str, fields: str = "*") -> dict[str, list]:
+         by_task: dict[str, list] = {tid: [] for tid in row_ids}
+         for row in conn.execute(
+-            f"SELECT * FROM {table} WHERE task_id IN ({_placeholders(row_ids)}) ORDER BY id", tuple(row_ids)):
++            f"SELECT {fields} FROM {table} WHERE task_id IN ({_placeholders(row_ids)}) ORDER BY id", tuple(row_ids)):
+             by_task.setdefault(row["task_id"], []).append(row)
+@@ -231,3 +252,3 @@ def _compute_task_diagnostics(conn: sqlite3.Connection, task_ids: Optional[list[
+     events_by_task = _rows_by_task("task_events")
+-    runs_by_task = _rows_by_task("task_runs")
++    runs_by_task = _rows_by_task("task_runs", "id,task_id,outcome,error")
+     graph_by_task = kanban_db.task_graph_contexts(conn, row_ids)
+@@ -289,2 +310,27 @@ def _link_tasks(conn: sqlite3.Connection, links: dict[str, list[str]]) -> list[d
  
 +_WORKFLOW_LINK_LIMIT = 5000
 +
@@ -45936,14 +45971,14 @@ index c38f8e399bdca0d8cf7f5cb1c9ed8e383302e1c8..90a1202c2f6245d00326db5f7e262d55
 +
 +
  def get_board(
-@@ -294,3 +333,5 @@ def get_board(
+@@ -294,3 +340,5 @@ def get_board(
      workflow_template_id: Optional[str] = Query(None, description="Restrict to tasks using this workflow template id"),
 -    current_step_key: Optional[str] = Query(None, description="Restrict to tasks at this workflow step key")):
 +    current_step_key: Optional[str] = Query(None, description="Restrict to tasks at this workflow step key"),
 +    include_links: bool = False,
 +):
      """Full board grouped by status column; omitting ``board`` uses the active board
-@@ -302,6 +343,3 @@ def get_board(
+@@ -302,6 +350,3 @@ def get_board(
          # Link / comment / progress rollups are each one aggregate query rather than N per-task lookups.
 -        link_counts: dict[str, dict[str, int]] = {}
 -        for row in conn.execute("SELECT parent_id, child_id FROM task_links").fetchall():
@@ -45951,7 +45986,7 @@ index c38f8e399bdca0d8cf7f5cb1c9ed8e383302e1c8..90a1202c2f6245d00326db5f7e262d55
 -            link_counts.setdefault(row["child_id"], {"parents": 0, "children": 0})["parents"] += 1
 +        link_counts, workflow_links = _board_link_data(conn, {task.id for task in tasks}, include_links)
          comment_counts: dict[str, int] = {
-@@ -316,3 +354,9 @@ def get_board(
+@@ -316,3 +361,9 @@ def get_board(
          latest_event_id = conn.execute("SELECT COALESCE(MAX(id), 0) AS m FROM task_events").fetchone()["m"]
 -        columns: dict[str, list[dict]] = {c: [] for c in BOARD_COLUMNS}
 +        # local patch 11: a display-only "needs_owner" lane before "blocked" for cards waiting on a human
@@ -45962,36 +45997,36 @@ index c38f8e399bdca0d8cf7f5cb1c9ed8e383302e1c8..90a1202c2f6245d00326db5f7e262d55
 +                columns[NEEDS_OWNER_COLUMN] = []
 +            columns[c] = []
          if include_archived:
-@@ -333,3 +377,3 @@ def get_board(
+@@ -333,3 +384,3 @@ def get_board(
              _attach_diagnostics(d, diagnostics_per_task.get(t.id))
 -            columns[t.status if t.status in columns else "todo"].append(d)
 +            columns[_board_column(t, columns)].append(d)
  
-@@ -352,3 +396,3 @@ def get_board(
+@@ -352,3 +403,3 @@ def get_board(
              "columns": [{"name": name, "tasks": columns[name]} for name in columns], "tenants": tenants,
 -            "assignees": assignees, "latest_event_id": int(latest_event_id), "now": int(time.time())}
 +            "assignees": assignees, "latest_event_id": int(latest_event_id), "now": int(time.time()), **workflow_links}
  
-@@ -365,2 +409,3 @@ async def get_board_endpoint(
+@@ -365,2 +416,3 @@ async def get_board_endpoint(
      current_step_key: Optional[str] = Query(None, description="Restrict to tasks at this workflow step key"),
 +    include_links: bool = False,
  ):
-@@ -368,2 +413,3 @@ async def get_board_endpoint(
+@@ -368,2 +420,3 @@ async def get_board_endpoint(
      return await _read_board(
 +        include_links=include_links,
          tenant=tenant,
-@@ -398,3 +444,5 @@ def get_task(
+@@ -398,3 +451,5 @@ def get_task(
          _attach_diagnostics(task_d, _compute_task_diagnostics(conn, task_ids=[task_id]).get(task_id) or [])
 +        from hermes_cli.kanban_delivery_view import delivery_summary
          return {
 +            "delivery": delivery_summary(conn, task_id),
              "task": task_d,
-@@ -408,3 +456,3 @@ def get_task(
+@@ -408,3 +463,3 @@ def get_task(
                  for c in children],
 -            "runs": [asdict(r) for r in kanban_db.list_runs(conn, task_id, state_type=run_state_type, state_name=run_state_name)]}
 +            "runs": run_payloads(kanban_db.list_runs(conn, task_id, state_type=run_state_type, state_name=run_state_name), board)}
  
-@@ -1271,4 +1319,31 @@ def dispatch(dry_run: bool = Query(False), max_n: int = Query(8, alias="max"), b
+@@ -1271,4 +1326,31 @@ def dispatch(dry_run: bool = Query(False), max_n: int = Query(8, alias="max"), b
      """Dispatch nudge so the UI doesn't wait out the 60 s dispatcher tick."""
 +    from agent.estop import is_engaged
 +    if is_engaged():
@@ -68128,6 +68163,90 @@ index 0000000000000000000000000000000000000000..7593405998825c9b877ad1e719776ee6
 +    assert data['links'] == []
 +    assert data['links_total'] == 1
 +    assert data['links_truncated'] is True
+diff --git a/tests/plugins/test_kanban_dashboard_diagnostic_reads.py b/tests/plugins/test_kanban_dashboard_diagnostic_reads.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..41baa44f8f1b1d93587c37105969f7076b66bcd8
+--- /dev/null
++++ b/tests/plugins/test_kanban_dashboard_diagnostic_reads.py
+@@ -0,0 +1,78 @@
++"""Diagnostic reads leave unrelated task text and run evidence in SQLite."""
++from __future__ import annotations
++
++import importlib.util
++import json
++import sqlite3
++import sys
++from pathlib import Path
++
++import pytest
++
++from hermes_cli import kanban_db as kb
++from hermes_cli import kanban_db_connect as kbc
++from hermes_cli import kanban_diagnostics as kd
++
++
++@pytest.fixture
++def diagnostic_board(tmp_path, monkeypatch):
++    home = tmp_path / '.hermes'
++    home.mkdir()
++    monkeypatch.setenv('HERMES_HOME', str(home))
++    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
++    kb.init_db()
++    source = Path(__file__).resolve().parents[2] / 'plugins/kanban/dashboard/plugin_api.py'
++    spec = importlib.util.spec_from_file_location('diagnostic_read_test_plugin', source)
++    mod = importlib.util.module_from_spec(spec)
++    sys.modules[spec.name] = mod
++    spec.loader.exec_module(mod)
++    from hermes_cli import config
++    monkeypatch.setattr(config, 'load_config', dict)
++    monkeypatch.setattr(kd.time, 'time', lambda: 100_000)
++    with kbc.connect() as conn:
++        tid = kb.create_task(conn, title='Simple diagnostic card', assignee='test-worker')
++        conn.execute("UPDATE tasks SET status='blocked',consecutive_failures=3,last_failure_error='failed check',"
++                     "body=?,result=?,created_at=1 WHERE id=?", ('b' * 100_000, 'r' * 100_000, tid))
++        conn.execute("INSERT INTO task_runs(task_id,profile,status,started_at,outcome,error,summary,metadata) "
++                     "VALUES (?,'test-worker','finished',1,'crashed','worker error',?,?)",
++                     (tid, 's' * 100_000, json.dumps({'unused': 'm' * 100_000})))
++        for kind, payload in [('completion_blocked_hallucination', {'phantom_cards': ['t_ffff0000']}),
++                              ('blocked', {'reason': 'missing input'}),
++                              ('gave_up', {'terminal_provider': True})]:
++            conn.execute('INSERT INTO task_events(task_id,kind,payload,created_at) VALUES (?,?,?,?)',
++                         (tid, kind, json.dumps(payload), 1))
++        conn.commit()
++        yield mod, conn, tid
++
++
++@pytest.mark.parametrize('filtered', [False, True])
++@pytest.mark.parametrize('legacy', [False, True])
++def test_diagnostic_reads_preserve_warnings_without_loading_unrelated_text(diagnostic_board, filtered, legacy):
++    mod, conn, tid = diagnostic_board
++    if legacy:
++        conn.execute('ALTER TABLE tasks ADD COLUMN last_spawn_error TEXT')
++        conn.execute('ALTER TABLE tasks ADD COLUMN spawn_failures INTEGER')
++        conn.execute('UPDATE tasks SET last_failure_error=NULL,last_spawn_error=?,spawn_failures=9 WHERE id=?',
++                     ('legacy error retained', tid))
++    task = conn.execute('SELECT * FROM tasks WHERE id=?', (tid,)).fetchone()
++    events = conn.execute('SELECT * FROM task_events WHERE task_id=? ORDER BY id', (tid,)).fetchall()
++    runs = conn.execute('SELECT * FROM task_runs WHERE task_id=? ORDER BY id', (tid,)).fetchall()
++    graph = kb.task_graph_contexts(conn, [tid])[tid]
++    expected = [d.to_dict() for d in kd.compute_task_diagnostics(task, events, runs, graph=graph)]
++    assert {'hallucinated_cards', 'repeated_failures', 'stuck_in_blocked'} <= {d['kind'] for d in expected}
++    if legacy:
++        assert next(d['data']['last_error'] for d in expected if d['kind'] == 'repeated_failures') == 'legacy error retained'
++    denied = {'tasks': {'body', 'result'}, 'task_runs': {'summary', 'metadata'}}
++
++    def authorize(action, table, column, *_):
++        if action == sqlite3.SQLITE_READ and column in denied.get(table, set()):
++            return sqlite3.SQLITE_DENY
++        return sqlite3.SQLITE_OK
++
++    before = conn.total_changes
++    conn.set_authorizer(authorize)
++    try:
++        assert mod._compute_task_diagnostics(conn, [tid] if filtered else None) == {tid: expected}
++        assert conn.total_changes == before
++    finally:
++        conn.set_authorizer(None)
 diff --git a/tests/plugins/test_kanban_dashboard_plugin.py b/tests/plugins/test_kanban_dashboard_plugin.py
 index 2c0a1e57866668a338b0218c0dcaacea81548446..af8592159130c7e8efb69148643ebd517a093e88 100644
 --- a/tests/plugins/test_kanban_dashboard_plugin.py
