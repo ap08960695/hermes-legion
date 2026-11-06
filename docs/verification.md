@@ -1,3 +1,12 @@
+# v0.8.16 — Preserve config type-change order
+
+Eight new regressions failed before repair; 38 related tests pass after repair.
+Fourteen actual-queue/native-storage comparisons pass on Linux and ARM64 Mac.
+Unsafe type transitions retain two ordered config requests, while compatible
+controls still coalesce into one. Both native packages were rebuilt and installed,
+with 954-path source parity and package/source fingerprint checks. No model or GPU
+work was used for the behavior checks. See [scope and limits](settings-null-sections.md#ordered-type-changes-v0816).
+
 # v0.8.15 — Preserve edits followed by null sections
 
 Two new regressions failed before repair; 30 related UI/Electron tests pass after

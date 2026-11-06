@@ -5405,10 +5405,10 @@ index 0000000000000000000000000000000000000000..a80183098dae7033db4b60fc1900e9f2
 +})
 diff --git a/apps/desktop/electron/config-autosave.ts b/apps/desktop/electron/config-autosave.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..3e76f53cfda0d9795ce36a31762dcec38d479f34
+index 0000000000000000000000000000000000000000..52e353c562911f0e00b06217cd3f5aca50deb35f
 --- /dev/null
 +++ b/apps/desktop/electron/config-autosave.ts
-@@ -0,0 +1,191 @@
+@@ -0,0 +1,209 @@
 +import type { HermesApiRequest } from '../../shared/src/api-request'
 +import { mergeConfigPatch } from '../../shared/src/config-patch'
 +
@@ -5435,11 +5435,29 @@ index 0000000000000000000000000000000000000000..3e76f53cfda0d9795ce36a31762dcec3
 +
 +function compatible(left: HermesApiRequest, right: HermesApiRequest): boolean {
 +  return left.path === right.path && left.timeoutMs === right.timeoutMs &&
-+    left.priority === right.priority && left.passive === right.passive
++    left.priority === right.priority && left.passive === right.passive &&
++    canCoalesce(patch(left), patch(right))
 +}
 +
 +function patch(request: HermesApiRequest): Record<string, unknown> {
 +  return (request.body as { config: Record<string, unknown> }).config
++}
++
++function mapping(value: unknown): value is Record<string, unknown> {
++  return value !== null && typeof value === 'object' && !Array.isArray(value)
++}
++
++/** A replacement can erase an existing mapping. Folding a later mapping/null
++ * into it would instead merge with/ignore that old mapping on the backend. */
++function canCoalesce(previous: Record<string, unknown>, next: Record<string, unknown>): boolean {
++  return Object.entries(next).every(([key, value]) => {
++    if (!Object.hasOwn(previous, key)) { return true }
++    const old = previous[key]
++
++    if (mapping(old) && mapping(value)) { return canCoalesce(old, value) }
++
++    return old === null || mapping(old) || (value !== null && !mapping(value))
++  })
 +}
 +
 +/** The main process, rather than a settings component, owns accepted edits.
@@ -80783,4 +80801,50 @@ index 0000000000000000000000000000000000000000..4455992455b9a0f634f3013dc282c1b3
 +
 +  assert.deepEqual(result, { empty: {}, section: { enabled: true }, scalar: null, list: null })
 +  assert.deepEqual(previous, { empty: {}, section: { enabled: true }, scalar: 'old', list: ['old'] })
++})
+diff --git a/apps/desktop/electron/config-autosave-types.test.ts b/apps/desktop/electron/config-autosave-types.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..4052c271a7cff5cafabfae18f0a6be1c4c9dc29a
+--- /dev/null
++++ b/apps/desktop/electron/config-autosave-types.test.ts
+@@ -0,0 +1,40 @@
++import assert from 'node:assert/strict'
++
++import { test } from 'vitest'
++
++import type { HermesApiRequest } from '../../shared/src/api-request'
++
++import { createConfigAutosaveQueue } from './config-autosave'
++
++test.each([
++  [[], { provider: 'auto' }],
++  [false, { provider: 'auto' }],
++  ['reset', { provider: 'auto' }],
++  [23, { provider: 'auto' }],
++  [[], null],
++  [false, null],
++  ['reset', null],
++  [23, null]
++])('preserves a replacement followed by a mapping or null: %j then %j', async (first, last) => {
++  const requests: HermesApiRequest[] = []
++
++  const dispatch = async (request: HermesApiRequest) => {
++    requests.push(request)
++
++    return { ok: true }
++  }
++
++  const queue = createConfigAutosaveQueue(dispatch, () => ({ key: 'home', send: dispatch }))
++  const patches = [first, last].map(vision => ({ auxiliary: { vision } }))
++
++  const writes = patches.map(config => queue.run({
++    path: '/api/config', method: 'PUT', body: { config }, configAutosave: true
++  }))
++
++  await queue.flush()
++  await Promise.all(writes)
++  // Sending only the last mapping/null would merge with (or ignore) the old
++  // on-disk mapping, reviving fields removed by the preceding replacement.
++  assert.deepEqual(requests.map(request => request.body), patches.map(config => ({ config })))
++  assert.equal(queue.hasPending(), false)
 +})

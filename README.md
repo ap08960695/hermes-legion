@@ -16,12 +16,13 @@ Historical source comments and release payloads received [privacy maintenance](d
 
 - A [compact bot settings editor](docs/desktop-bot-settings.md) that keeps model/effort visible and groups optional appearance controls.
 - Optional [per-model effort ceilings](docs/reasoning-effort-limits.md), with effective/requested effort disclosure and offline request-boundary checks.
-- A consolidated [953-path source and Desktop kit for upstream v0.22.5](docs/stable-full-kit.md), with pinned hashes and a reproducible test selection. It includes the interface, workflow, search, memory/cache, usage, waiting and update-preservation changes as one complete alternative.
+- A consolidated [954-path source and Desktop kit for upstream v0.22.5](docs/stable-full-kit.md), with pinned hashes and a reproducible test selection. It includes the interface, workflow, search, memory/cache, usage, waiting and update-preservation changes as one complete alternative.
 - v0.8.0 adds live bot progress (current tool, step, elapsed, tokens), inline `chart` answers with diagram guidance, a vision result cache, cacheable compression prompts, crash-safe worker attempt markers, opt-in delegated goal decisions and fleet-wide session search. See [the update notes](docs/stable-full-kit.md#efficiency-monitoring-and-autonomy-update-v080).
 - v0.8.10 records [native Desktop and bounded recall acceptance](docs/native-desktop-recall-acceptance.md), without changing the source patch.
 - v0.8.13 [explains settings write failures without exposing private paths](docs/settings-write-errors.md), with native permission-failure recovery checks.
 - v0.8.14 documents an optional [eager search schema for recall workers](docs/recall-tool-policy.md): one native card pair used three requests instead of four, with the source kit unchanged.
 - v0.8.15 [preserves nested settings edits followed by a null section](docs/settings-null-sections.md), matching native storage behavior on Linux and Mac.
+- v0.8.16 [preserves ordered config type changes](docs/settings-null-sections.md#ordered-type-changes-v0816), avoiding stale fields when two writes cannot safely be combined.
 - v0.8.12 [preserves settings edits across navigation, reload and close](docs/settings-autosave.md), with installed Linux acceptance and matching Linux/Mac source.
 - v0.8.11 [names shared settings controls for assistive navigation](docs/settings-accessibility.md), with installed Linux save/readback acceptance and native Linux/Mac packages.
 - v0.8.9 [forwards worker progress through the unified Gateway roster](docs/unified-worker-progress.md), with isolated real-card acceptance.

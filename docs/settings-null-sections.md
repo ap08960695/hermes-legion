@@ -44,3 +44,29 @@ These are queue-to-native-storage and package checks. A new visual Desktop journ
 was not run for this change. They do not establish crash durability, general
 cross-profile failure recovery, production usage savings or a change to the
 existing single config-write lane.
+
+## Ordered type changes (v0.8.16)
+
+A list or scalar replacement followed by a mapping or null cannot always be
+represented as one merged patch. The first write removes the old mapping; sending
+only the combined patch would merge with, or ignore, that old mapping instead.
+That could revive fields the earlier write removed.
+
+The native autosave queue now recognizes this transition, including nested fields,
+and keeps both writes in order. Ordinary compatible edits retain their debounce
+and coalescing behavior. This changes neither setting validation nor the existing
+rules for profile aliases, captured destinations, retries and quit guards.
+
+Eight new regression cases failed before repair. The six-file related selection
+passes 38 tests. Fourteen synthetic pairs sent through the actual queue and native
+config storage match sequential writes on Linux and ARM64 Mac: eight transitions
+remain two requests, while six compatible controls remain one. These are config
+requests, not model requests. The fixtures exercise merge boundaries rather than
+recommend types for a particular production setting.
+
+Both native packages were rebuilt and installed before publication. All 954 source
+paths match; package files match the build outputs and source fingerprints, and
+the Mac application passes strict signature verification. The behavior checks use
+no model requests or GPU access. A new visual Desktop journey was not run for this
+change, and these checks do not extend the crash-durability or cross-profile
+recovery claims above.
