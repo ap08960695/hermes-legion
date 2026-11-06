@@ -2438,11 +2438,11 @@ index 3223e616467b1e687b838cde2dc2f0234bd6752b..c6cc65dd8c5f1694c5a3d58adad53de8
          ),
 diff --git a/agent/kanban_terminal_stop.py b/agent/kanban_terminal_stop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..d30fb150b0b06246ca4d61c06027dbd6e58b64ef
+index 0000000000000000000000000000000000000000..090b026474bcfeb282f8808a4b560c88c8a09ba1
 --- /dev/null
 +++ b/agent/kanban_terminal_stop.py
-@@ -0,0 +1,76 @@
-+"""Stop an owned worker after a durably committed completion or review handoff.
+@@ -0,0 +1,93 @@
++"""Stop an owned worker after a durably committed completion, review or blocked handoff.
 +
 +Tool intent alone is never authority. Check the fresh result and the exact native
 +run/claim/process identity; refuse uncertain proof without changing loop behavior.
@@ -2452,25 +2452,38 @@ index 0000000000000000000000000000000000000000..d30fb150b0b06246ca4d61c06027dbd6
 +import os
 +from pathlib import Path
 +import sqlite3
++from typing import NamedTuple
 +
-+_TERMINAL_TOOLS = {'kanban_complete': 'completed', 'kanban_request_review': 'review_requested'}
++_TERMINAL_TOOLS = {
++    'kanban_complete': 'completed',
++    'kanban_request_review': 'review_requested',
++    'kanban_block': 'blocked',
++}
++TERMINAL_EXIT_REASONS = frozenset(f"kanban_task_{outcome}" for outcome in _TERMINAL_TOOLS.values())
 +
 +
-+def completed_worker_summary(messages):
++class WorkerHandoff(NamedTuple):
++    outcome: str
++    summary: str
++
++
++
++def verified_worker_handoff(messages):
 +    from agent.delegation_context import owned_kanban_task
 +    task=owned_kanban_task()
 +    if not task:return None
 +    run=os.environ.get('HERMES_KANBAN_RUN_ID','');lock=os.environ.get('HERMES_KANBAN_CLAIM_LOCK','');path=os.environ.get('HERMES_KANBAN_DB','')
 +    if not run.isascii() or not run.isdecimal() or len(run)>19 or not lock or not path or not Path(path).is_absolute():return None
-+    outcome = _successful_completion(messages,task,int(run))
++    outcome = _successful_handoff(messages,task,int(run))
 +    if outcome is None:return None
 +    try:
-+        return _verified_summary(Path(path),task,int(run),lock,outcome)
++        summary = _verified_summary(Path(path),task,int(run),lock,outcome)
++        return WorkerHandoff(outcome, summary) if summary is not None else None
 +    except (OSError,sqlite3.Error,ValueError,TypeError):
 +        return None
 +
 +
-+def _successful_completion(messages,task,run):
++def _successful_handoff(messages,task,run):
 +    for message in messages:
 +        if not isinstance(message,dict) or message.get('role')!='tool' or message.get('name') not in _TERMINAL_TOOLS:continue
 +        content=message.get('content')
@@ -2488,7 +2501,11 @@ index 0000000000000000000000000000000000000000..d30fb150b0b06246ca4d61c06027dbd6
 +        if not row or row['task_id']!=task or row['outcome']!=outcome or row['ended_at'] is None:return None
 +        if row['claim_lock']!=lock or not _matching_worker(conn,row,task,run,lock):return None
 +    summary=row['summary']
-+    fallback = 'Kanban task completed successfully.' if outcome == 'completed' else 'Work handed off for independent review.'
++    fallback = {
++        'completed': 'Kanban task completed successfully.',
++        'review_requested': 'Work handed off for independent review.',
++        'blocked': 'Kanban task blocked; see the recorded blocker before continuing.',
++    }[outcome]
 +    return summary[:4000] if isinstance(summary,str) and summary.strip() else fallback
 +
 +
@@ -4041,23 +4058,23 @@ index 03ede0060d239d9ecca197ed29d039d205fc230e..09964a101987f8021aaf2f64088220f0
 +            shared_layout_version=layout_version(stored) or 2)["stable"]
          if static and stored.startswith(static):
 diff --git a/agent/tool_executor.py b/agent/tool_executor.py
-index cb58137a2aced3a76da570c0eb9f3a0aab625bf7..f67a13ce9f4acbfa50d10b4f96817dedd4347bf4 100644
+index cb58137a2aced3a76da570c0eb9f3a0aab625bf7..f6a881ed13c24618ef7e0f6d2d2d7688136f074c 100644
 --- a/agent/tool_executor.py
 +++ b/agent/tool_executor.py
 @@ -205,6 +205,19 @@ def _flush_session_db_after_tool_progress(agent, messages: list, *, stage: str)
  
-+    # A successful owned completion is already terminal. Appending either notice
++    # A successful owned handoff is already terminal. Appending either notice
 +    # corrupts its JSON and prevents the stop guard from verifying it, causing
 +    # an unnecessary model turn. Suppress notices only after the same durable
 +    # task/run/claim/process proof used by the stop guard; refusals and uncertain
 +    # ownership still receive the ordinary checkpoint.
 +    terminal = False
-+    if messages and messages[-1].get("role") == "tool" and messages[-1].get("name") in {"kanban_complete", "kanban_request_review"}:
++    if messages and messages[-1].get("role") == "tool" and messages[-1].get("name") in {"kanban_complete", "kanban_request_review", "kanban_block"}:
 +        try:
-+            from agent.kanban_terminal_stop import completed_worker_summary
-+            terminal = completed_worker_summary(messages[-1:]) is not None
++            from agent.kanban_terminal_stop import verified_worker_handoff
++            terminal = verified_worker_handoff(messages[-1:]) is not None
 +        except Exception:
-+            logging.debug("kanban completion checkpoint verification failed", exc_info=True)
++            logging.debug("kanban handoff checkpoint verification failed", exc_info=True)
      # Persist exactly the checkpoint text the next model call will see, before stamping
      # this tool result as durable. Already-written rows must never be rewritten later.
 -    _maybe_inject_run_budget_wrapup(agent, messages)
@@ -4219,12 +4236,12 @@ index 009f43c7957f6325bb9b7d59993f5b8c4404d831..13aec803584858e13d65bc5555ac5a24
 +    )
      return ext_prefetch_cache
 diff --git a/agent/turn_finalizer.py b/agent/turn_finalizer.py
-index c882efb7d611186eefa773e7df642720feb0072f..c666fcdaca47119c96242572f25d1fc7b1db6d59 100644
+index c882efb7d611186eefa773e7df642720feb0072f..e999c0a5065ef734c57e3aa6793e02e94e9003bf 100644
 --- a/agent/turn_finalizer.py
 +++ b/agent/turn_finalizer.py
 @@ -17,2 +17,3 @@ from agent.delegation_context import is_dispatcher_owned_worker_context
  from agent.interrupt_control import interrupted_during_api_call_reason
-+from agent.kanban_terminal_stop import completed_worker_summary
++from agent.kanban_terminal_stop import TERMINAL_EXIT_REASONS, verified_worker_handoff
  from agent.turn_failure_copy import exit_reason_failure, stamp_failure
 @@ -51,9 +52,5 @@ def _record_kanban_budget_exhausted(
  
@@ -4248,12 +4265,12 @@ index c882efb7d611186eefa773e7df642720feb0072f..c666fcdaca47119c96242572f25d1fc7
 +    # terminal outcome so the task does not remain in an ambiguous lifecycle state.
 +    # _end_run's CAS does not fence the failure counter or a review-phase task.
 +    # Preserve an exact, durably verified handoff made on the final iteration.
-+    if _kanban_task and completed_worker_summary(messages) is None:
++    if _kanban_task and verified_worker_handoff(messages) is None:
          _record_kanban_budget_exhausted(_kanban_task, api_call_count, agent.max_iterations, logger)
 @@ -591,3 +588,3 @@ def finalize_turn(
          and not interrupted
 -        and (api_call_count < agent.max_iterations or str(_turn_exit_reason).startswith("text_response("))
-+        and (api_call_count < agent.max_iterations or str(_turn_exit_reason).startswith("text_response(") or _turn_exit_reason == "kanban_task_completed")
++        and (api_call_count < agent.max_iterations or str(_turn_exit_reason).startswith("text_response(") or _turn_exit_reason in TERMINAL_EXIT_REASONS)
      )
 diff --git a/agent/turn_overflow.py b/agent/turn_overflow.py
 index 7dd8aad95fcd9d2cbface63d7683babe957b9a61..c123eb8df4b424632d28588051f32dca87e0ab49 100644
@@ -4291,7 +4308,7 @@ index ffd197d0ad06ed2af8b30deb74c16d2f3909d2e6..b4bb145b7bd981b49ab069d13f326446
 +            else _ra()._pool_may_recover_from_rate_limit(agent._credential_pool)
          )
 diff --git a/agent/turn_tool_round.py b/agent/turn_tool_round.py
-index 457fe024d1b1df438df104fd0ace85d290b66495..97bc233718d0c23294273033f35103d51273fc23 100644
+index 457fe024d1b1df438df104fd0ace85d290b66495..c461703d3f805be2c575206ae1e4654e3c9d8d75 100644
 --- a/agent/turn_tool_round.py
 +++ b/agent/turn_tool_round.py
 @@ -10,2 +10,3 @@ from __future__ import annotations
@@ -4314,13 +4331,13 @@ index 457fe024d1b1df438df104fd0ace85d290b66495..97bc233718d0c23294273033f35103d5
      if agent._tool_guardrail_halt_decision is not None:
 @@ -194,2 +203,11 @@ def run_tool_round(
  
-+    from agent.kanban_terminal_stop import completed_worker_summary
-+    completed_summary = completed_worker_summary(messages[result_start:])
-+    if completed_summary is not None:
-+        final_response = completed_summary
-+        _turn_exit_reason = "kanban_task_completed"
++    from agent.kanban_terminal_stop import verified_worker_handoff
++    handoff = verified_worker_handoff(messages[result_start:])
++    if handoff is not None:
++        final_response = handoff.summary
++        _turn_exit_reason = f"kanban_task_{handoff.outcome}"
 +        agent._session_messages = messages
-+        logger.info("KANBAN_COMPLETED_WORKER_STOP: native completion verified; continuation skipped")
++        logger.info("KANBAN_WORKER_HANDOFF_STOP: native %s verified; continuation skipped", handoff.outcome)
 +        return _verdict("break")
 +
      # Reset per-turn retry counters so one truncation can't poison the turn.
@@ -5133,6 +5150,52 @@ index 0000000000000000000000000000000000000000..444ead3688dade4832b885192df21f7b
 +    }
 +  }
 +}
+diff --git a/apps/desktop/electron/config-autosave-types.test.ts b/apps/desktop/electron/config-autosave-types.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..4052c271a7cff5cafabfae18f0a6be1c4c9dc29a
+--- /dev/null
++++ b/apps/desktop/electron/config-autosave-types.test.ts
+@@ -0,0 +1,40 @@
++import assert from 'node:assert/strict'
++
++import { test } from 'vitest'
++
++import type { HermesApiRequest } from '../../shared/src/api-request'
++
++import { createConfigAutosaveQueue } from './config-autosave'
++
++test.each([
++  [[], { provider: 'auto' }],
++  [false, { provider: 'auto' }],
++  ['reset', { provider: 'auto' }],
++  [23, { provider: 'auto' }],
++  [[], null],
++  [false, null],
++  ['reset', null],
++  [23, null]
++])('preserves a replacement followed by a mapping or null: %j then %j', async (first, last) => {
++  const requests: HermesApiRequest[] = []
++
++  const dispatch = async (request: HermesApiRequest) => {
++    requests.push(request)
++
++    return { ok: true }
++  }
++
++  const queue = createConfigAutosaveQueue(dispatch, () => ({ key: 'home', send: dispatch }))
++  const patches = [first, last].map(vision => ({ auxiliary: { vision } }))
++
++  const writes = patches.map(config => queue.run({
++    path: '/api/config', method: 'PUT', body: { config }, configAutosave: true
++  }))
++
++  await queue.flush()
++  await Promise.all(writes)
++  // Sending only the last mapping/null would merge with (or ignore) the old
++  // on-disk mapping, reviving fields removed by the preceding replacement.
++  assert.deepEqual(requests.map(request => request.body), patches.map(config => ({ config })))
++  assert.equal(queue.hasPending(), false)
++})
 diff --git a/apps/desktop/electron/config-autosave.test.ts b/apps/desktop/electron/config-autosave.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..a80183098dae7033db4b60fc1900e9f2b7992aeb
@@ -5618,6 +5681,55 @@ index 0000000000000000000000000000000000000000..52e353c562911f0e00b06217cd3f5aca
 +
 +  return queue
 +}
+diff --git a/apps/desktop/electron/config-patch-null.test.ts b/apps/desktop/electron/config-patch-null.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..4455992455b9a0f634f3013dc282c1b3ec8475b7
+--- /dev/null
++++ b/apps/desktop/electron/config-patch-null.test.ts
+@@ -0,0 +1,43 @@
++import assert from 'node:assert/strict'
++
++import { test } from 'vitest'
++
++import { mergeConfigPatch } from '../../shared/src/config-patch'
++
++import { createConfigAutosaveQueue } from './config-autosave'
++
++test('a later null section does not erase an accepted nested settings edit', async () => {
++  const persisted: unknown[] = []
++
++  const dispatch = async (request: { body?: unknown }) => {
++    persisted.push(request.body)
++
++    return { ok: true }
++  }
++
++  const queue = createConfigAutosaveQueue(dispatch, () => ({ key: 'home', send: dispatch }))
++
++  const patches = [
++    { auxiliary: { vision: { model: 'updated-model' } } },
++    { auxiliary: { vision: null } }
++  ]
++
++  const writes = patches.map(config => queue.run({
++    path: '/api/config', method: 'PUT', body: { config }, configAutosave: true
++  }))
++
++  await queue.flush()
++  await Promise.all(writes)
++  // Native PUT ignores null over a mapping. Coalescing must keep the edit it
++  // would have saved before receiving that null section.
++  assert.deepEqual(persisted, [{ config: patches[0] }])
++  assert.equal(queue.hasPending(), false)
++})
++
++test('null preserves mapping sections but still replaces scalar and list leaves', () => {
++  const previous = { empty: {}, section: { enabled: true }, scalar: 'old', list: ['old'] }
++  const result = mergeConfigPatch(previous, { empty: null, section: null, scalar: null, list: null })
++
++  assert.deepEqual(result, { empty: {}, section: { enabled: true }, scalar: null, list: null })
++  assert.deepEqual(previous, { empty: {}, section: { enabled: true }, scalar: 'old', list: ['old'] })
++})
 diff --git a/apps/desktop/electron/main.ts b/apps/desktop/electron/main.ts
 index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..bc6cb9f28865f2a60ea7106643e6ffff6f5b5e46 100644
 --- a/apps/desktop/electron/main.ts
@@ -38780,6 +38892,41 @@ index df183e424bc3e48743e9680ab4cfb186200011f7..a9223265aa5f2eaf1e4253c22103b5d6
 +            ["update", "--yes", "--preserve-local-changes"], "hermes-update",
 +            env_overrides={"HERMES_ACTION_ID": action_id})
      return {"ok": True, "pid": proc.pid, "name": "hermes-update", "action_id": action_id}
+diff --git a/hermes_cli/web_routers/config_env.py b/hermes_cli/web_routers/config_env.py
+index 644be8c2cfeab0e4d8909d46f87b39f0f043e462..f2ba22cf47b1687f69860fb4d1366492307d8800 100644
+--- a/hermes_cli/web_routers/config_env.py
++++ b/hermes_cli/web_routers/config_env.py
+@@ -7,2 +7,3 @@ Extracted from ``hermes_cli.web_server``; helpers/state that tests monkeypatch o
+ import contextlib
++import errno
+ import logging
+@@ -143,5 +144,23 @@ async def update_config(
+                 # Ordinary settings saves include merged defaults, not a choice.
+-                save_config(
+-                    merged, preserve_keys={("display", "language")} if preserve_language else None
+-                )
++                try:
++                    save_config(
++                        merged, preserve_keys={("display", "language")} if preserve_language else None
++                    )
++                except OSError as exc:
++                    # Keep paths and exception text in local logs, while giving
++                    # Desktop/dashboard users a recovery step for known faults.
++                    if exc.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
++                        detail = (
++                            "Could not finish saving settings. Check write access to the settings folder "
++                            "on the destination device, then try again."
++                        )
++                    elif exc.errno in (errno.ENOSPC, errno.EDQUOT):
++                        detail = (
++                            "Not enough storage to finish saving settings. Free space or increase the storage "
++                            "quota on the destination device, then try again."
++                        )
++                    else:
++                        raise
++                    _log.exception("PUT /api/config could not finish saving settings")
++                    raise HTTPException(status_code=500, detail=detail) from exc
+         # REST saves bypass the config.set RPC (which re-emits itself), so
 diff --git a/hermes_cli/web_routers/file_preview.py b/hermes_cli/web_routers/file_preview.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..8bdab494a3303055bb9c45eab670dc7a25f144b5
@@ -47941,12 +48088,60 @@ index 0000000000000000000000000000000000000000..3c6b7be8936206e467f19ee5cb51b58f
 +    monkeypatch.setenv('HERMES_BUNDLED_LOCALES', str(catalogs))
 +    assert i18n._load_bundled('en')['approval.denied'] == 'Bundled A'
 +    assert len(reads) == 2, 'An old bundle remained pinned after many distinct source roots'
+diff --git a/tests/agent/test_kanban_terminal_block.py b/tests/agent/test_kanban_terminal_block.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..ddf774b59afb069108d8807159d7263895514cd5
+--- /dev/null
++++ b/tests/agent/test_kanban_terminal_block.py
+@@ -0,0 +1,42 @@
++"""Durable blocked handoffs stop inference without completing or timing out the card."""
++import json
++from unittest.mock import patch
++
++import pytest
++
++from hermes_cli import kanban_db as kb
++from tests.agent import test_kanban_terminal_stop as terminal
++
++agent = terminal.agent
++owned_run = terminal.owned_run
++
++
++@pytest.mark.parametrize("max_iterations", [4, 1])
++def test_block_preserves_reason_and_hold_without_another_model_call(agent, owned_run, max_iterations):
++    from tools.kanban_tools import _handle_block
++
++    conn, tid, run = owned_run
++    reason = "Checkpoint COVE-6D3A19; waiting for external controller release."
++    agent.max_iterations = max_iterations
++    agent.valid_tool_names = {"kanban_block"}
++    agent.client.chat.completions.create.side_effect = [
++        terminal.call("kanban_block", {"task_id": tid, "reason": reason, "kind": "needs_input"}, "hold"),
++        terminal._mock_response(content="Unnecessary acknowledgement", finish_reason="stop"),
++    ]
++
++    def tool(name, args, *unused, **kwargs):
++        return _handle_block(args if isinstance(args, dict) else json.loads(args))
++
++    with patch.object(agent, "_persist_session"), patch.object(agent, "_save_trajectory"), \
++         patch.object(agent, "_cleanup_task_resources"), patch("model_tools.handle_function_call", side_effect=tool):
++        result = agent.run_conversation("Save the checkpoint and wait for external input.")
++
++    task = kb.get_task(conn, tid)
++    assert task.status == "blocked" and task.block_kind == "needs_input"
++    assert kb.get_run(conn, run).outcome == "blocked"
++    assert task.consecutive_failures == 0
++    assert agent.client.chat.completions.create.call_count == 1
++    assert result["final_response"] == reason
++    assert result["turn_exit_reason"] == "kanban_task_blocked"
++    assert result["completed"] is True and result["failed"] is False
++    assert not conn.execute("SELECT 1 FROM task_events WHERE task_id=? AND kind IN ('completed','timed_out','gave_up')", (tid,)).fetchone()
 diff --git a/tests/agent/test_kanban_terminal_budget.py b/tests/agent/test_kanban_terminal_budget.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..29d7ba11854f628d5cd2c316f595c163f274f9bf
+index 0000000000000000000000000000000000000000..103473b87a53dbb1d5fb0c1d0d1b890fba47fedb
 --- /dev/null
 +++ b/tests/agent/test_kanban_terminal_budget.py
-@@ -0,0 +1,59 @@
+@@ -0,0 +1,60 @@
 +"""A last-turn native handoff must not be counted as a worker timeout."""
 +import json
 +import logging
@@ -47988,6 +48183,7 @@ index 0000000000000000000000000000000000000000..29d7ba11854f628d5cd2c316f595c163
 +    assert kb.get_run(conn, run).outcome == ('completed' if phase == 'done' else 'review_requested')
 +    assert not conn.execute("SELECT 1 FROM task_events WHERE task_id=? AND kind IN ('timed_out','gave_up')", (tid,)).fetchone()
 +    assert result['completed'] is True and result['failed'] is False
++    assert result['turn_exit_reason'] == ('kanban_task_completed' if phase == 'done' else 'kanban_task_review_requested')
 +    assert agent.client.chat.completions.create.call_count == 1
 +
 +
@@ -48008,10 +48204,10 @@ index 0000000000000000000000000000000000000000..29d7ba11854f628d5cd2c316f595c163
 +    agent.client.chat.completions.create.assert_not_called()
 diff --git a/tests/agent/test_kanban_terminal_stop.py b/tests/agent/test_kanban_terminal_stop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..960cc7bb434bb8417657538c70d9dba7ff51d3c4
+index 0000000000000000000000000000000000000000..975450ab1637b43e2e9262fb0e6b35e95ddc303b
 --- /dev/null
 +++ b/tests/agent/test_kanban_terminal_stop.py
-@@ -0,0 +1,212 @@
+@@ -0,0 +1,227 @@
 +"""A successful native completion must not re-enter inference for status or a final summary."""
 +import json
 +import os
@@ -48080,11 +48276,16 @@ index 0000000000000000000000000000000000000000..960cc7bb434bb8417657538c70d9dba7
 +    return conn,tid,run
 +
 +
++@pytest.mark.parametrize('handoff', ['kanban_complete', 'kanban_block'])
 +@pytest.mark.parametrize('case',['running','failed_result','wrong_task','wrong_run','wrong_lock','wrong_pid','missing_db','bad_fingerprint','not_worker','malformed'])
-+def test_uncertain_or_foreign_completion_never_stops(owned_run,monkeypatch,tmp_path,case):
-+    from agent.kanban_terminal_stop import completed_worker_summary
++def test_uncertain_or_foreign_completion_never_stops(owned_run,monkeypatch,tmp_path,case,handoff):
++    from agent.kanban_terminal_stop import verified_worker_handoff
 +    conn,tid,run=owned_run
-+    if case!='running':complete_fixture(owned_run)
++    if case!='running':
++        if handoff == 'kanban_complete':
++            complete_fixture(owned_run)
++        else:
++            assert kb.block_task(conn, tid, reason='Waiting', kind='needs_input', expected_run_id=run)
 +    message=success_message(tid,run)
 +    def update_run(field,value):
 +        with kb.write_txn(conn):conn.execute(f'UPDATE task_runs SET {field}=? WHERE id=?',(value,run))
@@ -48100,18 +48301,19 @@ index 0000000000000000000000000000000000000000..960cc7bb434bb8417657538c70d9dba7
 +        'malformed':lambda:message.update(content='not-json'),
 +    }
 +    mutations.get(case,lambda:None)()
-+    assert completed_worker_summary([message]) is None
++    message['name'] = handoff
++    assert verified_worker_handoff([message]) is None
 +    assert not (tmp_path/'absent.db').exists()
 +
 +
 +def test_children_cron_and_review_handoff_keep_their_own_loop(owned_run):
-+    from agent.kanban_terminal_stop import completed_worker_summary
++    from agent.kanban_terminal_stop import verified_worker_handoff
 +    from agent.delegation_context import delegated_child_context,non_dispatcher_owned_context
 +    _,tid,run=complete_fixture(owned_run);message=success_message(tid,run)
 +    for context in (delegated_child_context(),non_dispatcher_owned_context()):
-+        with context:assert completed_worker_summary([message]) is None
++        with context:assert verified_worker_handoff([message]) is None
 +    message['name']='kanban_request_review'
-+    assert completed_worker_summary([message]) is None
++    assert verified_worker_handoff([message]) is None
 +
 +
 +def test_rejected_completion_allows_correction_then_stops(agent,owned_run):
@@ -48153,12 +48355,18 @@ index 0000000000000000000000000000000000000000..960cc7bb434bb8417657538c70d9dba7
 +    assert result['completed'] is True and result['final_response']=='Verified checkpoint result.'
 +
 +
++@pytest.mark.parametrize('handoff', ['kanban_complete', 'kanban_block'])
 +@pytest.mark.parametrize('notice',['iteration','wallclock'])
-+def test_verified_completion_result_is_not_modified_by_budget_notices(agent,owned_run,notice):
++def test_verified_completion_result_is_not_modified_by_budget_notices(agent,owned_run,notice,handoff):
 +    import time
 +    from agent.iteration_budget import IterationBudget
 +    from agent.tool_executor import _flush_session_db_after_tool_progress
-+    _,tid,run=complete_fixture(owned_run);message=success_message(tid,run);original=message['content']
++    conn,tid,run=owned_run
++    if handoff == 'kanban_complete':
++        complete_fixture(owned_run)
++    else:
++        assert kb.block_task(conn, tid, reason='Waiting', kind='needs_input', expected_run_id=run)
++    message=success_message(tid,run);message['name']=handoff;original=message['content']
 +    agent.iteration_budget=IterationBudget(4)
 +    for _ in range(3):agent.iteration_budget.consume()
 +    if notice=='wallclock':
@@ -48198,7 +48406,7 @@ index 0000000000000000000000000000000000000000..960cc7bb434bb8417657538c70d9dba7
 +
 +@pytest.mark.parametrize('mismatch', [None, 'pid', 'claim_lock', 'started_at'])
 +def test_managed_worker_terminal_uses_bound_process_not_submitter(owned_run, mismatch):
-+    from agent.kanban_terminal_stop import completed_worker_summary
++    from agent.kanban_terminal_stop import verified_worker_handoff
 +    conn, tid, run = owned_run
 +    lock = kb.get_run(conn, run).claim_lock
 +    bound = {'pid': os.getpid(), 'claim_lock': lock,
@@ -48209,21 +48417,24 @@ index 0000000000000000000000000000000000000000..960cc7bb434bb8417657538c70d9dba7
 +        conn.execute('UPDATE task_runs SET worker_pid=? WHERE id=?', (os.getpid() + 100, run))
 +        kb._append_event(conn, tid, 'worker_bound', bound, run_id=run)
 +    complete_fixture(owned_run)
-+    expected = None if mismatch else 'Verified fixture done.'
-+    assert completed_worker_summary([success_message(tid, run)]) == expected
++    handoff = verified_worker_handoff([success_message(tid, run)])
++    if mismatch:
++        assert handoff is None
++    else:
++        assert handoff.summary == 'Verified fixture done.' and handoff.outcome == 'completed'
 +
 +
 +def test_verified_review_handoff_stops_attempt_without_claiming_task_done(owned_run):
-+    from agent.kanban_terminal_stop import completed_worker_summary
++    from agent.kanban_terminal_stop import verified_worker_handoff
 +    conn, tid, run = owned_run
 +    assert kb.request_review(conn, tid, summary='Ready for independent review',
 +                             reviewer='reviewer', expected_run_id=run)
 +    message = success_message(tid, run)
 +    message['name'] = 'kanban_request_review'
-+    assert completed_worker_summary([message]) == 'Ready for independent review'
++    assert verified_worker_handoff([message]).summary == 'Ready for independent review'
 +    assert kb.get_task(conn, tid).status == 'review'
 +    message['name'] = 'kanban_complete'
-+    assert completed_worker_summary([message]) is None
++    assert verified_worker_handoff([message]) is None
 diff --git a/tests/agent/test_memory_background_snapshot.py b/tests/agent/test_memory_background_snapshot.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..d98c6e391bb856404632a93a373bcf5f0ef1a0f2
@@ -62410,6 +62621,95 @@ index 0000000000000000000000000000000000000000..c744db309add48ec6e978b2e9acfc4c4
 +    assert summarize(rows, 90, 110)['comparable_groups'] == 0
 +    with_bool = deepcopy(rows[3]); with_bool['usage']['cached_tokens'] = True
 +    assert summarize([rows[0], rows[1], event('b', '3'), with_bool], 90, 110)['comparable_groups'] == 0
+diff --git a/tests/hermes_cli/test_web_config_write_errors.py b/tests/hermes_cli/test_web_config_write_errors.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..8b18eb72a9c071cf87ed386dd72a60960da248a1
+--- /dev/null
++++ b/tests/hermes_cli/test_web_config_write_errors.py
+@@ -0,0 +1,83 @@
++"""Settings write failures explain recovery without disclosing filesystem details."""
++
++import errno
++
++import pytest
++from starlette.testclient import TestClient
++
++import utils
++from hermes_cli import config, web_server
++
++
++@pytest.mark.parametrize(
++    ("error_number", "guidance"),
++    [
++        (errno.EACCES, "write access"),
++        (errno.EPERM, "write access"),
++        (errno.EROFS, "write access"),
++        (errno.ENOSPC, "storage"),
++        (errno.EDQUOT, "storage"),
++        (errno.EIO, "Internal server error"),
++    ],
++)
++def test_failed_settings_write_is_private_and_can_be_retried(
++    _isolate_hermes_home, monkeypatch, error_number, guidance
++):
++    """Catch opaque known failures, exception leaks, or a partial failed save."""
++    path = config.get_config_path()
++    config.atomic_config_replace(
++        path, {"memory": {"memory_char_limit": 2800}, "display": {"language": "en"}}
++    )
++    before = path.read_bytes()
++    client = TestClient(web_server.app)
++    client.headers[web_server._SESSION_HEADER_NAME] = web_server._SESSION_TOKEN
++    patch = {"config": {"memory": {"memory_char_limit": 2900}}}
++
++    def refuse_staging(*_args, **_kwargs):
++        raise OSError(error_number, "private error detail", "/private/user-secret/config.yaml")
++
++    try:
++        with monkeypatch.context() as fault:
++            fault.setattr(utils, "mkstemp_beside", refuse_staging)
++            response = client.put("/api/config", json=patch)
++        assert response.status_code == 500
++        detail = response.json()["detail"]
++        assert guidance in detail
++        assert "private" not in detail and "user-secret" not in detail
++        assert path.read_bytes() == before
++
++        assert client.put("/api/config", json=patch).json() == {"ok": True}
++        saved = config.require_readable_config_before_write(path)
++        assert saved["memory"]["memory_char_limit"] == 2900
++        assert saved["display"]["language"] == "en"
++    finally:
++        client.close()
++
++
++def test_settings_error_does_not_claim_the_file_was_unchanged_after_replace(
++    _isolate_hermes_home, monkeypatch
++):
++    """Cleanup/metadata can fail after replacement; retry must remain safe."""
++    path = config.get_config_path()
++    config.atomic_config_replace(path, {"memory": {"memory_char_limit": 2800}})
++    replace = utils.atomic_replace
++
++    def fail_after_replace(source, destination):
++        replace(source, destination)
++        raise PermissionError(errno.EACCES, "private cleanup failure", str(destination))
++
++    client = TestClient(web_server.app)
++    client.headers[web_server._SESSION_HEADER_NAME] = web_server._SESSION_TOKEN
++    patch = {"config": {"memory": {"memory_char_limit": 2900}}}
++    try:
++        with monkeypatch.context() as fault:
++            fault.setattr(utils, "atomic_replace", fail_after_replace)
++            response = client.put("/api/config", json=patch)
++        assert response.status_code == 500
++        assert "finish" in response.json()["detail"]
++        assert "private" not in response.json()["detail"]
++        assert config.require_readable_config_before_write(path)["memory"]["memory_char_limit"] == 2900
++        assert client.put("/api/config", json=patch).json() == {"ok": True}
++        assert config.require_readable_config_before_write(path)["memory"]["memory_char_limit"] == 2900
++    finally:
++        client.close()
 diff --git a/tests/hermes_cli/test_web_server.py b/tests/hermes_cli/test_web_server.py
 index ed942172b6e13c2bf0f85461d288ee6c30b1d930..af61d5ea3837af5e2641e40f55e21045d944653c 100644
 --- a/tests/hermes_cli/test_web_server.py
@@ -80629,222 +80929,3 @@ index 7d8751f1747c559ccdf7898877a6d37fec7f1002..ad849d65c5ba02bfc580a3027248d19b
 +independent review/apply gates are separate from installing this command.
 +
  `--delivery-mode` controls **how** the notifier reacts to a terminal event. Every subscription is in one of three modes (`notify` is the default and the original behavior):
-diff --git a/hermes_cli/web_routers/config_env.py b/hermes_cli/web_routers/config_env.py
-index 644be8c2cfeab0e4d8909d46f87b39f0f043e462..f2ba22cf47b1687f69860fb4d1366492307d8800 100644
---- a/hermes_cli/web_routers/config_env.py
-+++ b/hermes_cli/web_routers/config_env.py
-@@ -7,2 +7,3 @@ Extracted from ``hermes_cli.web_server``; helpers/state that tests monkeypatch o
- import contextlib
-+import errno
- import logging
-@@ -143,5 +144,23 @@ async def update_config(
-                 # Ordinary settings saves include merged defaults, not a choice.
--                save_config(
--                    merged, preserve_keys={("display", "language")} if preserve_language else None
--                )
-+                try:
-+                    save_config(
-+                        merged, preserve_keys={("display", "language")} if preserve_language else None
-+                    )
-+                except OSError as exc:
-+                    # Keep paths and exception text in local logs, while giving
-+                    # Desktop/dashboard users a recovery step for known faults.
-+                    if exc.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
-+                        detail = (
-+                            "Could not finish saving settings. Check write access to the settings folder "
-+                            "on the destination device, then try again."
-+                        )
-+                    elif exc.errno in (errno.ENOSPC, errno.EDQUOT):
-+                        detail = (
-+                            "Not enough storage to finish saving settings. Free space or increase the storage "
-+                            "quota on the destination device, then try again."
-+                        )
-+                    else:
-+                        raise
-+                    _log.exception("PUT /api/config could not finish saving settings")
-+                    raise HTTPException(status_code=500, detail=detail) from exc
-         # REST saves bypass the config.set RPC (which re-emits itself), so
-diff --git a/tests/hermes_cli/test_web_config_write_errors.py b/tests/hermes_cli/test_web_config_write_errors.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..8b18eb72a9c071cf87ed386dd72a60960da248a1
---- /dev/null
-+++ b/tests/hermes_cli/test_web_config_write_errors.py
-@@ -0,0 +1,83 @@
-+"""Settings write failures explain recovery without disclosing filesystem details."""
-+
-+import errno
-+
-+import pytest
-+from starlette.testclient import TestClient
-+
-+import utils
-+from hermes_cli import config, web_server
-+
-+
-+@pytest.mark.parametrize(
-+    ("error_number", "guidance"),
-+    [
-+        (errno.EACCES, "write access"),
-+        (errno.EPERM, "write access"),
-+        (errno.EROFS, "write access"),
-+        (errno.ENOSPC, "storage"),
-+        (errno.EDQUOT, "storage"),
-+        (errno.EIO, "Internal server error"),
-+    ],
-+)
-+def test_failed_settings_write_is_private_and_can_be_retried(
-+    _isolate_hermes_home, monkeypatch, error_number, guidance
-+):
-+    """Catch opaque known failures, exception leaks, or a partial failed save."""
-+    path = config.get_config_path()
-+    config.atomic_config_replace(
-+        path, {"memory": {"memory_char_limit": 2800}, "display": {"language": "en"}}
-+    )
-+    before = path.read_bytes()
-+    client = TestClient(web_server.app)
-+    client.headers[web_server._SESSION_HEADER_NAME] = web_server._SESSION_TOKEN
-+    patch = {"config": {"memory": {"memory_char_limit": 2900}}}
-+
-+    def refuse_staging(*_args, **_kwargs):
-+        raise OSError(error_number, "private error detail", "/private/user-secret/config.yaml")
-+
-+    try:
-+        with monkeypatch.context() as fault:
-+            fault.setattr(utils, "mkstemp_beside", refuse_staging)
-+            response = client.put("/api/config", json=patch)
-+        assert response.status_code == 500
-+        detail = response.json()["detail"]
-+        assert guidance in detail
-+        assert "private" not in detail and "user-secret" not in detail
-+        assert path.read_bytes() == before
-+
-+        assert client.put("/api/config", json=patch).json() == {"ok": True}
-+        saved = config.require_readable_config_before_write(path)
-+        assert saved["memory"]["memory_char_limit"] == 2900
-+        assert saved["display"]["language"] == "en"
-+    finally:
-+        client.close()
-+
-+
-+def test_settings_error_does_not_claim_the_file_was_unchanged_after_replace(
-+    _isolate_hermes_home, monkeypatch
-+):
-+    """Cleanup/metadata can fail after replacement; retry must remain safe."""
-+    path = config.get_config_path()
-+    config.atomic_config_replace(path, {"memory": {"memory_char_limit": 2800}})
-+    replace = utils.atomic_replace
-+
-+    def fail_after_replace(source, destination):
-+        replace(source, destination)
-+        raise PermissionError(errno.EACCES, "private cleanup failure", str(destination))
-+
-+    client = TestClient(web_server.app)
-+    client.headers[web_server._SESSION_HEADER_NAME] = web_server._SESSION_TOKEN
-+    patch = {"config": {"memory": {"memory_char_limit": 2900}}}
-+    try:
-+        with monkeypatch.context() as fault:
-+            fault.setattr(utils, "atomic_replace", fail_after_replace)
-+            response = client.put("/api/config", json=patch)
-+        assert response.status_code == 500
-+        assert "finish" in response.json()["detail"]
-+        assert "private" not in response.json()["detail"]
-+        assert config.require_readable_config_before_write(path)["memory"]["memory_char_limit"] == 2900
-+        assert client.put("/api/config", json=patch).json() == {"ok": True}
-+        assert config.require_readable_config_before_write(path)["memory"]["memory_char_limit"] == 2900
-+    finally:
-+        client.close()
-diff --git a/apps/desktop/electron/config-patch-null.test.ts b/apps/desktop/electron/config-patch-null.test.ts
-new file mode 100644
-index 0000000000000000000000000000000000000000..4455992455b9a0f634f3013dc282c1b3ec8475b7
---- /dev/null
-+++ b/apps/desktop/electron/config-patch-null.test.ts
-@@ -0,0 +1,43 @@
-+import assert from 'node:assert/strict'
-+
-+import { test } from 'vitest'
-+
-+import { mergeConfigPatch } from '../../shared/src/config-patch'
-+
-+import { createConfigAutosaveQueue } from './config-autosave'
-+
-+test('a later null section does not erase an accepted nested settings edit', async () => {
-+  const persisted: unknown[] = []
-+
-+  const dispatch = async (request: { body?: unknown }) => {
-+    persisted.push(request.body)
-+
-+    return { ok: true }
-+  }
-+
-+  const queue = createConfigAutosaveQueue(dispatch, () => ({ key: 'home', send: dispatch }))
-+
-+  const patches = [
-+    { auxiliary: { vision: { model: 'updated-model' } } },
-+    { auxiliary: { vision: null } }
-+  ]
-+
-+  const writes = patches.map(config => queue.run({
-+    path: '/api/config', method: 'PUT', body: { config }, configAutosave: true
-+  }))
-+
-+  await queue.flush()
-+  await Promise.all(writes)
-+  // Native PUT ignores null over a mapping. Coalescing must keep the edit it
-+  // would have saved before receiving that null section.
-+  assert.deepEqual(persisted, [{ config: patches[0] }])
-+  assert.equal(queue.hasPending(), false)
-+})
-+
-+test('null preserves mapping sections but still replaces scalar and list leaves', () => {
-+  const previous = { empty: {}, section: { enabled: true }, scalar: 'old', list: ['old'] }
-+  const result = mergeConfigPatch(previous, { empty: null, section: null, scalar: null, list: null })
-+
-+  assert.deepEqual(result, { empty: {}, section: { enabled: true }, scalar: null, list: null })
-+  assert.deepEqual(previous, { empty: {}, section: { enabled: true }, scalar: 'old', list: ['old'] })
-+})
-diff --git a/apps/desktop/electron/config-autosave-types.test.ts b/apps/desktop/electron/config-autosave-types.test.ts
-new file mode 100644
-index 0000000000000000000000000000000000000000..4052c271a7cff5cafabfae18f0a6be1c4c9dc29a
---- /dev/null
-+++ b/apps/desktop/electron/config-autosave-types.test.ts
-@@ -0,0 +1,40 @@
-+import assert from 'node:assert/strict'
-+
-+import { test } from 'vitest'
-+
-+import type { HermesApiRequest } from '../../shared/src/api-request'
-+
-+import { createConfigAutosaveQueue } from './config-autosave'
-+
-+test.each([
-+  [[], { provider: 'auto' }],
-+  [false, { provider: 'auto' }],
-+  ['reset', { provider: 'auto' }],
-+  [23, { provider: 'auto' }],
-+  [[], null],
-+  [false, null],
-+  ['reset', null],
-+  [23, null]
-+])('preserves a replacement followed by a mapping or null: %j then %j', async (first, last) => {
-+  const requests: HermesApiRequest[] = []
-+
-+  const dispatch = async (request: HermesApiRequest) => {
-+    requests.push(request)
-+
-+    return { ok: true }
-+  }
-+
-+  const queue = createConfigAutosaveQueue(dispatch, () => ({ key: 'home', send: dispatch }))
-+  const patches = [first, last].map(vision => ({ auxiliary: { vision } }))
-+
-+  const writes = patches.map(config => queue.run({
-+    path: '/api/config', method: 'PUT', body: { config }, configAutosave: true
-+  }))
-+
-+  await queue.flush()
-+  await Promise.all(writes)
-+  // Sending only the last mapping/null would merge with (or ignore) the old
-+  // on-disk mapping, reviving fields removed by the preceding replacement.
-+  assert.deepEqual(requests.map(request => request.body), patches.map(config => ({ config })))
-+  assert.equal(queue.hasPending(), false)
-+})

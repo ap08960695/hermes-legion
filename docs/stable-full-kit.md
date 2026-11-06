@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **954-path** Legion source, interface and optimization alternative
+This is the complete **955-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -11,6 +11,8 @@ The [test selection](../patches/stable-full/test-selection.json) records the off
 Python and Desktop selection. No dependency or lockfile change is included.
 
 ## Included behavior
+
+- [Verified blocked-worker handoffs](blocked-worker-handoff.md), returning the saved blocker without an extra model call and preserving final-iteration holds.
 
 - [Null-section settings merge parity](settings-null-sections.md), preserving an accepted nested edit when a later null section is ignored by the native API.
 - [Ordered config type changes](settings-null-sections.md#ordered-type-changes-v0816), retaining separate writes when combining them would revive removed fields.

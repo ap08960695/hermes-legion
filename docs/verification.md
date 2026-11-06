@@ -1,3 +1,11 @@
+# v0.8.17 — Stop after a verified blocked handoff
+
+Two regressions failed before repair; 383 related Python tests pass afterward.
+A fresh native two-stage card used four model requests instead of five and
+recovered its saved checkpoint correctly. All 955 source paths match on Linux
+and ARM64 Mac; 12 offline native Mac checks pass. No GPU or production queue was
+used. See [the acceptance scope and limits](blocked-worker-handoff.md).
+
 # v0.8.16 — Preserve config type-change order
 
 Eight new regressions failed before repair; 38 related tests pass after repair.
