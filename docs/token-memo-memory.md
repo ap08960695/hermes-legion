@@ -49,3 +49,16 @@ The 918-path kit matches installed AI and ARM64 Mac source. Both production Pyth
 environments complete the same offline retention, warm-cache and release fixture.
 Source health, scoped lint, 100 companion tests and patch apply/reverse/reapply pass.
 Desktop packages are unchanged.
+
+## Fresh-process RSS follow-up
+
+Five fresh native Linux Python processes per version, alternating baseline and
+candidate, repeat the same 128 half-MiB message workload without tracing enabled.
+Median retained process RSS is 103,916 KiB before and 71,024 KiB after (31.7% lower).
+Median growth from each process's pre-workload RSS is 66,100 versus 33,284 KiB
+(49.6% lower). All ten returned estimate sums match; retained entries remain
+128 versus 63. Network and GPU devices are unavailable and no model requests run.
+
+These are whole-process measurements of a controlled native Python fixture, not
+the running production Gateway or Mac. They establish neither general latency
+improvement nor provider quota savings.

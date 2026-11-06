@@ -1,3 +1,17 @@
+# v0.8.11 — Accessible shared settings controls
+
+Shared settings inputs and pickers now use their existing localized field titles
+as accessible names. The six-file selection passes 33 tests, with renderer types,
+scoped lint and source health clean. Native Linux and ARM64 Mac packages were
+installed before publication. Linux Desktop named-field editing and saved-value
+reload pass in an isolated home without GPU devices or model calls. Immediate
+reload before the existing autosave debounce can still discard pending edits.
+See [scope and the remaining save limitation](settings-accessibility.md).
+
+Fresh-process token-memo measurements also confirm lower retained RSS for the
+controlled workload; they do not establish production Gateway savings. See
+[the RAM measurement](token-memo-memory.md#fresh-process-rss-follow-up).
+
 # v0.8.10 — Native Desktop and saved recall acceptance
 
 Evidence-only release: installed Linux Desktop navigation and stored rich output
