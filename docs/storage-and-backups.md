@@ -237,3 +237,7 @@ archives, temporary public clones and superseded generated logs can often be
 recreated. Confirm no process uses them, retain compact final results and required
 rollback evidence, then retire only those selected disposable paths. Neither this
 guide nor a successful release authorizes a blanket age sweep of user data.
+
+## Verified maintenance retirement (v0.8.26)
+
+A later explicitly selected cleanup retired duplicate exports/readbacks and completed test snapshot copies on Linux and Mac. It retained canonical archives and byte-verified compressed snapshot evidence, reducing selected allocation by 240.2 MiB net. See [the measured scope and process-observation safeguards](native-maintenance-continuation.md#retired-maintenance-copies). This was an operator-selected maintenance action; scheduled cleanup rules and permissions remain unchanged.

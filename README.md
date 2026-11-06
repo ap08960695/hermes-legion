@@ -10,6 +10,8 @@ Historical source comments and release payloads received [privacy maintenance](d
 
 ## What is included
 
+- [Automatic review continuation and verified maintenance retirement](docs/native-maintenance-continuation.md).
+
 - [Lower diagnostic read memory and latency](docs/diagnostic-read-efficiency.md).
 
 - [Work tracking and independently reviewed delivery](docs/tracked-delivery.md).
