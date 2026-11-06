@@ -1,3 +1,17 @@
+# v0.8.3 — Attribute post-turn goal judge usage
+
+The current pre-repair source fails five ownership regressions. The focused accounting
+selection passes 10 tests after the repair; a separate adjacent selection passes 142 tests.
+Scoped lint and source health pass. Actual installed Linux and macOS source and production
+Python each pass four offline native checks with real stores and fixed SDK response fixtures.
+These checks deny network access and GPU access; they do not start production worker jobs.
+
+The 912-path kit is installed with matching payloads on both hosts. Configuration and owner
+pauses are preserved, and existing Gateway processes are not restarted. A small native smoke
+card is parked without a worker/run; live provider acceptance and original-process adoption
+remain unverified. No new performance or usage savings are claimed. See [the accounting
+record](goal-usage-accounting.md) for scope, fixture counts and limitations.
+
 # v0.8.2 — Retain in-use data and verify report archives
 
 The companion retention helper repairs protected-descendant handling, stale planning

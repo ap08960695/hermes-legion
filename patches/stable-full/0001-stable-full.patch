@@ -27322,6 +27322,25 @@ index 30c6ef5d0e342af19c79ede92b013d374f7c2fec..599c6164eed3b6baee89632268a4199e
 +            # One unavailable profile must not prevent persisted-room recovery elsewhere.
 +            logging.getLogger(__name__).warning('Hosted room standby read failed (%s)', type(exc).__name__)
  
+diff --git a/gateway/session_kanban.py b/gateway/session_kanban.py
+index 6b89dfa3737d29f613b2fa5320bd5ca444e2b005..76b76a4786b9b846ae955b00f17e32621e9b4322 100644
+--- a/gateway/session_kanban.py
++++ b/gateway/session_kanban.py
+@@ -386,5 +386,11 @@ def _run_task_turns(agent, frame, history, context):
+         return result.get('final_response', '')
+-    run_kanban_goal_loop(task_id=context['task_id'], goal_text=context['goal_text'], run_turn=turn,
+-        task_status_fn=status, block_fn=block, max_turns=context['goal_max_turns'] or DEFAULT_MAX_TURNS,
+-        first_response=result.get('final_response', ''))
++    # Nested turns restore this worker's scope before their between-turn judge runs.
++    from agent.aux_accounting import reset_accounting_context, set_accounting_context
++    token = set_accounting_context(agent._session_db, agent.session_id)
++    try:
++        run_kanban_goal_loop(task_id=context['task_id'], goal_text=context['goal_text'], run_turn=turn,
++            task_status_fn=status, block_fn=block, max_turns=context['goal_max_turns'] or DEFAULT_MAX_TURNS,
++            first_response=result.get('final_response', ''))
++    finally:
++        reset_accounting_context(token)
+     return result
 diff --git a/gateway/session_local.py b/gateway/session_local.py
 index 2cff15e5964167865e128981d820f32464e517c8..4372f7fcc873204ea0f8f79ab35fbd6b82788c77 100644
 --- a/gateway/session_local.py
@@ -29390,7 +29409,7 @@ index 0000000000000000000000000000000000000000..e7be6d1c50f59f85be6c89a3bfc765e0
 +    args = parser.parse_args(['goal', *sys.argv[1:]])
 +    raise SystemExit(args.func(args))
 diff --git a/hermes_cli/goals.py b/hermes_cli/goals.py
-index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..d9866676c750ca8a7a007edd577bb0361675403b 100644
+index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..73afd9a9375be35e6095187e5829ac014318eb57 100644
 --- a/hermes_cli/goals.py
 +++ b/hermes_cli/goals.py
 @@ -15,2 +15,3 @@ import os
@@ -29762,22 +29781,33 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..d9866676c750ca8a7a007edd577bb036
 +                reason = state.paused_reason or "wait target could not be verified"
 +                return _decision("paused", False, None, "wait_unverified", reason, f"⏸ Goal paused — {reason}")
              return self._waiting_decision(state)
-@@ -1510,2 +1685,4 @@ class GoalManager:
+@@ -1510,6 +1685,15 @@ class GoalManager:
  
+-        verdict, reason, parse_failed, wait_directive, transport_failed = judge_goal(
+-            state.goal, last_response, subgoals=state.subgoals or None, background_processes=background_processes,
+-            contract=state.contract if state.has_contract() else None, active_delegations=active_delegations,
+-        )
 +        active_cards = count_active_kanban_cards(self.session_id, notification_target=kanban_notification_target)
 +        delegated = _delegated_decisions_enabled()
-         verdict, reason, parse_failed, wait_directive, transport_failed = judge_goal(
-@@ -1513,2 +1690,3 @@ class GoalManager:
-             contract=state.contract if state.has_contract() else None, active_delegations=active_delegations,
-+            active_kanban_cards=active_cards, delegated_decisions=delegated,
-         )
-@@ -1523,3 +1701,4 @@ class GoalManager:
++        # The model turn released its accounting scope; the judge still belongs to this goal.
++        from agent.aux_accounting import reset_accounting_context, set_accounting_context
++        token = set_accounting_context(_get_session_db(), self.session_id)
++        try:
++            verdict, reason, parse_failed, wait_directive, transport_failed = judge_goal(
++                state.goal, last_response, subgoals=state.subgoals or None, background_processes=background_processes,
++                contract=state.contract if state.has_contract() else None, active_delegations=active_delegations,
++                active_kanban_cards=active_cards, delegated_decisions=delegated,
++            )
++        finally:
++            reset_accounting_context(token)
+         state.last_verdict = verdict
+@@ -1523,3 +1707,4 @@ class GoalManager:
          if verdict == "wait" and wait_directive:
 -            parked = self._apply_wait_directive(wait_directive, reason, active_delegations=active_delegations)
 +            parked = self._apply_wait_directive(wait_directive, reason, active_delegations=active_delegations,
 +                                                active_kanban_cards=active_cards)
              if parked is not None:
-@@ -1532,2 +1711,16 @@ class GoalManager:
+@@ -1532,2 +1717,16 @@ class GoalManager:
          if verdict == "blocked":
 +            # Delegated decisions: a block that only waits on a user choice gets a bounded nudge
 +            # to decide within authority before the goal pauses.
@@ -29794,7 +29824,7 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..d9866676c750ca8a7a007edd577bb036
 +                    f"↻ Deciding within delegated authority ({n}/{DEFAULT_MAX_DELEGATED_AUTO_CONTINUES}): {reason}",
 +                )
              return self._pause_decision(
-@@ -1564,4 +1757,7 @@ class GoalManager:
+@@ -1564,4 +1763,7 @@ class GoalManager:
          self._save()
 +        prompt = self.next_continuation_prompt()
 +        if delegated and reason:
@@ -51361,6 +51391,86 @@ index 91f30aa217762d0aa80a9dccfcf5134050a9d3eb..99ee516b0f2a78b5bdb5cc0875890aad
 +
 +
  def test_profiles_list_survives_an_undecodable_sibling_profile_yaml(tmp_path, monkeypatch, caplog):
+diff --git a/tests/gateway/test_session_kanban_aux_accounting.py b/tests/gateway/test_session_kanban_aux_accounting.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..bfbae9f44d5768b7bf47c0e4dc99ac4bbdb52cc8
+--- /dev/null
++++ b/tests/gateway/test_session_kanban_aux_accounting.py
+@@ -0,0 +1,74 @@
++"""Canonical worker judges retain usage between turns, stopping at the native terminal fence."""
++from types import SimpleNamespace
++
++import pytest
++
++from agent.aux_accounting import record_aux_usage, reset_accounting_context, set_accounting_context
++from agent.auxiliary_client import _validate_llm_response
++from gateway.session_kanban import _run_task_turns
++from hermes_cli import kanban_db as kb
++from hermes_cli.kanban_db_connect import connect_closing
++from hermes_state import SessionDB
++
++
++@pytest.mark.parametrize("already_terminal,completion_turn", [(False, 2), (False, 3), (True, 1)])
++def test_worker_judge_accounts_to_bound_session_and_never_after_completion(
++    tmp_path, monkeypatch, already_terminal, completion_turn,
++):
++    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
++    monkeypatch.setenv("HERMES_KANBAN_HOME", str(tmp_path))
++    monkeypatch.setattr("agent.usage_pricing.estimate_usage_cost", lambda *a, **kw: SimpleNamespace(amount_usd=None))
++    kb.init_db()
++    with connect_closing() as conn:
++        tid = kb.create_task(conn, title="offline fixture", assignee="default")
++        task = kb.claim_task(conn, tid, claimer="offline-owner")
++    context = {"skills": [], "context": "", "goal_mode": True, "goal_text": "finish fixture",
++               "goal_max_turns": 3, "task_id": tid, "run_id": task.current_run_id}
++    response = SimpleNamespace(model="offline-judge", choices=[SimpleNamespace(message=SimpleNamespace(
++        content='{"done":true,"reason":"verified"}'))], usage=SimpleNamespace(
++            prompt_tokens=100, completion_tokens=20, prompt_tokens_details=SimpleNamespace(cached_tokens=60)))
++    attempts = []
++
++    def response_boundary(*, task, **kwargs):
++        attempts.append(task)
++        response.choices[0].message.content = (
++            '{"done":false,"reason":"continue fixture"}' if len(attempts) < completion_turn - 1
++            else '{"done":true,"reason":"verified"}')
++        return _validate_llm_response(response, task, provider="offline")
++
++    monkeypatch.setattr("agent.auxiliary_client.call_llm", response_boundary)
++    with SessionDB(tmp_path / "session.db") as db:
++        for sid in ("worker", "outer"):
++            db.create_session(sid, source="cli")
++        turns = []
++
++        def run_conversation(prompt, conversation_history=None):
++            turns.append(prompt)
++            token = set_accounting_context(db, "worker")
++            try:
++                if already_terminal or len(turns) == completion_turn:
++                    with connect_closing() as conn:
++                        assert kb.complete_task(conn, tid, result="offline evidence", expected_run_id=task.current_run_id)
++                return {"completed": True, "final_response": "fixture completed"}
++            finally:
++                reset_accounting_context(token)
++
++        agent = SimpleNamespace(session_id="worker", _session_db=db, run_conversation=run_conversation)
++        token = set_accounting_context(db, "outer")
++        try:
++            result = _run_task_turns(agent, {"text": "offline fixture"}, [], context)
++            record_aux_usage(response, "owner-probe", provider="offline")
++        finally:
++            reset_accounting_context(token)
++        with db._read_ctx() as conn:
++            rows = [tuple(row) for row in conn.execute(
++                "SELECT session_id,task,input_tokens,output_tokens,cache_read_tokens,api_call_count "
++                "FROM session_model_usage ORDER BY session_id,task")]
++    expected = [("outer", "owner-probe", 40, 20, 60, 1)]
++    if not already_terminal:
++        calls = completion_turn - 1
++        expected.append(("worker", "goal_judge", 40 * calls, 20 * calls, 60 * calls, calls))
++    assert rows == expected
++    assert len(turns) == completion_turn
++    assert attempts == ["goal_judge"] * (completion_turn - 1)
++    assert result["final_response"] == "fixture completed"
 diff --git a/tests/gateway/test_session_policy.py b/tests/gateway/test_session_policy.py
 index 93f2baba69134f7dbf7ae830accab4a826b5c12d..2ea21cc45d260cc6a53cc694230078dc082fabd6 100644
 --- a/tests/gateway/test_session_policy.py
@@ -52596,6 +52706,165 @@ index c4e4080046e70116f98165e92debbe3e98ecfeec..999318a1677ce3f47db910ca86c84915
  
 +    monkeypatch.setattr(profiles, "_get_wrapper_dir", lambda: tmp_path / "wrappers")
      (tmp_path / "profiles" / "beta").mkdir(parents=True)
+diff --git a/tests/hermes_cli/test_goal_aux_accounting.py b/tests/hermes_cli/test_goal_aux_accounting.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..898a49c507b7b02aba99381a7f08f5b229c583ea
+--- /dev/null
++++ b/tests/hermes_cli/test_goal_aux_accounting.py
+@@ -0,0 +1,153 @@
++"""Post-turn judges belong to the goal's session, not a finished or unrelated turn."""
++from concurrent.futures import ThreadPoolExecutor
++from pathlib import Path
++from threading import Barrier
++from types import SimpleNamespace
++import time
++
++import pytest
++from openai.types.chat import ChatCompletion
++
++from agent.aux_accounting import record_aux_usage, reset_accounting_context, set_accounting_context
++from agent.auxiliary_client import _validate_llm_response
++from hermes_cli import goals
++from hermes_constants import reset_hermes_home_override, set_hermes_home_override
++
++
++@pytest.fixture
++def home(tmp_path, monkeypatch):
++    path = tmp_path / ".hermes"
++    path.mkdir()
++    monkeypatch.setattr(Path, "home", lambda: tmp_path)
++    monkeypatch.setenv("HERMES_HOME", str(path))
++    monkeypatch.setenv("HERMES_KANBAN_HOME", str(path))
++    monkeypatch.setattr("agent.usage_pricing.estimate_usage_cost", lambda *a, **kw: SimpleNamespace(amount_usd=None))
++    goals._DB_CACHE.clear()
++    yield path
++    goals._DB_CACHE.clear()
++
++
++def _response():
++    return ChatCompletion.model_validate({
++        "id": "offline-goal", "object": "chat.completion", "created": 0, "model": "offline-judge",
++        "choices": [{"index": 0, "finish_reason": "stop", "message": {
++            "role": "assistant", "content": '{"done":true,"reason":"verified"}'}}],
++        "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120,
++                  "prompt_tokens_details": {"cached_tokens": 60},
++                  "completion_tokens_details": {"reasoning_tokens": 7}}})
++
++
++def _rows(db):
++    with db._read_ctx() as conn:
++        return [tuple(row) for row in conn.execute(
++            "SELECT session_id,task,input_tokens,output_tokens,cache_read_tokens,reasoning_tokens,api_call_count "
++            "FROM session_model_usage ORDER BY session_id,task")]
++
++
++@pytest.mark.parametrize("failure", [False, True])
++@pytest.mark.parametrize("missing_store", [False, True])
++def test_post_turn_judge_uses_goal_owner_and_restores_outer_owner(home, monkeypatch, failure, missing_store):
++    db = goals._get_session_db()
++    for sid in ("goal-owner", "outer-owner"):
++        db.create_session(sid, source="cli")
++    mgr = goals.GoalManager("goal-owner")
++    mgr.set("finish offline fixture")
++    if missing_store:
++        monkeypatch.setattr(goals, "_get_session_db", lambda: None)
++    attempts = []
++
++    def response_boundary(*, task, **kwargs):
++        attempts.append(task)
++        if failure:
++            raise RuntimeError("offline transport failure")
++        return _validate_llm_response(_response(), task, provider="offline")
++
++    monkeypatch.setattr("agent.auxiliary_client.call_llm", response_boundary)
++    token = set_accounting_context(db, "outer-owner")
++    try:
++        decision = mgr.evaluate_after_turn("fixture completed")
++        record_aux_usage(_response(), "owner-probe", provider="offline")
++    finally:
++        reset_accounting_context(token)
++    expected = [("outer-owner", "owner-probe", 40, 20, 60, 7, 1)]
++    if not failure and not missing_store:
++        expected.insert(0, ("goal-owner", "goal_judge", 40, 20, 60, 7, 1))
++    assert _rows(db) == expected
++    assert attempts == ["goal_judge"]
++    assert decision["status"] == ("active" if failure else "done")
++    assert mgr.state.turns_used == 1
++
++
++def test_waiting_goal_spends_no_call_or_usage(home, monkeypatch):
++    db = goals._get_session_db()
++    db.create_session("waiting", source="cli")
++    mgr = goals.GoalManager("waiting")
++    mgr.set("wait for result")
++    mgr.state.waiting_until = time.time() + 3600
++    mgr._save()
++
++    def no_call(**kwargs):
++        pytest.fail("parked goals must not invoke the judge")
++
++    monkeypatch.setattr("agent.auxiliary_client.call_llm", no_call)
++    assert not mgr.evaluate_after_turn("waiting")["should_continue"]
++    assert mgr.state.turns_used == 0
++    assert _rows(db) == []
++
++
++def test_escaping_judge_error_restores_outer_owner(home, monkeypatch):
++    db = goals._get_session_db()
++    for sid in ("goal-owner", "outer-owner"):
++        db.create_session(sid, source="cli")
++    mgr = goals.GoalManager("goal-owner")
++    mgr.set("finish offline fixture")
++
++    def broken_judge(*args, **kwargs):
++        raise RuntimeError("unexpected judge failure")
++
++    monkeypatch.setattr(goals, "judge_goal", broken_judge)
++    token = set_accounting_context(db, "outer-owner")
++    try:
++        with pytest.raises(RuntimeError, match="unexpected judge failure"):
++            mgr.evaluate_after_turn("fixture completed")
++        record_aux_usage(_response(), "owner-probe", provider="offline")
++    finally:
++        reset_accounting_context(token)
++    assert _rows(db) == [("outer-owner", "owner-probe", 40, 20, 60, 7, 1)]
++
++
++def test_concurrent_profile_judges_keep_their_own_store(home, monkeypatch):
++    owners = []
++    for name in ("left", "right"):
++        profile = home / name
++        profile.mkdir()
++        token = set_hermes_home_override(profile)
++        try:
++            db = goals._get_session_db()
++            db.create_session(name, source="cli")
++            mgr = goals.GoalManager(name)
++            mgr.set("finish isolated fixture")
++            owners.append((profile, db, mgr))
++        finally:
++            reset_hermes_home_override(token)
++    barrier = Barrier(2)
++
++    def response_boundary(*, task, **kwargs):
++        barrier.wait(timeout=5)
++        return _validate_llm_response(_response(), task, provider="offline")
++
++    def evaluate(owner):
++        profile, db, mgr = owner
++        token = set_hermes_home_override(profile)
++        try:
++            assert mgr.evaluate_after_turn("fixture completed")["status"] == "done"
++            record_aux_usage(_response(), "unowned", provider="offline")
++        finally:
++            reset_hermes_home_override(token)
++        return _rows(db)
++
++    monkeypatch.setattr("agent.auxiliary_client.call_llm", response_boundary)
++    with ThreadPoolExecutor(max_workers=2) as pool:
++        rows = list(pool.map(evaluate, owners))
++    assert rows == [[("left", "goal_judge", 40, 20, 60, 7, 1)],
++                    [("right", "goal_judge", 40, 20, 60, 7, 1)]]
 diff --git a/tests/hermes_cli/test_goal_delegated_decisions.py b/tests/hermes_cli/test_goal_delegated_decisions.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..906f8ed028617d03a5a230f00356c50db12a0060
