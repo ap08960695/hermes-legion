@@ -2438,11 +2438,11 @@ index 3223e616467b1e687b838cde2dc2f0234bd6752b..c6cc65dd8c5f1694c5a3d58adad53de8
          ),
 diff --git a/agent/kanban_terminal_stop.py b/agent/kanban_terminal_stop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..090b026474bcfeb282f8808a4b560c88c8a09ba1
+index 0000000000000000000000000000000000000000..fa9fb5ab1fc4df23f8845e308a6051140df815da
 --- /dev/null
 +++ b/agent/kanban_terminal_stop.py
-@@ -0,0 +1,93 @@
-+"""Stop an owned worker after a durably committed completion, review or blocked handoff.
+@@ -0,0 +1,97 @@
++"""Stop an owned worker after a durably committed terminal handoff.
 +
 +Tool intent alone is never authority. Check the fresh result and the exact native
 +run/claim/process identity; refuse uncertain proof without changing loop behavior.
@@ -2458,6 +2458,8 @@ index 0000000000000000000000000000000000000000..090b026474bcfeb282f8808a4b560c88
 +    'kanban_complete': 'completed',
 +    'kanban_request_review': 'review_requested',
 +    'kanban_block': 'blocked',
++    'kanban_schedule': 'scheduled',
++    'kanban_request_changes': 'changes_requested',
 +}
 +TERMINAL_EXIT_REASONS = frozenset(f"kanban_task_{outcome}" for outcome in _TERMINAL_TOOLS.values())
 +
@@ -2505,6 +2507,8 @@ index 0000000000000000000000000000000000000000..090b026474bcfeb282f8808a4b560c88
 +        'completed': 'Kanban task completed successfully.',
 +        'review_requested': 'Work handed off for independent review.',
 +        'blocked': 'Kanban task blocked; see the recorded blocker before continuing.',
++        'scheduled': 'Kanban task scheduled; waiting for its release gate.',
++        'changes_requested': 'Changes requested; work handed back to the implementer.',
 +    }[outcome]
 +    return summary[:4000] if isinstance(summary,str) and summary.strip() else fallback
 +
@@ -4058,7 +4062,7 @@ index 03ede0060d239d9ecca197ed29d039d205fc230e..09964a101987f8021aaf2f64088220f0
 +            shared_layout_version=layout_version(stored) or 2)["stable"]
          if static and stored.startswith(static):
 diff --git a/agent/tool_executor.py b/agent/tool_executor.py
-index cb58137a2aced3a76da570c0eb9f3a0aab625bf7..f6a881ed13c24618ef7e0f6d2d2d7688136f074c 100644
+index cb58137a2aced3a76da570c0eb9f3a0aab625bf7..e0f2c9454f012700a72fce764a98a65e4f2a1349 100644
 --- a/agent/tool_executor.py
 +++ b/agent/tool_executor.py
 @@ -205,6 +205,19 @@ def _flush_session_db_after_tool_progress(agent, messages: list, *, stage: str)
@@ -4069,7 +4073,7 @@ index cb58137a2aced3a76da570c0eb9f3a0aab625bf7..f6a881ed13c24618ef7e0f6d2d2d7688
 +    # task/run/claim/process proof used by the stop guard; refusals and uncertain
 +    # ownership still receive the ordinary checkpoint.
 +    terminal = False
-+    if messages and messages[-1].get("role") == "tool" and messages[-1].get("name") in {"kanban_complete", "kanban_request_review", "kanban_block"}:
++    if messages and messages[-1].get("role") == "tool" and messages[-1].get("name") in {"kanban_complete", "kanban_request_review", "kanban_block", "kanban_schedule", "kanban_request_changes"}:
 +        try:
 +            from agent.kanban_terminal_stop import verified_worker_handoff
 +            terminal = verified_worker_handoff(messages[-1:]) is not None
@@ -48208,6 +48212,102 @@ index 0000000000000000000000000000000000000000..103473b87a53dbb1d5fb0c1d0d1b890f
 +    assert kb.get_task(conn, tid).consecutive_failures == 1
 +    assert kb.get_run(conn, run).outcome == 'timed_out'
 +    agent.client.chat.completions.create.assert_not_called()
+diff --git a/tests/agent/test_kanban_terminal_handoffs.py b/tests/agent/test_kanban_terminal_handoffs.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..9b006f2adf7add29ac70fd2ea23083ad68f75eda
+--- /dev/null
++++ b/tests/agent/test_kanban_terminal_handoffs.py
+@@ -0,0 +1,90 @@
++"""Scheduled and revision handoffs end the owned attempt without extra inference."""
++import json
++import os
++from unittest.mock import patch
++
++import pytest
++
++from hermes_cli import kanban_db as kb, kanban_db_connect as kbc, kanban_db_dispatch as dispatch
++from tests.agent import test_kanban_terminal_stop as terminal
++
++agent = terminal.agent
++
++
++@pytest.fixture
++def handoff_run(tmp_path, monkeypatch, handoff):
++    path = tmp_path / "board.db"
++    monkeypatch.setenv("HERMES_KANBAN_DB", str(path))
++    monkeypatch.setenv("HERMES_KANBAN_HOME", str(tmp_path))
++    monkeypatch.delenv("HERMES_DELEGATED_CHILD_CONTEXT", raising=False)
++    kb.init_db(path)
++    conn = kbc.connect(path)
++    tid = kb.create_task(conn, title="Offline handoff fixture", body="synthetic", assignee="builder")
++    claim = kb.claim_task(conn, tid)
++    if handoff == "kanban_request_changes":
++        assert kb.request_review(conn, tid, summary="Ready for review", reviewer="reviewer", expected_run_id=claim.current_run_id)
++        claim = kb.claim_review_task(conn, tid, claimer="reviewer:fixture")
++    dispatch._set_worker_pid(conn, tid, os.getpid())
++    for key, value in {"HERMES_KANBAN_TASK": tid, "HERMES_KANBAN_RUN_ID": str(claim.current_run_id),
++                       "HERMES_KANBAN_CLAIM_LOCK": claim.claim_lock}.items():
++        monkeypatch.setenv(key, value)
++    yield conn, tid, claim.current_run_id
++    conn.close()
++
++
++@pytest.mark.parametrize("handoff,phase,outcome", [
++    ("kanban_schedule", "scheduled", "scheduled"),
++    ("kanban_request_changes", "ready", "changes_requested"),
++])
++@pytest.mark.parametrize("max_iterations", [4, 1])
++def test_handoff_preserves_landing_and_reason_without_another_call(agent, handoff_run, handoff, phase, outcome, max_iterations):
++    from tools.registry import registry
++    import tools.kanban_tools
++
++    conn, tid, run = handoff_run
++    reason = "Synthetic handoff checkpoint"
++    agent.max_iterations = max_iterations
++    agent.valid_tool_names = {handoff}
++    agent.client.chat.completions.create.side_effect = [
++        terminal.call(handoff, {"task_id": tid, "reason": reason}, "handoff"),
++        terminal._mock_response(content="Unnecessary acknowledgement", finish_reason="stop"),
++    ]
++
++    def tool(name, args, *unused, **kwargs):
++        return registry.dispatch(name, args if isinstance(args, dict) else json.loads(args))
++
++    with patch.object(agent, "_persist_session"), patch.object(agent, "_save_trajectory"), \
++         patch.object(agent, "_cleanup_task_resources"), patch("model_tools.handle_function_call", side_effect=tool):
++        result = agent.run_conversation("Hand off this owned synthetic card.")
++
++    task = kb.get_task(conn, tid)
++    assert task.status == phase and task.assignee == "builder"
++    assert kb.get_run(conn, run).outcome == outcome
++    assert task.consecutive_failures == 0
++    assert agent.client.chat.completions.create.call_count == 1
++    assert result["final_response"] == reason
++    assert result["turn_exit_reason"] == "kanban_task_" + outcome
++    assert result["completed"] is True and result["failed"] is False
++    assert not conn.execute("SELECT 1 FROM task_events WHERE task_id=? AND kind IN ('completed','timed_out','gave_up')", (tid,)).fetchone()
++
++
++@pytest.mark.parametrize("handoff", ["kanban_schedule", "kanban_request_changes"])
++@pytest.mark.parametrize("proof", ["running", "foreign_lock", "foreign_pid", "wrong_result"])
++def test_uncertain_schedule_or_revision_never_stops(handoff_run, monkeypatch, handoff, proof):
++    from agent.kanban_terminal_stop import verified_worker_handoff
++    from tools.registry import registry
++    import tools.kanban_tools
++
++    conn, tid, run = handoff_run
++    message = {"role": "tool", "name": handoff, "content": json.dumps({"ok": True, "task_id": tid, "run_id": run})}
++    if proof != "running":
++        response = json.loads(registry.dispatch(handoff, {"task_id": tid, "reason": "Synthetic checkpoint"}))
++        assert response["ok"] is True
++    if proof == "foreign_lock":
++        monkeypatch.setenv("HERMES_KANBAN_CLAIM_LOCK", "foreign")
++    elif proof == "foreign_pid":
++        with kb.write_txn(conn):
++            conn.execute("UPDATE task_runs SET worker_pid=? WHERE id=?", (os.getpid() + 1, run))
++    elif proof == "wrong_result":
++        message["content"] = json.dumps({"ok": True, "task_id": tid, "run_id": run + 1})
++    assert verified_worker_handoff([message]) is None
 diff --git a/tests/agent/test_kanban_terminal_stop.py b/tests/agent/test_kanban_terminal_stop.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..975450ab1637b43e2e9262fb0e6b35e95ddc303b

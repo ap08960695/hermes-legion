@@ -1,3 +1,11 @@
+# v0.8.19 — Stop after scheduled and revision handoffs
+
+Four regressions failed before repair; 473 related Python cases pass afterward.
+A fresh native scheduled-card pair used three requests instead of four and stayed
+parked on the next dispatch check. Linux/Mac source matches all 957 paths; eight
+offline native Mac checks cover successful and foreign handoff proof. See
+[scope and token measurements](scheduled-review-handoffs.md).
+
 # v0.8.18 — Avoid discarded recall payloads
 
 One regression failed before repair; 214 related Python tests pass afterward.

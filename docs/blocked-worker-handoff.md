@@ -14,7 +14,8 @@ result before it is persisted.
 The existing task/run/claim/PID/birth-time checks remain controlling, including
 managed-worker binding. Failed tools, uncertain ownership and delegated children
 do not qualify. No unblocking, retry, goal-judge or scheduling authority is added.
-Scheduling and request-changes tools are outside this fast-stop change.
+Scheduling and request-changes tools were outside the v0.8.17 change;
+the [v0.8.19 extension](scheduled-review-handoffs.md) covers those handoffs.
 
 ## Verification
 
