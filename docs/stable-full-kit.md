@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **958-path** Legion source, interface and optimization alternative
+This is the complete **959-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -11,6 +11,8 @@ The [test selection](../patches/stable-full/test-selection.json) records the off
 Python and Desktop selection. No dependency or lockfile change is included.
 
 ## Included behavior
+
+- [Bounded interpreter work for recall Unicode validation](recall-unicode-work.md), without per-character Python callbacks.
 
 - [Missing-skill worker results](missing-skill-worker-results.md), settling known preload failures with an actionable diagnostic.
 - [Scheduled and revision handoff termination](scheduled-review-handoffs.md), preserving native landing states without a follow-up model acknowledgement.

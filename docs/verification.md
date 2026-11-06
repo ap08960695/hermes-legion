@@ -2573,3 +2573,14 @@ zero-request card. The fixture is blocked by its existing no-retry policy;
 ordinary retry policy, partial preload behavior and unknown crash handling are
 unchanged. All 958 installed targets match on both hosts. Desktop UI and
 continuous production Captain behavior are not newly validated by this change.
+
+## Recall Unicode validation work (v0.8.21)
+
+The [Unicode scan optimization](recall-unicode-work.md) preserves surrogate
+handling while removing per-character Python callbacks. A portable registered-tool
+work-budget regression failed before repair and passed afterward; 213 scoped
+Python cases across 13 files pass without retries. Native Linux/Mac exhaustive
+Unicode and nested-shape checks agree. A fresh native full-recall card returned
+all three codes in three physical requests without a post-completion request.
+All 959 installed kit targets match on both hosts. No new general latency,
+provider cache-saving or Desktop UI claim is made.
