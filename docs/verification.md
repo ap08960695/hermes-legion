@@ -1,3 +1,12 @@
+# v0.8.15 — Preserve edits followed by null sections
+
+Two new regressions failed before repair; 30 related UI/Electron tests pass after
+repair. The actual queue's coalesced patches now match sequential writes through
+native config storage on Linux and ARM64 Mac. Both packages were rebuilt and
+installed, with 953-path source parity and package/source fingerprint checks.
+These offline behavior checks made no model requests and used no GPU. See
+[the null-section contract and limits](settings-null-sections.md).
+
 # v0.8.14 — Scoped recall tool preparation
 
 An optional native config fragment makes the search schema eager for a selected

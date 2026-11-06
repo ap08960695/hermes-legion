@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **952-path** Legion source, interface and optimization alternative
+This is the complete **953-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -11,6 +11,8 @@ The [test selection](../patches/stable-full/test-selection.json) records the off
 Python and Desktop selection. No dependency or lockfile change is included.
 
 ## Included behavior
+
+- [Null-section settings merge parity](settings-null-sections.md), preserving an accepted nested edit when a later null section is ignored by the native API.
 
 - Focus navigation, saved-chat history, always-visible device/profile context, bot
   configuration, Hub collections, native file previews, rich Markdown and Workflow.

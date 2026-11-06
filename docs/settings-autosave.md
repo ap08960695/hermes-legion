@@ -17,6 +17,10 @@ another explicit close retries. Changes to credentials or tenant headers split
 the captured route. Profile and connection switches isolate drafts and cache
 acknowledgements, including replies that arrive after navigation.
 
+From v0.8.15, the shared merge also [preserves nested edits followed by a null
+section](settings-null-sections.md), matching the native API rather than dropping
+those edits during coalescing.
+
 ## Verification
 
 - 72 tests across nine UI and Electron files pass. Regression cases cover
