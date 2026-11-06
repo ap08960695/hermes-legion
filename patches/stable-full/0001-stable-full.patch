@@ -650,10 +650,10 @@ index 0000000000000000000000000000000000000000..8afb3638d40ba912eb8c2ef5af4a570e
 +    }
 diff --git a/agent/cache_request_diagnostics.py b/agent/cache_request_diagnostics.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..448f06f4f01168872140c84c7c52e7d98a0e7612
+index 0000000000000000000000000000000000000000..af9ccaa529069ef4e35e43a8370c2ca4eee4398f
 --- /dev/null
 +++ b/agent/cache_request_diagnostics.py
-@@ -0,0 +1,174 @@
+@@ -0,0 +1,175 @@
 +"""Content-free fingerprints for the existing provider request log.
 +
 +Observe the prepared request after transport preflight, not the server's hidden prefix or
@@ -749,11 +749,12 @@ index 0000000000000000000000000000000000000000..448f06f4f01168872140c84c7c52e7d9
 +    history = effective.get('input', effective.get('messages'))
 +    result['history'] = _digest(key, history, budget, anchors=True)
 +    result['input_items'] = len(history) if isinstance(history, list) else None
-+    from agent.shared_prompt_cache import common_prefix
++    from agent.shared_prompt_cache import common_prefix, layout_version
 +    instruction = fields['instructions']
 +    if isinstance(instruction, list) and instruction and isinstance(instruction[0], dict):
 +        instruction = instruction[0].get('text', instruction[0].get('content'))
 +    result['shared_prefix_used'] = common_prefix(instruction) is not None
++    result['shared_layout_version'] = layout_version(instruction) if result['shared_prefix_used'] else None
 +    result['shared_key_used'] = str(effective.get('prompt_cache_key') or '').startswith(('hsp1_', 'hsp2_', 'hsp3_', 'hsp4_'))
 +    result['key_id'] = hmac.new(key, b'hermes-cache-diagnostics-v1', hashlib.sha256).hexdigest()[:16]
 +    result['complete'] = all(result[name]['complete'] for name in (*fields, 'history'))
@@ -45697,6 +45698,43 @@ index 0000000000000000000000000000000000000000..0c21100c44cd45f1dccabe18b04acdff
 +    second=observe(root,a,req)
 +    assert first['fields']['options']!=second['fields']['options']
 +    assert first['fields']['cache_key']==second['fields']['cache_key']
+diff --git a/tests/agent/test_cache_layout_diagnostics.py b/tests/agent/test_cache_layout_diagnostics.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..ad76262af1da42130ecc9897f09ded52787b15b2
+--- /dev/null
++++ b/tests/agent/test_cache_layout_diagnostics.py
+@@ -0,0 +1,31 @@
++"""Identify prepared prompt layouts without exporting or mutating their content."""
++import copy
++import json
++
++import pytest
++
++from agent.cache_request_diagnostics import fingerprint
++
++
++@pytest.mark.parametrize('version', [1, 2, 3, 4])
++@pytest.mark.parametrize('shape', ['instructions', 'system', 'messages', 'override'])
++def test_layout_is_read_from_effective_complete_prompt(version, shape):
++    text = f'[Hermes common operating rules v{version}]\n\nprivate rules\n\n[/Hermes common operating rules v{version}]\n\nprivate tail'
++    payload = {'model': 'synthetic', 'prompt_cache_key': 'hsp1_unrelated'}
++    if shape == 'messages':
++        payload['messages'] = [{'role': 'system', 'content': text}]
++    elif shape == 'override':
++        payload.update(instructions='unversioned', extra_body={'instructions': text})
++    else:
++        payload[shape] = text
++    original = copy.deepcopy(payload)
++    result = fingerprint(payload, key=b'k' * 32, session_id='s', request_id='r', base_url='https://example.invalid')
++    assert result['shared_layout_version'] == version
++    assert payload == original
++    assert 'private' not in json.dumps(result)
++
++
++@pytest.mark.parametrize('text', [None, '', 'unversioned', '[Hermes common operating rules v4]\n\nmissing end', '[Hermes common operating rules v5]\n\nrules\n\n[/Hermes common operating rules v5]'])
++def test_unknown_or_incomplete_layout_is_not_inferred_from_key(text):
++    result = fingerprint({'instructions': text, 'prompt_cache_key': 'hsp4_synthetic'}, key=b'k' * 32, session_id='s', request_id='r', base_url='https://example.invalid')
++    assert result['shared_layout_version'] is None
 diff --git a/tests/agent/test_cache_request_diagnostics.py b/tests/agent/test_cache_request_diagnostics.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..8405785176f0304a944b1867d30df1e23b375d25
