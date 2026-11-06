@@ -32,9 +32,9 @@ the page reloads. Screenshots at 1280 and 640 pixels show the saved value. The
 earlier toggle test also survives reload. No workers or model requests run.
 The only observed console resource errors were the offline Google Fonts request.
 
-## Remaining save limitation
+## Save limitation in v0.8.11
 
 Reloading immediately after an edit, before the existing 550 ms autosave debounce
-fires, discards the pending value. This was reproduced and remains unresolved in
-this release. Successful persistence checks waited for the actual file write;
+fires, discards the pending value. This was reproduced in v0.8.11. The subsequent
+[v0.8.12 autosave repair](settings-autosave.md) addresses it. Successful persistence checks waited for the actual file write;
 they do not prove that immediate reload or app exit preserves pending edits.

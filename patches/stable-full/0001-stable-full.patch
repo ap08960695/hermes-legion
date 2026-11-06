@@ -4750,11 +4750,876 @@ index 33589152a26f10f2c548a951f6d3a056604c7667..350640892f752b7f615658866cacf2d1
          })
 +        await page.screenshot({ path: test.info().outputPath('updated-chat.png') })
        } finally {
+diff --git a/apps/desktop/electron/api-request-log.ts b/apps/desktop/electron/api-request-log.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..b518bf54e96bd05be1b76c6b2ff1e51d62a9a31d
+--- /dev/null
++++ b/apps/desktop/electron/api-request-log.ts
+@@ -0,0 +1,21 @@
++// Format an api-request failure for desktop.log. The renderer only ever sees
++// the invoke rejection; the real stack lives here in main, so persist it
++// before rethrowing. Clamp: paths and error detail must not bloat the log.
++export function formatApiRequestFailure(
++  request: { method?: string; path?: string } | null | undefined,
++  error: unknown
++): string {
++  const method = String(request?.method ?? 'GET').toUpperCase()
++  const path = String(request?.path ?? '(no path)').slice(0, 500)
++  const detail = error instanceof Error ? (error.stack ?? error.message) : String(error)
++
++  return `[hermes:api ${method} ${path}] ${detail}`.slice(0, 6000)
++}
++
++// A 404 raised by `fetchJson` — the shape is `404: <body>` (see fetchJson).
++// Session lookups are a probe ladder: "not on this profile" is a normal rung
++// outcome, not a failure.
++export function isNotFoundApiError(error: unknown) {
++  return /(?:^|\s)404\b/.test(String((error as any)?.message ?? error))
++}
++
+diff --git a/apps/desktop/electron/config-autosave-quit.test.ts b/apps/desktop/electron/config-autosave-quit.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..e2a82d3c91b4c8722ce01087db18825f868f7e43
+--- /dev/null
++++ b/apps/desktop/electron/config-autosave-quit.test.ts
+@@ -0,0 +1,47 @@
++import assert from 'node:assert/strict'
++
++import { test, vi } from 'vitest'
++
++import { createConfigQuitGate } from './config-autosave-quit'
++
++test('quit waits for the native save without starting teardown, including reentrant quit', async () => {
++  let pending = true
++  let resolve!: () => void
++  const save = new Promise<void>(done => { resolve = done })
++  const requestQuit = vi.fn()
++  const flush = vi.fn(async () => { await save; pending = false })
++
++  const gate = createConfigQuitGate({
++    queue: { hasPending: () => pending, flush }, holdForActiveWork: () => false,
++    requestQuit, log: vi.fn(), notify: vi.fn()
++  })
++
++  const event = { preventDefault: vi.fn() }
++  assert.equal(gate(event), true)
++  assert.equal(gate(event), true)
++  assert.equal(requestQuit.mock.calls.length, 0)
++  assert.equal(flush.mock.calls.length, 1)
++  resolve()
++  await vi.waitFor(() => assert.equal(requestQuit.mock.calls.length, 1))
++  assert.equal(gate(event), false)
++})
++
++test('failed quit reports without a modal or data loss and a later quit can recover', async () => {
++  let pending = true
++  const requestQuit = vi.fn()
++  const notify = vi.fn(async () => true)
++  const flush = vi.fn().mockRejectedValueOnce(new Error('offline')).mockImplementation(async () => { pending = false })
++
++  const gate = createConfigQuitGate({
++    queue: { hasPending: () => pending, flush }, holdForActiveWork: () => false,
++    requestQuit, log: vi.fn(), notify
++  })
++
++  const event = { preventDefault: vi.fn() }
++  assert.equal(gate(event), true)
++  await vi.waitFor(() => assert.equal(notify.mock.calls.length, 1))
++  assert.equal(requestQuit.mock.calls.length, 0)
++  assert.equal(gate(event), true)
++  await vi.waitFor(() => assert.equal(requestQuit.mock.calls.length, 1))
++  assert.equal(gate(event), false)
++})
+diff --git a/apps/desktop/electron/config-autosave-quit.ts b/apps/desktop/electron/config-autosave-quit.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..d627e50c17666ebc56fef371da699e1cab0c22e6
+--- /dev/null
++++ b/apps/desktop/electron/config-autosave-quit.ts
+@@ -0,0 +1,40 @@
++import type { HermesNotification } from './notification-types'
++
++interface QuitEvent { preventDefault: () => void }
++interface ConfigQuitHost {
++  queue: { hasPending: () => boolean; flush: () => Promise<void> }
++  holdForActiveWork: (event: QuitEvent) => boolean
++  requestQuit: () => void
++  log: (message: string) => void
++  notify: (payload: HermesNotification) => Promise<boolean>
++}
++
++/** A failed save keeps the viewer and its transports alive, without a modal.
++ * Another explicit quit retries. Forced termination cannot preserve RAM-only
++ * edits; this gate never claims crash durability or discards failed intent. */
++export function createConfigQuitGate(host: ConfigQuitHost) {
++  let waiting: Promise<void> | null = null
++
++  return (event: QuitEvent): boolean => {
++    if (host.holdForActiveWork(event)) { return true }
++
++    if (!waiting && !host.queue.hasPending()) { return false }
++    event.preventDefault()
++
++    if (!waiting) {
++      waiting = host.queue.flush().then(() => {
++        waiting = null
++        host.requestQuit()
++      }).catch(error => {
++        waiting = null
++        host.log(`Settings save failed before quit: ${String(error)}`)
++        void host.notify({
++          tag: 'config-save-failed', title: 'Settings could not be saved',
++          body: 'Hermes is still open. Reconnect to the settings destination and try quitting again.'
++        }).catch(notificationError => host.log(`Settings notification failed: ${String(notificationError)}`))
++      })
++    }
++
++    return true
++  }
++}
+diff --git a/apps/desktop/electron/config-autosave-route.test.ts b/apps/desktop/electron/config-autosave-route.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..eb8c26ef9f99be939ef6971cd05064612d23db5a
+--- /dev/null
++++ b/apps/desktop/electron/config-autosave-route.test.ts
+@@ -0,0 +1,117 @@
++import assert from 'node:assert/strict'
++
++import { test } from 'vitest'
++
++import type { HermesApiRequest } from '../../shared/src/api-request'
++
++import { configRouteRevision, createConfigRouteCapture } from './config-autosave-route'
++import { normalizeRegistry } from './connection-registry'
++
++const write: HermesApiRequest = {
++  path: '/api/config', method: 'PUT', profile: 'mara', body: { config: { enabled: true } }
++}
++
++function setup() {
++  let revision = 'original'
++  const calls: string[] = []
++  const received: { backend: string; path: string; request: HermesApiRequest }[] = []
++
++  const capture = createConfigRouteCapture({
++    revision: () => revision,
++    primaryProfile: () => 'captain',
++    legacyOptions: () => ({ primaryProfile: 'captain', profileRemoteOverride: true, backendProfile: 'default' }),
++    ensureLegacy: async profile => { calls.push(`legacy:${profile}`);
++
++ return { mode: 'remote', target: revision } },
++    ensureRegistry: async id => { calls.push(`registry:${id}`);
++
++ return { mode: 'local', target: revision } },
++    forgetLegacy: async () => { calls.push('forget') },
++    send: async (connection, path, request) => {
++      received.push({ backend: connection.target, path, request })
++
++      return { ok: true }
++    }
++  })
++
++  return { capture, calls, received, switchDestination: () => { revision = 'replacement' } }
++}
++
++test('legacy profile overrides are captured as legacy routes, never repinned to local', async () => {
++  const fixture = setup()
++  const route = fixture.capture(write)
++  assert.deepEqual(fixture.calls, ['legacy:mara'])
++  await Promise.resolve()
++  fixture.switchDestination()
++  await route.send(write)
++  assert.equal(fixture.received[0].backend, 'original')
++  assert.equal(fixture.received[0].request.connectionId, undefined)
++  assert.equal(fixture.received[0].path, '/api/config')
++})
++
++test('a destination change during resolution rejects instead of selecting the replacement', async () => {
++  const fixture = setup()
++  const route = fixture.capture(write)
++  fixture.switchDestination()
++  await assert.rejects(route.send(write), /destination changed/)
++  assert.equal(fixture.received.length, 0)
++})
++
++test('a concrete local registry request keeps local routing and profile query scope', async () => {
++  const fixture = setup()
++  const request = { ...write, connectionId: 'local' }
++  const route = fixture.capture(request)
++  await route.send(request)
++  assert.deepEqual(fixture.calls, ['registry:local'])
++  assert.equal(fixture.received[0].path, '/api/config?profile=mara')
++})
++
++test('implicit registry and legacy profiles have distinct owner identities', () => {
++  const fixture = setup()
++  const legacy = fixture.capture({ ...write, profile: undefined })
++  const registry = fixture.capture({ ...write, profile: undefined, connectionId: 'local' })
++  assert.notEqual(legacy.key, registry.key)
++})
++
++test('a failed resolution retries under the original destination when connectivity recovers', async () => {
++  let online = false
++  let sends = 0
++
++  const capture = createConfigRouteCapture({
++    revision: () => 'original', primaryProfile: () => 'default',
++    legacyOptions: () => ({ primaryProfile: 'default' }),
++    ensureLegacy: async () => {
++      if (!online) { throw new Error('offline') }
++
++      return { mode: 'local' }
++    },
++    ensureRegistry: async () => ({ mode: 'local' }),
++    forgetLegacy: async () => {},
++    send: async () => { sends += 1;
++
++ return { ok: true } }
++  })
++
++  const route = capture(write)
++  await assert.rejects(route.send(write), /offline/)
++  online = true
++  await route.send(write)
++  assert.equal(sends, 1)
++})
++
++test('registry metadata keeps the guard stable while credentials and tenant headers change it', () => {
++  const registry = normalizeRegistry({ primary: 'local', connections: [
++    { id: 'local', kind: 'local', label: 'Local' },
++    { id: 'remote-a', kind: 'remote', label: 'A', url: 'https://a.example', token: 'old' }
++  ] })
++
++  const input = { registry, config: { mode: 'local', profiles: {} } }
++  const request = { ...write, connectionId: 'remote-a' }
++  const before = configRouteRevision(request, input, 'default', {})
++  registry.lastUsed = 'remote-a'
++  registry.connections[1].label = 'Renamed'
++  registry.connections.push({ id: 'unrelated', kind: 'remote', label: 'B', url: 'https://b.example' })
++  assert.equal(configRouteRevision(request, input, 'default', {}), before)
++  registry.connections[1].headers = { 'X-Tenant': 'replacement' }
++  assert.notEqual(configRouteRevision(request, input, 'default', {}), before)
++})
+diff --git a/apps/desktop/electron/config-autosave-route.ts b/apps/desktop/electron/config-autosave-route.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..444ead3688dade4832b885192df21f7be64c0acc
+--- /dev/null
++++ b/apps/desktop/electron/config-autosave-route.ts
+@@ -0,0 +1,128 @@
++import { createHash } from 'node:crypto'
++
++import type { HermesApiRequest } from '../../shared/src/api-request'
++
++import type { CapturedConfigRoute } from './config-autosave'
++import {
++  apiRequestRegistryConnectionId,
++  pathForRegistryBackendRequest,
++  type ProfileRouteOptions,
++  type RegistryBackendRequestScope,
++  resolveProfileApiRequest
++} from './connection-config'
++import type { DesktopRemoteRouteInput } from './desktop-remote-route'
++import { resolveDesktopRemoteRoute } from './desktop-remote-route'
++
++/** Only destination inputs belong in the resolution guard. Registry UI
++ * metadata must not invalidate an accepted edit. Credentials remain in the
++ * private guard because headers or principals can select another tenant. */
++export function configRouteRevision(
++  request: HermesApiRequest,
++  input: DesktopRemoteRouteInput,
++  primaryProfile: string,
++  options: ProfileRouteOptions
++): string {
++  const registryId = apiRequestRegistryConnectionId(request)
++
++  const destination = (value: unknown): unknown => {
++    if (!value || typeof value !== 'object') { return value }
++
++    return Object.fromEntries(Object.entries(value).filter(([key]) =>
++      key !== 'label'
++    ).map(([key, entry]) => [key, destination(entry)]))
++  }
++
++  return JSON.stringify([
++    primaryProfile, options,
++    destination(resolveDesktopRemoteRoute({ ...input, profile: request.profile || primaryProfile })),
++    destination(resolveDesktopRemoteRoute({ ...input, profile: primaryProfile })),
++    registryId ? destination(input.registry.connections.find(entry => entry.id === registryId)) : null
++  ])
++}
++
++interface ConfigRouteDeps<C extends RegistryBackendRequestScope> {
++  revision: (request: HermesApiRequest) => string
++  primaryProfile: () => string
++  legacyOptions: (profile: string | null | undefined, request: HermesApiRequest) => ProfileRouteOptions
++  ensureLegacy: (profile: string | null, request: HermesApiRequest) => Promise<C>
++  ensureRegistry: (connectionId: string, request: HermesApiRequest) => Promise<C>
++  forgetLegacy: (profile: string | null, request: HermesApiRequest) => Promise<void>
++  send: (connection: C, path: string, request: HermesApiRequest, reconnect?: {
++    ensure: () => Promise<C>
++    forget: () => Promise<void>
++  }) => Promise<unknown>
++}
++
++/** Begin resolving the original route at admission, not when its debounce
++ * expires. A settings write must never reinterpret a legacy alias as 'local'. */
++export function createConfigRouteCapture<C extends RegistryBackendRequestScope>(deps: ConfigRouteDeps<C>) {
++  return (request: HermesApiRequest): CapturedConfigRoute => {
++    const revision = deps.revision(request)
++    const registry = apiRequestRegistryConnectionId(request)
++    const options = registry ? undefined : deps.legacyOptions(request.profile, request)
++    const legacy = registry ? undefined : resolveProfileApiRequest(request.profile, request.path, options)
++    const profile = request.profile?.trim() || (registry ? '__implicit__' : deps.primaryProfile())
++
++    const key = JSON.stringify([
++      registry ?? '__legacy__', profile, createHash('sha256').update(revision).digest('hex')
++    ])
++
++    const assertOwner = () => {
++      if (deps.revision(request) !== revision) {
++        throw new Error('Settings destination changed while it was being resolved')
++      }
++    }
++
++    const resolve = () => {
++      assertOwner()
++
++      const connection = registry
++        ? deps.ensureRegistry(registry, request)
++        : deps.ensureLegacy(legacy!.backendProfile, request)
++
++      return connection.then(backend => { assertOwner();
++
++ return backend })
++    }
++
++    let resolutionFailed = false
++
++    const beginResolve = async () => {
++      try {
++        return await resolve()
++      } catch (error) {
++        resolutionFailed = true
++        throw error
++      }
++    }
++
++    let resolved = beginResolve()
++    // A rejected dial can settle before the delayed request awaits it.
++    void resolved.catch(() => undefined)
++
++    return {
++      key,
++      async send(next) {
++        // Retry a failed dial only under the originally captured routing
++        // inputs. A transient failure must not poison this accepted edit.
++        if (resolutionFailed) {
++          resolutionFailed = false
++          resolved = beginResolve()
++        }
++
++        const backend = await resolved
++
++        const targetPath = registry
++          ? pathForRegistryBackendRequest(next.path, request.profile, backend, next.method || 'GET')
++          : resolveProfileApiRequest(request.profile, next.path, { ...options, requestMethod: next.method }).requestPath
++
++        return deps.send(backend, targetPath, next, registry ? undefined : {
++          ensure: () => { resolved = beginResolve();
++
++ return resolved },
++          forget: async () => { assertOwner(); await deps.forgetLegacy(legacy!.backendProfile, request) }
++        })
++      }
++    }
++  }
++}
+diff --git a/apps/desktop/electron/config-autosave.test.ts b/apps/desktop/electron/config-autosave.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..a80183098dae7033db4b60fc1900e9f2b7992aeb
+--- /dev/null
++++ b/apps/desktop/electron/config-autosave.test.ts
+@@ -0,0 +1,264 @@
++import assert from 'node:assert/strict'
++
++import { afterEach, test, vi } from 'vitest'
++
++import type { HermesApiRequest } from '../../shared/src/api-request'
++
++import { createConfigAutosaveQueue as createQueue } from './config-autosave'
++
++const createConfigAutosaveQueue = (dispatch: (request: HermesApiRequest) => Promise<unknown>) =>
++  createQueue(dispatch, request => ({
++    key: JSON.stringify([request.connectionId ?? '__legacy__', request.profile ?? '__primary__']),
++    send: dispatch
++  }))
++
++afterEach(() => vi.useRealTimers())
++
++const write = (config: Record<string, unknown>, profile = 'alpha'): HermesApiRequest => ({
++  connectionId: 'local', profile, path: '/api/config', method: 'PUT',
++  body: { config }, configAutosave: true
++})
++
++test('native admission keeps the latest sparse edits after the renderer leaves', async () => {
++  vi.useFakeTimers()
++  const disk = { memory: { limit: 2200 }, toolsets: ['terminal'], other: 'untouched' }
++  const requests: HermesApiRequest[] = []
++
++  const queue = createConfigAutosaveQueue(async request => {
++    requests.push(request)
++    Object.assign(disk, (request.body as { config: object }).config)
++
++    return { ok: true }
++  })
++
++  const first = queue.run(write({ memory: { limit: 2300 } }))
++  const last = queue.run(write({ memory: { limit: 2400 }, toolsets: [] }))
++  assert.equal(requests.length, 0)
++  await vi.advanceTimersByTimeAsync(550)
++  await Promise.all([first, last])
++  assert.deepEqual(disk, { memory: { limit: 2400 }, toolsets: [], other: 'untouched' })
++  assert.equal(requests.length, 1)
++  assert.equal(queue.hasPending(), false)
++})
++
++test('a config read flushes and joins older writes on its original owner', async () => {
++  vi.useFakeTimers()
++  const order: string[] = []
++  let release!: () => void
++  const wait = new Promise<void>(resolve => { release = resolve })
++
++  const queue = createConfigAutosaveQueue(async request => {
++    order.push(`${request.profile}:${request.method ?? 'GET'}`)
++
++    if (request.method === 'PUT') { await wait }
++
++    return { ok: true }
++  })
++
++  const save = queue.run(write({ memory: { limit: 2400 } }))
++  const read = queue.run({ connectionId: 'local', profile: 'alpha', path: '/api/config' })
++  await vi.advanceTimersByTimeAsync(0)
++  assert.deepEqual(order, ['alpha:PUT'])
++  release()
++  await Promise.all([save, read])
++  assert.deepEqual(order, ['alpha:PUT', 'alpha:GET'])
++})
++
++test('all owners drain their admitted writes before shutdown', async () => {
++  vi.useFakeTimers()
++  const requests: HermesApiRequest[] = []
++
++  const queue = createConfigAutosaveQueue(async request => { requests.push(request);
++
++ return { ok: true } })
++
++  const alpha = queue.run(write({ enabled: true }))
++  const beta = queue.run(write({ enabled: false }, 'beta'))
++  await queue.flush()
++  await Promise.all([alpha, beta])
++  assert.deepEqual(requests.map(request => request.profile).sort(), ['alpha', 'beta'])
++  assert.equal(queue.hasPending(), false)
++})
++
++test('an in-flight write cannot overtake a rapid revert', async () => {
++  vi.useFakeTimers()
++  let release!: () => void
++  const wait = new Promise<void>(resolve => { release = resolve })
++  let persisted = false
++  let calls = 0
++
++  const queue = createConfigAutosaveQueue(async request => {
++    calls += 1
++
++    if (calls === 1) { await wait }
++    persisted = (request.body as { config: { enabled: boolean } }).config.enabled
++
++    return { ok: true }
++  })
++
++  const on = queue.run(write({ enabled: true }))
++  await vi.advanceTimersByTimeAsync(550)
++  const off = queue.run(write({ enabled: false }))
++  const drained = queue.flush()
++  await Promise.resolve()
++  assert.equal(calls, 1)
++  release()
++  await Promise.all([on, off, drained])
++  assert.equal(persisted, false)
++  assert.equal(calls, 2)
++})
++
++test('failed saves reject without poisoning subsequent owner writes', async () => {
++  vi.useFakeTimers()
++
++  const queue = createConfigAutosaveQueue(vi.fn()
++    .mockRejectedValueOnce(new Error('offline'))
++    .mockResolvedValue({ ok: true }))
++
++  const failure = assert.rejects(queue.run(write({ enabled: true })), /offline/)
++  await vi.advanceTimersByTimeAsync(550)
++  await failure
++  const recovery = queue.run(write({ enabled: false }))
++  await queue.flush()
++  assert.deepEqual(await recovery, { ok: true })
++})
++
++test('a legacy unpinned write remains visible to the quit drain while it is in flight', async () => {
++  let release!: () => void
++  const wait = new Promise<void>(resolve => { release = resolve })
++
++  const queue = createConfigAutosaveQueue(async () => { await wait;
++
++ return { ok: true } })
++
++  const save = queue.run({ ...write({ enabled: true }), connectionId: undefined })
++
++  try {
++    assert.equal(queue.hasPending(), true)
++  } finally {
++    release()
++    await save
++  }
++})
++
++test('an accepted edit that failed cannot be reported as successfully drained', async () => {
++  vi.useFakeTimers()
++  const queue = createConfigAutosaveQueue(async () => { throw new Error('offline') })
++  const failure = assert.rejects(queue.run(write({ enabled: true })), /offline/)
++  await vi.advanceTimersByTimeAsync(550)
++  await failure
++  await assert.rejects(queue.flush(), /offline/)
++})
++
++test('an explicit backend refusal is a failed save, not a successful receipt', async () => {
++  vi.useFakeTimers()
++  const queue = createConfigAutosaveQueue(async () => ({ ok: false }))
++  const failure = assert.rejects(queue.run(write({ enabled: true })))
++  await vi.advanceTimersByTimeAsync(550)
++  await failure
++})
++
++test('profile mutation closes admission before draining existing edits', async () => {
++  vi.useFakeTimers()
++  const order: string[] = []
++
++  const queue = createConfigAutosaveQueue(async () => { order.push('save');
++
++ return { ok: true } })
++
++  const save = queue.run(write({ enabled: true }))
++  const mutation = queue.withMutation(async () => { order.push('delete') })
++  await assert.rejects(queue.run(write({ enabled: false })), /profile update/)
++  await Promise.all([save, mutation])
++  assert.deepEqual(order, ['save', 'delete'])
++})
++
++test('different config endpoint options remain separate ordered writes', async () => {
++  vi.useFakeTimers()
++  const paths: string[] = []
++
++  const queue = createConfigAutosaveQueue(async request => { paths.push(request.path);
++
++ return { ok: true } })
++
++  const first = queue.run({ ...write({ language: 'en' }), path: '/api/config?preserve_language=true' })
++  const second = queue.run(write({ enabled: true }))
++  await queue.flush()
++  await Promise.all([first, second])
++  assert.deepEqual(paths, ['/api/config?preserve_language=true', '/api/config'])
++})
++
++test('a later read cannot hide an earlier rejected edit from the quit drain', async () => {
++  vi.useFakeTimers()
++  let online = false
++  const methods: string[] = []
++
++  const queue = createConfigAutosaveQueue(async request => {
++    methods.push(request.method ?? 'GET')
++
++    if (!online) { throw new Error('offline') }
++
++    return { ok: true }
++  })
++
++  const failure = assert.rejects(queue.run(write({ enabled: true })), /offline/)
++  await vi.advanceTimersByTimeAsync(550)
++  await failure
++  await assert.rejects(queue.run({ ...write({}), method: 'GET' }), /offline/)
++  assert.equal(methods.includes('GET'), false)
++  assert.equal(queue.hasPending(), true)
++  online = true
++  await queue.flush()
++  assert.equal(queue.hasPending(), false)
++})
++
++test('an incompatible edit survives repeated failure of its predecessor after the renderer leaves', async () => {
++  vi.useFakeTimers()
++  let online = false
++  const persisted: unknown[] = []
++
++  const queue = createConfigAutosaveQueue(async request => {
++    if (!online) { throw new Error('offline') }
++    persisted.push(request.body)
++
++    return { ok: true }
++  })
++
++  const first = assert.rejects(queue.run(write({ language: 'en' })), /offline/)
++  await vi.advanceTimersByTimeAsync(550)
++  await first
++
++  const next = assert.rejects(queue.run({
++    ...write({ enabled: true }), path: '/api/config?preserve_language=true'
++  }), /offline/)
++
++  await vi.advanceTimersByTimeAsync(550)
++  await next
++  online = true
++  await queue.flush()
++  assert.deepEqual(persisted, [{ config: { language: 'en' } }, { config: { enabled: true } }])
++})
++
++test('different aliases cannot overtake an in-flight write to their shared backend', async () => {
++  vi.useFakeTimers()
++  let release!: () => void
++  const wait = new Promise<void>(resolve => { release = resolve })
++  const persisted: unknown[] = []
++
++  const queue = createConfigAutosaveQueue(async request => {
++    if (persisted.length === 0) { persisted.push('started'); await wait }
++    persisted.push(request.body)
++
++    return { ok: true }
++  })
++
++  const first = queue.run({ ...write({ enabled: true }), connectionId: undefined })
++  await vi.advanceTimersByTimeAsync(550)
++  const revert = queue.run({ ...write({ enabled: false }), connectionId: 'registry-alias' })
++  const drained = queue.flush()
++  await vi.advanceTimersByTimeAsync(0)
++  assert.deepEqual(persisted, ['started'])
++  release()
++  await Promise.all([first, revert, drained])
++  assert.deepEqual(persisted, ['started', { config: { enabled: true } }, { config: { enabled: false } }])
++})
+diff --git a/apps/desktop/electron/config-autosave.ts b/apps/desktop/electron/config-autosave.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..3e76f53cfda0d9795ce36a31762dcec38d479f34
+--- /dev/null
++++ b/apps/desktop/electron/config-autosave.ts
+@@ -0,0 +1,191 @@
++import type { HermesApiRequest } from '../../shared/src/api-request'
++import { mergeConfigPatch } from '../../shared/src/config-patch'
++
++export interface CapturedConfigRoute {
++  key: string
++  send: (request: HermesApiRequest) => Promise<unknown>
++}
++
++interface PendingSave {
++  request: HermesApiRequest
++  route: CapturedConfigRoute
++  resolve: (value: unknown) => void
++  reject: (reason: unknown) => void
++  promise: Promise<unknown>
++  timer: ReturnType<typeof setTimeout>
++}
++
++interface OwnerQueue {
++  tail: Promise<unknown>
++  pending?: PendingSave
++  unsaved: { request: HermesApiRequest; route: CapturedConfigRoute }[]
++  active: number
++}
++
++function compatible(left: HermesApiRequest, right: HermesApiRequest): boolean {
++  return left.path === right.path && left.timeoutMs === right.timeoutMs &&
++    left.priority === right.priority && left.passive === right.passive
++}
++
++function patch(request: HermesApiRequest): Record<string, unknown> {
++  return (request.body as { config: Record<string, unknown> }).config
++}
++
++/** The main process, rather than a settings component, owns accepted edits.
++ * Reads and explicit writes are barriers on the same owner queue. */
++export function createConfigAutosaveQueue(
++  dispatch: (request: HermesApiRequest) => Promise<unknown>,
++  capture: (request: HermesApiRequest) => CapturedConfigRoute
++) {
++  const owners = new Map<string, OwnerQueue>()
++  let mutations = 0
++
++  const release = (key: string, owner: OwnerQueue) => {
++    if (!owner.pending && owner.unsaved.length === 0 && owner.active === 0 && owners.get(key) === owner) {
++      owners.delete(key)
++    }
++  }
++
++  const enqueue = (key: string, owner: OwnerQueue, request: HermesApiRequest, route: CapturedConfigRoute) => {
++    owner.active += 1
++
++    const result = owner.tail.catch(() => undefined).then(async () => {
++      const isWrite = request.method?.toUpperCase() === 'PUT'
++
++      // Retain the current write BEFORE retrying its predecessor. If the
++      // predecessor fails again, closing the renderer cannot discard either.
++      if (isWrite) { owner.unsaved.push({ request, route }) }
++      const response = await drain(owner)
++
++      return isWrite ? response : send(request, route)
++    })
++
++    owner.tail = result
++    // Observe errors without changing the rejecting promise returned to callers.
++    void result.catch(() => undefined).finally(() => {
++      owner.active -= 1
++      release(key, owner)
++    })
++
++    return result
++  }
++
++  const send = async (request: HermesApiRequest, route: CapturedConfigRoute) => {
++    const response = await route.send(request)
++
++    if (request.method?.toUpperCase() === 'PUT' && (response as { ok?: boolean } | null)?.ok === false) {
++      throw new Error('Settings save was refused')
++    }
++
++    return response
++  }
++
++  const drain = async (owner: OwnerQueue) => {
++    let response: unknown
++
++    while (owner.unsaved.length > 0) {
++      const next = owner.unsaved[0]
++      response = await send(next.request, next.route)
++      owner.unsaved.shift()
++    }
++
++    return response
++  }
++
++  const flushOwner = (key: string, owner: OwnerQueue) => {
++    const pending = owner.pending
++
++    if (pending) {
++      clearTimeout(pending.timer)
++      owner.pending = undefined
++      void enqueue(key, owner, pending.request, pending.route).then(pending.resolve, pending.reject)
++    }
++  }
++
++  const queue = {
++    run(request: HermesApiRequest): Promise<unknown> {
++      if (request.path.split('?')[0] !== '/api/config') {
++        return dispatch(request)
++      }
++
++      if (mutations > 0) {
++        return Promise.reject(new Error('Settings are waiting for a profile update'))
++      }
++
++      const route = capture(request)
++      // Aliases and registry connections may resolve to the same config file.
++      // Until the backend exposes a canonical home identity, one low-volume
++      // config lane prevents aliases from overtaking each other.
++      const key = 'config' 
++
++      const owner = owners.get(key) ?? { tail: Promise.resolve(), active: 0, unsaved: [] }
++      owners.set(key, owner)
++
++      if (request.method?.toUpperCase() !== 'PUT' || !request.configAutosave) {
++        flushOwner(key, owner)
++
++        return enqueue(key, owner, request, route)
++      }
++
++      if (owner.pending && (owner.pending.route.key !== route.key || !compatible(owner.pending.request, request))) {
++        flushOwner(key, owner)
++      }
++
++      if (owner.pending) {
++        owner.pending.request = {
++          ...request,
++          body: { config: mergeConfigPatch(patch(owner.pending.request), patch(request)) }
++        }
++        clearTimeout(owner.pending.timer)
++        owner.pending.timer = setTimeout(() => flushOwner(key, owner), 550)
++
++        return owner.pending.promise
++      }
++
++      let resolve!: (value: unknown) => void
++      let reject!: (reason: unknown) => void
++      const promise = new Promise<unknown>((done, fail) => { resolve = done; reject = fail })
++      owner.pending = {
++        request, route, resolve, reject, promise,
++        timer: setTimeout(() => flushOwner(key, owner), 550)
++      }
++
++      return promise
++    },
++    hasPending: () => owners.size > 0,
++    async flush(): Promise<void> {
++      while (owners.size > 0) {
++        const batch = [...owners.entries()]
++
++        for (const [key, owner] of batch) {
++          if (!owner.pending && owner.active === 0 && owner.unsaved.length > 0) {
++            owner.active += 1
++            owner.tail = drain(owner).finally(() => { owner.active -= 1; release(key, owner) })
++            void owner.tail.catch(() => undefined)
++          }
++
++          flushOwner(key, owner)
++        }
++
++        await Promise.all(batch.map(([, owner]) => owner.tail))
++
++        for (const [key, owner] of batch) { release(key, owner) }
++      }
++    },
++    async withMutation<T>(operation: () => Promise<T>): Promise<T> {
++      // Close admission synchronously. The already captured routes may finish
++      // before the native profile teardown gate is acquired by operation.
++      mutations += 1
++
++      try {
++        await queue.flush()
++
++        return await operation()
++      } finally {
++        mutations -= 1
++      }
++    }
++  }
++
++  return queue
++}
 diff --git a/apps/desktop/electron/main.ts b/apps/desktop/electron/main.ts
-index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..1c4005f8a3f76e14af3ca531b4979901dd5afb3a 100644
+index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..bc6cb9f28865f2a60ea7106643e6ffff6f5b5e46 100644
 --- a/apps/desktop/electron/main.ts
 +++ b/apps/desktop/electron/main.ts
-@@ -12435,6 +12435,4 @@ function spawnSecondaryWindow({
+@@ -2,2 +2,4 @@ import { type ChildProcess, execFileSync, spawn } from 'node:child_process'
+ 
++import { formatApiRequestFailure, isNotFoundApiError } from './api-request-log'
++import { createConfigQuitGate } from './config-autosave-quit'
+ import type { GatewayEndpoint } from './local-gateway'
+@@ -137,2 +139,4 @@ import { composerImageTimestamp } from './composer-image-name'
+ import { writeComposerPaste } from './composer-paste'
++import { createConfigAutosaveQueue } from './config-autosave'
++import { configRouteRevision, createConfigRouteCapture } from './config-autosave-route'
+ import { applyConnectionChange, teardownSshState } from './connection-apply'
+@@ -490,3 +494,3 @@ import {
+   type ActiveWork,
+-  backendOwnedByApp,
++  backendMayStopOnQuit,
+   mergeActiveWork,
+@@ -12435,6 +12439,4 @@ function spawnSecondaryWindow({
  
 -// Open (or focus) a standalone window for a single chat session.
 -function createSessionWindow(sessionId, { connectionId = null, profile = null, watch = false } = {}) {
@@ -4763,6 +5628,215 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..1c4005f8a3f76e14af3ca531b4979901
 +const createSessionWindow = (sessionId, opts = {}) =>
 +  sessionWindows.openOrFocus(sessionId, () => spawnSecondaryWindow({ ...opts, sessionId }), opts)
  
+@@ -16134,9 +16136,2 @@ async function teardownConnectionScopedProfileBackend(connectionId, profile) {
+ 
+-// A 404 raised by `fetchJson` — the shape is `404: <body>` (see fetchJson).
+-// Session lookups are a probe ladder: "not on this profile" is a normal rung
+-// outcome, not a failure.
+-function isNotFoundApiError(error) {
+-  return /(?:^|\s)404\b/.test(String((error as any)?.message ?? error))
+-}
+-
+ async function handleHermesApiRequest(request) {
+@@ -16249,15 +16244,31 @@ async function handleHermesApiRequest(request) {
+ 
+-// Format an api-request failure for desktop.log. The renderer only ever sees
+-// the invoke rejection; the real stack lives here in main, so persist it
+-// before rethrowing. Clamp: paths and error detail must not bloat the log.
+-function formatApiRequestFailure(
+-  request: { method?: string; path?: string } | null | undefined,
+-  error: unknown
+-): string {
+-  const method = String(request?.method ?? 'GET').toUpperCase()
+-  const path = String(request?.path ?? '(no path)').slice(0, 500)
+-  const detail = error instanceof Error ? (error.stack ?? error.message) : String(error)
++const captureConfigRoute = createConfigRouteCapture({
++  revision: request => configRouteRevision(request, {
++    config: readDesktopConnectionConfig(), registry: readDesktopConnectionsRegistry(),
++    env: { url: process.env.HERMES_DESKTOP_REMOTE_URL, token: process.env.HERMES_DESKTOP_REMOTE_TOKEN }
++  }, primaryProfileKey(), profileRouteOptions(request.profile, request)),
++  primaryProfile: primaryProfileKey,
++  legacyOptions: profileRouteOptions,
++  ensureLegacy: (profile, request) => ensureBackend(profile, { passive: request.passive, request }),
++  ensureRegistry: (connectionId, request) => request.passive
++    ? ensureRegistryBackend(connectionId, request.profile, '', { passive: true })
++    : backendDialClaims.run(backendScopeKey(connectionId, request.profile), () => ensureRegistryBackend(connectionId, request.profile)),
++  forgetLegacy: (profile, request) => forgetLocalGatewayDescriptor(profile, request),
++  send: (connection, requestPath, request, reconnect) => {
++    const sendRequest = current => fetchJsonForBackend(current, requestPath, {
++      method: request.method, body: request.body, upload: request.upload,
++      timeoutMs: resolveTimeoutMs(request.timeoutMs, DEFAULT_FETCH_TIMEOUT_MS)
++    })
+ 
+-  return `[hermes:api ${method} ${path}] ${detail}`.slice(0, 6000)
+-}
++    return connection.gatewayEndpoint && reconnect ? redialLocalGateway({ ...reconnect, use: sendRequest }) : sendRequest(connection)
++  }
++})
++
++const configAutosaves = createConfigAutosaveQueue(handleHermesApiRequest, captureConfigRoute)
++
++const deferConfigQuit = createConfigQuitGate({
++  queue: configAutosaves, holdForActiveWork: heldQuitForActiveWork,
++  requestQuit: () => app.quit(), log: rememberLog,
++  notify: payload => nativeNotifications.show(payload)
++})
+ 
+@@ -16272,22 +16283,24 @@ ipcMain.handle('hermes:api', async (_event, request) => {
+   try {
+-    if (deletingProfile && registryConnectionId) {
+-      return await dispatchConnectionScopedProfileDelete(request, {
+-        acquire: profile => profileDeletionGate.acquire(profile),
+-        connectionKind: connectionId => registryConnectionKind(connectionId),
+-        dispatch: routeProfile =>
+-          dispatchRegistryApiRequest(request, registryConnectionId, routeProfile, deletingProfile),
+-        isDefaultProfile: profile => profile === 'default',
+-        isValidProfileName: profile => PROFILE_NAME_RE.test(profile),
+-        prepareLocal: localRequest => prepareProfileDeleteRequest(localRequest).then(() => undefined),
+-        teardownConnection: (connectionId, profile) => teardownConnectionScopedProfileBackend(connectionId, profile)
+-      })
+-    }
+-
+     if (!mutatingProfile) {
+-      return await handleHermesApiRequest(request)
+-    }
++      return await configAutosaves.run(request)
++    }
++
++    return await configAutosaves.withMutation(async () => {
++      if (deletingProfile && registryConnectionId) {
++        return dispatchConnectionScopedProfileDelete(request, {
++          acquire: profile => profileDeletionGate.acquire(profile),
++          connectionKind: connectionId => registryConnectionKind(connectionId),
++          dispatch: routeProfile =>
++            dispatchRegistryApiRequest(request, registryConnectionId, routeProfile, deletingProfile),
++          isDefaultProfile: profile => profile === 'default',
++          isValidProfileName: profile => PROFILE_NAME_RE.test(profile),
++          prepareLocal: localRequest => prepareProfileDeleteRequest(localRequest).then(() => undefined),
++          teardownConnection: (connectionId, profile) => teardownConnectionScopedProfileBackend(connectionId, profile)
++        })
++      }
+ 
+-    const releaseProfileDeletion = profileDeletionGate.acquire(mutatingProfile)
++      const releaseProfileDeletion = profileDeletionGate.acquire(mutatingProfile)
+ 
+-    return await handleHermesApiRequest(request).finally(releaseProfileDeletion)
++      return handleHermesApiRequest(request).finally(releaseProfileDeletion)
++    })
+   } catch (error) {
+@@ -18058,33 +18071,8 @@ function configureSpellChecker() {
+ 
+-// Does quitting take the agent down with the app? Reads the primary profile's
+-// route through the same resolver resolveRemoteBackend uses, plus every backend
+-// the quit teardown below will stop (SSH-managed servers; the local gateway is
+-// attached, never owned).
+-// A route we can't resolve counts as owned: the lost-work warning is the safe
+-// side to be wrong on.
+-function quitStopsBackendWork(): boolean {
+-  let primaryRouteKind: 'cloud' | 'remote' | 'ssh' | null
+-
+-  try {
+-    primaryRouteKind =
+-      resolveDesktopRemoteRoute({
+-        config: readDesktopConnectionConfig(),
+-        env: {
+-          token: process.env.HERMES_DESKTOP_REMOTE_TOKEN,
+-          url: process.env.HERMES_DESKTOP_REMOTE_URL
+-        },
+-        profile: primaryProfileKey(),
+-        registry: readDesktopConnectionsRegistry()
+-      })?.kind ?? null
+-  } catch {
+-    return true
+-  }
+-
+-  const ownedBackendCount =
+-    (backendConnectionState.getProcess() ? 1 : 0) +
+-    [...backendPool.values()].filter(entry => entry?.process).length +
+-    sshConnections.size
+-
+-  return backendOwnedByApp({ ownedBackendCount, primaryRouteKind })
+-}
++const quitStopsBackendWork = () => backendMayStopOnQuit(() => ({
++  config: readDesktopConnectionConfig(), registry: readDesktopConnectionsRegistry(),
++  profile: primaryProfileKey(),
++  env: { token: process.env.HERMES_DESKTOP_REMOTE_TOKEN, url: process.env.HERMES_DESKTOP_REMOTE_URL }
++}), () => (backendConnectionState.getProcess() ? 1 : 0) +
++  [...backendPool.values()].filter(entry => entry?.process).length + sshConnections.size)
+ 
+@@ -18163,2 +18151,8 @@ function heldQuitForActiveWork(event: Electron.Event): boolean {
+ function registerChatWindow(window: BrowserWindow) {
++  const deferClose = createConfigQuitGate({
++    queue: configAutosaves, holdForActiveWork: () => false,
++    requestQuit: () => { if (!window.isDestroyed()) { window.close() } },
++    log: rememberLog, notify: payload => nativeNotifications.show(payload)
++  })
++
+   chatWindows.add(window)
+@@ -18174,3 +18168,3 @@ function registerChatWindow(window: BrowserWindow) {
+ 
+-    if (!shouldGuardWindowClose(work, isQuittingForHandoff, IS_MAC, hasOtherChatWindows(window))) {
++    if (shouldGuardWindowClose(work, isQuittingForHandoff, IS_MAC, hasOtherChatWindows(window)) && heldQuitForActiveWork(event)) {
+       return
+@@ -18178,3 +18172,3 @@ function registerChatWindow(window: BrowserWindow) {
+ 
+-    heldQuitForActiveWork(event)
++    deferClose(event)
+   })
+@@ -18206,3 +18200,3 @@ app.on('before-quit', event => {
+   // overlay-suppression latch must not leak into the next close (#130810).
+-  if (heldQuitForActiveWork(event)) {
++  if (deferConfigQuit(event)) {
+     appQuitting = false
+diff --git a/apps/desktop/electron/notification-ipc.ts b/apps/desktop/electron/notification-ipc.ts
+index 2c784ec2a2e709f7fc953d88399b3078aaa5e12b..5492eec425bbd695225966f3bc91032d19a23b3b 100644
+--- a/apps/desktop/electron/notification-ipc.ts
++++ b/apps/desktop/electron/notification-ipc.ts
+@@ -18,3 +18,3 @@ export function registerNativeNotifications({
+   platform = process.platform
+-}: NotificationHost): { dispose: () => void } {
++}: NotificationHost): { dispose: () => void; show: (payload: HermesNotification) => Promise<boolean> } {
+   const dedupeIntervalMs = 1000
+@@ -25,5 +25,3 @@ export function registerNativeNotifications({
+ 
+-  ipcMain.handle('hermes:notify', async (event, payload: HermesNotification) => {
+-    // The source renderer owns runtime bindings and plugin callbacks.
+-    const sourceWindow = BrowserWindow.fromWebContents(event.sender)
++  const show = async (payload: HermesNotification, sourceWindow: BrowserWindow | null = null) => {
+     const targetWindow = () => (sourceWindow && !sourceWindow.isDestroyed() ? sourceWindow : getMainWindow())
+@@ -121,5 +119,9 @@ export function registerNativeNotifications({
+     return delivery
+-  })
++  }
+ 
+-  return { dispose: () => linux?.dispose() }
++  ipcMain.handle('hermes:notify', (event, payload: HermesNotification) =>
++    show(payload, BrowserWindow.fromWebContents(event.sender))
++  )
++
++  return { dispose: () => linux?.dispose(), show }
+ }
+diff --git a/apps/desktop/electron/quit-guard.ts b/apps/desktop/electron/quit-guard.ts
+index d88d2c65dc964e200a7a0fb4f1fff3a898f0fe5d..1eaf248e1c44b3545b2bb9817c1488e4bd2a6f10 100644
+--- a/apps/desktop/electron/quit-guard.ts
++++ b/apps/desktop/electron/quit-guard.ts
+@@ -1 +1,3 @@
++import { type DesktopRemoteRouteInput, resolveDesktopRemoteRoute } from './desktop-remote-route'
++
+ // Quitting with a turn in flight kills the backend mid-tool-call: the work is
+@@ -158 +160,12 @@ export function shouldGuardWindowClose(
+ }
++
++/** Unknown routing keeps the existing conservative active-work warning. */
++export function backendMayStopOnQuit(routeInput: () => DesktopRemoteRouteInput, ownedCount: () => number): boolean {
++  try {
++    const primaryRouteKind = resolveDesktopRemoteRoute(routeInput())?.kind ?? null
++
++    return backendOwnedByApp({ primaryRouteKind, ownedBackendCount: ownedCount() })
++  } catch {
++    return true
++  }
++}
 diff --git a/apps/desktop/electron/session-windows.test.ts b/apps/desktop/electron/session-windows.test.ts
 index 2d57a5039b1a56bf6b32ff07f2b7f550bda0e19d..51e73b0b43b67ef2374e1174e1ea35590451ac73 100644
 --- a/apps/desktop/electron/session-windows.test.ts
@@ -4829,6 +5903,31 @@ index 36b6aabe25068b9faf5d606062abc3daef602f15..411a3ea3cb361b3518df099601140905
 +      : id
 +
      const existing = windows.get(key)
+diff --git a/apps/desktop/src/api/client.ts b/apps/desktop/src/api/client.ts
+index 68c5a3e1b74856ec19591084e20c681d92984ba5..0ae229939f6a02d078660078690cf24a19abb351 100644
+--- a/apps/desktop/src/api/client.ts
++++ b/apps/desktop/src/api/client.ts
+@@ -7,6 +7,5 @@ import {
+ } from '@hermes/shared'
++import type { HermesApiRequest } from '@hermes/shared'
+ import { map, type MapStore } from 'nanostores'
+ 
+-import type { HermesApiRequest } from '@/global'
+-
+ import { CANONICAL_GATEWAY_PROTOCOL, CanonicalDesktopProtocol, canonicalProfile, canonicalPromptParams, canonicalSessionKey, recordCanonicalOwner, splitRewindSubmit } from './canonical-protocol'
+diff --git a/apps/desktop/src/api/config.ts b/apps/desktop/src/api/config.ts
+index 976f79976e40cc672ef1a9bdfe6c1c80b91f4f1f..d65e9e9d6b7b93890c91dcbdb1bf080721550461 100644
+--- a/apps/desktop/src/api/config.ts
++++ b/apps/desktop/src/api/config.ts
+@@ -182,3 +182,3 @@ export function saveHermesConfig(
+   profile?: ProfileScope,
+-  { preserveLanguage = false }: { preserveLanguage?: boolean } = {}
++  { preserveLanguage = false, autosave = false }: { preserveLanguage?: boolean; autosave?: boolean } = {}
+ ): Promise<{ ok: boolean }> {
+@@ -186,2 +186,3 @@ export function saveHermesConfig(
+     ...resolveConfigWriteScope(config, profile),
++    ...(autosave ? { configAutosave: true } : {}),
+     path: preserveLanguage ? '/api/config?preserve_language=true' : '/api/config',
 diff --git a/apps/desktop/src/api/sessions.ts b/apps/desktop/src/api/sessions.ts
 index b92ab645fba5b1cb71c1858da8fec74acb389bbb..610d3242999ecaccfafb972685f5822fccb9a908 100644
 --- a/apps/desktop/src/api/sessions.ts
@@ -8687,6 +9786,19 @@ index 89ac18e3541800f7cefaaa975756bb49681d9aef..1f96e3d6587be6f796fbfff6b2f2da8c
 -  }, [queueSessionKey, selectedSessionId, sessions])
 +  }, [activeSessionId, queueSessionKey, selectedSessionId, sessions])
  
+diff --git a/apps/desktop/src/app/chat/right-rail/preview-file-save-scope.test.tsx b/apps/desktop/src/app/chat/right-rail/preview-file-save-scope.test.tsx
+index b2283546257bfef46374c5b88ac857faddec0f27..610e86559e4dfe31ae45d61fa1da0339d8b35d07 100644
+--- a/apps/desktop/src/app/chat/right-rail/preview-file-save-scope.test.tsx
++++ b/apps/desktop/src/app/chat/right-rail/preview-file-save-scope.test.tsx
+@@ -5,2 +5,3 @@ import path from 'node:path'
+ import { EditorView } from '@codemirror/view'
++import type { HermesApiRequest } from '@hermes/shared'
+ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+@@ -9,3 +10,3 @@ import { expect, it, vi } from 'vitest'
+ import { setApiRequestConnection, setApiRequestProfile } from '@/api/client'
+-import type { HermesApiRequest, HermesConnection } from '@/global'
++import type { HermesConnection } from '@/global'
+ import { $connection } from '@/store/session'
 diff --git a/apps/desktop/src/app/chat/route-tile.tsx b/apps/desktop/src/app/chat/route-tile.tsx
 index a5706ba38449c78733766e56f2ec62f8fb101d9e..424cdc3f17e087aed1f25ca25499bc9afb80a0b3 100644
 --- a/apps/desktop/src/app/chat/route-tile.tsx
@@ -13590,6 +14702,48 @@ index 0000000000000000000000000000000000000000..4eef1c056b12b54a4a7249624c8e25bb
 +    </Dialog>
 +  )
 +}
+diff --git a/apps/desktop/src/app/hooks/use-config-record.test.tsx b/apps/desktop/src/app/hooks/use-config-record.test.tsx
+index 3fe33bdc62bdf486c7b4f2cf695d2eccfeff94d5..54667831c97e65da6cf11ec4c7e72e25e03fceea 100644
+--- a/apps/desktop/src/app/hooks/use-config-record.test.tsx
++++ b/apps/desktop/src/app/hooks/use-config-record.test.tsx
+@@ -11,4 +11,6 @@ import { $connection } from '@/store/session'
+ import {
++  captureHermesConfigCacheWriter,
+   HERMES_CONFIG_KEY,
+   hermesConfigCacheWriter,
++  hermesConfigKey,
+   setHermesConfigCache,
+@@ -32,2 +34,15 @@ const wrapper = ({ children }: { children: React.ReactNode }) =>
+ 
++it.each([undefined, 'worker'])('an admitted save updates its original query slot for scope %s', scope => {
++  useGateway('laptop')
++  const originalKey = hermesConfigKey(scope)
++  queryClient.setQueryData(originalKey, { enabled: false })
++  const acknowledge = captureHermesConfigCacheWriter(scope)
++  useGateway('devbox')
++  const otherKey = hermesConfigKey(scope)
++  queryClient.setQueryData(otherKey, { enabled: false })
++  acknowledge({ enabled: true })
++  expect(queryClient.getQueryData(originalKey)).toEqual({ enabled: true })
++  expect(queryClient.getQueryData(otherKey)).toEqual({ enabled: false })
++})
++
+ it('updates the write origin when a refetch replaces the displayed record', async () => {
+diff --git a/apps/desktop/src/app/hooks/use-config-record.ts b/apps/desktop/src/app/hooks/use-config-record.ts
+index 53c5d0240cf329f961a446f89b28d973c9025e25..ba56a72a0d6191ecc385e8eb4471871211c34efc 100644
+--- a/apps/desktop/src/app/hooks/use-config-record.ts
++++ b/apps/desktop/src/app/hooks/use-config-record.ts
+@@ -152,2 +152,10 @@ export const hermesConfigCacheWriter = (profile?: ProfileScope) =>
+ 
++/** A write already handed to the native owner must update the cache slot from
++ * edit admission, even when a legacy origin has no explicit connection tag. */
++export const captureHermesConfigCacheWriter = (profile?: ProfileScope) => {
++  const key = hermesConfigKey(profile)
++
++  return writeHermesConfigCache(() => key)
++}
++
+ export const invalidateHermesConfig = (profile?: ProfileScope) =>
 diff --git a/apps/desktop/src/app/open-session-owner.ts b/apps/desktop/src/app/open-session-owner.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..ff3b0cf782467a04c2132b64a01a21d24f75bd9b
@@ -14455,6 +15609,502 @@ index 0000000000000000000000000000000000000000..1414effea6c441cf135fc6528fb16f7b
 +    <ScopedAccountUsage connectionId={connectionId} key={JSON.stringify([connectionId, profile])} profile={profile} />
 +  )
 +}
+diff --git a/apps/desktop/src/app/settings/config-field-accessibility.test.tsx b/apps/desktop/src/app/settings/config-field-accessibility.test.tsx
+new file mode 100644
+index 0000000000..2f1d4b4bec
+--- /dev/null
++++ b/apps/desktop/src/app/settings/config-field-accessibility.test.tsx
+@@ -0,0 +1,69 @@
++import { cleanup, fireEvent, render, screen } from '@testing-library/react'
++import { afterEach, expect, it, vi } from 'vitest'
++
++import { I18nProvider } from '@/i18n'
++import type { ConfigFieldSchema } from '@/types/hermes'
++
++import { ConfigField } from './config-field'
++
++afterEach(cleanup)
++
++it.each([
++  ['number', { type: 'number' }, 2200, 'spinbutton'],
++  ['string', { type: 'string' }, '', 'textbox'],
++  ['text', { type: 'text' }, '', 'textbox'],
++  ['object', { type: 'string' }, { enabled: true }, 'textbox'],
++  ['list', { type: 'list' }, ['one'], 'textbox'],
++  ['select', { type: 'select', options: ['one', 'two'] }, 'one', 'combobox'],
++  ['searchable', { type: 'select', options: ['one', 'two'], searchable: true }, 'one', 'combobox']
++] as const)('names the %s editor from its visible setting label', (_kind, schema, value, role) => {
++  render(
++    <ConfigField
++      onChange={() => {}}
++      schema={schema as ConfigFieldSchema}
++      schemaKey="custom.setting"
++      value={value}
++    />
++  )
++
++  expect(screen.getByRole(role, { name: 'Setting' })).toBeTruthy()
++})
++
++it('names open-world fields while preserving typed values', () => {
++  const onChange = vi.fn()
++  render(
++    <ConfigField
++      enumOptions={['alloy', 'nova']}
++      onChange={onChange}
++      schema={{ type: 'string' }}
++      schemaKey="tts.openai.voice"
++      value="alloy"
++    />
++  )
++
++  const input = screen.getByRole('combobox', { name: 'OpenAI Voice' })
++  fireEvent.change(input, { target: { value: 'custom-voice' } })
++  expect(onChange).toHaveBeenCalledWith('custom-voice')
++})
++
++it('uses the displayed localized label for numeric memory settings', () => {
++  const onChange = vi.fn()
++
++  const { container } = render(
++    <I18nProvider configClient={null} initialLocale="zh">
++      <ConfigField
++        onChange={onChange}
++        schema={{ type: 'number' }}
++        schemaKey="memory.memory_char_limit"
++        value={2200}
++      />
++    </I18nProvider>
++  )
++
++  const input = screen.getByRole('spinbutton', { name: /.+/ }) as HTMLInputElement
++  expect(input.value).toBe('2200')
++  expect(container.textContent).toContain(input.getAttribute('aria-label'))
++  expect(input.getAttribute('aria-label')).not.toBe('Memory Budget')
++  fireEvent.change(input, { target: { value: '2300' } })
++  expect(onChange).toHaveBeenCalledWith(2300)
++})
+diff --git a/apps/desktop/src/app/settings/config-field.tsx b/apps/desktop/src/app/settings/config-field.tsx
+index ec633f6dde..de044e9765 100644
+--- a/apps/desktop/src/app/settings/config-field.tsx
++++ b/apps/desktop/src/app/settings/config-field.tsx
+@@ -133,6 +133,7 @@ export function ConfigField({
+   if (selectOptions && schema.searchable) {
+     return row(
+       <SearchableSelect
++        aria-label={label}
+         clearLabel={schema.clearable ? c.systemDefault : undefined}
+         emptyMessage={c.noResults}
+         onChange={next => onChange(next)}
+@@ -151,6 +152,7 @@ export function ConfigField({
+   if (selectOptions && FREE_INPUT_KEYS.has(schemaKey)) {
+     return row(
+       <ComboboxInput
++        aria-label={label}
+         className={CONTROL_TEXT}
+         onChange={onChange}
+         optionLabels={optionLabels}
+@@ -167,7 +169,7 @@ export function ConfigField({
+         onValueChange={next => onChange(next === EMPTY_SELECT_VALUE ? '' : next)}
+         value={String(value ?? '') || EMPTY_SELECT_VALUE}
+       >
+-        <SelectTrigger className={CONTROL_TEXT}>
++        <SelectTrigger aria-label={label} className={CONTROL_TEXT}>
+           <SelectValue />
+         </SelectTrigger>
+         <SelectContent>
+@@ -190,6 +192,7 @@ export function ConfigField({
+   if (schema.type === 'number') {
+     return row(
+       <Input
++        aria-label={label}
+         className={CONTROL_TEXT}
+         onChange={e => {
+           const raw = e.target.value
+@@ -207,12 +210,13 @@ export function ConfigField({
+   }
+ 
+   if (schema.type === 'list') {
+-    return row(<ListField onChange={onChange} placeholder={c.commaSeparated} value={value} />)
++    return row(<ListField label={label} onChange={onChange} placeholder={c.commaSeparated} value={value} />)
+   }
+ 
+   if (typeof value === 'object' && value !== null) {
+     return wideRow(
+       <Textarea
++        aria-label={label}
+         className={cn('min-h-28 resize-y bg-background font-mono', CONTROL_TEXT)}
+         onChange={e => {
+           try {
+@@ -233,6 +237,7 @@ export function ConfigField({
+   return isLong
+     ? wideRow(
+         <Textarea
++          aria-label={label}
+           className={cn('min-h-24 resize-y bg-background', CONTROL_TEXT)}
+           onChange={e => onChange(e.target.value)}
+           placeholder={c.notSet}
+@@ -241,6 +246,7 @@ export function ConfigField({
+       )
+     : row(
+         <Input
++          aria-label={label}
+           className={CONTROL_TEXT}
+           onChange={e => onChange(e.target.value)}
+           placeholder={c.notSet}
+@@ -250,10 +256,12 @@ export function ConfigField({
+ }
+ 
+ function ListField({
++  label,
+   value,
+   onChange,
+   placeholder
+ }: {
++  label: string
+   value: unknown
+   onChange: (value: unknown) => void
+   placeholder: string
+@@ -276,6 +284,7 @@ function ListField({
+ 
+   return (
+     <Input
++      aria-label={label}
+       className={CONTROL_TEXT}
+       onBlur={() => {
+         focusedRef.current = false
+diff --git a/apps/desktop/src/app/settings/config-settings.test.tsx b/apps/desktop/src/app/settings/config-settings.test.tsx
+index 8042833b24f09eae131fc65e7f7471c920b6eb99..e64d8af1804e9b283bd23b9f6c9cbcc6546601ad 100644
+--- a/apps/desktop/src/app/settings/config-settings.test.tsx
++++ b/apps/desktop/src/app/settings/config-settings.test.tsx
+@@ -1,3 +1,3 @@
+-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+-import { cleanup, render, screen } from '@testing-library/react'
++import { QueryClientProvider } from '@tanstack/react-query'
++import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+ import { atom } from 'nanostores'
+@@ -8,2 +8,5 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
+ import type * as ConfigApi from '@/api/config'
++import { bindConfigReadOrigin } from '@/api/config'
++import { queryClient } from '@/lib/query-client'
++import { $connection } from '@/store/session'
+ import { $settingsRequestProfile } from '@/store/settings-scope'
+@@ -14,3 +17,3 @@ import type { ConfigSettings as ConfigSettingsType } from './config-settings'
+ // writable one; narrow the import back so tests can drive it.
+-const scopeProfileMock = $settingsRequestProfile as unknown as { set: (value: string) => void }
++const scopeProfileMock = $settingsRequestProfile as unknown as { set: (value: string | undefined) => void }
+ 
+@@ -36,4 +39,5 @@ vi.mock('@/hermes', async () => ({
+ 
++const profileSwitch = vi.hoisted(() => ({ run: () => {} }))
+ vi.mock('../hooks/use-on-profile-switch', () => ({
+-  useOnProfileSwitch: () => {}
++  useOnProfileSwitch: (callback: () => void) => { profileSwitch.run = callback }
+ }))
+@@ -80,2 +84,4 @@ afterEach(() => {
+   cleanup()
++  queryClient.clear()
++  $connection.set(null)
+   vi.clearAllMocks()
+@@ -84,6 +90,6 @@ afterEach(() => {
+ function renderConfigSettings(activeSectionId = 'safety') {
+-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
++  const client = queryClient
+   const importInputRef = createRef<HTMLInputElement>()
+ 
+-  render(
++  const view = render(
+     <MemoryRouter>
+@@ -95,3 +101,3 @@ function renderConfigSettings(activeSectionId = 'safety') {
+ 
+-  return { importInputRef }
++  return { client, importInputRef, unmount: view.unmount }
+ }
+@@ -99,2 +105,73 @@ function renderConfigSettings(activeSectionId = 'safety') {
+ describe('ConfigSettings autosave', () => {
++  it('switching connections resets a pending draft even when the profile name stays the same', async () => {
++    const first = { checkpoints: { enabled: false } }
++    const second = { checkpoints: { enabled: false }, owner: 'B' }
++    bindConfigReadOrigin(first, { connectionId: 'A', profile: 'default' })
++    bindConfigReadOrigin(second, { connectionId: 'B', profile: 'default' })
++    $connection.set({ connectionId: 'A', mode: 'remote' } as never)
++    let release!: () => void
++    saveHermesConfig.mockImplementationOnce(() => new Promise(resolve => { release = () => resolve({ ok: true }) }))
++    getHermesConfigRecord.mockResolvedValue(first)
++    renderConfigSettings()
++    fireEvent.click(await screen.findByRole('switch'))
++    getHermesConfigRecord.mockResolvedValue(second)
++    await act(async () => { $connection.set({ connectionId: 'B', mode: 'remote' } as never) })
++    expect((await screen.findByRole('switch')).getAttribute('aria-checked')).toBe('false')
++    fireEvent.click(screen.getByRole('switch'))
++    expect(saveHermesConfig.mock.calls[1][1]).toEqual({ connectionId: 'B', profile: 'default' })
++    await act(async () => { release() })
++    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('true')
++  })
++
++  it('acknowledges an ambient edit in the exact cache row that supplied the displayed draft', async () => {
++    scopeProfileMock.set(undefined)
++    const record = { checkpoints: { enabled: false } }
++    bindConfigReadOrigin(record, { profile: 'default' })
++    getHermesConfigRecord.mockResolvedValue(record)
++    const { client, unmount } = renderConfigSettings()
++    fireEvent.click(await screen.findByRole('switch'))
++    unmount()
++    await vi.waitFor(() => expect(client.getQueryData(['hermes-config-record'])).toEqual({
++      checkpoints: { enabled: true }
++    }))
++  })
++
++  it('an old profile acknowledgement cannot overwrite the new profile ambient cache', async () => {
++    scopeProfileMock.set(undefined)
++    const releases: (() => void)[] = []
++    saveHermesConfig.mockImplementation(() => new Promise(resolve => {
++      releases.push(() => resolve({ ok: true }))
++    }))
++    getHermesConfigRecord.mockResolvedValue({ checkpoints: { enabled: false } })
++    const { client } = renderConfigSettings()
++    fireEvent.click(await screen.findByRole('switch'))
++    await act(async () => { profileSwitch.run() })
++    getHermesConfigRecord.mockResolvedValue({ checkpoints: { enabled: true }, owner: 'B' })
++    await act(async () => { await client.invalidateQueries({ queryKey: ['hermes-config-record'] }) })
++    fireEvent.click(await screen.findByRole('switch'))
++    await act(async () => { releases[1]() })
++    expect(client.getQueryData(['hermes-config-record'])).toEqual({ checkpoints: { enabled: false }, owner: 'B' })
++    await act(async () => { releases[0]() })
++    expect(client.getQueryData(['hermes-config-record'])).toEqual({ checkpoints: { enabled: false }, owner: 'B' })
++  })
++
++  it('refreshes an untouched reopened draft when the pending native save becomes visible', async () => {
++    getHermesConfigRecord.mockResolvedValue({ checkpoints: { enabled: false } })
++    const { client } = renderConfigSettings()
++    expect((await screen.findByRole('switch')).getAttribute('aria-checked')).toBe('false')
++    getHermesConfigRecord.mockResolvedValue({ checkpoints: { enabled: true } })
++    await act(async () => { await client.invalidateQueries({ queryKey: ['hermes-config-record'] }) })
++    await vi.waitFor(() => expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('true'))
++  })
++
++  it('hands the pending edit to the native owner before the settings view unmounts', async () => {
++    getHermesConfigRecord.mockResolvedValue({ checkpoints: { enabled: false }, other: 'untouched' })
++    const { unmount } = renderConfigSettings()
++    fireEvent.click(await screen.findByRole('switch'))
++    unmount()
++    expect(saveHermesConfig).toHaveBeenCalledWith(
++      { checkpoints: { enabled: true } }, expect.objectContaining({ profile: 'default' })
++    )
++  })
++
+   it('sends a later revert instead of diffing it away against the stale page-load baseline', async () => {
+@@ -149,3 +226,5 @@ describe('ConfigSettings autosave', () => {
+ 
+-      await vi.waitFor(() => expect(saveHermesConfig).toHaveBeenCalledWith({ checkpoints: { enabled: true } }, 'nash'))
++      await vi.waitFor(() => expect(saveHermesConfig).toHaveBeenCalledWith(
++        { checkpoints: { enabled: true } }, expect.objectContaining({ profile: 'nash' })
++      ))
+     } finally {
+diff --git a/apps/desktop/src/app/settings/config-settings.tsx b/apps/desktop/src/app/settings/config-settings.tsx
+index b4cb584c4ddbd7b9b2cb8e4edbf41ac62e3e8204..8fd64f4c278d1ff08d0fdf923d287d763820a2b3 100644
+--- a/apps/desktop/src/app/settings/config-settings.tsx
++++ b/apps/desktop/src/app/settings/config-settings.tsx
+@@ -1 +1,2 @@
++import { mergeConfigPatch } from '@hermes/shared'
+ import { useStore } from '@nanostores/react'
+@@ -9,3 +10,3 @@ import { Input } from '@/components/ui/input'
+ import { SegmentedControl } from '@/components/ui/segmented-control'
+-import { getElevenLabsVoices, getHermesConfigSchema, saveHermesConfig } from '@/hermes'
++import { getElevenLabsVoices, getHermesConfigSchema, resolveConfigWriteScope, saveHermesConfig } from '@/hermes'
+ import { useI18n } from '@/i18n'
+@@ -34,3 +35,3 @@ import type { ConfigFieldSchema, HermesConfigRecord } from '@/types/hermes'
+ 
+-import { hermesConfigCacheWriter, useHermesConfigRecord } from '../hooks/use-config-record'
++import { captureHermesConfigCacheWriter, useHermesConfigRecord } from '../hooks/use-config-record'
+ import { useOnProfileSwitch } from '../hooks/use-on-profile-switch'
+@@ -133,6 +134,2 @@ function ConfigSettingsInner({
+ 
+-  // Writes land on the same cache key the query above reads (base key when
+-  // following the active profile, suffixed when a scope override is set).
+-  const writeConfigCache = useMemo(() => hermesConfigCacheWriter(scopeProfile), [scopeProfile])
+-
+   const {
+@@ -155,6 +152,11 @@ function ConfigSettingsInner({
+   const savedDiscoverySignatureRef = useRef<string | undefined>(undefined)
+-  const [saveVersion, setSaveVersion] = useState(0)
++  const pendingPatchRef = useRef<HermesConfigRecord>({})
++  const saveGenerationRef = useRef(0)
++
++  useEffect(() => () => {
++    saveGenerationRef.current += 1
++  }, [])
+ 
+-  // Seed the local draft once, the first time the shared record lands.
+-  // Background refetches thereafter must not clobber in-progress edits.
++  // Reconcile server updates only while no local edit is pending. Reopening
++  // during a native save may initially paint an older cached record.
+   const configSeeded = useRef(false)
+@@ -165,10 +167,5 @@ function ConfigSettingsInner({
+   const configBaselineRef = useRef<HermesConfigRecord | null>(null)
+-  // Serializes autosave requests so an older save that's still in flight can't
+-  // resolve after a newer one and re-advance the baseline / cache with stale
+-  // data — each save's diff+request only starts once the previous one lands.
+-  const saveQueueRef = useRef<Promise<void>>(Promise.resolve())
+-
+   // eslint-disable-next-line no-restricted-syntax -- legitimate non-atom ref write (see eslint rule comment)
+   useEffect(() => {
+-    if (loadedConfig && !configSeeded.current) {
++    if (loadedConfig && (!configSeeded.current || Object.keys(pendingPatchRef.current).length === 0)) {
+       configSeeded.current = true
+@@ -182,4 +179,4 @@ function ConfigSettingsInner({
+   // the local draft would otherwise keep profile A's data and autosave it into
+-  // B. Drop the seed + draft (re-seeds from B's refetch) and zero saveVersion so
+-  // the pending debounced autosave is cancelled by its effect cleanup.
++  // B. Drop the local draft and invalidate old callbacks. Admitted edits already
++  // belong to their captured native owner and may finish there.
+   useOnProfileSwitch(() => {
+@@ -189,5 +186,5 @@ function ConfigSettingsInner({
+     setConfig(null)
+-    saveVersionRef.current = 0
+-    setSaveVersion(0)
+-    saveQueueRef.current = Promise.resolve()
++    saveVersionRef.current += 1
++    pendingPatchRef.current = {}
++    saveGenerationRef.current += 1
+   })
+@@ -217,68 +214,41 @@ function ConfigSettingsInner({
+ 
+-  // eslint-disable-next-line no-restricted-syntax -- autosave bookkeeping refs, not an atom mirror
+-  useEffect(() => {
+-    if (!config || saveVersion === 0) {
+-      return
+-    }
++  // The native main process owns the debounce and write order. Submit intent
++  // in the edit handler, before React can unmount or the renderer can reload.
++  const applyConfig = (next: HermesConfigRecord) => {
++    const patch = mergeConfigPatch(pendingPatchRef.current, diffConfig(config ?? {}, next))
++    pendingPatchRef.current = patch
++    const version = ++saveVersionRef.current
++    const generation = saveGenerationRef.current
++    const owner = resolveConfigWriteScope(configBaselineRef.current ?? {}, writeScope ?? scopeProfile)
++    const writeCache = captureHermesConfigCacheWriter(scopeProfile)
++    setConfig(next)
+ 
+-    const v = saveVersion
+-    const snapshot = config
+-
+-    const t = window.setTimeout(() => {
+-      // Chained onto the queue (not fired directly) so an older save that's
+-      // still awaiting its response can't land after this one and undo its
+-      // baseline advance — each save's diff is computed once its predecessor
+-      // has fully resolved.
+-      saveQueueRef.current = saveQueueRef.current.then(async () => {
+-        try {
+-          const patch = diffConfig(configBaselineRef.current ?? {}, snapshot)
+-          const result = await saveHermesConfig(patch, writeScope ?? scopeProfile)
+-
+-          if (!result.ok) {
+-            throw new Error(c.autosaveFailed)
+-          }
+-
+-          // The saved snapshot becomes the new baseline, so the next autosave
+-          // diffs against what's actually on disk instead of the page-load
+-          // (or last-baseline) copy — otherwise reverting a field to its
+-          // pre-save value diffs to nothing and the revert never reaches disk.
+-          configBaselineRef.current = snapshot
+-
+-          // Mirror the saved record into the shared cache so MCP/model surfaces
+-          // reflect the edit without their own refetch.
+-          writeConfigCache(snapshot)
+-          const savedScope = writeScope ?? scopeProfile
+-
+-          recordSettingsSaved(patch, schema ?? {}, typeof savedScope === 'string' ? savedScope : savedScope?.profile)
+-
+-          if (saveVersionRef.current === v) {
+-            // The repo-discovery scan reads the ACTIVE profile's workspace
+-            // policy; skip it when this page is editing another profile.
+-            if (scopeProfile == null) {
+-              const discoverySignature = repoDiscoveryPolicySignature(repoDiscoveryPolicyFromConfig(snapshot))
+-
+-              if (savedDiscoverySignatureRef.current !== discoverySignature) {
+-                savedDiscoverySignatureRef.current = discoverySignature
+-                await scanAndRecordRepos(true)
+-              }
+-            }
++    void saveHermesConfig(patch, owner, { autosave: true }).then(async result => {
++      if (!result.ok) { throw new Error(c.autosaveFailed) }
+ 
+-            onConfigSaved?.()
+-          }
+-        } catch (err) {
+-          if (saveVersionRef.current === v) {
+-            notifyError(err, c.autosaveFailed)
+-          }
+-        }
+-      })
+-    }, 550)
++      if (version !== saveVersionRef.current) { return }
+ 
+-    return () => window.clearTimeout(t)
+-    // eslint-disable-next-line react-hooks/exhaustive-deps -- copy is stable; avoid re-scheduling autosave on locale change
+-  }, [config, onConfigSaved, saveVersion, writeScope, scopeProfile])
++      writeCache(previous => mergeConfigPatch(previous ?? next, patch))
+ 
+-  const applyConfig = (next: HermesConfigRecord) => {
+-    saveVersionRef.current += 1
+-    setConfig(next)
+-    setSaveVersion(saveVersionRef.current)
++      if (generation !== saveGenerationRef.current) { return }
++
++      configBaselineRef.current = next
++      pendingPatchRef.current = {}
++      recordSettingsSaved(patch, schema ?? {}, owner.profile)
++
++      if (scopeProfile == null) {
++        const signature = repoDiscoveryPolicySignature(repoDiscoveryPolicyFromConfig(next))
++
++        if (savedDiscoverySignatureRef.current !== signature) {
++          savedDiscoverySignatureRef.current = signature
++          await scanAndRecordRepos(true)
++        }
++      }
++
++      onConfigSaved?.()
++    }).catch(error => {
++      if (generation === saveGenerationRef.current && version === saveVersionRef.current) {
++        notifyError(error, c.autosaveFailed)
++      }
++    })
+   }
+diff --git a/apps/desktop/src/app/settings/delegation-settings-integration.test.tsx b/apps/desktop/src/app/settings/delegation-settings-integration.test.tsx
+index 195119776c6437401d292afb135060ed4c4b7744..ae9d1b87a7b669d3aa3776ea1b2aebfe247ef082 100644
+--- a/apps/desktop/src/app/settings/delegation-settings-integration.test.tsx
++++ b/apps/desktop/src/app/settings/delegation-settings-integration.test.tsx
+@@ -1 +1,2 @@
++import type { HermesApiRequest } from '@hermes/shared'
+ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+@@ -8,3 +9,2 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
+ import { setApiRequestConnection, setApiRequestProfile } from '@/api/client'
+-import type { HermesApiRequest } from '@/global'
+ import { $activeConnectionId } from '@/store/connections'
+diff --git a/apps/desktop/src/app/settings/delegation/routing-data.test.ts b/apps/desktop/src/app/settings/delegation/routing-data.test.ts
+index 18024305d10641dfd9b0916bf29affd4de09b83d..63e537aff181770d782d6f455094aaa770e1c539 100644
+--- a/apps/desktop/src/app/settings/delegation/routing-data.test.ts
++++ b/apps/desktop/src/app/settings/delegation/routing-data.test.ts
+@@ -1 +1,2 @@
++import type { HermesApiRequest } from '@hermes/shared'
+ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+@@ -3,3 +4,2 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+ import type { DelegationModelMap, DelegationRouting } from '@/api/delegation'
+-import type { HermesApiRequest } from '@/global'
+ import { queryClient } from '@/lib/query-client'
+diff --git a/apps/desktop/src/app/settings/delegation/routing-section.test.tsx b/apps/desktop/src/app/settings/delegation/routing-section.test.tsx
+index fa2b1996b102517262ac337612b8ec226dd54399..9fd3e55fdb92c9cce8da85aff04d17b4d0935985 100644
+--- a/apps/desktop/src/app/settings/delegation/routing-section.test.tsx
++++ b/apps/desktop/src/app/settings/delegation/routing-section.test.tsx
+@@ -1 +1,2 @@
++import type { HermesApiRequest } from '@hermes/shared'
+ import { QueryClientProvider } from '@tanstack/react-query'
+@@ -5,3 +6,2 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+ import type { DelegationRouting } from '@/api/delegation'
+-import type { HermesApiRequest } from '@/global'
+ import { queryClient } from '@/lib/query-client'
 diff --git a/apps/desktop/src/app/settings/profile-scope.test.tsx b/apps/desktop/src/app/settings/profile-scope.test.tsx
 index ce247ebbd1ec49fa1708030b396849c32ba49f38..9328312453a7b2140a7edc435c7e65e3e37a5c42 100644
 --- a/apps/desktop/src/app/settings/profile-scope.test.tsx
@@ -14612,6 +16262,34 @@ index 47088a22534bb6db11f02ef1d40a7e3a25dd8f3b..ddac5eb518c1fe7245903915a2d93001
        <SettingsProfileScope className="mb-5" />
 +      {view === 'accounts' && <AccountUsagePanel />}
        <OAuthPicker
+diff --git a/apps/desktop/src/app/settings/searchable-select.tsx b/apps/desktop/src/app/settings/searchable-select.tsx
+index fb45db8578..256212523e 100644
+--- a/apps/desktop/src/app/settings/searchable-select.tsx
++++ b/apps/desktop/src/app/settings/searchable-select.tsx
+@@ -47,6 +47,7 @@ export function rankSearchOption(option: string, search: string): number {
+  * `ConfigField` routes here when `schema.searchable === true`.
+  */
+ export function SearchableSelect({
++  'aria-label': ariaLabel,
+   value,
+   onChange,
+   options,
+@@ -54,6 +55,7 @@ export function SearchableSelect({
+   emptyMessage = 'No results found.',
+   clearLabel
+ }: {
++  'aria-label'?: string
+   value: string
+   onChange: (value: string) => void
+   options: string[]
+@@ -82,6 +84,7 @@ export function SearchableSelect({
+         <button
+           aria-expanded={open}
+           aria-haspopup="listbox"
++          aria-label={ariaLabel}
+           className={cn(
+             controlVariants(),
+             'flex items-center justify-between gap-2 whitespace-nowrap',
 diff --git a/apps/desktop/src/app/shell/account-usage-statusbar.test.tsx b/apps/desktop/src/app/shell/account-usage-statusbar.test.tsx
 new file mode 100644
 index 0000000000000000000000000000000000000000..fe28c0e6f75cb9008d117c9744de6233f37b44f4
@@ -16161,6 +17839,45 @@ index 7d1c2ea4b9ff9f1908bdb750a838cf1f6f1d2e47..dd2ca05e000ebd575864e2bdb05c7048
        >
 +        <DialogTitle className="sr-only">{label}</DialogTitle>
          <div
+diff --git a/apps/desktop/src/global.d.ts b/apps/desktop/src/global.d.ts
+index b266da09084b763017fd34ad93e0aba8dda2d700..c8e625a41028ae9d5aac8dfaad71d6af286588bc 100644
+--- a/apps/desktop/src/global.d.ts
++++ b/apps/desktop/src/global.d.ts
+@@ -1 +1,2 @@
++import type { HermesApiRequest } from '@hermes/shared'
+ import type { GatewayWsUrlResult } from '@hermes/shared'
+@@ -1525,31 +1526,2 @@ export type DesktopBootstrapEvent =
+ 
+-export interface HermesApiRequest {
+-  path: string
+-  method?: string
+-  body?: unknown
+-  // Single-file multipart upload (FastAPI UploadFile endpoints). Mutually
+-  // exclusive with `body`; bytes transfer over IPC as a structured-clone
+-  // ArrayBuffer. Token-mode backends only.
+-  upload?: { filename: string; contentType?: string; bytes: ArrayBuffer }
+-  timeoutMs?: number
+-  // Route this REST call to a specific profile's backend. Omit for the primary
+-  // (window) backend. Read-only cross-profile data is served by the primary, so
+-  // this is only needed for profile-scoped live/settings calls.
+-  profile?: string | null
+-  // Route this REST call to a specific REGISTERED gateway connection (v2
+-  // registry). Data owned by a remote gateway — cron jobs and their run
+-  // sessions — lives in that host's state.db, so requests for it must resolve
+-  // through the owning connection, not the local profile pool. Omit / '' to
+-  // keep the legacy profile-routed path; explicit 'local' forces this device.
+-  connectionId?: string | null
+-  // Passive background read that must never cold-start a pooled backend (#103375).
+-  // When true and the target profile has no warm pool entry, the main process
+-  // fails fast without spawning a child or consuming a pool slot, so background
+-  // tile reconciles cannot starve interactive opens.
+-  passive?: boolean
+-  // An interactive Settings scope selection may cold-start a profile backend.
+-  // Keep that intent separate from passive hydration so the pool can reserve a
+-  // slot for the user's visible request.
+-  priority?: 'foreground'
+-}
+ 
 diff --git a/apps/desktop/src/hermes.ts b/apps/desktop/src/hermes.ts
 index 4a1fd216cab155c4ea62120db72c9f3884a797a3..8d2b9520fc0e5eabae81e5b8697651c28bcc6485 100644
 --- a/apps/desktop/src/hermes.ts
@@ -16673,6 +18390,17 @@ index f07f677aff0a7e71083415e5e76be022b1ea5abc..fc7590268f1205aeac6ad49b26c5a4ab
 +      onHold: '`hermes resume` まで新しい作業は保留されます',
 +      composer: '`hermes resume` まで送信したメッセージは実行されません'
      }
+diff --git a/apps/desktop/src/i18n/profile-locale.test.tsx b/apps/desktop/src/i18n/profile-locale.test.tsx
+index ef09bea74af6898b44262b9a3baba41349940349..954673cff0fb906494f04e2eceb6eb032806457c 100644
+--- a/apps/desktop/src/i18n/profile-locale.test.tsx
++++ b/apps/desktop/src/i18n/profile-locale.test.tsx
+@@ -1 +1,2 @@
++import type { HermesApiRequest } from '@hermes/shared'
+ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+@@ -4,3 +5,2 @@ import { afterEach, expect, it, vi } from 'vitest'
+ import { setApiRequestConnection } from '@/api/client'
+-import type { HermesApiRequest } from '@/global'
+ import type { HermesConfigRecord } from '@/hermes'
 diff --git a/apps/desktop/src/i18n/ru.ts b/apps/desktop/src/i18n/ru.ts
 index f18bf35b8cb991c3b69a393c0816bdb7c26615b9..1ad03a68098e337084792f8926b296fc7aaab8d9 100644
 --- a/apps/desktop/src/i18n/ru.ts
@@ -25443,6 +27171,30 @@ index 8b8e542115f2eb3ec8b1d3707c9bd66e5b75e3e6..26b9b4cc25e95bb7883ec4d275febacf
 +  // Focus owns navigation; the positional edge must not restore the legacy roster.
 +  if ($interfaceMode.get() === 'simple' && !isSecondaryWindow()) return
    if (revealNarrowPane(CHAT_SIDEBAR_PANE_ID, 'toggle')) {
+diff --git a/apps/desktop/src/store/local-models-surfaces.test.tsx b/apps/desktop/src/store/local-models-surfaces.test.tsx
+index 60af35fe4eb4f6810f94eda83c57740749fd004a..34dec9c62bad4e30432e7627ca1e1132148eef36 100644
+--- a/apps/desktop/src/store/local-models-surfaces.test.tsx
++++ b/apps/desktop/src/store/local-models-surfaces.test.tsx
+@@ -1,2 +1,3 @@
+ import type { ModelOptionsResult } from '@hermes/shared'
++import type { HermesApiRequest } from '@hermes/shared'
+ import { QueryClientProvider } from '@tanstack/react-query'
+@@ -6,3 +7,3 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+ 
+-import type { HermesApiRequest, HermesConnection } from '@/global'
++import type { HermesConnection } from '@/global'
+ import type { LocalCatalogModel, LocalModelsStatus, LocalRuntimeJob } from '@/types/hermes'
+diff --git a/apps/desktop/src/store/onboarding-owner.test.ts b/apps/desktop/src/store/onboarding-owner.test.ts
+index 0df45f0d2fa39cb7b448ee5258dd655616ad0168..c65a93aba142f98bb7d3dc484e2454ab8cb6268e 100644
+--- a/apps/desktop/src/store/onboarding-owner.test.ts
++++ b/apps/desktop/src/store/onboarding-owner.test.ts
+@@ -1 +1,2 @@
++import type { HermesApiRequest } from '@hermes/shared'
+ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+@@ -4,3 +5,2 @@ import { setApiRequestConnection, setApiRequestProfile } from '@/api/client'
+ import { setEnvVar } from '@/api/config'
+-import type { HermesApiRequest } from '@/global'
+ import { makeOAuthProvider } from '@/test/oauth-provider'
 diff --git a/apps/desktop/src/store/pending-submissions.test.ts b/apps/desktop/src/store/pending-submissions.test.ts
 index b0eb473252b6e6e149f1f0711a6d8de535e87d8e..ad1ef8e2c1e29ef4fed05dc9d0fac09dc78e6eab 100644
 --- a/apps/desktop/src/store/pending-submissions.test.ts
@@ -25568,6 +27320,17 @@ index b46d5b4247acbda0b8649e2958b4e8ba1fa01925..1b0cc54843ec80008f3a9ae2926545c4
 +        resolveSessionOwner(opts?.parentSessionId || sessionId)
 +      ))
  
+diff --git a/apps/desktop/src/test/rest-bridge.ts b/apps/desktop/src/test/rest-bridge.ts
+index 795e9baf3538f1f17cc661e5ea27f489720bc768..998cbae40616c3e8002470f3dcdd980650784bec 100644
+--- a/apps/desktop/src/test/rest-bridge.ts
++++ b/apps/desktop/src/test/rest-bridge.ts
+@@ -1,5 +1,4 @@
++import type { HermesApiRequest } from '@hermes/shared'
+ import { vi } from 'vitest'
+ 
+-import type { HermesApiRequest } from '@/global'
+-
+ /** Install a fake `window.hermesDesktop.api`, the preload bridge every REST helper sends through. */
 diff --git a/apps/desktop/src/types/hermes.ts b/apps/desktop/src/types/hermes.ts
 index 927c98b200234f54756b368f9152cdd706686957..73698e41427ad975b15f29fef4dc23a73d38db94 100644
 --- a/apps/desktop/src/types/hermes.ts
@@ -25582,6 +27345,77 @@ index 927c98b200234f54756b368f9152cdd706686957..73698e41427ad975b15f29fef4dc23a7
 +  /** Global pause (`hermes pause`): null while running. `reason` only on an ungated bind. */
 +  estop?: { engaged_at: string | null; reason?: string | null } | null
    active_sessions: number
+diff --git a/apps/desktop/tsconfig.electron.json b/apps/desktop/tsconfig.electron.json
+index c8ed7be26169f546ea0a70288662e525bf2585b9..a5b43fcd13fe14112b11ee029034062763ba9a2f 100644
+--- a/apps/desktop/tsconfig.electron.json
++++ b/apps/desktop/tsconfig.electron.json
+@@ -19,3 +19,3 @@
+   },
+-  "include": ["electron", "product-identity.cjs", "product-identity.d.cts", "update-feed.cjs", "update-feed.d.cts", "../shared/src/ansi.ts", "../shared/src/data-url-read-max.ts", "../shared/src/translucency.ts"],
++  "include": ["electron", "product-identity.cjs", "product-identity.d.cts", "update-feed.cjs", "update-feed.d.cts", "../shared/src/ansi.ts", "../shared/src/api-request.ts", "../shared/src/config-patch.ts", "../shared/src/data-url-read-max.ts", "../shared/src/translucency.ts"],
+   "exclude": ["src", "electron/**/*.e2e.mts"]
+diff --git a/apps/shared/src/api-request.ts b/apps/shared/src/api-request.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..e36c7516d36391e1c58a58eadb36294eaf957e25
+--- /dev/null
++++ b/apps/shared/src/api-request.ts
+@@ -0,0 +1,31 @@
++export interface HermesApiRequest {
++  path: string
++  /** Coalesce a config PUT in the native owner so renderer navigation cannot cancel it. */
++  configAutosave?: boolean
++  method?: string
++  body?: unknown
++  // Single-file multipart upload (FastAPI UploadFile endpoints). Mutually
++  // exclusive with `body`; bytes transfer over IPC as a structured-clone
++  // ArrayBuffer. Token-mode backends only.
++  upload?: { filename: string; contentType?: string; bytes: ArrayBuffer }
++  timeoutMs?: number
++  // Route this REST call to a specific profile's backend. Omit for the primary
++  // (window) backend. Read-only cross-profile data is served by the primary, so
++  // this is only needed for profile-scoped live/settings calls.
++  profile?: string | null
++  // Route this REST call to a specific REGISTERED gateway connection (v2
++  // registry). Data owned by a remote gateway — cron jobs and their run
++  // sessions — lives in that host's state.db, so requests for it must resolve
++  // through the owning connection, not the local profile pool. Omit / '' to
++  // keep the legacy profile-routed path; explicit 'local' forces this device.
++  connectionId?: string | null
++  // Passive background read that must never cold-start a pooled backend (#103375).
++  // When true and the target profile has no warm pool entry, the main process
++  // fails fast without spawning a child or consuming a pool slot, so background
++  // tile reconciles cannot starve interactive opens.
++  passive?: boolean
++  // An interactive Settings scope selection may cold-start a profile backend.
++  // Keep that intent separate from passive hydration so the pool can reserve a
++  // slot for the user's visible request.
++  priority?: 'foreground'
++}
+diff --git a/apps/shared/src/config-patch.ts b/apps/shared/src/config-patch.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..fdeef61c6ed17f60af7fa2ae4cc5d3bb3336f354
+--- /dev/null
++++ b/apps/shared/src/config-patch.ts
+@@ -0,0 +1,19 @@
++/** Compose sparse config updates without reviving untouched fields. Arrays,
++ * scalars and null replace their previous value, matching the config API. */
++export function mergeConfigPatch(
++  previous: Record<string, unknown>,
++  next: Record<string, unknown>
++): Record<string, unknown> {
++  const entries = new Map(Object.entries(previous))
++
++  for (const [key, value] of Object.entries(next)) {
++    const old = entries.get(key)
++    const objects = old !== null && value !== null && typeof old === 'object' && typeof value === 'object'
++
++    entries.set(key, objects && !Array.isArray(old) && !Array.isArray(value)
++      ? mergeConfigPatch(old as Record<string, unknown>, value as Record<string, unknown>)
++      : value)
++  }
++
++  return Object.fromEntries(entries)
++}
 diff --git a/apps/shared/src/gateway-contract.generated.ts b/apps/shared/src/gateway-contract.generated.ts
 index 57a5f6d6774588963334c22dccc5a7101a80b7ed..1e9b8e3b6b2a1d3ad369046a3c1ad05be8dd0c04 100644
 --- a/apps/shared/src/gateway-contract.generated.ts
@@ -26380,6 +28214,18 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..8114b9dd4b1cd6b03eb857bfa803fbf6
 +      }
 +    },
      {
+diff --git a/apps/shared/src/index.ts b/apps/shared/src/index.ts
+index 3bf687a2663c8a91cef3312c32d06adaf074730b..cb026c35958d7865593e60cf0bc9c8ab33871543 100644
+--- a/apps/shared/src/index.ts
++++ b/apps/shared/src/index.ts
+@@ -1,2 +1,3 @@
+ export { hasAnsi, sanitizeAnsiForRender, stripAnsi } from './ansi'
++export type { HermesApiRequest } from './api-request'
+ export { backendScopeKey, backendScopePrefix, LOCAL_CONNECTION_ID, registryBackendScopeKey } from './backend-scope'
+@@ -52,2 +53,3 @@ export {
+ } from './color'
++export { mergeConfigPatch } from './config-patch'
+ export {
 diff --git a/docs/legion/bounded-retry-policy.md b/docs/legion/bounded-retry-policy.md
 new file mode 100644
 index 0000000000000000000000000000000000000000..f109b3556f0986a3aef44ac3b24d6b90a5129e28
@@ -78761,195 +80607,3 @@ index 7d8751f1747c559ccdf7898877a6d37fec7f1002..ad849d65c5ba02bfc580a3027248d19b
 +independent review/apply gates are separate from installing this command.
 +
  `--delivery-mode` controls **how** the notifier reacts to a terminal event. Every subscription is in one of three modes (`notify` is the default and the original behavior):
-diff --git a/apps/desktop/src/app/settings/config-field-accessibility.test.tsx b/apps/desktop/src/app/settings/config-field-accessibility.test.tsx
-new file mode 100644
-index 0000000000..2f1d4b4bec
---- /dev/null
-+++ b/apps/desktop/src/app/settings/config-field-accessibility.test.tsx
-@@ -0,0 +1,69 @@
-+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-+import { afterEach, expect, it, vi } from 'vitest'
-+
-+import { I18nProvider } from '@/i18n'
-+import type { ConfigFieldSchema } from '@/types/hermes'
-+
-+import { ConfigField } from './config-field'
-+
-+afterEach(cleanup)
-+
-+it.each([
-+  ['number', { type: 'number' }, 2200, 'spinbutton'],
-+  ['string', { type: 'string' }, '', 'textbox'],
-+  ['text', { type: 'text' }, '', 'textbox'],
-+  ['object', { type: 'string' }, { enabled: true }, 'textbox'],
-+  ['list', { type: 'list' }, ['one'], 'textbox'],
-+  ['select', { type: 'select', options: ['one', 'two'] }, 'one', 'combobox'],
-+  ['searchable', { type: 'select', options: ['one', 'two'], searchable: true }, 'one', 'combobox']
-+] as const)('names the %s editor from its visible setting label', (_kind, schema, value, role) => {
-+  render(
-+    <ConfigField
-+      onChange={() => {}}
-+      schema={schema as ConfigFieldSchema}
-+      schemaKey="custom.setting"
-+      value={value}
-+    />
-+  )
-+
-+  expect(screen.getByRole(role, { name: 'Setting' })).toBeTruthy()
-+})
-+
-+it('names open-world fields while preserving typed values', () => {
-+  const onChange = vi.fn()
-+  render(
-+    <ConfigField
-+      enumOptions={['alloy', 'nova']}
-+      onChange={onChange}
-+      schema={{ type: 'string' }}
-+      schemaKey="tts.openai.voice"
-+      value="alloy"
-+    />
-+  )
-+
-+  const input = screen.getByRole('combobox', { name: 'OpenAI Voice' })
-+  fireEvent.change(input, { target: { value: 'custom-voice' } })
-+  expect(onChange).toHaveBeenCalledWith('custom-voice')
-+})
-+
-+it('uses the displayed localized label for numeric memory settings', () => {
-+  const onChange = vi.fn()
-+
-+  const { container } = render(
-+    <I18nProvider configClient={null} initialLocale="zh">
-+      <ConfigField
-+        onChange={onChange}
-+        schema={{ type: 'number' }}
-+        schemaKey="memory.memory_char_limit"
-+        value={2200}
-+      />
-+    </I18nProvider>
-+  )
-+
-+  const input = screen.getByRole('spinbutton', { name: /.+/ }) as HTMLInputElement
-+  expect(input.value).toBe('2200')
-+  expect(container.textContent).toContain(input.getAttribute('aria-label'))
-+  expect(input.getAttribute('aria-label')).not.toBe('Memory Budget')
-+  fireEvent.change(input, { target: { value: '2300' } })
-+  expect(onChange).toHaveBeenCalledWith(2300)
-+})
-diff --git a/apps/desktop/src/app/settings/config-field.tsx b/apps/desktop/src/app/settings/config-field.tsx
-index ec633f6dde..de044e9765 100644
---- a/apps/desktop/src/app/settings/config-field.tsx
-+++ b/apps/desktop/src/app/settings/config-field.tsx
-@@ -133,6 +133,7 @@ export function ConfigField({
-   if (selectOptions && schema.searchable) {
-     return row(
-       <SearchableSelect
-+        aria-label={label}
-         clearLabel={schema.clearable ? c.systemDefault : undefined}
-         emptyMessage={c.noResults}
-         onChange={next => onChange(next)}
-@@ -151,6 +152,7 @@ export function ConfigField({
-   if (selectOptions && FREE_INPUT_KEYS.has(schemaKey)) {
-     return row(
-       <ComboboxInput
-+        aria-label={label}
-         className={CONTROL_TEXT}
-         onChange={onChange}
-         optionLabels={optionLabels}
-@@ -167,7 +169,7 @@ export function ConfigField({
-         onValueChange={next => onChange(next === EMPTY_SELECT_VALUE ? '' : next)}
-         value={String(value ?? '') || EMPTY_SELECT_VALUE}
-       >
--        <SelectTrigger className={CONTROL_TEXT}>
-+        <SelectTrigger aria-label={label} className={CONTROL_TEXT}>
-           <SelectValue />
-         </SelectTrigger>
-         <SelectContent>
-@@ -190,6 +192,7 @@ export function ConfigField({
-   if (schema.type === 'number') {
-     return row(
-       <Input
-+        aria-label={label}
-         className={CONTROL_TEXT}
-         onChange={e => {
-           const raw = e.target.value
-@@ -207,12 +210,13 @@ export function ConfigField({
-   }
- 
-   if (schema.type === 'list') {
--    return row(<ListField onChange={onChange} placeholder={c.commaSeparated} value={value} />)
-+    return row(<ListField label={label} onChange={onChange} placeholder={c.commaSeparated} value={value} />)
-   }
- 
-   if (typeof value === 'object' && value !== null) {
-     return wideRow(
-       <Textarea
-+        aria-label={label}
-         className={cn('min-h-28 resize-y bg-background font-mono', CONTROL_TEXT)}
-         onChange={e => {
-           try {
-@@ -233,6 +237,7 @@ export function ConfigField({
-   return isLong
-     ? wideRow(
-         <Textarea
-+          aria-label={label}
-           className={cn('min-h-24 resize-y bg-background', CONTROL_TEXT)}
-           onChange={e => onChange(e.target.value)}
-           placeholder={c.notSet}
-@@ -241,6 +246,7 @@ export function ConfigField({
-       )
-     : row(
-         <Input
-+          aria-label={label}
-           className={CONTROL_TEXT}
-           onChange={e => onChange(e.target.value)}
-           placeholder={c.notSet}
-@@ -250,10 +256,12 @@ export function ConfigField({
- }
- 
- function ListField({
-+  label,
-   value,
-   onChange,
-   placeholder
- }: {
-+  label: string
-   value: unknown
-   onChange: (value: unknown) => void
-   placeholder: string
-@@ -276,6 +284,7 @@ function ListField({
- 
-   return (
-     <Input
-+      aria-label={label}
-       className={CONTROL_TEXT}
-       onBlur={() => {
-         focusedRef.current = false
-diff --git a/apps/desktop/src/app/settings/searchable-select.tsx b/apps/desktop/src/app/settings/searchable-select.tsx
-index fb45db8578..256212523e 100644
---- a/apps/desktop/src/app/settings/searchable-select.tsx
-+++ b/apps/desktop/src/app/settings/searchable-select.tsx
-@@ -47,6 +47,7 @@ export function rankSearchOption(option: string, search: string): number {
-  * `ConfigField` routes here when `schema.searchable === true`.
-  */
- export function SearchableSelect({
-+  'aria-label': ariaLabel,
-   value,
-   onChange,
-   options,
-@@ -54,6 +55,7 @@ export function SearchableSelect({
-   emptyMessage = 'No results found.',
-   clearLabel
- }: {
-+  'aria-label'?: string
-   value: string
-   onChange: (value: string) => void
-   options: string[]
-@@ -82,6 +84,7 @@ export function SearchableSelect({
-         <button
-           aria-expanded={open}
-           aria-haspopup="listbox"
-+          aria-label={ariaLabel}
-           className={cn(
-             controlVariants(),
-             'flex items-center justify-between gap-2 whitespace-nowrap',
