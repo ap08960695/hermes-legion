@@ -2620,7 +2620,7 @@ index c6525e0c1c1b315dc26be085e9d421b894f387e2..aa8e9ace1721f7caff76600508562aa4
 +        snapshot = _redact_messages_for_egress(messages or [])
  
 diff --git a/agent/model_metadata.py b/agent/model_metadata.py
-index 5126590c7d0617ce01899ce7be9b248aa01a9d5c..8b673f9d51e488184de0b4b7ced672c88e0e9658 100644
+index 5126590c7d0617ce01899ce7be9b248aa01a9d5c..2fc397c7b94fbe47f3ba1490fe69a56f21f34332 100644
 --- a/agent/model_metadata.py
 +++ b/agent/model_metadata.py
 @@ -11,5 +11,8 @@ import json
@@ -2632,12 +2632,14 @@ index 5126590c7d0617ce01899ce7be9b248aa01a9d5c..8b673f9d51e488184de0b4b7ced672c8
  from pathlib import Path
 +from itertools import chain
  from typing import Any, Callable, Dict, List, Optional, Tuple
-@@ -20,3 +23,3 @@ import hermes_yaml as yaml
+@@ -20,4 +23,5 @@ import hermes_yaml as yaml
  from agent import model_metadata_http
 -from agent.model_metadata_cache import _write_context_cache, locked_context_cache
 +from agent.model_metadata_cache import _write_context_cache
  from agent.model_metadata_llamacpp import llamacpp_context
-@@ -67,6 +70,7 @@ _model_metadata_cache_time: float = 0
++from agent.model_metadata_token_memo import MessageTokenMemo
+ 
+@@ -67,6 +71,7 @@ _model_metadata_cache_time: float = 0
  _MODEL_CACHE_TTL = 3600
 -# In-memory memo keyed by (base_url, api-key fingerprint): per-key gateways return a per-key catalog, and
 -# in a multiplexed process two profiles may share a URL with different keys. The disk memo stays per URL.
@@ -2649,7 +2651,7 @@ index 5126590c7d0617ce01899ce7be9b248aa01a9d5c..8b673f9d51e488184de0b4b7ced672c8
 +_endpoint_metadata_lock = threading.RLock()
 +_MAX_ENDPOINT_MODEL_CACHE_ENTRIES = 128
  _ENDPOINT_MODEL_CACHE_TTL = 300
-@@ -191,10 +195,10 @@ def _local_probe_disk_cache_path() -> Path:
+@@ -191,10 +196,10 @@ def _local_probe_disk_cache_path() -> Path:
  
 -def _local_probe_disk_get(kind: str, key: str) -> Optional[Any]:
 +def _local_probe_disk_get(kind: str, key: str, api_key: str = "") -> Optional[Any]:
@@ -2664,7 +2666,7 @@ index 5126590c7d0617ce01899ce7be9b248aa01a9d5c..8b673f9d51e488184de0b4b7ced672c8
 -    _ttl_memo_put(_local_probe_disk_cache_path(), f"{kind}:{key}", value, _LOCAL_PROBE_DISK_TTL_SECONDS, ts_key="ts", value_key="value", what="local probe disk cache")
 +    _ttl_memo_put(_local_probe_disk_cache_path(), f"{kind}:{_endpoint_disk_cache_key(key, api_key)}", value, _LOCAL_PROBE_DISK_TTL_SECONDS, ts_key="ts", value_key="value", what="local probe disk cache")
  
-@@ -238,7 +242,12 @@ def _get_endpoint_metadata_cache_path() -> Path:
+@@ -238,7 +243,12 @@ def _get_endpoint_metadata_cache_path() -> Path:
  
 -def _endpoint_disk_cache_get(normalized: str) -> Optional[dict[str, dict[str, Any]]]:
 -    """Fresh cross-process memo of a remote ``/models`` probe (same TTL as in-memory): one-shot
@@ -2682,7 +2684,7 @@ index 5126590c7d0617ce01899ce7be9b248aa01a9d5c..8b673f9d51e488184de0b4b7ced672c8
 +    with _endpoint_metadata_lock:
 +        models = _ttl_memo_get(_get_endpoint_metadata_cache_path(), _endpoint_disk_cache_key(normalized, api_key), _ENDPOINT_MODEL_CACHE_TTL, ts_key="at", value_key="models")
      return models if isinstance(models, dict) else None
-@@ -246,7 +255,8 @@ def _endpoint_disk_cache_get(normalized: str) -> Optional[dict[str, dict[str, An
+@@ -246,7 +256,8 @@ def _endpoint_disk_cache_get(normalized: str) -> Optional[dict[str, dict[str, An
  
 -def _endpoint_disk_cache_put(normalized: str, cache: dict[str, dict[str, Any]]) -> None:
 +def _endpoint_disk_cache_put(normalized: str, cache: dict[str, dict[str, Any]], api_key: str = "") -> None:
@@ -2695,7 +2697,7 @@ index 5126590c7d0617ce01899ce7be9b248aa01a9d5c..8b673f9d51e488184de0b4b7ced672c8
 +            _get_endpoint_metadata_cache_path(), _endpoint_disk_cache_key(normalized, api_key), cache, _ENDPOINT_MODEL_CACHE_TTL,
 +            ts_key="at", value_key="models", what="endpoint model metadata disk cache", ts_first=True)
  
-@@ -636,9 +646,9 @@ def _is_codex_route(provider: str, base_url: str, custom_providers: list | None)
+@@ -636,9 +647,9 @@ def _is_codex_route(provider: str, base_url: str, custom_providers: list | None)
  
 -def _save_unless_skipped(model: str, base_url: str, ctx: int, provider: str) -> None:
 +def _save_unless_skipped(model: str, base_url: str, ctx: int, provider: str, api_key: str = "") -> None:
@@ -2708,17 +2710,17 @@ index 5126590c7d0617ce01899ce7be9b248aa01a9d5c..8b673f9d51e488184de0b4b7ced672c8
 -def _maybe_cache_local_context_length(model: str, base_url: str, length: int) -> None:
 +def _maybe_cache_local_context_length(model: str, base_url: str, length: int, api_key: str = "") -> None:
      """Persist a probed local window only at/above MINIMUM_CONTEXT_LENGTH: sub-minimum windows are
-@@ -646,3 +656,3 @@ def _maybe_cache_local_context_length(model: str, base_url: str, length: int) ->
+@@ -646,3 +657,3 @@ def _maybe_cache_local_context_length(model: str, base_url: str, length: int) ->
      if length >= MINIMUM_CONTEXT_LENGTH:
 -        save_context_length(model, base_url, length)
 +        save_context_length(model, base_url, length, api_key=api_key)
  
-@@ -655,3 +665,3 @@ def _probe_local_context_length(model: str, base_url: str, api_key: str, provide
+@@ -655,3 +666,3 @@ def _probe_local_context_length(model: str, base_url: str, api_key: str, provide
      if not _skip_persistent_context_cache(base_url, provider):
 -        _maybe_cache_local_context_length(model, base_url, local_ctx)
 +        _maybe_cache_local_context_length(model, base_url, local_ctx, api_key)
      return local_ctx
-@@ -670,5 +680,5 @@ def _reconcile_local_cached_context_length(model: str, base_url: str, cached: in
+@@ -670,5 +681,5 @@ def _reconcile_local_cached_context_length(model: str, base_url: str, cached: in
          logger.info("Reconciling stale local cache entry %s@%s: %s -> %s (live probe)", model, base_url, f"{cached:,}", f"{live_ctx:,}")
 -    _invalidate_cached_context_length(model, base_url)
 +    _invalidate_cached_context_length(model, base_url, api_key=api_key)
@@ -2726,13 +2728,13 @@ index 5126590c7d0617ce01899ce7be9b248aa01a9d5c..8b673f9d51e488184de0b4b7ced672c8
 -        _maybe_cache_local_context_length(model, base_url, live_ctx)
 +        _maybe_cache_local_context_length(model, base_url, live_ctx, api_key)
      return live_ctx
-@@ -731,3 +741,4 @@ def detect_local_server_type(base_url: str, api_key: str = "") -> Optional[str]:
+@@ -731,3 +742,4 @@ def detect_local_server_type(base_url: str, api_key: str = "") -> Optional[str]:
      lmstudio_url = _lmstudio_server_root(normalized)
 -    cached = _endpoint_probe_path_cache.get(server_url)
 +    memo_key = _endpoint_memo_key(server_url, api_key)
 +    cached = _endpoint_probe_path_cache.get(memo_key)
      if cached is not None and (time.monotonic() - cached[1]) < (_ENDPOINT_PROBE_TTL_SECONDS if cached[0] is not None else _ENDPOINT_PROBE_FAILURE_TTL_SECONDS):
-@@ -738,5 +749,5 @@ def detect_local_server_type(base_url: str, api_key: str = "") -> Optional[str]:
+@@ -738,5 +750,5 @@ def detect_local_server_type(base_url: str, api_key: str = "") -> Optional[str]:
          return None
 -    disk_hit = _local_probe_disk_get("server_type", server_url)
 +    disk_hit = _local_probe_disk_get("server_type", server_url, api_key)
@@ -2740,7 +2742,7 @@ index 5126590c7d0617ce01899ce7be9b248aa01a9d5c..8b673f9d51e488184de0b4b7ced672c8
 -        _endpoint_probe_path_cache[server_url] = (disk_hit, time.monotonic())
 +        _endpoint_probe_path_cache[memo_key] = (disk_hit, time.monotonic())
          return disk_hit
-@@ -770,5 +781,5 @@ def detect_local_server_type(base_url: str, api_key: str = "") -> Optional[str]:
+@@ -770,5 +782,5 @@ def detect_local_server_type(base_url: str, api_key: str = "") -> Optional[str]:
      # Negative verdict in memory only (never on disk — failures are often transient).
 -    _endpoint_probe_path_cache[server_url] = (result, time.monotonic())
 +    _endpoint_probe_path_cache[memo_key] = (result, time.monotonic())
@@ -2748,7 +2750,7 @@ index 5126590c7d0617ce01899ce7be9b248aa01a9d5c..8b673f9d51e488184de0b4b7ced672c8
 -        _local_probe_disk_put("server_type", server_url, result)
 +        _local_probe_disk_put("server_type", server_url, result, api_key)
      return result
-@@ -855,2 +866,11 @@ def _normalize_token_rates(pricing: dict[str, Any], unit: Any) -> dict[str, Any]
+@@ -855,2 +867,11 @@ def _normalize_token_rates(pricing: dict[str, Any], unit: Any) -> dict[str, Any]
  
 +def _pricing_rate_known(value: Any) -> bool:
 +    if isinstance(value, bool):
@@ -2760,24 +2762,24 @@ index 5126590c7d0617ce01899ce7be9b248aa01a9d5c..8b673f9d51e488184de0b4b7ced672c8
 +
 +
  def _extract_pricing(payload: dict[str, Any]) -> dict[str, Any]:
-@@ -858,3 +878,3 @@ def _extract_pricing(payload: dict[str, Any]) -> dict[str, Any]:
+@@ -858,3 +879,3 @@ def _extract_pricing(payload: dict[str, Any]) -> dict[str, Any]:
          # Provider $/MTok (or Novita's 1/10_000-$ per M) -> per-token strings, the same path usage_pricing uses for OpenRouter.
 -        return {target: str(scale(float(source[key]))) for target, key in fields.items() if source.get(key) is not None}
 +        return {target: str(scale(float(source[key]))) for target, key in fields.items() if _pricing_rate_known(source.get(key))}
      novita_fields = {"prompt": "input_token_price_per_m", "completion": "output_token_price_per_m"}
-@@ -875,3 +895,5 @@ def _extract_pricing(payload: dict[str, Any]) -> dict[str, Any]:
+@@ -875,3 +896,5 @@ def _extract_pricing(payload: dict[str, Any]) -> dict[str, Any]:
      }
 -    for mapping in _iter_nested_dicts(payload):
 +    explicit = (mapping["pricing"] for mapping in _iter_nested_dicts(payload)
 +                if isinstance(mapping.get("pricing"), dict))
 +    for mapping in chain(explicit, _iter_nested_dicts(payload)):
          normalized = {str(key).lower(): value for key, value in mapping.items()}
-@@ -880,3 +902,3 @@ def _extract_pricing(payload: dict[str, Any]) -> dict[str, Any]:
+@@ -880,3 +903,3 @@ def _extract_pricing(payload: dict[str, Any]) -> dict[str, Any]:
              for alias in aliases:
 -                if alias in normalized and normalized[alias] not in {None, ""}:
 +                if alias in normalized and _pricing_rate_known(normalized[alias]):
                      pricing[target] = normalized[alias]
-@@ -1007,11 +1029,22 @@ def _apply_llamacpp_props(cache: dict[str, dict[str, Any]], request_candidate: s
+@@ -1007,11 +1030,22 @@ def _apply_llamacpp_props(cache: dict[str, dict[str, Any]], request_candidate: s
  
 -def _endpoint_memo_key(normalized: str, api_key: object) -> tuple[str, str]:
 +def _endpoint_memo_key(normalized: str, api_key: object) -> tuple[str, str, str]:
@@ -2805,7 +2807,7 @@ index 5126590c7d0617ce01899ce7be9b248aa01a9d5c..8b673f9d51e488184de0b4b7ced672c8
 +        _endpoint_model_metadata_cache[memo_key] = cache
 +        _endpoint_model_metadata_cache_time[memo_key] = now
      return cache
-@@ -1029,58 +1062,6 @@ def _parse_models_payload(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+@@ -1029,58 +1063,6 @@ def _parse_models_payload(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
  def fetch_endpoint_model_metadata(base_url: str, api_key: str = "", force_refresh: bool = False) -> dict[str, dict[str, Any]]:
 -    """Model metadata from an OpenAI-compatible ``/models`` endpoint (cached per base URL)."""
 -    normalized = _normalize_base_url(base_url)
@@ -2868,7 +2870,7 @@ index 5126590c7d0617ce01899ce7be9b248aa01a9d5c..8b673f9d51e488184de0b4b7ced672c8
 +
 +    return fetch_endpoint_catalog(base_url, api_key, force_refresh)
  
-@@ -1130,4 +1111,7 @@ def _load_context_cache() -> dict[str, int]:
+@@ -1130,4 +1112,7 @@ def _load_context_cache() -> dict[str, int]:
  
 -def _context_cache_key(model: str, base_url: str) -> str:
 -    """Canonical ``model@base_url`` key; trailing slashes stripped so ``/v1`` and ``/v1/`` share one entry."""
@@ -2878,7 +2880,7 @@ index 5126590c7d0617ce01899ce7be9b248aa01a9d5c..8b673f9d51e488184de0b4b7ced672c8
 +        scope = json.dumps((model, *_endpoint_memo_key((base_url or '').rstrip('/'), api_key)), separators=(",", ":"))
 +        return "credential-v1:" + hashlib.sha256(scope.encode()).hexdigest()
      return f"{model}@{(base_url or '').rstrip('/')}"
-@@ -1135,32 +1119,9 @@ def _context_cache_key(model: str, base_url: str) -> str:
+@@ -1135,32 +1120,9 @@ def _context_cache_key(model: str, base_url: str) -> str:
  
 -@locked_context_cache
 -def save_context_length(model: str, base_url: str, length: int, *, source: str = "") -> None:
@@ -2916,7 +2918,7 @@ index 5126590c7d0617ce01899ce7be9b248aa01a9d5c..8b673f9d51e488184de0b4b7ced672c8
 -def save_provider_context_length(model: str, base_url: str, length: int, provider: str = "") -> None:
 +def save_provider_context_length(model: str, base_url: str, length: int, provider: str = "", *, api_key: str = "") -> None:
      """Persist a provider-confirmed window, distinguishing it from legacy Bedrock fallbacks."""
-@@ -1169,8 +1130,10 @@ def save_provider_context_length(model: str, base_url: str, length: int, provide
+@@ -1169,8 +1131,10 @@ def save_provider_context_length(model: str, base_url: str, length: int, provide
      else:
 -        save_context_length(model, base_url, length)
 +        save_context_length(model, base_url, length, api_key=api_key)
@@ -2930,13 +2932,13 @@ index 5126590c7d0617ce01899ce7be9b248aa01a9d5c..8b673f9d51e488184de0b4b7ced672c8
 +        return None
 +    key = _context_cache_key(model, base_url, api_key)
      document = _load_context_cache_document()
-@@ -1180,3 +1143,4 @@ def get_cached_context_length(model: str, base_url: str, *, bedrock_confirmed: b
+@@ -1180,3 +1144,4 @@ def get_cached_context_length(model: str, base_url: str, *, bedrock_confirmed: b
      # Legacy rows may carry a trailing slash, so probe the canonical key, the literal form and the slashed canonical form.
 -    matched_key = next((k for k in (key, f"{model}@{base_url}", f"{key}/") if cache.get(k) is not None), None)
 +    aliases = (key,) if api_key else (key, f"{model}@{base_url}", f"{key}/")
 +    matched_key = next((k for k in aliases if cache.get(k) is not None), None)
      length = cache.get(matched_key)
-@@ -1192,23 +1156,6 @@ def get_cached_context_length(model: str, base_url: str, *, bedrock_confirmed: b
+@@ -1192,23 +1157,6 @@ def get_cached_context_length(model: str, base_url: str, *, bedrock_confirmed: b
  
 -def _invalidate_cached_context_length(model: str, base_url: str) -> None:
 -    """Drop a stale entry and its probe cooldown using the persisted cache URL.
@@ -2964,56 +2966,70 @@ index 5126590c7d0617ce01899ce7be9b248aa01a9d5c..8b673f9d51e488184de0b4b7ced672c8
 +    from agent.model_metadata_context_cache import invalidate_window
 +    invalidate_window(model, base_url, api_key=api_key)
  
-@@ -1439,3 +1386,3 @@ def query_ollama_num_ctx(model: str, base_url: str, api_key: str = "") -> Option
+@@ -1439,3 +1387,3 @@ def query_ollama_num_ctx(model: str, base_url: str, api_key: str = "") -> Option
      _disk_key = f"{server_url}|{bare_model}"
 -    disk_hit = _local_probe_disk_get("ollama_num_ctx", _disk_key)
 +    disk_hit = _local_probe_disk_get("ollama_num_ctx", _disk_key, api_key)
      if isinstance(disk_hit, int) and disk_hit > 0:
-@@ -1445,3 +1392,3 @@ def query_ollama_num_ctx(model: str, base_url: str, api_key: str = "") -> Option
+@@ -1445,3 +1393,3 @@ def query_ollama_num_ctx(model: str, base_url: str, api_key: str = "") -> Option
      if ctx is not None:
 -        _local_probe_disk_put("ollama_num_ctx", _disk_key, ctx)
 +        _local_probe_disk_put("ollama_num_ctx", _disk_key, ctx, api_key)
      return ctx
-@@ -1483,3 +1430,3 @@ def _query_ollama_api_show(model: str, base_url: str, api_key: str = "") -> Opti
+@@ -1483,3 +1431,3 @@ def _query_ollama_api_show(model: str, base_url: str, api_key: str = "") -> Opti
      GGUF-first (hosted users can't set num_ctx) — the reverse of query_ollama_num_ctx(), hence the namespaced memo key."""
 -    return _memo_local_probe(("ollama_show", _strip_provider_prefix(model), base_url.rstrip("/")), lambda: _query_ollama_api_show_uncached(model, base_url, api_key=api_key))
 +    return _memo_local_probe(("ollama_show", _strip_provider_prefix(model), *_endpoint_memo_key(base_url.rstrip("/"), api_key)), lambda: _query_ollama_api_show_uncached(model, base_url, api_key=api_key))
  
-@@ -1550,3 +1497,3 @@ def _query_local_context_length(model: str, base_url: str, api_key: str = "") ->
+@@ -1550,3 +1498,3 @@ def _query_local_context_length(model: str, base_url: str, api_key: str = "") ->
      """Local-server context probe, short-TTL cached (see _LOCAL_CTX_PROBE_CACHE)."""
 -    return _memo_local_probe((_strip_provider_prefix(model), base_url.rstrip("/")), lambda: _query_local_context_length_uncached(model, base_url, api_key=api_key))
 +    return _memo_local_probe(("context", _strip_provider_prefix(model), *_endpoint_memo_key(base_url.rstrip("/"), api_key)), lambda: _query_local_context_length_uncached(model, base_url, api_key=api_key))
  
-@@ -1979,3 +1926,3 @@ def _validate_cached_context_length(model: str, base_url: str, cached: int, *, a
+@@ -1979,3 +1927,3 @@ def _validate_cached_context_length(model: str, base_url: str, cached: int, *, a
              log(msg, model, base_url, shown)
 -            _invalidate_cached_context_length(model, base_url)
 +            _invalidate_cached_context_length(model, base_url, api_key=api_key)
              return None
-@@ -2062,3 +2009,3 @@ def _resolve_custom_endpoint_context_length(model: str, base_url: str, api_key:
+@@ -2062,3 +2010,3 @@ def _resolve_custom_endpoint_context_length(model: str, base_url: str, api_key:
      if ctx is not None:
 -        _save_unless_skipped(model, base_url, ctx, provider)
 +        _save_unless_skipped(model, base_url, ctx, provider, api_key)
          return ctx
-@@ -2174,3 +2121,3 @@ def _resolve_provider_aware_context_length(model: str, base_url: str, api_key: s
+@@ -2174,3 +2122,3 @@ def _resolve_provider_aware_context_length(model: str, base_url: str, api_key: s
              if base_url and source == persist_on:
 -                save_context_length(model, base_url, ctx)
 +                save_context_length(model, base_url, ctx, api_key=api_key)
              return ctx
-@@ -2188,3 +2135,3 @@ def _resolve_provider_aware_context_length(model: str, base_url: str, api_key: s
+@@ -2188,3 +2136,3 @@ def _resolve_provider_aware_context_length(model: str, base_url: str, api_key: s
          if ctx is not None:
 -            _save_unless_skipped(model, base_url, ctx, provider)
 +            _save_unless_skipped(model, base_url, ctx, provider, api_key)
              return ctx
-@@ -2269,3 +2216,3 @@ def get_model_context_length(
+@@ -2269,3 +2217,3 @@ def get_model_context_length(
      # 1. Persistent cache (LM Studio / Codex routes excluded — see _skip_persistent_context_cache).
 -    cached = get_cached_context_length(model, base_url) if base_url and not is_bedrock_context and not codex_route and not _skip_persistent_context_cache(base_url, provider) else None
 +    cached = get_cached_context_length(model, base_url, api_key=api_key) if base_url and not is_bedrock_context and not codex_route and not _skip_persistent_context_cache(base_url, provider) else None
      validated = _validate_cached_context_length(model, base_url, cached, api_key=api_key) if cached is not None else None
-@@ -2282,3 +2229,3 @@ def get_model_context_length(
+@@ -2282,3 +2230,3 @@ def get_model_context_length(
              if base_url:
 -                save_context_length(model, base_url, ctx)
 +                save_context_length(model, base_url, ctx, api_key=api_key)
              return ctx
+@@ -2438,4 +2386,3 @@ def _strip_stale_thinking_for_estimate(messages: list[dict[str, Any]]) -> list[d
+ # objects every turn.
+-_MSG_TOKENS_CACHE: dict[Any, tuple[list, int, int]] = {}  # pins, text tokens, image count
+-_MSG_TOKENS_CACHE_MAX = 4096
++_MSG_TOKENS_CACHE = MessageTokenMemo()  # pins, text tokens, image count
+ 
+@@ -2479,7 +2426,2 @@ def _estimate_message_tokens_cached(msg: Any, image_cost: int) -> int:
+     _MSG_TOKENS_CACHE[key] = (pins, text, images)
+-    while len(_MSG_TOKENS_CACHE) > _MSG_TOKENS_CACHE_MAX:
+-        try:
+-            _MSG_TOKENS_CACHE.pop(next(iter(_MSG_TOKENS_CACHE)))
+-        except (StopIteration, KeyError, RuntimeError):
+-            break
+     return tokens
 diff --git a/agent/model_metadata_context_cache.py b/agent/model_metadata_context_cache.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..dc2c2228af02cbe83b20f35a082de382d42133a1
@@ -3220,6 +3236,106 @@ index 0000000000000000000000000000000000000000..0c05609167a271f6c407cd5af20a6bf8
 +    if last_error:
 +        metadata.logger.debug("Failed to fetch model metadata from %s/models: %s", normalized, last_error)
 +    return metadata._remember_endpoint_models(memo_key, {})
+diff --git a/agent/model_metadata_token_memo.py b/agent/model_metadata_token_memo.py
+index 86bb3cc34f3753782e1f90ad95ef9964d721de9a..f3982d115830308a6a5f9fae30b4017cb42aef29 100644
+--- a/agent/model_metadata_token_memo.py
++++ b/agent/model_metadata_token_memo.py
+@@ -1,6 +1,6 @@
+-"""Release a closed conversation's entries from the per-message token-estimate memo.
++"""Bound token-estimate retention and release closed conversations' entries.
+ 
+ ``agent.model_metadata._MSG_TOKENS_CACHE`` pins every string it fingerprints (the pin keeps the ``id()``
+-key sound), so a long-lived process kept each closed session's message bodies resident until 4096 newer
+-messages pushed them out.
++key sound). A byte/count bound limits retention even before the owning conversation closes;
++close and compression also release entries holding message bodies they no longer need.
+ """
+@@ -9,2 +9,4 @@ from __future__ import annotations
+ 
++import sys
++import threading
+ from typing import Any
+@@ -12,2 +14,80 @@ from typing import Any
+ 
++def _retained_size(key: Any, value: Any) -> int:
++    """Conservatively charge shared immutable objects once per entry, not per process."""
++    seen: set[int] = set()
++    stack = [key, value]
++    size = 0
++    while stack:
++        item = stack.pop()
++        identity = id(item)
++        if identity in seen:
++            continue
++        seen.add(identity)
++        size += sys.getsizeof(item)
++        if type(item) in (list, tuple):
++            stack.extend(item)
++    return size
++
++
++class MessageTokenMemo:
++    """FIFO memo bounded by both entry count and retained key/value bytes.
++
++    Admission never truncates a message or changes an estimate. Oversized entries
++    simply remain uncached. Snapshots keep close/compression eviction safe while
++    other conversations estimate tokens in the same process.
++    """
++
++    def __init__(self, max_bytes: int = 32 * 1024 * 1024, max_entries: int = 4096):
++        self._max_bytes = max_bytes
++        self._max_entries = max_entries
++        self._entries: dict[Any, tuple[Any, int]] = {}
++        self._bytes = 0
++        self._lock = threading.Lock()
++
++    def get(self, key: Any) -> Any:
++        with self._lock:
++            entry = self._entries.get(key)
++            return entry[0] if entry is not None else None
++
++    def __setitem__(self, key: Any, value: Any) -> None:
++        size = _retained_size(key, value)
++        with self._lock:
++            old = self._entries.pop(key, None)
++            if old is not None:
++                self._bytes -= old[1]
++            if size > self._max_bytes or self._max_entries <= 0:
++                return
++            while self._entries and (self._bytes + size > self._max_bytes
++                                     or len(self._entries) >= self._max_entries):
++                _, evicted_size = self._entries.pop(next(iter(self._entries)))
++                self._bytes -= evicted_size
++            self._entries[key] = (value, size)
++            self._bytes += size
++
++    def pop(self, key: Any, default: Any = None) -> Any:
++        with self._lock:
++            entry = self._entries.pop(key, None)
++            if entry is None:
++                return default
++            self._bytes -= entry[1]
++            return entry[0]
++
++    def clear(self) -> None:
++        with self._lock:
++            self._entries.clear()
++            self._bytes = 0
++
++    def items(self) -> tuple:
++        with self._lock:
++            return tuple((key, entry[0]) for key, entry in self._entries.items())
++
++    def values(self) -> tuple:
++        with self._lock:
++            return tuple(entry[0] for entry in self._entries.values())
++
++    def __len__(self) -> int:
++        with self._lock:
++            return len(self._entries)
++
++
+ def _long_string_ids(messages: Any) -> set[int]:
 diff --git a/agent/oneshot.py b/agent/oneshot.py
 index 9a5e12ecba0400180e6b9c4c075f2d7c57859cc2..a1e17bd66f609502615c95b9f93e7c25aa90f336 100644
 --- a/agent/oneshot.py
@@ -47252,6 +47368,97 @@ index 0000000000000000000000000000000000000000..9a4c77c4646e3ddc662810f9c6970bb6
 +        reasoning_config={"enabled": effort != "none", "effort": effort},
 +    )
 +    assert request["reasoning"]["effort"] == expected
+diff --git a/tests/agent/test_token_memo_memory_bound.py b/tests/agent/test_token_memo_memory_bound.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..d184167fd63303cee13954e4a2993c2d83da77d8
+--- /dev/null
++++ b/tests/agent/test_token_memo_memory_bound.py
+@@ -0,0 +1,85 @@
++"""Long message bodies must not remain pinned without a byte bound."""
++
++import sys
++
++import pytest
++
++from agent import model_metadata as metadata
++
++
++@pytest.fixture(autouse=True)
++def empty_memo():
++    metadata._MSG_TOKENS_CACHE.clear()
++    yield
++    metadata._MSG_TOKENS_CACHE.clear()
++
++
++def _pinned_bytes():
++    pins = {id(pin): pin for values, _, _ in metadata._MSG_TOKENS_CACHE.values() for pin in values}
++    return sum(sys.getsizeof(pin) for pin in pins.values())
++
++
++def test_rotating_large_messages_release_old_pins_without_changing_estimates():
++    for index in range(80):
++        message = {"role": "tool", "content": str(index) + "x" * (512 * 1024)}
++        expected = metadata._estimate_message_tokens_without_images(message)
++        assert metadata.estimate_messages_tokens_rough([message]) == expected
++    assert 0 < _pinned_bytes() <= 32 * 1024 * 1024
++    # A repeated estimate retains the same numeric result.
++    assert metadata.estimate_messages_tokens_rough([message]) == expected
++
++
++def test_oversized_message_does_not_displace_or_pin_other_messages():
++    small = {"role": "user", "content": "retained ordinary message " * 200}
++    metadata.estimate_messages_tokens_rough([small])
++    before = list(metadata._MSG_TOKENS_CACHE.items())
++    large = {"role": "tool", "content": "x" * (33 * 1024 * 1024)}
++    expected = metadata._estimate_message_tokens_without_images(large)
++    assert metadata.estimate_messages_tokens_rough([large]) == expected
++    assert list(metadata._MSG_TOKENS_CACHE.items()) == before
++
++
++def test_memo_reuses_estimates_and_releases_capacity(monkeypatch):
++    from agent.model_metadata_token_memo import MessageTokenMemo, forget_message_token_memo
++
++    memo = MessageTokenMemo(max_bytes=24 * 1024, max_entries=2)
++    monkeypatch.setattr(metadata, "_MSG_TOKENS_CACHE", memo)
++    original = metadata._estimate_message_tokens_without_images
++    calls = []
++
++    def compute(message):
++        calls.append(message["content"])
++        return original(message)
++
++    monkeypatch.setattr(metadata, "_estimate_message_tokens_without_images", compute)
++    first = {"role": "user", "content": "first " + "x" * 9000}
++    second = {"role": "user", "content": "second " + "x" * 9000}
++    third = {"role": "user", "content": "third " + "x" * 9000}
++    first_tokens = metadata.estimate_messages_tokens_rough([first])
++    assert metadata.estimate_messages_tokens_rough([dict(first)]) == first_tokens
++    assert len(calls) == 1
++    metadata.estimate_messages_tokens_rough([second, third])
++    assert len(memo) == 2
++    assert metadata.estimate_messages_tokens_rough([first]) == first_tokens
++    assert len(calls) == 4  # FIFO evicted first, so it was computed again.
++    assert forget_message_token_memo([first]) == 1
++    memo.clear()
++    metadata.estimate_messages_tokens_rough([first, second])
++    assert len(memo) == 2
++
++
++def test_wide_unicode_is_charged_in_bytes_and_shared_pins_are_counted_once(monkeypatch):
++    from agent.model_metadata_token_memo import MessageTokenMemo
++
++    memo = MessageTokenMemo(max_bytes=16 * 1024)
++    monkeypatch.setattr(metadata, "_MSG_TOKENS_CACHE", memo)
++    shared = "z" * 9000
++    message = {"role": "assistant", "content": shared, "reasoning_content": shared}
++    expected = metadata._estimate_message_tokens_without_images(message)
++    assert metadata.estimate_messages_tokens_rough([message]) == expected
++    assert len(memo) == 1  # One string referenced twice still fits.
++    wide = {"role": "user", "content": "😀" * 5000}
++    expected = metadata._estimate_message_tokens_without_images(wide)
++    assert metadata.estimate_messages_tokens_rough([wide]) == expected
++    assert len(memo) == 1
++    assert any(pin is shared for pins, _, _ in memo.values() for pin in pins)
 diff --git a/tests/agent/test_usage_run_binding.py b/tests/agent/test_usage_run_binding.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..d38cc6970ec708e9bfc69e51ea704f6a652fc9dc

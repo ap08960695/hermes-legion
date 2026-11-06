@@ -1,3 +1,13 @@
+# v0.8.8 — Bound retained token-estimate memo memory
+
+The token memo now caps retained key/value objects at 32 MiB and keeps the existing
+4,096-entry ceiling. Two tests reproduce the preceding retention problem; 143 tests
+across eight related files pass after repair. Nine overlapping tests pass against
+installed Linux source. Native production-Python checks preserve estimates, warm
+reuse and lifecycle release on both AI and ARM64 Mac without a model call.
+The 918-path kit matches both hosts; source health, companion checks and patch
+apply/reverse/reapply pass. Existing Gateway processes are preserved. See [measurements and limits](token-memo-memory.md).
+
 # v0.8.7 — Make offline vision routing checks deterministic
 
 The v0.8.6 adjacent failure was an unseeded catalog assumption: the test expected

@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **916-path** Legion source, interface and optimization alternative
+This is the complete **918-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -368,3 +368,7 @@ The capability-routing regression now supplies synthetic catalog data for text-o
 vision-capable and unknown models. This removes a live-catalog assumption from the
 offline test while keeping production routing unchanged. The complete kit contains
 916 paths; see [verification](vision-routing-verification.md).
+
+## v0.8.8 — Bound retained token-estimate memo memory
+
+The global token-estimate memo now limits retained key/value objects to 32 MiB as well as 4,096 entries. Oversized messages are estimated normally without being cached. See the [measurement and adoption boundaries](token-memo-memory.md).
