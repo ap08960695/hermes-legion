@@ -10,6 +10,8 @@ Historical source comments and release payloads received [privacy maintenance](d
 
 ## What is included
 
+- [Complete Captain skill installation and offline copy checks](docs/captain-skill-installation.md).
+
 - [Automatic review continuation and verified maintenance retirement](docs/native-maintenance-continuation.md).
 
 - [Lower diagnostic read memory and latency](docs/diagnostic-read-efficiency.md).

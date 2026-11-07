@@ -1,3 +1,12 @@
+# v0.8.27 — Check complete Captain skill copies
+
+The offline doctor compares an explicit installed skill directory with every
+published supporting file. Four regressions and all 104 companion tests pass.
+Linux/ARM64 Mac native discovery, per-profile goal flags, saved goals and the
+two-file skill are verified for the intended main and named Captain. Both
+Gateways stay closed; no model, GPU or card dispatch is used. Runtime source
+and Desktop builds are unchanged. See [scope and installation checks](captain-skill-installation.md).
+
 # v0.8.19 — Stop after scheduled and revision handoffs
 
 Four regressions failed before repair; 473 related Python cases pass afterward.

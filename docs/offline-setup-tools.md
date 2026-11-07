@@ -58,7 +58,19 @@ python3 scripts/legion_doctor.py --bundle "$LEGION_BUNDLE" --checkout "$HERMES_C
 
 Use `--phase base` before applying the patch. This runs only the existing checkout verifier's read-only Git commands and file hashes; it never imports Hermes. Git filesystem-monitor helpers, external diff/text conversion, lazy fetching, interactive prompts and optional index locks are disabled for inspection. A different revision or changed target fails, rather than triggering an update/install.
 
-## 5. Review and adopt separately
+## 5. Check an explicitly selected installed skill
+
+```sh
+python3 scripts/legion_doctor.py --skill-copy "$CAPTAIN_HOME/skills/legion/goal-driven-execution"
+```
+
+Set `CAPTAIN_HOME` to the intended existing profile home. Missing or changed
+release files fail; extra owner files are retained. This compares the full
+published skill, including references, without importing or running Hermes.
+It does not establish goal permissions, native discovery or live adoption;
+`runtime_ready` remains `unknown`. See [complete Captain installation](captain-skill-installation.md).
+
+## 6. Review and adopt separately
 
 Review the generated diff and files. If an operator chooses to deploy them, follow the [native fresh-home setup recipe](setup-multi-account.md), create only the selected fresh profiles, set individual config keys and copy the corresponding reviewed SOUL. Do not replace a full existing config with a fragment. Preserve all native caps and pool ownership; a recommended planning account does not pin the actual native credential.
 

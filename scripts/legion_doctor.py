@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Read explicit offline inputs. Runtime/auth readiness always remains unknown."""
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -11,8 +12,38 @@ from legion_setup import ROOT, inspect_bundle, model_reference
 from verify_checkout import verify
 
 
-def diagnose(*, team=None, bundle=None, checkout=None, phase='installed', snapshot=None, now=None):
+def _digest(path):
+    value = hashlib.sha256()
+    with path.open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            value.update(chunk)
+    return value.digest()
+
+
+def _skill_copy_check(copy):
+    source = ROOT / 'skills/goal-driven-execution'
+    if not (source / 'SKILL.md').is_file():
+        raise ValueError('source skill unavailable')
+    missing, different = [], []
+    files = sorted(p for p in source.rglob('*') if p.is_file())
+    for path in files:
+        relative = path.relative_to(source)
+        candidate = Path(copy) / relative
+        if not candidate.is_file():
+            missing.append(relative.as_posix())
+        elif _digest(candidate) != _digest(path):
+            different.append(relative.as_posix())
+    return {'code': 'goal-skill-copy', 'status': 'fail' if missing or different else 'pass',
+            'files_checked': len(files), 'missing_files': missing, 'different_files': different}
+
+
+def diagnose(*, team=None, bundle=None, checkout=None, phase='installed', snapshot=None, now=None, skill_copy=None):
     checks = []
+    if skill_copy is not None:
+        try:
+            checks.append(_skill_copy_check(skill_copy))
+        except (OSError, ValueError):
+            checks.append({'code': 'goal-skill-copy-unreadable', 'status': 'fail'})
     if team is not None:
         try:
             validate(team, snapshot or {}, [], {})
@@ -61,18 +92,19 @@ def main():
     parser.add_argument('--team', type=Path)
     parser.add_argument('--bundle', type=Path)
     parser.add_argument('--checkout', type=Path)
+    parser.add_argument('--skill-copy', type=Path, help='explicit installed goal-driven-execution directory')
     parser.add_argument('--phase', choices=['base', 'installed'], default='installed')
     parser.add_argument('--snapshot', type=Path)
     parser.add_argument('--now', type=float)
     args = parser.parse_args()
-    if args.team is None and args.bundle is None:
+    if args.team is None and args.bundle is None and args.skill_copy is None:
         args.team = ROOT / 'examples/team.small.json'
     try:
         if args.snapshot is not None and args.team is None:
             raise ValueError('snapshot requires team')
         result = diagnose(team=read_json(args.team) if args.team else None, bundle=args.bundle,
                           checkout=args.checkout, phase=args.phase,
-                          snapshot=read_json(args.snapshot) if args.snapshot else None, now=args.now)
+                          snapshot=read_json(args.snapshot) if args.snapshot else None, now=args.now, skill_copy=args.skill_copy)
     except (ValueError, OSError, KeyError, TypeError, AttributeError):
         result = {'mode': 'offline-only', 'executed': False, 'offline_ready': False,
                   'runtime_ready': 'unknown', 'checks': [{'code': 'invalid-input', 'status': 'fail'}]}

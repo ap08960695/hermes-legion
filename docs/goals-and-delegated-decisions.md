@@ -58,7 +58,12 @@ hermes -p legion-legatus config get goals.allow_self_management
 
 Use the first pair for the terminal's current launch home and the second pair for the named example profile. After confirming the intended main Captain home, the owner can explicitly opt it in with `hermes config set goals.allow_self_management true`. Keep the existing goal, turn cap, models, accounts and quotas. Ordinary dispatched workers still retain their task lifecycle and cannot extend it with a self-goal.
 
-Install the published `goal-driven-execution` skill in each intended Captain's native skill scope, then confirm that native skill discovery and viewing can resolve that same content. A file installed for another profile is insufficient. A short pointer in that Captain's SOUL can keep the method on demand:
+Delegated routine decisions are a separate opt-in. For the same explicitly
+authorized named Captain, use `hermes -p legion-legatus config set goals.delegated_decisions true`.
+Check both flags in each intended profile; enabling either flag does not enable
+the other or remove owner pauses and approval boundaries.
+
+Install the entire published `goal-driven-execution` directory, including its references, in each intended Captain's native skill scope. Use the [offline copy comparison](captain-skill-installation.md) and confirm that native discovery resolves that same content. A file installed for another profile is insufficient. A short pointer in that Captain's SOUL can keep the method on demand:
 
 ```text
 For an explicitly authorized multi-step objective or continuation, load the installed goal-driven-execution skill through native skill discovery. It governs current-session goals, parallel work, verification and routine delegated decisions within the existing owner scope, quotas and gates.
