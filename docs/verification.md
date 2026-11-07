@@ -1,3 +1,22 @@
+# v0.8.28 — Official Codex alias usage
+
+Official Codex routes configured through a custom alias now use the existing
+subscription-included pricing path without optional model-catalog reads. The
+five accepted-route regressions failed before repair; nine connected native
+files pass 109 tests. Linux and Mac installed interpreters each pass 13 direct
+routing controls with zero catalog attempts. The complete 976-path kit passes
+exact reverse/base/forward/installed checks and installed compatibility on both
+hosts. The production Gateways remain closed, with account/configuration/saved
+state retained.
+
+The bounded live batch created eight cards: six completed and two earlier
+failures were retained without replay. All 13 physical model requests, including
+the one in a failed card, count against the 32-request cap. The successful runs
+reconcile full body consumption, native task/run/session usage and observed
+client exit. No Linux GPU was exposed. The matched layout comparison reported
+46.92% cache read for both layouts; neither cache improvement nor general
+latency causality is established. See [the measured scope and failures](codex-alias-usage.md).
+
 # v0.8.27 — Check complete Captain skill copies
 
 The offline doctor compares an explicit installed skill directory with every
