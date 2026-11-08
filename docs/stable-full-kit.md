@@ -10,6 +10,13 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Verification update (v0.8.31)
+
+The v0.8.31 update isolates one auxiliary OAuth refresh test from the operator's
+credential directory and corrects the companion clone walkthrough's version pin.
+All 976 paths remain pinned; runtime authentication and Desktop assets are
+unchanged. See [the native test and static-check scope](auxiliary-refresh-test-isolation.md).
+
 ## Included behavior
 
 - [Official Codex alias usage accounting](codex-alias-usage.md), avoiding unnecessary pricing-catalog reads while retaining actual token usage.

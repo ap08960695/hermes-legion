@@ -1,3 +1,20 @@
+# v0.8.31 — Isolate the auxiliary refresh fixture
+
+The existing OAuth refresh fixture now uses its own Claude Code configuration
+directory before cache-key calculation, retaining real locking and every
+refresh/write/cache assertion. Its original failure reproduces on Linux and
+ARM64 macOS with protected real homes. Three complete native files pass 245
+tests on each host after repair, in matching isolated checkouts with separate
+test environments and no networking, model requests or Linux GPU devices.
+The reviewed test is installed on both hosts; the 976-path kit changes only
+that test's after hash. Runtime authentication code and Desktop builds are
+unchanged. The clone walkthrough now pins this release.
+
+The changed fixture passes pinned Ruff and code health. Full native checks
+retain 41 existing Ruff findings and 16 Windows-footgun findings; this release
+does not claim global native-suite or static-check success. See [the fixture
+scope, resource observations and remaining checks](auxiliary-refresh-test-isolation.md).
+
 # v0.8.30 — Clarify native verification scope
 
 The compact-worker guide distinguishes the matching isolated Linux checkout
