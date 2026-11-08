@@ -1,3 +1,20 @@
+# v0.8.33 — Native checks and bounded test imports
+
+All twelve native blocking check groups pass on Linux, resolving 41 Ruff and nine
+ownership/platform findings without new checker suppressions. A shared live UID
+fact retains numeric ownership checks. The Desktop control fixture keeps normal
+module caching; its full 33 cases pass at 286.6 MiB, while an isolated old-fixture
+control crosses the unchanged 768 MiB guard.
+
+Linux passes 497 native cases across separate complete-file runs; ARM64 macOS
+passes 496 with two host skips in one 33-file run. The reviewed fifteen runtime
+and eighteen test files are installed on both hosts, with 980 pinned source paths.
+The Mac resumed segment preserves original access metadata, records OS-added
+provenance, and uses a fault-tested pending journal; the first segment's protected
+end-hash comparison is explicitly unavailable. One real-Gateway fixture remains
+not run. No new real card/model request or production activation occurred. See
+[the complete evidence and limits](native-checks-and-test-memory.md).
+
 # v0.8.32 — Read UTF-8 state with optional BOMs
 
 Seven readers accept valid UTF-8 state with an optional BOM, including quota

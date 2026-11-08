@@ -12,6 +12,7 @@ Historical source comments and release payloads received [privacy maintenance](d
 
 - [Private credential-store paths for auxiliary refresh tests](docs/auxiliary-refresh-test-isolation.md), preserving the native lock and refresh assertions.
 - [UTF-8 state files with optional BOMs](docs/utf8-state-files.md), preserving quota observations and recovery checks.
+- [Passing native checks and bounded test memory](docs/native-checks-and-test-memory.md), preserving ownership checks and Python module caching.
 
 - [Optional compact card-worker schemas](docs/compact-worker-schemas.md), with a native configuration fragment and one bounded comparison showing 21.22% lower total input; general performance remains unproven.
 
@@ -124,13 +125,13 @@ Review the [optional external-memory pilot guide](docs/external-memory-pilot.md)
 Clone the release and run from its repository root; the same commands work after extracting the release archive and entering its top-level directory. Only Python and Git are needed for this companion-only walkthrough. Native profile setup has the additional upstream prerequisites documented separately.
 
 ```sh
-git clone --branch v0.8.32 --single-branch https://github.com/ap08960695/hermes-legion.git
+git clone --branch v0.8.33 --single-branch https://github.com/ap08960695/hermes-legion.git
 cd hermes-legion
 python3 scripts/verify_release.py
 python3 scripts/legion_plan.py --team examples/team.full.json --snapshot examples/snapshots/synthetic-ready.json --tasks examples/scenarios/parallel-production.json --now 1
 ```
 
-The walkthrough pins v0.8.32. The consolidated stable kit is an alternative to the historical cumulative patch and the smaller stable units; select exactly one matching manifest. Source application, a running application, original-session adoption and measured workload improvements remain separate evidence. See the [verification record](docs/verification.md).
+The walkthrough pins v0.8.33. The consolidated stable kit is an alternative to the historical cumulative patch and the smaller stable units; select exactly one matching manifest. Source application, a running application, original-session adoption and measured workload improvements remain separate evidence. See the [verification record](docs/verification.md).
 
 For an existing Mac, follow the [isolated source installation and update guide](docs/macos-install-update.md). It keeps native CLI, Desktop packaging and production activation evidence separate.
 

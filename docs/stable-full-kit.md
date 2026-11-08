@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **978-path** Legion source, interface and optimization alternative
+This is the complete **980-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -10,14 +10,14 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
-## Verification update (v0.8.32)
+## Verification update (v0.8.33)
 
-Seven existing text-state readers accept UTF-8 files with an optional BOM,
-preserving unrelated quota observations and existing recovery validation. Ten
-native test files pass 72 cases on each host; five runtime and five test files
-are installed on Linux and macOS. Two added regression files bring the kit to
-978 pinned paths. Desktop assets and dependency locks are unchanged. See
-[the native verification and remaining static-check scope](utf8-state-files.md).
+All twelve native check groups pass on Linux. Shared numeric owner checks and
+bounded Desktop-test imports preserve existing behavior. Native verification
+covers 497 Linux cases across separate file runs and 496 macOS cases in one
+33-file run, with host-specific skips. Fifteen runtime and eighteen test files
+are installed on both hosts; the kit now pins 980 paths. Desktop assets and
+lockfiles remain unchanged. See [the exact scope and installation limits](native-checks-and-test-memory.md).
 
 ## Included behavior
 
