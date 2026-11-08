@@ -71,8 +71,11 @@ checks the complete directory, including the new reference and fragment.
 
 ## Offline native compatibility
 
-Two behavior checks pass on both Linux and ARM64 macOS using the installed
-native source and interpreters. They exercise fresh-profile creation, the three
+Two behavior checks pass on both Linux and ARM64 macOS in separately managed
+test environments. Linux uses an isolated native checkout whose 976 pinned
+source paths match the installed kit; macOS uses the installed native source.
+These are offline compatibility checks, not production-session execution.
+They exercise fresh-profile creation, the three
 native config setters and JSON readback, preservation of unrelated settings,
 native tool assembly with explicitly selected Kanban/recall toolsets, retention
 of the deferred schemas in the catalog, and Responses serialization. They do

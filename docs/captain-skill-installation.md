@@ -83,6 +83,8 @@ doctor passes all four files per copy, and native skill resolution selects
 the intended local directory. Existing file modes, owners, extended attributes,
 goal flags and saved profile state are retained; the entry's frontmatter and
 tracked-delivery reference remain unchanged. The optional fragment was not
-applied to any profile. Gateways remain closed and no model request is used
+applied to any existing Captain profile. Temporary profiles used by offline
+configuration checks are isolated from these installed copies.
+Gateways remain closed and no model request is used
 for installation or discovery checks. Reading this copy in a new diagnostic
 process does not establish that a cached Captain has adopted the method.

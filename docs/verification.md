@@ -1,3 +1,14 @@
+# v0.8.30 — Clarify native verification scope
+
+The compact-worker guide distinguishes the matching isolated Linux checkout
+from the installed macOS source; both native compatibility runs used separately
+managed test environments. It also separates temporary configuration-test
+profiles from the existing Captain profiles, whose configuration was not changed.
+The v0.8.29 native test, live-card and installation results remain historical;
+they are not relabelled as rerun. Runtime patches, skill assets, the fragment and
+the native verifier are unchanged. All 104 companion tests pass for this wording
+update, and the exact release inventory and secret scans are checked again.
+
 # v0.8.29 — Optional compact card-worker schemas
 
 An on-demand skill reference and explicit native configuration fragment keep
