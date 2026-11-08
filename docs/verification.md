@@ -1,3 +1,30 @@
+# v0.8.29 — Optional compact card-worker schemas
+
+An on-demand skill reference and explicit native configuration fragment keep
+eight lifecycle/recall tools direct and defer six additional Kanban schemas
+for a fresh dedicated worker. Native profile/config/tool assembly and wire
+serialization checks pass two cases each on Linux and ARM64 macOS, without
+network access, Gateway startup or model requests. The 976-path native kit is
+unchanged.
+
+The complete four-file skill is installed and passes the copy doctor and native
+resolution checks for the existing main and named Captain on each host. File
+metadata, unrelated profile state and existing permissions are preserved; the
+optional fragment is not applied to a live profile. Installation and offline
+guidance checks do not establish use by a cached Captain.
+
+One completed simple-card pair used two physical requests per card. Total input,
+including cached input, fell from 21,242 to 16,734 tokens (21.22%); wire schema
+bytes fell 35.65%. Both returned the same result. Four authorized extra card
+slots are consumed: two earlier controls stopped before a model request and
+were retained without replay. The cumulative count is 17 physical requests
+against the original 32-request ceiling. All production and test Gateways are
+closed and no Linux GPU was exposed.
+
+This single pair does not establish general quality, better cache use, lower
+RAM, lower latency or live Captain adoption. See [the complete measured scope,
+native recipe and limitations](compact-worker-schemas.md).
+
 # v0.8.28 — Official Codex alias usage
 
 Official Codex routes configured through a custom alias now use the existing

@@ -10,6 +10,8 @@ Historical source comments and release payloads received [privacy maintenance](d
 
 ## What is included
 
+- [Optional compact card-worker schemas](docs/compact-worker-schemas.md), with a native configuration fragment and one bounded comparison showing 21.22% lower total input; general performance remains unproven.
+
 - [Official Codex alias usage without unnecessary pricing-catalog reads](docs/codex-alias-usage.md), with installed Linux/Mac checks and bounded real-card acceptance.
 
 - [Complete Captain skill installation and offline copy checks](docs/captain-skill-installation.md).

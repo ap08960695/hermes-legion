@@ -13,6 +13,8 @@ description: Use for an authorized multi-step objective, delegated decisions, or
 6. Start eligible independent work once, with disjoint write scopes, native claims and current capacity checks. Before waiting, check other ready work. Retain script/worker identities and use native completion delivery or bounded non-model waits. Resume the original operation after interruption using its checkpoint.
 7. Check each deliverable against actual acceptance evidence. Continue correcting authorized failures within existing limits. Completion requires verified outputs and no required work remaining; a green unit test alone does not establish deployment, visual quality or production savings.
 
+For a fresh worker limited to Kanban cards and session recall, read [compact worker schemas](references/compact-worker-schemas.md) before configuring its tool surface.
+
 Ask only when the next required action changes material scope, incurs unapproved cost, needs unavailable access, risks irreversible effects, conflicts with acceptance criteria or crosses a rights/review/publication gate. Continue independent authorized work while that decision waits. Time passing does not grant permission. Notify on completion, failure or a material question; keep unchanged waits quiet.
 
 Keep existing turn caps, quotas, models, accounts and provider routes. Dispatched workers complete their assigned native task; they cannot extend it with a self-goal. Preserve user pauses and existing goal content. No paid fallback, quota probes, duplicate dispatch, unrelated worker interruption or extra inference solely for status/proof. A goal schedules normal work within native limits; it cannot guarantee completion when a real external dependency remains.

@@ -26,8 +26,8 @@ goal permission and actual use are separate checks.
 
 Review the installed copy before changing it. Preserve custom instructions and
 owner additions; an unknown changed file needs review rather than replacement.
-Copy the entire reviewed skill directory, including
-`references/tracked-delivery.md`, into the intended profile's native skill
+Copy the entire reviewed skill directory, including its supporting references
+and configuration fragment, into the intended profile's native skill
 scope. Re-run the comparison and confirm native skill discovery resolves that
 same copy. An entry file installed for a different profile is insufficient.
 
@@ -63,3 +63,26 @@ The 974-path runtime patch and Desktop builds are unchanged. Both production
 Gateways remain closed. No model request, real card dispatch or GPU work is
 performed for this release. These checks prove installation and discoverability;
 cached Captain adoption and unrestricted autonomous performance are not claimed.
+
+## v0.8.29 supporting files
+
+The complete skill now has four files: `SKILL.md`,
+`references/tracked-delivery.md`, `references/compact-worker-schemas.md`, and
+`references/compact-kanban-worker.config.fragment.json`. The new entry pointer
+loads the compact-worker recipe only when relevant; the skill's frontmatter
+and existing tracked-delivery reference are unchanged. Installing these files
+does not apply the optional fragment to any profile or change a cached prompt.
+
+The fragment is for a separately authorized fresh dispatcher worker. Keep it
+out of Captain configuration and held conversations. File parity, native skill
+discovery and actual use remain distinct checks.
+
+The four-file skill is installed and hash-checked in the existing main and
+named Captain on Linux and ARM64 macOS, four copies in total. The offline
+doctor passes all four files per copy, and native skill resolution selects
+the intended local directory. Existing file modes, owners, extended attributes,
+goal flags and saved profile state are retained; the entry's frontmatter and
+tracked-delivery reference remain unchanged. The optional fragment was not
+applied to any profile. Gateways remain closed and no model request is used
+for installation or discovery checks. Reading this copy in a new diagnostic
+process does not establish that a cached Captain has adopted the method.
