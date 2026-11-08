@@ -1,3 +1,19 @@
+# v0.8.32 — Read UTF-8 state with optional BOMs
+
+Seven readers accept valid UTF-8 state with an optional BOM, including quota
+snapshots, attention policy, update capsules and owned daemon PIDs. Native quota
+refresh preserves unrelated adapter observations. Five complete affected files
+pass 29 cases and five updater regression files pass 43 cases on Linux and
+ARM64 macOS. The Mac updater check required a narrow test-policy exception for
+the native read-only process observer; the original failed run is retained.
+
+The reviewed five runtime and five test files are installed on both hosts. The
+complete kit now pins 978 paths, including two new regression files. Native code
+health has zero new findings; full native static checks retain 41 existing Ruff
+and nine ownership/platform findings. No new real card/model request or service
+activation occurred. See [the exact tests, resource limits and remaining
+acceptance scope](utf8-state-files.md).
+
 # v0.8.31 — Isolate the auxiliary refresh fixture
 
 The existing OAuth refresh fixture now uses its own Claude Code configuration

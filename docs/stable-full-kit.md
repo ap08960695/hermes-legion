@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **976-path** Legion source, interface and optimization alternative
+This is the complete **978-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -10,12 +10,14 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
-## Verification update (v0.8.31)
+## Verification update (v0.8.32)
 
-The v0.8.31 update isolates one auxiliary OAuth refresh test from the operator's
-credential directory and corrects the companion clone walkthrough's version pin.
-All 976 paths remain pinned; runtime authentication and Desktop assets are
-unchanged. See [the native test and static-check scope](auxiliary-refresh-test-isolation.md).
+Seven existing text-state readers accept UTF-8 files with an optional BOM,
+preserving unrelated quota observations and existing recovery validation. Ten
+native test files pass 72 cases on each host; five runtime and five test files
+are installed on Linux and macOS. Two added regression files bring the kit to
+978 pinned paths. Desktop assets and dependency locks are unchanged. See
+[the native verification and remaining static-check scope](utf8-state-files.md).
 
 ## Included behavior
 
