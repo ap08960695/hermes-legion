@@ -36,21 +36,23 @@ DAY = 86400
 # retention permanently unavailable on any host with an SSH login or a user systemd.
 # ponytail: name allowlist; an unknown closed process still makes observation unknown.
 CLOSED_SESSION_DAEMONS = frozenset({
-    "systemd", "(sd-pam)", "gpg-agent", "ssh-agent", "sshd", "sshd-session", "sftp-server"})
+    "systemd", "(sd-pam)", "gpg-agent", "ssh-agent", "sshd", "sshd-session", "sftp-server",
+    "ping",  # file capabilities make it non-dumpable while it runs
+    "PanGPS"})  # macOS: the GlobalProtect agent is invisible to the user's lsof.
 
 
 def _user_processes():
-    result = subprocess.run(["ps", "-U", str(os.getuid()), "-o", "pid=,stat=,lstart="],
+    result = subprocess.run(["ps", "-U", str(os.getuid()), "-o", "pid=,stat=,lstart=,comm="],
                             capture_output=True, text=True, timeout=10)
     if result.returncode or result.stderr.strip():
         raise OSError("process inventory unavailable")
     processes = {}
     for line in result.stdout.splitlines():
-        pid, state, started = line.split(None, 2)
-        if not pid.isdigit():
+        pid, state, *rest = line.split()
+        if not pid.isdigit() or len(rest) < 5:
             raise ValueError("invalid process inventory")
-        if not state.startswith("Z"):
-            processes[pid] = started
+        if not state.startswith("Z"):  # value: (lstart, command name)
+            processes[pid] = (" ".join(rest[:5]), os.path.basename(" ".join(rest[5:])))
     return processes
 
 
@@ -126,7 +128,8 @@ def held_paths():
         return None
     fields = [field.lstrip("\n") for field in result.stdout.split("\0")]
     observed = {field[1:] for field in fields if field.startswith("p") and field[1:].isdigit()}
-    stable = {pid for pid, started in before.items() if after.get(pid) == started}
+    stable = {pid for pid, started in before.items() if after.get(pid) == started
+              and not (pid not in observed and started[1] in CLOSED_SESSION_DAEMONS)}
     if not stable or not stable.issubset(observed):
         return None
     paths = {field[1:] for field in fields if field.startswith("n/")}

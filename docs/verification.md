@@ -1,3 +1,10 @@
+# v0.8.36 — Retention parity on macOS
+
+A new lsof-path test fails on v0.8.35 and passes now; all 24 retention tests pass on
+Linux, and on ARM64 macOS with two Linux-only skips. Linux and Mac hold helpers with
+the same SHA-256. A 50-second Linux sample found `ping` as the only transient closed
+process besides the listed session daemons.
+
 # v0.8.35 — Retention runs on hosts with SSH and user systemd
 
 Four new retention tests fail on v0.8.34 and pass now: a real non-dumpable child

@@ -10,6 +10,11 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Retention parity on macOS (v0.8.36)
+
+The companion retention helper now also runs when lsof cannot see a closed vendor
+agent, and when a short-lived `ping` is active. Native source and patch are unchanged.
+
 ## Retention runs again (v0.8.35)
 
 The companion retention helper no longer gives up on non-dumpable session daemons,

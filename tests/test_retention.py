@@ -157,6 +157,20 @@ class RetentionTests(unittest.TestCase):
                 process_result if command[0] == "ps" else lsof_result):
             self.assertIsNone(retention.held_paths())
 
+    def test_lsof_closed_session_daemon_is_not_unknown(self):
+        original = Path.is_dir
+        def without_proc(path):
+            return False if path == Path("/proc") else original(path)
+        process_result = type("Result", (), dict(returncode=0, stderr="",
+            stdout="123 S Fri Nov 6 12:00:00 2026 /usr/bin/python3\n"
+                   "456 S Fri Nov 6 12:00:00 2026 /Applications/GlobalProtect.app/Contents/Resources/PanGPS\n"))()
+        lsof_result = type("Result", (), dict(returncode=0, stderr="",
+            stdout="p123\0\nn/tmp/open\0\n"))()
+        with patch.object(Path, "is_dir", without_proc), patch.object(
+                retention.subprocess, "run", side_effect=lambda command, **kw:
+                process_result if command[0] == "ps" else lsof_result):
+            self.assertEqual(retention.held_paths(), {"/tmp/open"})
+
     def test_lsof_escaped_filename_is_unknown(self):
         original = Path.is_dir
         def without_proc(path):

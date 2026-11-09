@@ -155,6 +155,20 @@ owner shut Hermes down on 2026-11-08, was restarted, because it uses no model or
 network. To avoid new root-owned scratch, run containers with
 `--user "$(id -u):$(id -g)"` or the Docker backend's `docker_run_as_host_user`.
 
+## Retention on macOS and with periodic helpers (v0.8.36)
+
+The macOS lsof path had the same failure: the GlobalProtect agent `PanGPS` is not
+visible to the user's lsof, so every run kept everything. Retention last applied on
+the Mac on 2026-11-02, and its launchd job was no longer loaded. `ps` now reports
+each process name. A stable process that lsof omits is ignored only when its name is
+on the same closed-daemon list. On Linux, a periodic `ping` (non-dumpable because of
+file capabilities) intermittently made the daily purge keep everything; it is on the
+list too.
+
+Measured: the Mac preview went from `remove=0 keep=61` to 58 backup removals and 3
+lossless report packs; `~/.hermes` went from 11 GB to 8.6 GB, and the launchd job is
+loaded again. Linux and Mac run byte-identical helpers.
+
 ## Verify a compacted snapshot without restoring it live
 
 This command verifies an archive by streaming its bytes without loading the whole
