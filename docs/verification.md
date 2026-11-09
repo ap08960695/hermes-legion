@@ -1,3 +1,14 @@
+# v0.8.43 — v0.8.42 installed on the Mac
+
+The four v0.8.42 files are installed in the Mac checkout, and their SHA-256 values
+match Linux. On ARM64 macOS the new kick-contract case and 52 other goal cases pass
+in a temporary pytest environment, which was removed afterwards. Two
+`test_surface_goal_state_matches_cli[...-gateway]` cases fail in that run. Run alone
+on the unchanged base, the same test fails all 60 of its cases. The cause is that
+this checkout sits inside the real `~/.hermes`, so importing `cli` trips the
+`home_io_guard` test fixture; the v0.8.42 change does not cause it. The
+tui_gateway setup errors also occur on the base in that environment. No code change.
+
 # v0.8.42 — First /goal turn sees its contract and evidence rule
 
 The new case fails on v0.8.41. 99 goal-dispatch, kick and TUI goal cases pass, and
