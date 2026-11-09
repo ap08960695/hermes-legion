@@ -1,3 +1,10 @@
+# v0.8.44 — Second live judge verdict
+
+On card t_d1f9e350 the live goal judge rejected a finished card for violating the
+goal's own "do not reread" rule, which contradicted its Verification line. The
+cumulative count is 56/56 requests. No code change. See
+[the live cards](live-captain-cards-20261109.md#after-the-owner-raised-the-ceiling-to-56).
+
 # v0.8.43 — v0.8.42 installed on the Mac
 
 The four v0.8.42 files are installed in the Mac checkout, and their SHA-256 values

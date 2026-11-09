@@ -23,9 +23,19 @@ The t_8ff2d400 judge was right to reject the reply. Hermes caused the extra roun
 Verification criterion or the rule to show evidence. Only the continuation prompt
 carried that rule. v0.8.42 gives the first turn the same contract and evidence rule.
 
+## After the owner raised the ceiling to 56
+
+| Card | Source | Requests | Result |
+| --- | --- | --- | --- |
+| t_d1f9e350 | v0.8.43 kit | 8 | Card done, with evidence in the reply. The live judge answered `continue` because the reply showed a readback, while the goal text said "do not reread the card, call no other tools". The contract's Verification line required that readback. The judge applied the explicit constraint correctly. The test input contradicted itself; Hermes did not misbehave. The second judge call was refused at the 56 ceiling. |
+
+Lesson for goal authors: keep the goal text and the Verification line consistent. A
+judge treats an explicit prohibition as binding even when the contract asks for the
+opposite.
+
 ## What remains unproven
 
-- A live `done` verdict and terminal goal state. A live judge did run on t_8ff2d400 and answered `continue`. After the fix the reply carries the evidence that judge asked for, but no judge call fit inside the 48 ceiling.
+- A live `done` verdict and terminal goal state. Two live judge verdicts (t_8ff2d400, t_d1f9e350) were `continue`, each for a reason the judge stated correctly. A consistent test prompt is ready for the next quota.
 - Live use of the v0.8.37 judge memo, because no judge call ran.
 - Behaviour in a production Gateway or a running Desktop, which stay closed by owner
   instruction.
