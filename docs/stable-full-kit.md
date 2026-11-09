@@ -10,6 +10,15 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Goal ensure usage (v0.8.34)
+
+The goal-driven-execution skill now shows the exact `hermes goal ensure` form:
+contract text as one argument or heredoc on stdin, with `outcome:` and
+`verification:` lines. In an isolated live Captain card, the model read the
+skill, checked `hermes goal status`, then guessed nonexistent `--outcome` and
+`--verification` flags that native argparse rejects. Native source and the
+stable-full patch are unchanged.
+
 ## Verification update (v0.8.33)
 
 All twelve native check groups pass on Linux. Shared numeric owner checks and

@@ -1,3 +1,13 @@
+# v0.8.34 — Exact goal ensure usage in the Captain skill
+
+An isolated Captain card (private home, counted relay, 1 GiB cgroup, no Linux GPU,
+production closed) proved native skill discovery, exact installed skill read,
+card read and `hermes goal status`, then stopped when the model called
+`hermes goal ensure --outcome ... --verification ...`. Those flags do not exist,
+so the skill now gives the literal heredoc form. Five physical requests were used
+(23 of the owner's 32). Goal creation, card completion and the goal judge remain
+unproven live. Native source and patch bytes are unchanged.
+
 # v0.8.33 — Native checks and bounded test imports
 
 All twelve native blocking check groups pass on Linux, resolving 41 Ruff and nine
