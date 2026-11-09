@@ -1,3 +1,10 @@
+# v0.8.41 — Live Captain card evidence
+
+The owner `/goal` path, a delegated wording choice, the card comment and the card
+completion are now proven on isolated live cards. The goal judge verdict is not
+proven, because the 32-request ceiling is fully used. See
+[the three live cards](live-captain-cards-20261109.md).
+
 # v0.8.40 — Documentation correction
 
 The TUI in a git-checkout install rebuilds from source on launch. Only the web
