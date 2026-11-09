@@ -1,8 +1,14 @@
+# v0.8.40 — Documentation correction
+
+The TUI in a git-checkout install rebuilds from source on launch. Only the web
+dashboard bundle needs a manual build. No code change.
+
 # v0.8.39 — TUI agents panel shows tool and step
 
 1,882 TUI cases pass. The new case fails on v0.8.38. The patch verifies 989 targets
-on clean v0.22.5. The source files match on Linux and Mac. The installed TUI bundle
-still needs `npm run build`.
+on clean v0.22.5. The source files match on Linux and Mac. The TUI rebuilds itself
+from the newer source on its next launch. Correction in v0.8.40: an earlier note said
+it needed a manual build.
 
 # v0.8.38 — Tables on the web dashboard, honest TUI rendering hint
 

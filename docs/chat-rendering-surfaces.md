@@ -45,6 +45,7 @@ note is not repeated.
 Two new cases cover this, and one of them fails on v0.8.38. All 1,882 TUI cases
 pass (2 skipped), and the TypeScript check is clean. The local `hermes-ink` package
 had to be built first, because its `dist/` was missing in the dev checkout. Source is
-installed on Linux and Mac with matching hashes. The installed TUI bundle
-(`hermes_cli/tui_dist`) has not been rebuilt: run `npm run build` in `ui-tui/` on
-each host, the same step as `web_dist`.
+installed on Linux and Mac with matching hashes. These git-checkout installs ship no
+prebuilt `hermes_cli/tui_dist`, so the TUI launcher rebuilds `ui-tui/dist` by itself
+when the sources are newer (`_tui_need_rebuild`). Only `web_dist` needs a manual
+`npm run build`.
