@@ -47,6 +47,7 @@ Historical source comments and release payloads received [privacy maintenance](d
 - v0.8.18 [loads only returned adaptive recall payloads](docs/adaptive-recall-hydration.md), with byte-identical answers and fewer message bodies materialized.
 - v0.8.17 [stops workers after a verified blocked handoff](docs/blocked-worker-handoff.md), preserving the hold and saving one request in a bounded two-stage card test.
 - v0.8.16 [preserves ordered config type changes](docs/settings-null-sections.md#ordered-type-changes-v0816), avoiding stale fields when two writes cannot safely be combined.
+- v0.8.39 [shows a running subagent's tool and step in the TUI agents panel](docs/chat-rendering-surfaces.md#tui-agents-panel-shows-what-a-subagent-is-doing-v0839), matching the Desktop bot row.
 - v0.8.38 [renders tables on the web dashboard and tells the TUI model not to send diagram fences](docs/chat-rendering-surfaces.md).
 - v0.8.37 [reuses the goal-judge verdict for an identical input](docs/goal-judge-memo.md), so a repeated response costs no second judge call.
 - v0.8.35–v0.8.36 [make retention actually run](docs/storage-and-backups.md#retention-that-can-actually-run-v0835) on hosts with SSH, user systemd or a VPN agent; Linux Hermes home 43 GB to 33 GB, Mac 11 GB to 8.6 GB.
@@ -128,13 +129,13 @@ Review the [optional external-memory pilot guide](docs/external-memory-pilot.md)
 Clone the release and run from its repository root; the same commands work after extracting the release archive and entering its top-level directory. Only Python and Git are needed for this companion-only walkthrough. Native profile setup has the additional upstream prerequisites documented separately.
 
 ```sh
-git clone --branch v0.8.38 --single-branch https://github.com/ap08960695/hermes-legion.git
+git clone --branch v0.8.39 --single-branch https://github.com/ap08960695/hermes-legion.git
 cd hermes-legion
 python3 scripts/verify_release.py
 python3 scripts/legion_plan.py --team examples/team.full.json --snapshot examples/snapshots/synthetic-ready.json --tasks examples/scenarios/parallel-production.json --now 1
 ```
 
-The walkthrough pins v0.8.38. The consolidated stable kit is an alternative to the historical cumulative patch and the smaller stable units; select exactly one matching manifest. Source application, a running application, original-session adoption and measured workload improvements remain separate evidence. See the [verification record](docs/verification.md).
+The walkthrough pins v0.8.39. The consolidated stable kit is an alternative to the historical cumulative patch and the smaller stable units; select exactly one matching manifest. Source application, a running application, original-session adoption and measured workload improvements remain separate evidence. See the [verification record](docs/verification.md).
 
 For an existing Mac, follow the [isolated source installation and update guide](docs/macos-install-update.md). It keeps native CLI, Desktop packaging and production activation evidence separate.
 

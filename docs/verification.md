@@ -1,3 +1,9 @@
+# v0.8.39 — TUI agents panel shows tool and step
+
+1,882 TUI cases pass. The new case fails on v0.8.38. The patch verifies 989 targets
+on clean v0.22.5. The source files match on Linux and Mac. The installed TUI bundle
+still needs `npm run build`.
+
 # v0.8.38 — Tables on the web dashboard, honest TUI rendering hint
 
 Three new cases fail on v0.8.37 and pass now. 452 web cases and 97 prompt and

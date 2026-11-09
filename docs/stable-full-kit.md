@@ -10,6 +10,11 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## TUI agent activity (v0.8.39)
+
+The kit covers 989 paths. The TUI agents panel shows a running subagent's tool and
+step. See [chat rendering surfaces](chat-rendering-surfaces.md#tui-agents-panel-shows-what-a-subagent-is-doing-v0839).
+
 ## Chat rendering across surfaces (v0.8.38)
 
 The kit covers 986 paths. The web dashboard renders tables and labels fenced

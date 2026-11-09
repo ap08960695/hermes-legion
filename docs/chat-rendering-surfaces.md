@@ -33,3 +33,18 @@ shows tables.
 - The web bundle builds into a scratch directory. The installed `web_dist` was not
   rebuilt, because another session is testing the running dashboard on Linux.
   Rebuild it with `npm run build` in `web/` when that dashboard is free.
+
+## TUI agents panel shows what a subagent is doing (v0.8.39)
+
+The Desktop bot row already showed a worker's tool, step, elapsed time and tokens.
+The TUI's docked agents panel showed only the latest note. A running subagent's row
+now also shows its current tool and step, for example
+`Reading the config · read_file config.yaml · step 4`. A tool already shown as the
+note is not repeated.
+
+Two new cases cover this, and one of them fails on v0.8.38. All 1,882 TUI cases
+pass (2 skipped), and the TypeScript check is clean. The local `hermes-ink` package
+had to be built first, because its `dist/` was missing in the dev checkout. Source is
+installed on Linux and Mac with matching hashes. The installed TUI bundle
+(`hermes_cli/tui_dist`) has not been rebuilt: run `npm run build` in `ui-tui/` on
+each host, the same step as `web_dist`.
