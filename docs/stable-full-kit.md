@@ -10,6 +10,12 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Chat rendering across surfaces (v0.8.38)
+
+The kit covers 986 paths. The web dashboard renders tables and labels fenced
+blocks, and the TUI hint stops the model from sending unrenderable mermaid or chart
+fences. See [chat rendering surfaces](chat-rendering-surfaces.md).
+
 ## Goal-judge verdict reuse (v0.8.37)
 
 The kit now covers 983 paths. `hermes_cli/goals_judge_memo.py` reuses the judge's

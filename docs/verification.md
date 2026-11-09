@@ -1,3 +1,10 @@
+# v0.8.38 — Tables on the web dashboard, honest TUI rendering hint
+
+Three new cases fail on v0.8.37 and pass now. 452 web cases and 97 prompt and
+hint cases pass on Linux. The patch verifies 986 targets on clean v0.22.5. Source
+is installed on Linux and Mac with matching hashes. The installed web bundle has
+not been rebuilt yet. See [chat rendering surfaces](chat-rendering-surfaces.md).
+
 # v0.8.37 — Reuse the goal-judge verdict for an identical input
 
 One new case fails on v0.8.36 and passes now. 494 cases in 35 goal and judge test
