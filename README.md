@@ -47,6 +47,7 @@ Historical source comments and release payloads received [privacy maintenance](d
 - v0.8.18 [loads only returned adaptive recall payloads](docs/adaptive-recall-hydration.md), with byte-identical answers and fewer message bodies materialized.
 - v0.8.17 [stops workers after a verified blocked handoff](docs/blocked-worker-handoff.md), preserving the hold and saving one request in a bounded two-stage card test.
 - v0.8.16 [preserves ordered config type changes](docs/settings-null-sections.md#ordered-type-changes-v0816), avoiding stale fields when two writes cannot safely be combined.
+- v0.8.42 [starts a /goal turn with its contract and evidence rule](docs/live-captain-cards-20261109.md#after-the-owner-raised-the-ceiling-to-48), so a finished card is not sent back for one more turn for lack of evidence.
 - v0.8.41 records [live Captain card evidence](docs/live-captain-cards-20261109.md): an owner `/goal` set the goal, and the Captain chose a wording, commented and completed the card. The judge verdict is still pending quota.
 - v0.8.39 [shows a running subagent's tool and step in the TUI agents panel](docs/chat-rendering-surfaces.md#tui-agents-panel-shows-what-a-subagent-is-doing-v0839), matching the Desktop bot row.
 - v0.8.38 [renders tables on the web dashboard and tells the TUI model not to send diagram fences](docs/chat-rendering-surfaces.md).
@@ -130,13 +131,13 @@ Review the [optional external-memory pilot guide](docs/external-memory-pilot.md)
 Clone the release and run from its repository root; the same commands work after extracting the release archive and entering its top-level directory. Only Python and Git are needed for this companion-only walkthrough. Native profile setup has the additional upstream prerequisites documented separately.
 
 ```sh
-git clone --branch v0.8.41 --single-branch https://github.com/ap08960695/hermes-legion.git
+git clone --branch v0.8.42 --single-branch https://github.com/ap08960695/hermes-legion.git
 cd hermes-legion
 python3 scripts/verify_release.py
 python3 scripts/legion_plan.py --team examples/team.full.json --snapshot examples/snapshots/synthetic-ready.json --tasks examples/scenarios/parallel-production.json --now 1
 ```
 
-The walkthrough pins v0.8.41. The consolidated stable kit is an alternative to the historical cumulative patch and the smaller stable units; select exactly one matching manifest. Source application, a running application, original-session adoption and measured workload improvements remain separate evidence. See the [verification record](docs/verification.md).
+The walkthrough pins v0.8.42. The consolidated stable kit is an alternative to the historical cumulative patch and the smaller stable units; select exactly one matching manifest. Source application, a running application, original-session adoption and measured workload improvements remain separate evidence. See the [verification record](docs/verification.md).
 
 For an existing Mac, follow the [isolated source installation and update guide](docs/macos-install-update.md). It keeps native CLI, Desktop packaging and production activation evidence separate.
 

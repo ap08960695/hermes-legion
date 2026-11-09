@@ -1,3 +1,13 @@
+# v0.8.42 — First /goal turn sees its contract and evidence rule
+
+The new case fails on v0.8.41. 99 goal-dispatch, kick and TUI goal cases pass, and
+498 cases pass across 40 goal-related files. The 7 remaining failures are the 2
+gateway kickoff timing cases, which also fail on the base commit, and 5 assertions
+that compared the kick prompt to the bare headline (updated). The patch is
+installed in the live Linux checkout. The Mac is held, by host agreement with
+another session. On the live card the reply carried the requested evidence, but the
+judge call did not fit inside the 48-request ceiling.
+
 # v0.8.41 — Live Captain card evidence
 
 The owner `/goal` path, a delegated wording choice, the card comment and the card

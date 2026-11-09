@@ -32481,6 +32481,29 @@ index 0000000000000000000000000000000000000000..4e79b5fc30dad6fbb4af84d6a2cf0944
 +    except Exception as exc:
 +        logger.debug('Continuation %s migration not confirmed: %s', prefix, exc)
 +        return False
+diff --git a/hermes_cli/goal_command.py b/hermes_cli/goal_command.py
+index 0c19ebf3641b5e809a20f999988c19a38428881d..cc59114db3a89152e24266ed1cfc7596de919e8f 100644
+--- a/hermes_cli/goal_command.py
++++ b/hermes_cli/goal_command.py
+@@ -171,3 +171,17 @@ def _set(mgr, arg, *, drafting, last_user_message, render, progress):
+                    "exhausted. Use /goal status, /goal show, /goal pause, /goal resume, /goal clear.")
+-    return GoalCommandResult(output, goals.goal_kick_prompt(state.goal, last_user_message), kickoff=True)
++    return GoalCommandResult(output, _kick_with_contract(state, last_user_message), kickoff=True)
++
++
++# The judge reads only the final reply, and the headline alone omits the contract lines, so a first
++# turn that never saw the Verification criterion (or never quoted its evidence) cost a wasted judge
++# round. Give the first turn the same contract and evidence rule the continuation prompt uses.
++_KICK_EVIDENCE = ("Before claiming the goal is done, satisfy the Verification criterion and show the "
++                  "concrete evidence (tool result, command output, file contents) in your final reply.")
++
++
++def _kick_with_contract(state, last_user_message):
++    kick = goals.goal_kick_prompt(state.goal, last_user_message)
++    if not state.has_contract():
++        return kick
++    return f"{kick}\n\nCompletion contract:\n{state.contract.render_block()}\n\n{_KICK_EVIDENCE}"
+ 
 diff --git a/hermes_cli/goal_self.py b/hermes_cli/goal_self.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..e7be6d1c50f59f85be6c89a3bfc765e0fd326edb
@@ -57362,6 +57385,21 @@ index 0000000000000000000000000000000000000000..2b3a0591481042ae2ee513ae5fa397d2
 +        goals.judge_goal("g", "r", delegated_decisions=True)
 +    assert "DELEGATED DECISIONS" not in seen[0]
 +    assert "DELEGATED DECISIONS" in seen[1]
+diff --git a/tests/hermes_cli/test_goal_dispatch.py b/tests/hermes_cli/test_goal_dispatch.py
+index 2aa63bb7f7b3e6161b9032e3b7f55e9fb37294db..2edc723b4a9f65508b927efb0ff5c9698962b9c6 100644
+--- a/tests/hermes_cli/test_goal_dispatch.py
++++ b/tests/hermes_cli/test_goal_dispatch.py
+@@ -109,3 +109,4 @@ def test_drafts_start_work_but_inspection_and_literal_prefixes_do_not_draft(
+     assert calls == ['build it']
+-    assert prompts == ['build it']
++    assert [p.split('\n', 1)[0] for p in prompts] == ['build it']
++    assert ('show the concrete evidence' in prompts[0]) == (draft_result == 'contract')
+     execute('show')
+@@ -114,3 +115,3 @@ def test_drafts_start_work_but_inspection_and_literal_prefixes_do_not_draft(
+     assert goals.load_goal(mgr.session_id).goal == 'build it'
+-    assert prompts == ['build it']
++    assert len(prompts) == 1
+     execute('drafting docs')
 diff --git a/tests/hermes_cli/test_goal_judge_memo.py b/tests/hermes_cli/test_goal_judge_memo.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..bb3235259eb0aa34c805f6db996e048979cf705d
@@ -57590,6 +57628,31 @@ index 0000000000000000000000000000000000000000..ac0cd899fff8a51597724373d5ca54b4
 +    again = manager.evaluate_after_turn("Still waiting")
 +    assert not again["should_continue"] and counts == [2]
 +    assert manager.state.turns_used == turns
+diff --git a/tests/hermes_cli/test_goal_kick_contract.py b/tests/hermes_cli/test_goal_kick_contract.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..cee28e5ff8193e0346487869ae5465f7468c3852
+--- /dev/null
++++ b/tests/hermes_cli/test_goal_kick_contract.py
+@@ -0,0 +1,19 @@
++"""The first goal turn sees the completion contract and the evidence rule the judge relies on."""
++from hermes_cli import goals
++from hermes_cli.goal_command import dispatch_goal_command
++
++
++def _set(text):
++    mgr = goals.GoalManager(session_id="kick-contract", default_max_turns=5)
++    return dispatch_goal_command(mgr, text, authorize_gate=lambda: None, last_user_message="")
++
++
++def test_kick_carries_contract_and_evidence_rule():
++    result = _set("close card t_1\noutcome: card t_1 is done\nverification: read card t_1 back as done")
++    assert result.kickoff and result.prompt.startswith("close card t_1")
++    assert "read card t_1 back as done" in result.prompt
++    assert "show the concrete evidence" in result.prompt
++
++
++def test_free_form_goal_kick_is_unchanged():
++    assert _set("ship the report").prompt == "ship the report"
 diff --git a/tests/hermes_cli/test_goal_result_wait.py b/tests/hermes_cli/test_goal_result_wait.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..95d8c02f6d7740246844655b6b1f290f695fdf62
@@ -76847,6 +76910,14 @@ index 0000000000000000000000000000000000000000..e6de764c5dfcf879bc66fd671b0b6903
 +    assert mtime['result']['mtime'] == 200
 +    launch_location = server._methods['config.get']('launch', {'key':'profile'})
 +    assert launch_location['result']['home'] == str(launch)
+diff --git a/tests/tui_gateway/test_goal_command.py b/tests/tui_gateway/test_goal_command.py
+index 22ac870f87494705baf6a7d8f88caa36e8f871b1..4d2e0d5d88786d66cabe8e6af8d37a8dad133ec8 100644
+--- a/tests/tui_gateway/test_goal_command.py
++++ b/tests/tui_gateway/test_goal_command.py
+@@ -594,2 +594,2 @@ def test_goal_draft_uses_session_profile_without_blocking_rpc_reader(
+     result = next(frame["result"] for frame in frames if frame.get("id") == "draft")
+-    assert result["type"] == "send" and result["message"] == state.goal
++    assert result["type"] == "send" and result["message"].startswith(state.goal)
 diff --git a/tests/tui_gateway/test_hosted_runtime_arming.py b/tests/tui_gateway/test_hosted_runtime_arming.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..573f02a2e4a21614f124e923ad010971c52ec343

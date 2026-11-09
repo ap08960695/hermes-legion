@@ -10,6 +10,13 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## First goal turn sees its contract (v0.8.42)
+
+The kit covers 993 paths. `/goal` with a completion contract now starts the first turn
+with the contract and the evidence rule, not just the headline. A live judge had
+answered `continue` for a finished card whose reply carried no evidence. See
+[live Captain cards](live-captain-cards-20261109.md).
+
 ## TUI agent activity (v0.8.39)
 
 The kit covers 989 paths. The TUI agents panel shows a running subagent's tool and

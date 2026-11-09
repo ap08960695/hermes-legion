@@ -10,9 +10,22 @@ owner's ceiling of 32 model requests is now fully used.
 | t_58048ed9 | v0.8.34 skill | 5 | The Captain created its own native session goal with `hermes goal ensure` | Ran `python3`, which the test policy forbids |
 | t_4380d341 | v0.8.40 kit (989 paths) | 4 | Owner `/goal` set through the native TUI command path (no model call). The Captain chose between the two allowed wordings on its own, commented "เลือก รวมได้ 5 เพราะสั้นและชัด", and completed the card with result `รวมได้ 5`. The card reads back as done. | Its fifth request (the final reply) hit the 32-request ceiling, so the post-turn goal judge never ran |
 
+## After the owner raised the ceiling to 48
+
+| Card | Source | Requests | Result |
+| --- | --- | --- | --- |
+| t_280a5933 | v0.8.40 kit | 3 | Stopped when the Captain checked `2+3` with `python3`, which the fixture policy forbade at the time. The fixture now allows read-only goal checks and pure arithmetic checks. |
+| t_8ff2d400 | v0.8.40 kit | 8 | The card was done, and the **first live goal-judge verdict** ran: `continue`, because "the response claims completion but provides no concrete tool-result evidence". The loop then spent another turn. |
+| t_c93184b4 | v0.8.42 candidate | 5 | With the kick fix, the first turn saw its contract. The Captain read the card back and replied with evidence (`status: "done"`, `result: "รวมได้ 5"`, the comment). The judge call would have been request 49, so it was refused at the 48 ceiling. |
+
+The t_8ff2d400 judge was right to reject the reply. Hermes caused the extra round:
+`/goal` started the first turn with only the headline, so the turn never saw the
+Verification criterion or the rule to show evidence. Only the continuation prompt
+carried that rule. v0.8.42 gives the first turn the same contract and evidence rule.
+
 ## What remains unproven
 
-- A live post-turn goal judge verdict and terminal goal state. This needs more quota.
+- A live `done` verdict and terminal goal state. A live judge did run on t_8ff2d400 and answered `continue`. After the fix the reply carries the evidence that judge asked for, but no judge call fit inside the 48 ceiling.
 - Live use of the v0.8.37 judge memo, because no judge call ran.
 - Behaviour in a production Gateway or a running Desktop, which stay closed by owner
   instruction.
