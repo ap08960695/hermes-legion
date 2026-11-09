@@ -31,6 +31,12 @@ import tempfile
 import time
 
 DAY = 86400
+# Session daemons the kernel marks non-dumpable, so their /proc links are closed to the
+# owning user. They never open Hermes scratch, backups or reports; refusing on them left
+# retention permanently unavailable on any host with an SSH login or a user systemd.
+# ponytail: name allowlist; an unknown closed process still makes observation unknown.
+CLOSED_SESSION_DAEMONS = frozenset({
+    "systemd", "(sd-pam)", "gpg-agent", "ssh-agent", "sshd", "sshd-session", "sftp-server"})
 
 
 def _user_processes():
@@ -76,6 +82,17 @@ def held_paths():
                 if not p.exists():
                     continue
                 return None
+            try:
+                os.readlink(p / "cwd")
+            except PermissionError:
+                try:
+                    if p.joinpath("comm").read_text().strip() in CLOSED_SESSION_DAEMONS:
+                        continue
+                except OSError:
+                    pass
+                return None
+            except OSError:
+                pass  # Exit races are handled by the full observation below.
             for link in ("cwd", "exe"):
                 try:
                     held.add(os.readlink(p / link))
@@ -125,8 +142,14 @@ def source_stamp(path):
 
     def add(item):
         info = item.lstat()
-        if not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
+        # Links inside a tree (node_modules/.bin) are removed as links; rmtree never follows them.
+        inner_link = stat.S_ISLNK(info.st_mode) and item != path
+        if not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode) or inner_link):
             raise ValueError("links and special files require manual retention")
+        if inner_link:
+            digest.update(os.fsencode(os.readlink(item)))
+        if info.st_uid != os.getuid():
+            raise ValueError("another user's files require manual retention")
         if item.name in {".keep", ".git"}:
             raise ValueError("retained workspace marker")
         values = (str(item.relative_to(path)), info.st_dev, info.st_ino, info.st_mode,
@@ -188,8 +211,8 @@ class Plan:
         if not why:
             try:
                 self.stamps[path] = source_stamp(path)
-            except (OSError, ValueError):
-                why = "unreadable or retained tree"
+            except (OSError, ValueError) as exc:
+                why = f"retained tree: {exc}"
         self.actions.append(("keep" if why else kind, path, why or reason))
 
     def idle_for(self, path, days):
@@ -292,28 +315,38 @@ def pack(entry, can_remove=None):
 
 
 def apply(plan):
+    failed = 0
     for kind, path, _ in plan.actions:
-        if kind == "keep":
-            continue
-        plan.held = held_paths()
-        why = plan.blocked(path)
         try:
-            unchanged = source_stamp(path) == plan.stamps[path]
-        except (OSError, ValueError):
-            unchanged = False
-        if why or not unchanged:
-            print(f"keep   {path.relative_to(plan.home)}  ({why or 'source changed'})")
-            continue
-        if kind == "remove":
-            if path.is_dir() and not path.is_symlink():
-                shutil.rmtree(path)
-            else:
-                path.unlink()
-        elif kind == "pack":
-            def can_remove():
-                plan.held = held_paths()
-                return not plan.blocked(path)
-            pack(path, can_remove)
+            _apply_one(plan, kind, path)
+        except OSError as exc:  # One stuck entry must not abandon the rest of the plan.
+            failed += 1
+            print(f"failed {path.relative_to(plan.home)}  ({exc.strerror or exc})")
+    return failed
+
+
+def _apply_one(plan, kind, path):
+    if kind == "keep":
+        return
+    plan.held = held_paths()
+    why = plan.blocked(path)
+    try:
+        unchanged = source_stamp(path) == plan.stamps[path]
+    except (OSError, ValueError):
+        unchanged = False
+    if why or not unchanged:
+        print(f"keep   {path.relative_to(plan.home)}  ({why or 'source changed'})")
+        return
+    if kind == "remove":
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+    elif kind == "pack":
+        def can_remove():
+            plan.held = held_paths()
+            return not plan.blocked(path)
+        pack(path, can_remove)
 
 
 def main(argv=None):
@@ -340,8 +373,8 @@ def main(argv=None):
     counts = {k: sum(1 for a in plan.actions if a[0] == k) for k in ("remove", "pack", "keep")}
     print(f"summary: remove={counts['remove']} pack={counts['pack']} keep={counts['keep']}"
           + ("" if args.apply else " (preview; add --apply)"))
-    if args.apply:
-        apply(plan)
+    if args.apply and apply(plan):
+        return 1
     return 0
 
 

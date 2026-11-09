@@ -1,3 +1,12 @@
+# v0.8.35 — Retention runs on hosts with SSH and user systemd
+
+Four new retention tests fail on v0.8.34 and pass now: a real non-dumpable child
+named `gpg-agent` no longer disables observation, while an unknown closed process
+still does; a stuck entry no longer abandons the plan; another user's tree is kept;
+inner links are removed without touching their targets. All 23 retention tests pass.
+On the Linux host, the preview went from `remove=0 keep=298` to a working plan. The
+installed purge dry-run exits 0. Hermes home dropped from 43 GB to 34 GB.
+
 # v0.8.34 — Exact goal ensure usage in the Captain skill
 
 An isolated Captain card (private home, counted relay, 1 GiB cgroup, no Linux GPU,

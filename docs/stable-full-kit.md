@@ -10,6 +10,13 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Retention runs again (v0.8.35)
+
+The companion retention helper no longer gives up on non-dumpable session daemons,
+continues past an entry it cannot remove, and removes links inside idle trees without
+following them. Native source and the stable-full patch are unchanged. See
+[storage and backups](storage-and-backups.md#retention-that-can-actually-run-v0835).
+
 ## Goal ensure usage (v0.8.34)
 
 The goal-driven-execution skill now shows the exact `hermes goal ensure` form:

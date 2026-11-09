@@ -2,6 +2,9 @@
 import importlib.util
 import io
 import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 import tarfile
 import tempfile
@@ -176,6 +179,69 @@ class RetentionTests(unittest.TestCase):
             return original(path, *args, **kwargs)
         with patch.object(Path, "read_text", deny_maps):
             self.assertTrue(retention.held_paths() is None, "partial observation must remain unknown")
+
+    @unittest.skipUnless(Path("/proc").is_dir(), "Linux process observation")
+    def test_closed_session_daemon_does_not_disable_observation(self):
+        script = ("import ctypes,sys,time\n"
+                  "libc = ctypes.CDLL(None)\n"
+                  "libc.prctl(15, sys.argv[1].encode(), 0, 0, 0)\n"
+                  "libc.prctl(4, 0, 0, 0, 0)\n"
+                  "print(flush=True)\n"
+                  "time.sleep(30)\n")
+        for name, observable in (("gpg-agent", True), ("unknown-closed", False)):
+            child = subprocess.Popen([sys.executable, "-c", script, name], stdout=subprocess.PIPE)
+            try:
+                child.stdout.readline()
+                with self.assertRaises(PermissionError):
+                    os.readlink(f"/proc/{child.pid}/cwd")
+                self.assertEqual(retention.held_paths() is not None, observable, name)
+            finally:
+                child.kill()
+                child.wait()
+
+    def test_stuck_entry_does_not_abandon_the_rest_of_the_plan(self):
+        h = self.home
+        original = shutil.rmtree
+        def stuck(path, *args, **kwargs):
+            if Path(path).name == "old":
+                raise PermissionError(13, "Permission denied")
+            return original(path, *args, **kwargs)
+        out = io.StringIO()
+        with patch.object(retention.shutil, "rmtree", stuck), \
+                patch.object(retention, "held_paths", return_value=set()), redirect_stdout(out):
+            code = retention.main(["--home", str(h), "--now", str(NOW), "--apply"])
+        self.assertEqual(code, 1)
+        self.assertIn("failed profiles/dev/cache/scratch/old", out.getvalue())
+        self.assertEqual(sorted(p.name for p in (h / "backups").iterdir()), ["b0", "b1", "b2"])
+
+    def test_another_users_tree_is_retained(self):
+        foreign = os.getuid() + 1
+        real_lstat = Path.lstat
+        def lstat(path):
+            info = real_lstat(path)
+            if "scratch/old" not in str(path):
+                return info
+            return os.stat_result((*info[:4], foreign, *info[5:]))
+        with patch.object(Path, "lstat", lstat):
+            out = self.run_cli("--apply")
+        self.assertTrue((self.home / "profiles/dev/cache/scratch/old/a.txt").exists())
+        self.assertIn("keep   profiles/dev/cache/scratch/old", out)
+
+    def test_inner_links_are_removed_without_touching_targets(self):
+        outside = make(self.home.parent / (self.home.name + "-target.txt"), 10)
+        self.addCleanup(outside.unlink)
+        tree = self.home / "profiles/dev/cache/scratch/app"
+        make(tree / "node_modules/pkg/cli.js", 10)
+        (tree / "node_modules/.bin").mkdir()
+        (tree / "node_modules/.bin/cli").symlink_to("../pkg/cli.js")
+        (tree / "outside").symlink_to(outside)
+        for d in (tree / "node_modules/.bin", tree / "node_modules/pkg", tree / "node_modules", tree):
+            age_dir(d, 10)
+        for link in (tree / "node_modules/.bin/cli", tree / "outside"):
+            os.utime(link, (NOW - 10 * 86400,) * 2, follow_symlinks=False)
+        self.run_cli("--apply")
+        self.assertFalse(tree.exists())
+        self.assertTrue(outside.exists())
 
     def test_report_modified_during_archive_is_not_removed(self):
         entry = self.home / "reports/run1"

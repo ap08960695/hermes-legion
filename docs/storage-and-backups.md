@@ -129,6 +129,32 @@ paths and to stop when either process or open-card protection cannot be read. It
 longer traverses unrelated project worktrees. That private wrapper is not a portable
 installer supplied by this repository.
 
+## Retention that can actually run (v0.8.35)
+
+The v0.8.2 guard treated every same-user process it could not inspect as partial
+visibility. A user systemd manager, `(sd-pam)`, `gpg-agent` and an SSH or SFTP
+session are marked non-dumpable by the kernel, so their `/proc` links are closed to
+their own user. On this Linux host the daily purge therefore kept everything and
+exited 3 on every run: Hermes home reached 43 GB. Those named session daemons are now
+skipped; any other closed process still makes observation unknown.
+
+Three further gaps are closed:
+
+- One entry that cannot be removed (for example files a `docker run` created as root
+  inside scratch) no longer aborts the rest of `--apply`. It prints `failed` and the
+  exit status is 1.
+- A tree containing another user's files is kept at planning time with that reason,
+  instead of failing during removal.
+- Links inside a tree such as `node_modules/.bin` no longer pin the whole tree; their
+  targets are fingerprinted and never followed. A link at the candidate root is still
+  kept.
+
+Measured on Linux: 9.2 GB of idle root-owned build copies in worker scratch were
+removed once with elevated rights. The daily `hermes-purge` timer, stopped when the
+owner shut Hermes down on 2026-11-08, was restarted, because it uses no model or
+network. To avoid new root-owned scratch, run containers with
+`--user "$(id -u):$(id -g)"` or the Docker backend's `docker_run_as_host_user`.
+
 ## Verify a compacted snapshot without restoring it live
 
 This command verifies an archive by streaming its bytes without loading the whole
