@@ -1,3 +1,10 @@
+# v0.8.37 — Reuse the goal-judge verdict for an identical input
+
+One new case fails on v0.8.36 and passes now. 494 cases in 35 goal and judge test
+files pass on Linux, and 57 cases in 5 files pass on ARM64 macOS. The patch applies
+to clean v0.22.5 and verifies 983 targets. The installed Linux and Mac files match.
+See [the memo's scope and limits](goal-judge-memo.md).
+
 # v0.8.36 — Retention parity on macOS
 
 A new lsof-path test fails on v0.8.35 and passes now; all 24 retention tests pass on

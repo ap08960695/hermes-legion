@@ -10,6 +10,13 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Goal-judge verdict reuse (v0.8.37)
+
+The kit now covers 983 paths. `hermes_cli/goals_judge_memo.py` reuses the judge's
+`done`/`blocked`/`continue` verdict for an input identical except for its clock, so
+a repeated response does not cost a second judge call. See
+[goal-judge memo](goal-judge-memo.md).
+
 ## Retention parity on macOS (v0.8.36)
 
 The companion retention helper now also runs when lsof cannot see a closed vendor
