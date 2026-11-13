@@ -1,5 +1,6 @@
 """Retention removes only aged disposable data and never what a process holds."""
 import importlib.util
+import gzip
 import io
 import os
 import shutil
@@ -227,6 +228,72 @@ class RetentionTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("failed profiles/dev/cache/scratch/old", out.getvalue())
         self.assertEqual(sorted(p.name for p in (h / "backups").iterdir()), ["b0", "b1", "b2"])
+
+    def test_rejected_linked_report_does_not_abandon_later_report(self):
+        entry = self.home / "reports/a-linked"
+        report = make(entry / "report.txt", 5, "synthetic report")
+        target = self.home / "state.db"
+        original = target.read_bytes()
+        link = entry / "link"
+        link.symlink_to(target)
+        os.utime(link, (NOW - 5 * 86400,) * 2, follow_symlinks=False)
+        age_dir(entry, 5)
+        later = (self.home / "reports/run1/report.txt").read_bytes()
+        out = io.StringIO()
+        with patch.object(retention, "held_paths", return_value=set()), redirect_stdout(out):
+            code = retention.main(["--home", str(self.home), "--now", str(NOW), "--apply"])
+        self.assertEqual(code, 1)
+        self.assertIn("failed reports/a-linked  (archive file type differs)", out.getvalue())
+        self.assertEqual(report.read_text(), "synthetic report")
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(target.read_bytes(), original)
+        self.assertFalse(entry.with_name("a-linked.tar.gz").exists())
+        self.assertEqual(list(entry.parent.glob(".legion-pack-*")), [])
+        self.assertFalse((self.home / "reports/run1").exists())
+        with tarfile.open(self.home / "reports/run1.tar.gz") as tar:
+            self.assertEqual(tar.extractfile("run1/report.txt").read(), later)
+
+    def test_corrupt_report_archive_does_not_abandon_later_report(self):
+        verify = retention._verify_archive
+        for corruption in ("payload", "gzip-trailer", "tar-header", "deflate", "deflate-trailer"):
+            with self.subTest(corruption=corruption), tempfile.TemporaryDirectory() as tmp:
+                home = Path(tmp).resolve()
+                entry = home / "reports/a-corrupt"
+                source = make(entry / "report.txt", 5, "synthetic evidence")
+                later = make(home / "reports/z-valid/report.txt", 5, "later evidence")
+                for directory in (entry, later.parent):
+                    age_dir(directory, 5)
+
+                def corrupt_then_verify(archive, original):
+                    if original == entry:
+                        if corruption == "payload":
+                            with tarfile.open(archive, "w:gz") as tar:
+                                info = tarfile.TarInfo("a-corrupt/report.txt")
+                                info.size = 5
+                                tar.addfile(info, io.BytesIO(b"wrong"))
+                        elif corruption == "gzip-trailer":
+                            archive.write_bytes(archive.read_bytes()[:-8])
+                        elif corruption == "tar-header":
+                            archive.write_bytes(gzip.compress(b"not a tar archive"))
+                        elif corruption == "deflate-trailer":
+                            archive.write_bytes(archive.read_bytes() + b"\x1f\x8b\x08\x00" + b"\x00" * 6 + b"\x07")
+                        else:
+                            archive.write_bytes(b"\x1f\x8b\x08\x00" + b"\x00" * 6 + b"\x07")
+                    verify(archive, original)
+
+                out = io.StringIO()
+                with patch.object(retention, "_verify_archive", corrupt_then_verify), \
+                        patch.object(retention, "held_paths", return_value=set()), redirect_stdout(out):
+                    code = retention.main(["--home", str(home), "--now", str(NOW), "--apply"])
+                self.assertEqual(code, 1)
+                self.assertIn("failed reports/a-corrupt", out.getvalue())
+                self.assertNotIn("failed reports/z-valid", out.getvalue())
+                self.assertEqual(source.read_text(), "synthetic evidence")
+                self.assertFalse(entry.with_name("a-corrupt.tar.gz").exists())
+                self.assertEqual(list(entry.parent.glob(".legion-pack-*")), [])
+                self.assertFalse(later.parent.exists())
+                with tarfile.open(home / "reports/z-valid.tar.gz") as tar:
+                    self.assertEqual(tar.extractfile("z-valid/report.txt").read(), b"later evidence")
 
     def test_another_users_tree_is_retained(self):
         foreign = os.getuid() + 1

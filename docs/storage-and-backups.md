@@ -169,6 +169,28 @@ Measured: the Mac preview went from `remove=0 keep=61` to 58 backup removals and
 lossless report packs; `~/.hermes` went from 11 GB to 8.6 GB, and the launchd job is
 loaded again. Linux and Mac run byte-identical helpers.
 
+## Report validation failures (v0.8.49)
+
+One rejected report no longer aborts later entries in `--apply`. The per-entry
+boundary now handles the verifier's `ValueError`, truncated-stream `EOFError`,
+tar errors and DEFLATE errors alongside existing filesystem errors. It prints a
+`failed` diagnostic, counts the failure, continues independent entries, and still
+returns exit status 1. Unexpected exception types are not caught.
+
+Archive validation is unchanged. Unsupported report links and mismatched or
+malformed archives remain refusals. Before publication, a rejected report keeps
+its source and link targets, the temporary archive is removed, and no destination
+archive is published. A failure after successful publication can still leave both
+copies; inspect that state before any later attempt. Process visibility, protected
+paths, ownership, age and unchanged-source checks remain in force.
+
+Offline regressions run the real archive writer and verifier in synthetic homes.
+They cover a linked report, changed archive payload, missing gzip trailer, invalid
+tar header, invalid DEFLATE, and invalid appended gzip member. Each checks the
+failed report's preservation and a later valid report's exact archived payload.
+Process observations are controlled fixtures; these checks do not establish
+production cleanup, reclaimed bytes or timer activation. Stopped timers stay off.
+
 ## Verify a compacted snapshot without restoring it live
 
 This command verifies an archive by streaming its bytes without loading the whole

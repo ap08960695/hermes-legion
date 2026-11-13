@@ -29,6 +29,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import zlib
 
 DAY = 86400
 # Session daemons the kernel marks non-dumpable, so their /proc links are closed to the
@@ -322,9 +323,9 @@ def apply(plan):
     for kind, path, _ in plan.actions:
         try:
             _apply_one(plan, kind, path)
-        except OSError as exc:  # One stuck entry must not abandon the rest of the plan.
+        except (OSError, ValueError, EOFError, tarfile.TarError, zlib.error) as exc:  # A rejected entry must not abort later cleanup.
             failed += 1
-            print(f"failed {path.relative_to(plan.home)}  ({exc.strerror or exc})")
+            print(f"failed {path.relative_to(plan.home)}  ({getattr(exc, 'strerror', None) or exc})")
     return failed
 
 

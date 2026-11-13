@@ -10,6 +10,14 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Report retention failure isolation (v0.8.49)
+
+The companion retention helper now reports known archive-validation failures per
+entry and continues later eligible work, while retaining a failed run status.
+Rejected reports stay intact; archive validation and process/ownership guards are
+unchanged. See [storage safeguards](storage-and-backups.md#report-validation-failures-v0849).
+The upstream base, 993 native targets, patches and test selection are unchanged.
+
 ## Explicit offline doctor manifest (v0.8.48)
 
 The doctor can now check this kit with

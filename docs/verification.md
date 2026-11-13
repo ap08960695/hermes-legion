@@ -1,3 +1,29 @@
+# v0.8.49 — Isolate report retention failures
+
+Known report-validation errors escaped the retention apply loop, aborting later
+work. A real synthetic linked-report reproduction preserved its source but left
+the following valid report unpacked. The per-entry handler now records these
+failures and continues, retaining exit status 1 and all archive/process guards.
+
+Two new regressions exercise CLI parsing/main, real filesystem archives and the
+actual verifier. Initial runs expose five unhandled cases; an appended corrupt
+gzip member separately exposes raw `zlib.error`. All six cases now preserve the
+rejected report, leave no temporary/destination archive for it, and complete a
+later valid archive with exact payload equality. The linked target stays intact.
+Existing mutation, visibility, ownership, protection and preview checks remain.
+
+The full companion suite passes 120 tests with two Linux process-observation
+skips, and the tracked-only 222-file release inventory passes. An unmodified CLI
+process launched from a temporary directory retains the synthetic report when
+this Mac sandbox cannot observe processes; no guard override is used in that
+check. It proves conservative refusal, not successful production cleanup.
+
+This is companion-only offline acceptance with controlled process observations,
+not a native Hermes runtime test, production purge or measured disk saving. No
+owner home, timer, pause/ESTOP, installed source or dependency environment changed.
+Native patch artifacts and the 993-target source selection are unchanged. See
+[storage safeguards](storage-and-backups.md#report-validation-failures-v0849).
+
 # v0.8.48 — Explicit patch manifests in the offline doctor
 
 The doctor previously accepted only the historical cumulative-kit manifest. Its
