@@ -1,3 +1,48 @@
+# v0.8.50 — Preserve goal-judge timestamp evidence
+
+The goal-judge memo no longer strips timestamps from rendered evidence. Its sole
+caller renders an unchanged outgoing prompt and a canonical memo prompt with only
+the generated clock empty. The hash helper preserves that canonical text. Source
+changes are limited to two existing runtime files and their existing regression;
+the consolidated kit keeps its v0.22.5 base and 993 targets.
+
+The native three-case baseline passes. New red regressions show 15 stale `done`
+reuses after evidence changes and three missed reuses when only the clock changes.
+All 21 cases then pass, including exact outgoing/canonical rendering for plain,
+subgoal and contract templates and preservation of spoofed clock lines. Separate
+actual-candidate controls cover wait, parse/transport failures and memo admission.
+No actual model judges these fixtures or finishes an original goal.
+
+The wider seven-file run reports 85 pass and four failures. The native live-system
+guard refuses cleanup signals when this environment cannot establish ancestry of
+the synthetic child processes. Those capability-blocked cases are:
+
+- `TestWaitBarrier::test_parked_on_live_pid_does_not_continue_or_judge`
+- `TestWaitBarrier::test_stop_waiting_clears_barrier`
+- `TestWaitBarrier::test_barrier_on_a_live_process_does_not_expire`
+- `TestJudgeDrivenWait::test_judge_wait_pid_parks_loop`
+
+All are in `tests/hermes_cli/test_goals.py`. Their recorded child PIDs are later
+absent. No guard is bypassed. Explicitly excluding only these four nodes yields
+85 pass, zero failures across the same seven files. This is an admitted selection,
+not an inherited-failure claim or a globally green native suite; counts overlap.
+
+Testing uses isolated source/state and locked temporary pytest tools alongside
+existing native dependencies. Task-local guards self-test owner-state, write,
+network and process restrictions. Runner scratch is redirected into the trial,
+the verified null sink is admitted, return codes propagate, precompilation is
+single-CPU, and file retries are off. Two earlier zero-test harness failures are
+not passes. This does not establish OS-wide isolation, production adoption or
+measured token/cache savings. Desktop loopback and live goal acceptance remain
+blocked/unproven. See [memo boundaries](goal-judge-memo.md#preserve-timestamp-evidence-v0850).
+
+The companion suite runs 120 tests: 118 pass and two Linux-only cases skip. The
+tracked-only disposable 222-file package passes release verification. The exported
+patch passes installed verification, reverse-to-base verification and reapply/
+installed readback for all 993 targets; its reapplied native memo regression
+passes 21 cases again. Existing test selection already includes the changed file.
+Historical patch artifacts and the native base pin remain unchanged.
+
 # v0.8.49 — Isolate report retention failures
 
 Known report-validation errors escaped the retention apply loop, aborting later

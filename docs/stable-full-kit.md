@@ -10,6 +10,16 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Preserve judge timestamp evidence (v0.8.50)
+
+The native goal judge now renders a separate canonical memo prompt with only its
+generated clock field empty. Timestamps in goal, response, criteria, contract and
+background evidence stay in the key; outgoing judge prompts are unchanged. This
+prevents false verdict reuse without disabling valid clock-only reuse. See
+[memo boundaries](goal-judge-memo.md#preserve-timestamp-evidence-v0850).
+The v0.22.5 base and 993 targets remain; two existing runtime files and their
+existing regression file change within the consolidated patch.
+
 ## Report retention failure isolation (v0.8.49)
 
 The companion retention helper now reports known archive-validation failures per
