@@ -1,3 +1,49 @@
+# v0.8.56 — Restore native compressed-resume acceptance
+
+`tests/hermes_cli/test_resume_compressed_gateway_id.py` replaces its stale
+zero-argument config-loader stub with synthetic YAML and the real native loader.
+The fixture binds the Gateway's import-time launch home to its isolated home.
+One new test uses distinct launch/profile low/high reasoning settings and checks
+low/high/low results from default/explicit/default reads. No production code changes.
+
+Fresh baseline reproduces three setup TypeErrors; after adding the profile control,
+that control passes while all three original cases still error. Fixture repair
+then passes four: classic preload/late history restore addresses the logical receipt
+owner, direct physical tip still fails with `storage_unavailable`, and profile
+loader separation holds. Native Mac Python 3.14.9 uses actual SessionAuthority,
+SQLite receipts/compression and in-process GatewaySessionStore dispatch. Reapplied
+export passes all four again. See [actual coverage](session-metadata-reads.md#compressed-resume-receipts-v0856).
+
+Adjacent warm/cold compression/ownership and policy/posture cases give 50 unique
+passes across four native files. The initial optional breadth run has 50 passes
+and two failures: actual HTTP model fixtures stop at the existing socket-bind
+network audit guard. These were selected before their socket needs were screened;
+no guard change or blocked-case retry follows. The admitted rerun uses exactly:
+
+```text
+-k 'not test_launch_policy_reaches_real_turn_runner and not test_ordinary_daemon_cli_launch_policy'
+```
+
+Only those two cases are deselected: policy file 21 instead of 23, other files
+unchanged at 6, 19 and 4. They remain network-unadmitted/unverified; no passing
+full-suite or live-service claim. Prior four process-observation PID cases and
+original-session/live goal/UI requirements remain open.
+
+Committed native dependencies are borrowed read-only. Locked isolated test tools,
+self-tested scoped owner-read/write/socket/process/null guards, trial scratch,
+exit 7 propagation, one CPU/worker and zero retries remain. Native-extension/OS-wide
+containment is not established. No owner source/config/profile/database/app/service,
+quota, ESTOP/pause or timer change; source/runtime adoption and Linux parity separate.
+
+The export adds one existing pinned upstream test target/selection, giving 997.
+Every prior 996 before/after row is unchanged; no production hash change. Exact
+installed/reverse/base/reapply checks and native/raw root whitespace pass. Required
+companion suite passes: 124 run, 122 pass/two Linux-only skips, 3.882 s. Tracked-only
+inventory verifies 222 rows and patch hashes. Both exact secret scans pass without
+leaks; history scans 186 commits. Final advisor accepts scoped handoff. Owned source/tools/fixtures/caches/log tree
+and pointer are removed; borrowed dependencies remain. Final hash/scan refresh
+precedes driver handoff.
+
 # v0.8.55 — Avoid context reads during classic resume selection
 
 The native classic title-or-ID selector reuses `get_session_metadata` for its

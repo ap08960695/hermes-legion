@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **996-path** Legion source, interface and optimization alternative
+This is the complete **997-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,15 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Native compressed-resume acceptance (v0.8.56)
+
+The native compressed-resume fixture uses a synthetic config file and the actual
+loader instead of a stale zero-argument stub. Existing history/receipt assertions
+now run; a distinct default/explicit-profile control checks real loader separation.
+See [native coverage and limitations](session-metadata-reads.md#compressed-resume-receipts-v0856).
+This adds one existing upstream test target and its selection: 997 paths, with all
+previous 996 before/after rows unchanged. No production or dependency hash changes.
 
 ## Classic resume identity lookup (v0.8.55)
 

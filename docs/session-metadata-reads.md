@@ -301,3 +301,38 @@ All three allocation peaks equal their respective medians. This payload-heavy
 component fixture includes database open/close, excludes CLI import and later
 transcript use, and establishes no whole-service RSS, startup, representative
 workload, model-usage or billed saving.
+
+
+## Compressed resume receipts (v0.8.56)
+
+The three native compressed-resume cases recorded as setup errors in v0.8.55 now
+execute. Their fixture replaced the config loader with a zero-argument lambda;
+the native owning-profile reader supplies an explicit config path. The repair
+removes that test double, seeds synthetic `platform_toolsets.cli: []` YAML and
+binds the native Gateway launch-home variable to the same isolated fixture home.
+Production resume, configuration, authorization and receipt code are unchanged.
+
+The unchanged fixture reproduces exactly three setup TypeErrors. A new control
+uses different synthetic launch/profile YAML values: real no-argument loader
+returns low reasoning effort, explicit profile path returns high, then default
+still returns low. It passes while the original three still error, detecting
+ignored explicit paths or profile/cache leakage. After fixture repair, four cases
+pass, including after exported patch reapplication.
+
+Actual native Mac Python 3.14.9 executes SessionAuthority, SQLite receipts,
+compression children, GatewaySessionStore and in-process control dispatch. Both
+classic preload and late-load paths restore the latest segment's exact transcript
+while retaining the logical owner's receipt identity; direct physical-tip
+addressing still raises `storage_unavailable`. These are native synthetic storage
+cases, not a running Gateway, Desktop journey, original owner conversation or
+model continuation.
+
+Adjacent native compression tests include warm/cold authority reconstruction,
+foreign-owner refusal and a fork with a copied owner chat ID. Together with
+admitted policy/posture cases, four files pass 50 unique cases. The initial broader
+run also attempts two HTTP model fixtures and fails at the unchanged network audit
+guard. The admitted rerun excludes only
+`test_launch_policy_reaches_real_turn_runner` and
+`test_ordinary_daemon_cli_launch_policy`; those two remain network-unadmitted and
+unverified. No socket permission or fallback is added, and no full native-suite,
+live work, memory, speed, cache or model-usage improvement is claimed this round.
