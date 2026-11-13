@@ -1,3 +1,36 @@
+# v0.8.51 — Handle overflowing judge wait targets
+
+The shared native wait-target parser now catches `OverflowError` alongside its
+existing invalid-type/value exceptions. This one-line repair handles signed
+numeric overflow across all six aliases without changing wait priority, fallback,
+no-target continuation, flags or the v0.8.50 memo repair. Out-of-range conversion
+no longer escapes the judge's normal return contract.
+
+The actual installed parser reproduces the failure with numeric `1e999` in all
+aliases in an isolated synthetic-home probe. In the pinned candidate, six existing
+focused cases pass; 21 new cases then yield 18 expected overflow failures and three
+passing priority/filter controls. After repair all 27 focused cases pass, with
+real parser/judge imports and controlled auxiliary replies. This is offline proof,
+not a live model verdict or original-goal terminal result.
+
+The native seven-file selection passes 106 admitted cases and explicitly excludes the same four PID cases
+listed in the v0.8.50 section below; their unsupported process-ancestry cleanup is
+not retried or declared validated. Test and native guard code are not bypassed.
+Scoped Python guards, exact verified null sink, trial-local scratch, one CPU/worker
+and zero file retries retain the prior admission boundaries. No owner state,
+service, pause/ESTOP, timer or provider setting changes.
+
+The consolidated patch retains upstream v0.22.5 and 993 targets; only the existing
+runtime and regression file change. Existing native test selection already covers
+that file. See [wait-target handling](goal-result-waits.md#overflowing-judge-wait-targets-v0851).
+
+The exported patch passes installed verification, reverse-to-base verification
+and reapply/installed readback for all 993 targets. Its reapplied focused native
+selection passes 27 cases again. Companion tests run 120 cases: 118 pass and two
+Linux-only cases skip. The tracked-only disposable 222-file package passes release
+verification. Counts overlap and are not a full native-suite or live-acceptance
+claim. Owner adoption and Desktop/terminal-goal evidence remain pending.
+
 # v0.8.50 — Preserve goal-judge timestamp evidence
 
 The goal-judge memo no longer strips timestamps from rendered evidence. Its sole

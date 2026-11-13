@@ -51,3 +51,29 @@ needs no Desktop renderer rebuild. Continuous autonomous multi-bot graph proof
 and representative usage/cache measurements remain separate work. Historical
 selections overlap and are never summed; the previously documented twenty
 inherited auxiliary failures are not claimed fixed by this selection.
+
+## Overflowing judge wait targets (v0.8.51)
+
+A numeric JSON literal such as `1e999` or `-1e999` can decode as a nonfinite
+Python float. Converting it to a wait-target integer raised `OverflowError`,
+escaping the judge's normal verdict return. The shared parser now treats that
+conversion failure like its existing invalid-type/value cases.
+
+This applies to all six aliases: `wait_on_pid`, `pid`, `wait_pid`,
+`wait_for_seconds`, `seconds` and `wait_seconds`. A later positive alias is still
+tried. Session waits retain priority over PID waits, PID waits over timed waits,
+and a wait with no usable target still becomes `continue`. Parse/transport flags,
+finite-number conversion, timeout configuration, memo admission and provider
+settings are unchanged; this adds no new delay limit or input schema.
+
+Two parametrized regressions add 21 cases. Twelve use signed numeric overflow
+across all aliases; nine exercise `judge_goal` with the actual parser and a
+controlled judge reply, including alias fallback and three priority/filter
+controls. Eighteen cases first fail with the overflow; the three controls already
+pass. The repaired focused selection passes all 27 cases, including six existing
+parser/judge cases. No model request or real wait process is needed.
+
+Source installation, native PID observation, live terminal-goal acceptance and
+production adoption remain separate. The known four PID checks from v0.8.50 stay
+unverified; no guard is bypassed or stopped timer resumed. See the
+[verification record](verification.md) for admitted selection and release checks.

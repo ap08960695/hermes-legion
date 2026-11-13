@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **980-path** Legion source, interface and optimization alternative
+This is the complete **993-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,14 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Overflow-safe judge wait targets (v0.8.51)
+
+The native goal judge skips integer-conversion overflow in its existing shared
+wait-target parser. Later valid aliases, session/PID/time priority and no-target
+continuation retain their behavior. See [wait-target handling](goal-result-waits.md#overflowing-judge-wait-targets-v0851).
+Only one runtime line and its existing regression file change. The v0.22.5 base,
+993 targets, native test selection and v0.8.50 memo repair remain intact.
 
 ## Preserve judge timestamp evidence (v0.8.50)
 
