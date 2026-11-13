@@ -39098,6 +39098,24 @@ index 0000000000000000000000000000000000000000..4a2e3f727a9eb51c4116c9e799144fc9
 +
 +if __name__=='__main__':
 +    raise SystemExit(main())
+diff --git a/hermes_cli/status_bar_git.py b/hermes_cli/status_bar_git.py
+index a25c6cd5cf87cc3e30dd52a3b92a027bbc70a7ea..a28839f04b99cec84b9d798b1c5458f773baf611 100644
+--- a/hermes_cli/status_bar_git.py
++++ b/hermes_cli/status_bar_git.py
+@@ -15,2 +15,3 @@ from typing import Optional
+ _TTL_SECONDS = 5.0
++_CACHE_MAX_ENTRIES = 128
+ _cache: dict = {}
+@@ -40,3 +41,3 @@ def current_git_branch(cwd: Optional[str] = None) -> str:
+     A detached HEAD renders as the abbreviated commit (``a1b2c3d…``). Results are
+-    cached ~5s per directory so per-repaint calls never re-walk the tree.
++    cached ~5s per directory, retaining at most 128 cwd labels in insertion order.
+     """
+@@ -64,2 +65,4 @@ def current_git_branch(cwd: Optional[str] = None) -> str:
+     _cache[key] = (now, label)
++    if len(_cache) > _CACHE_MAX_ENTRIES:
++        del _cache[next(iter(_cache))]
+     return label
 diff --git a/hermes_cli/subcommands/pause.py b/hermes_cli/subcommands/pause.py
 index 6416df092b283f9d38dc4318e440f96da3c6052d..818832c6ffaeb019ab0407b0eff82cabf0d7f42e 100644
 --- a/hermes_cli/subcommands/pause.py
@@ -64006,6 +64024,94 @@ index 0000000000000000000000000000000000000000..075c18dc7caf226347b12e317e913fba
 +    rows=response.json()['items'];assert len(rows)==1 and rows[0]['id']==page['id'] and rows[0]['collection_title']=='First'
 +    assert 'data' not in rows[0] and 'text' not in rows[0] and 'private content' not in response.text
 +    with pytest.raises(SpaceDenied):store.read(one['id'],page['id'],'other')
+diff --git a/tests/hermes_cli/test_status_bar_git_branch.py b/tests/hermes_cli/test_status_bar_git_branch.py
+index e6a6910d7bb6ccdc21aa637389fa9f4802e91a1e..43ae4b56ad8b125df7ed7611b35e7e4162003798 100644
+--- a/tests/hermes_cli/test_status_bar_git_branch.py
++++ b/tests/hermes_cli/test_status_bar_git_branch.py
+@@ -3,2 +3,5 @@
+ from datetime import datetime, timedelta
++from types import SimpleNamespace
++
++import pytest
+ 
+@@ -70 +73,77 @@ def test_git_branch_segment_is_opt_in(monkeypatch, tmp_path):
+     assert "⎇ main" in text2
++
++
++@pytest.mark.parametrize("repository", [True, False])
++def test_git_branch_cache_bounds_retained_directories(tmp_path, monkeypatch, repository):
++    monkeypatch.setattr(status_bar_git, "time", SimpleNamespace(monotonic=lambda: 100.0))
++    if repository:
++        (tmp_path / ".git").mkdir()
++        (tmp_path / ".git/HEAD").write_text("ref: refs/heads/synthetic\n")
++    status_bar_git._cache.clear()
++    for number in range(512):
++        folder = tmp_path / str(number)
++        folder.mkdir()
++        assert current_git_branch(str(folder)) == ("synthetic" if repository else "")
++    assert len(status_bar_git._cache) <= 128
++    assert str((tmp_path / "0").resolve()) not in status_bar_git._cache
++    assert str((tmp_path / "511").resolve()) in status_bar_git._cache
++
++
++def test_git_branch_cache_hit_and_exact_ttl_boundary(tmp_path, monkeypatch):
++    now = [100.0]
++    monkeypatch.setattr(status_bar_git, "time", SimpleNamespace(monotonic=lambda: now[0]))
++    (tmp_path / ".git").mkdir()
++    head = tmp_path / ".git/HEAD"
++    head.write_text("ref: refs/heads/before\n")
++    status_bar_git._cache.clear()
++    assert current_git_branch(str(tmp_path)) == "before"
++    head.write_text("ref: refs/heads/after\n")
++    now[0] = 104.999
++    with monkeypatch.context() as hits:
++        def unexpected_probe(_):
++            raise AssertionError("a fresh hit must not walk the Git directory")
++        hits.setattr(status_bar_git, "_resolve_git_dir", unexpected_probe)
++        assert current_git_branch(str(tmp_path)) == "before"
++    now[0] = 105.0
++    assert current_git_branch(str(tmp_path)) == "after"
++
++
++def test_git_branch_cache_fifo_refresh_and_evicted_recomputation(tmp_path, monkeypatch):
++    now = [100.0]
++    monkeypatch.setattr(status_bar_git, "time", SimpleNamespace(monotonic=lambda: now[0]))
++    (tmp_path / ".git").mkdir()
++    head = tmp_path / ".git/HEAD"
++    head.write_text("ref: refs/heads/before\n")
++    folders = [tmp_path / str(number) for number in range(129)]
++    for folder in folders:
++        folder.mkdir()
++    status_bar_git._cache.clear()
++    for folder in folders[:128]:
++        assert current_git_branch(str(folder)) == "before"
++    head.write_text("ref: refs/heads/after\n")
++    now[0] = 105.0
++    assert current_git_branch(str(folders[0])) == "after"
++    assert current_git_branch(str(folders[128])) == "after"
++    assert len(status_bar_git._cache) == 128
++    assert str(folders[0].resolve()) not in status_bar_git._cache
++    assert current_git_branch(str(folders[0])) == "after"
++    assert len(status_bar_git._cache) == 128
++    assert str(folders[1].resolve()) not in status_bar_git._cache
++
++
++def test_git_branch_cache_preserves_bom_and_detached_labels(tmp_path, monkeypatch):
++    now = [100.0]
++    monkeypatch.setattr(status_bar_git, "time", SimpleNamespace(monotonic=lambda: now[0]))
++    repo = tmp_path / "repo"
++    (repo / ".git").mkdir(parents=True)
++    head = repo / ".git/HEAD"
++    head.write_text("\ufeffref: refs/heads/feature/แผน\n", encoding="utf-8")
++    status_bar_git._cache.clear()
++    assert current_git_branch(str(repo)) == "feature/แผน"
++    head.write_text("0123456789abcdef0123456789abcdef01234567\n")
++    now[0] = 105.0
++    assert current_git_branch(str(repo)) == "01234567…"
++    worktree = tmp_path / "worktree"
++    worktree.mkdir()
++    (worktree / ".git").write_text("\ufeffgitdir: ../repo/.git\n", encoding="utf-8")
++    assert current_git_branch(str(worktree)) == "01234567…"
 diff --git a/tests/hermes_cli/test_update_capsule_text_encoding.py b/tests/hermes_cli/test_update_capsule_text_encoding.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..bdf00cb834c77367018e609176d106a0ff591e5f

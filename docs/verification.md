@@ -1,3 +1,46 @@
+# v0.8.53 — Bound retained terminal Git-label memory
+
+The native status-bar Git-label cache now retains at most 128 cwd entries in
+insertion order. Hits retain their fast path and five-second TTL; refreshing an
+expired key does not change its eviction position. Oldest-entry eviction recomputes
+labels normally on revisit. The helper still uses direct local reads, with no new
+dependency, configuration, process, provider request or background cleanup.
+
+The existing two-case native file passes before edits. Five added cases give three
+expected cache-bound failures and four passing controls before the production
+change. All seven then pass, including positive/empty labels over 512 directories,
+exact TTL expiry, no fresh-hit Git probe, FIFO refresh/revisit and BOM/detached/
+worktree behavior. Fifty adjacent native status/layout cases pass separately.
+
+Native ARM64 Mac Python 3.14.9 runs an equal 512-directory workload in separate
+old/new processes. Every returned label matches. Against idle tracing snapshots,
+net retained Python allocation is 147,730 versus 49,625 bytes, with 512 versus 128
+cache entries. Paths, clock and tracing boundaries match; fixture bookkeeping is
+prepared before tracing. This single component fixture proves neither whole-Hermes
+RSS nor latency/usage savings. See [measurement and limits](chat-rendering-surfaces.md#bounded-git-label-cache-v0853).
+
+Testing uses an isolated source/home, read-only existing native dependencies,
+locked temporary test tools and the existing self-tested scoped audit/runner
+adaptations: protected owner-state reads, outside Python writes, socket bind/connect
+and unadmitted processes denied; exact null sink admitted; one worker and zero file
+retries. Native-extension/OS-wide containment and full native-suite coverage are
+not claimed. Owner installations, services, stop controls and timers are preserved.
+
+The kit adds two existing upstream paths to the pinned v0.22.5 export: 995 targets,
+with all previous 993 rows unchanged. Native test selection explicitly includes the
+existing Git-label test file. Source installation, owner adoption, Linux parity and
+public delivery remain distinct gates. Capacity 128 is a bounded policy choice,
+not an optimum; workloads exceeding it can incur extra filesystem reads.
+
+Exported installed, reverse/base and reapply/installed checks pass all 995 targets;
+the reapplied native file passes seven cases again. Counts overlap with the 57
+native cases above. Companion suite: 124 run, 122 pass, two Linux-only skips.
+Tracked-only release inventory verifies 222 rows and patch hashes. Raw generic
+`git diff --check` reports one whitespace warning for a single-space empty context
+record in the generated patch; this is an explicit format exception. Native changed
+source and other public text pass whitespace checks. Patch formatting/checkers are
+not weakened. Owner adoption remains pending for six source/test targets.
+
 # v0.8.52 — Refuse linked snapshot backup roots
 
 The companion snapshot helper checks the unresolved `HOME/backups` entry before

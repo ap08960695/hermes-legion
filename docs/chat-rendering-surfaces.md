@@ -49,3 +49,38 @@ installed on Linux and Mac with matching hashes. These git-checkout installs shi
 prebuilt `hermes_cli/tui_dist`, so the TUI launcher rebuilds `ui-tui/dist` by itself
 when the sources are newer (`_tui_need_rebuild`). Only `web_dist` needs a manual
 `npm run build`.
+
+## Bounded Git-label cache (v0.8.53)
+
+The terminal status bar reads Git labels directly from local files. Its five-second
+cache previously retained every distinct working directory indefinitely, including
+empty labels outside repositories. It now retains at most 128 directory entries,
+evicting the oldest inserted entry when a new one exceeds that bound. Fresh hits
+do not walk the Git directory or reorder entries; an expired refresh keeps its
+insertion position. The existing five-second freshness rule remains unchanged.
+
+The same helper serves the classic status snapshot and modern layout. Branches,
+worktree pointers, optional UTF-8 BOMs, detached HEAD labels and outside-repository
+results retain their behavior. No subprocess, provider request, background cleanup,
+new setting or renderer change is introduced.
+
+Seven native regression/control cases pass after three failures on the previous
+implementation. They cover 512 real directories for both positive and empty labels,
+the exact five-second boundary, hit-time I/O refusal, eviction/recomputation and
+expired refresh ordering. Fifty adjacent native status/layout cases also pass.
+
+Separate native Mac Python 3.14.9 processes run the same 512-directory fixture,
+with identical paths, a fixed clock and prebuilt workload bookkeeping. All returned
+labels match. Tracing begins after module warmup/cache clear; net retained traced
+Python allocation is compared against an idle snapshot after garbage collection:
+
+| Observation | Before | After |
+| --- | ---: | ---: |
+| Retained cwd entries | 512 | 128 |
+| Net retained traced allocation | 147,730 bytes | 49,625 bytes |
+
+This is one synthetic component measurement, not process RSS, whole-service RAM,
+latency or billed savings. The entry bound is not a byte limit or a measured optimal
+capacity. Idle expired entries can remain within the bound. Cycling through more
+than 128 directories may require additional file reads. Owner source/services are
+not updated or restarted by this acceptance; adoption remains separate.

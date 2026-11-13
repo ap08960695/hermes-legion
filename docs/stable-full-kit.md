@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **993-path** Legion source, interface and optimization alternative
+This is the complete **995-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,15 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Bounded terminal Git-label memory (v0.8.53)
+
+The shared native Git-label helper retains at most 128 cwd entries while preserving
+its five-second TTL and direct-file branch/worktree resolution. See the
+[regression and allocation evidence](chat-rendering-surfaces.md#bounded-git-label-cache-v0853).
+The existing runtime and regression files add two pinned targets, bringing the kit
+to 995 paths on the same v0.22.5 base. All previous 993 before/after rows remain
+unchanged. The native test selection now explicitly includes the Git-label file.
 
 ## Overflow-safe judge wait targets (v0.8.51)
 
