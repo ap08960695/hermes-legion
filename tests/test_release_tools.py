@@ -111,6 +111,68 @@ class ReleaseTests(unittest.TestCase):
     def test_exact_inventory(self):
         self.assertEqual(release.verify(self.root), 3)
 
+    def git(self, *args):
+        return subprocess.check_output(
+            ["git", "--no-optional-locks", "-C", str(self.root), *args],
+            text=True, stderr=subprocess.DEVNULL).strip()
+
+    def commit_release(self):
+        self.git("init", "-q", "--initial-branch=main")
+        self.git("add", ".")
+        self.git("-c", "user.name=Hermes Legion", "-c",
+                 "user.email=hermes-legion@users.noreply.github.com", "commit", "-qm", "Fixture")
+
+    def test_history_accepts_clean_neutral_repository(self):
+        self.commit_release()
+        self.assertEqual(release.verify(self.root, history=True), 3)
+        result = subprocess.run(
+            ["python3", str(ROOT / "scripts/verify_release.py"),
+             "--root", str(self.root), "--history"],
+            cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "PASS: 3 release files; no changes made\n")
+        self.assertEqual(result.stderr, "")
+
+    def test_history_does_not_run_a_repository_fsmonitor_hook(self):
+        self.commit_release()
+        hook = self.root / ".git" / "monitor-hook"
+        marker = self.root / ".git" / "monitor-called"
+        hook.write_text('#!/bin/sh\ntouch "$(dirname "$0")/monitor-called"\n'
+                        "printf 'synthetic-token\\0'\n")
+        hook.chmod(0o700)
+        self.git("config", "core.fsmonitor", str(hook))
+        # Prove this Git supports the hook before checking the verifier's fence.
+        self.git("status", "--porcelain")
+        self.assertTrue(marker.exists(), "fixture hook did not execute")
+        marker.unlink()
+
+        self.assertEqual(release.verify(self.root, history=True), 3)
+        self.assertFalse(marker.exists(), "read-only release inspection executed a helper")
+        self.assertEqual(self.git("config", "--get", "core.fsmonitor"), str(hook))
+
+    def test_history_rejects_dirty_checkout_with_matching_inventory(self):
+        self.commit_release()
+        target = self.root / "README.md"
+        target.write_text("Changed synthetic fixture\n")
+        manifest = self.root / release.MANIFEST
+        data = json.loads(manifest.read_text())
+        for row in data["files"]:
+            if row["path"] == "README.md":
+                row["sha256"] = self.sha(target.read_bytes())
+        manifest.write_text(json.dumps(data))
+        self.assertEqual(release.verify(self.root), 3)
+        with self.assertRaisesRegex(ValueError, "release checkout is not clean"):
+            release.verify(self.root, history=True)
+
+    def test_history_rejects_non_neutral_identity_on_another_branch(self):
+        self.commit_release()
+        self.git("checkout", "-qb", "other")
+        self.git("-c", "user.name=Synthetic Author", "-c",
+                 "user.email=synthetic@example.invalid", "commit", "--allow-empty", "-qm", "Other")
+        self.git("checkout", "-q", "main")
+        with self.assertRaisesRegex(ValueError, "non-neutral Git identity"):
+            release.verify(self.root, history=True)
+
     def add_additional_patch(self, *, patch_file="patches/extra.patch", checksum=None):
         payload = b"additional synthetic patch\n"
         (self.root / "patches/extra.patch").write_bytes(payload)

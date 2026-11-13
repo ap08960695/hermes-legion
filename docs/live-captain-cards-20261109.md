@@ -36,7 +36,9 @@ opposite.
 ## What remains unproven
 
 - A live `done` verdict and terminal goal state. Two live judge verdicts (t_8ff2d400, t_d1f9e350) were `continue`, each for a reason the judge stated correctly. A consistent test prompt is ready for the next quota.
-- Live use of the v0.8.37 judge memo, because no judge call ran.
+- Live reuse of the v0.8.37 judge memo. The two recorded judge verdicts do not
+  establish that an identical-input repeat returned a stored verdict without
+  another judge call.
 - Behaviour in a production Gateway or a running Desktop, which stay closed by owner
   instruction.
 

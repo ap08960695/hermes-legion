@@ -10,6 +10,17 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Release inspection and live judge evidence (v0.8.46)
+
+The companion release verifier disables repository fsmonitor hooks while checking
+Git status. See the [offline regression scope](privacy-review.md#read-only-history-check-v0846).
+The [live-card open items](live-captain-cards-20261109.md#what-remains-unproven)
+also distinguish two recorded judge verdicts from unproven identical-input memo
+reuse. These companion changes were prepared together; v0.8.45 was an unpublished
+intermediate, not a separate release.
+Native source, stable-full patch, pinned v0.22.5 base, all 993 target hashes and
+native test selection are unchanged.
+
 ## First goal turn sees its contract (v0.8.42)
 
 The kit covers 993 paths. `/goal` with a completion contract now starts the first turn

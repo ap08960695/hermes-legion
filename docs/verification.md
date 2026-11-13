@@ -1,3 +1,31 @@
+# v0.8.46 — Release history fsmonitor fence and accurate judge evidence
+
+A real marker-writing Git fsmonitor hook runs during the old release history
+check. The regression fails on v0.8.44 and passes after disabling fsmonitor
+for the status invocation. All 22 release-tool cases pass, including clean CLI
+acceptance, dirty-tree refusal with matching inventory hashes, and non-neutral
+history on another branch. The complete companion suite runs 113 tests with two
+Linux-only skips and no failures on macOS.
+
+The live-card record previously said no judge call ran, despite its two recorded
+`continue` verdicts. Its open item now states the actual evidence gap: those
+verdicts do not establish an identical-input repeat returning a stored verdict
+without another judge call. No new live run, verdict, request allowance or
+terminal state is claimed. Live `done`, terminal goal state, memo reuse and
+production adoption remain unproven. See [the open items](live-captain-cards-20261109.md#what-remains-unproven).
+
+The exact release inventory passes for all 220 public files in a disposable copy
+of tracked working-tree bytes. The original directory still refuses local ignored
+files and operational notes. Package-copy verification does not establish original
+directory cleanliness or history safety. The documented Gitleaks 8.30.1 directory
+and all-history scans pass with no leaks reported (176 commits scanned).
+Native source patches/manifests and test selection are unchanged. No native Hermes
+suite, provider, service or live Captain test was used. See
+[history-check scope](privacy-review.md#read-only-history-check-v0846).
+
+These changes form one v0.8.46 delivery. v0.8.45 was an unpublished preparation
+step, not a separate release. No push or publication was performed in this round.
+
 # v0.8.44 — Second live judge verdict
 
 On card t_d1f9e350 the live goal judge rejected a finished card for violating the

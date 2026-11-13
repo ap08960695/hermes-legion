@@ -79,7 +79,8 @@ def verify(root, *, history=False):
         if not result.stdout.strip() or any(line.split("\0") != allowed for line in result.stdout.splitlines()):
             raise ValueError("non-neutral Git identity")
         status = subprocess.check_output(
-            ["git", "--no-optional-locks", "-C", str(root), "status", "--porcelain"], text=True)
+            ["git", "--no-optional-locks", "-c", "core.fsmonitor=false",
+             "-C", str(root), "status", "--porcelain"], text=True)
         if status.strip():
             raise ValueError("release checkout is not clean")
     return len(rows)
