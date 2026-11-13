@@ -10,6 +10,14 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Metadata-only exact session ID lookup (v0.8.54)
+
+The shared native resolver reuses the existing small metadata reader for exact ID
+matches, preserving token flushing, prefix SQL and returned IDs. See the
+[regression and measured read-path limits](session-metadata-reads.md#exact-session-id-lookups-v0854).
+Only the existing runtime and regression after hashes change; the v0.22.5 base,
+all 995 target paths/before hashes and native test selection remain unchanged.
+
 ## Bounded terminal Git-label memory (v0.8.53)
 
 The shared native Git-label helper retains at most 128 cwd entries while preserving

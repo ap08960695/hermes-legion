@@ -44173,7 +44173,7 @@ index 0000000000000000000000000000000000000000..cca4733748f1236af1181204cfc4ba47
 +    if recall_scope is not None:
 +        _append_recall_scope(where, params, recall_scope)
 diff --git a/hermes_state_sessions.py b/hermes_state_sessions.py
-index a072ea5eec5bb9c74491052676e004c16eb2451a..416cbfa3dc8c41985d7a293c93bdbe218f19dbc7 100644
+index a072ea5eec5bb9c74491052676e004c16eb2451a..40192177d998593b0e2d581d3ba0c82b8d1452c9 100644
 --- a/hermes_state_sessions.py
 +++ b/hermes_state_sessions.py
 @@ -127,10 +127,4 @@ def _session_filter_where(
@@ -44220,6 +44220,11 @@ index a072ea5eec5bb9c74491052676e004c16eb2451a..416cbfa3dc8c41985d7a293c93bdbe21
 +        return dict(row) if row else None
 +
      def get_session(self, session_id: str) -> Optional[dict[str, Any]]:
+@@ -876,3 +874,3 @@ class SessionSessionsMixin:
+         """Exact id, else the single unambiguous prefix match, else None."""
+-        exact = self.get_session(session_id_or_prefix)
++        exact = self.get_session_metadata(session_id_or_prefix)
+         if exact:
 @@ -1141,2 +1139,3 @@ class SessionSessionsMixin:
                  "id", "ended_at", "end_reason", "message_count", "tool_call_count", "title", "last_active",
 +                "last_activity_at", "last_activity_description", "last_activity_provenance",
@@ -68001,10 +68006,10 @@ index 0000000000000000000000000000000000000000..f26f74cd125d59fe1f94a72ced63da2a
 +        assert db.get_session_model_config_value("session", "key") == {"ready": True}
 diff --git a/tests/hermes_state/test_session_search_metadata.py b/tests/hermes_state/test_session_search_metadata.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..6f86ad3faaaa6db800b037796304a08f960c112a
+index 0000000000000000000000000000000000000000..3938de6c5636401f04d2fe59e71ef95ebcc309cc
 --- /dev/null
 +++ b/tests/hermes_state/test_session_search_metadata.py
-@@ -0,0 +1,111 @@
+@@ -0,0 +1,156 @@
 +"""Conversation discovery needs identifying metadata, not prompt/tool context blobs."""
 +import json
 +import sqlite3
@@ -68116,6 +68121,51 @@ index 0000000000000000000000000000000000000000..6f86ad3faaaa6db800b037796304a08f
 +    finally:
 +        with db._read_ctx() as connection:
 +            connection.set_authorizer(None)
++
++
++@pytest.mark.parametrize("read_only", [False, True])
++def test_session_id_resolution_does_not_load_context(archive, read_only):
++    def deny_id_context(action, table, column, *rest):
++        if action == sqlite3.SQLITE_READ and table == "sessions" and column == "model_config":
++            return sqlite3.SQLITE_DENY
++        return deny_context_reads(action, table, column, *rest)
++
++    writer, path = archive
++    db = SessionDB(path, read_only=True) if read_only else writer
++    with db._read_ctx() as connection:
++        connection.set_authorizer(deny_id_context)
++    try:
++        assert db.resolve_session_id("archive") == "archive"
++    finally:
++        with db._read_ctx() as connection:
++            connection.set_authorizer(None)
++        if read_only:
++            db.close()
++
++
++def test_session_id_resolution_keeps_exact_prefix_and_literal_rules(archive):
++    db, _ = archive
++    for sid in ("archive-child-a", "archive-child-b", "solo-session",
++                r"literal%_\target", r"literalAB\target", r"literal%X\target"):
++        db.create_session(sid, source="cli")
++    for query, expected in (
++        ("archive", "archive"),
++        ("archive-child", None),
++        ("solo-", "solo-session"),
++        (r"literal%_\t", r"literal%_\target"),
++        ("missing-session", None),
++    ):
++        assert db.resolve_session_id(query) == expected, query
++
++
++def test_session_id_resolution_flushes_pending_token_counts(archive):
++    db, _ = archive
++    # No writer starts, so resolution must drain this queued delta before returning.
++    db._token_queue.append(("archive", {"input_tokens": 17, "api_call_count": 1}))
++    assert db._conn.execute("SELECT input_tokens FROM sessions WHERE id='archive'").fetchone()[0] == 0
++    assert db.resolve_session_id("archive") == "archive"
++    row = db._conn.execute("SELECT input_tokens, api_call_count FROM sessions WHERE id='archive'").fetchone()
++    assert tuple(row) == (17, 1)
 diff --git a/tests/hermes_state/test_sql_blob_reader.py b/tests/hermes_state/test_sql_blob_reader.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..e1805d095e92ef3f73842773124df8679a7bf657

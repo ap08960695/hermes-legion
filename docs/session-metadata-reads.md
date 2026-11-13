@@ -221,3 +221,37 @@ Median peak traced Python allocation was 107,491,242 bytes before and 24,736,700
 bytes after. These are local synthetic measurements, not production RAM or latency
 predictions. Existing-history serialization was compared read-only without
 exporting private content or invoking a model.
+
+## Exact session ID lookups (v0.8.54)
+
+The native `resolve_session_id` exact branch now uses the existing metadata reader
+instead of loading a full session and returning only its ID. Stored prompt, tool
+context and model configuration stay in SQLite. Pending token counts still flush
+before the read. Exact IDs still win over longer matching IDs; unique, ambiguous,
+missing and escaped literal prefixes keep their existing SQL and return rules.
+The full-session reader remains available to consumers that need context.
+
+Actual SessionDB regressions deny unused context columns during writable and
+read-only exact lookup. Controls cover prefix decoys and persisted pending token
+counts. Ten cases pass, alongside 28 profile/foreign-session/accounting cases and
+two selected existing full-reader/prefix cases. No provider or Gateway is started.
+
+One native ARM64 Mac Python 3.14.9 fixture stores a 1,703,936-character prompt and
+a separate 1,048,576-character model-config payload. The actual old and new resolver
+methods run against the same read-only database, with setup and warmup outside
+measurement. Every returned ID matches. Timing and allocation are measured
+separately, alternating version order:
+
+| Measurement | Full-session exact branch | Metadata exact branch |
+| --- | ---: | ---: |
+| Median batch-average time per lookup, seven batches of 40 | 0.825658 ms | 0.008156 ms |
+| Range across those batch averages | 0.813438–0.857217 ms | 0.007839–0.008747 ms |
+| Median peak traced allocation, three batches of 40 | 3,824,400 bytes | 9,944 bytes |
+| Range across traced peaks | 3,823,776–3,824,592 bytes | 9,656–9,976 bytes |
+
+These are one payload-heavy synthetic read path's results, not whole-service RSS,
+startup, production workload or billed savings. Consumers that subsequently load
+the full session still pay for that read. Classic title-or-ID resume has its own
+full-row exact lookup; only its local-prefix fallback uses this shared resolver.
+No unrelated direct reader, prefix query, schema, cache, prompt or route changes.
+Owner installation/adoption and Linux runtime acceptance remain separate.

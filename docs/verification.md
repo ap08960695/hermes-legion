@@ -1,3 +1,48 @@
+# v0.8.54 — Avoid full-context reads for exact session IDs
+
+The exact branch of native `resolve_session_id` calls `get_session_metadata`
+instead of `get_session`. This one-line change reuses the same token-count flush,
+returns the same ID and avoids unused prompt/tool/config materialization. Prefix
+SQL, ambiguity, wildcard escaping, full-reader API and caller signatures remain.
+No new projection, schema, cache, provider work or permission rule is introduced.
+
+Six existing metadata/search tests pass before edits. New writable/read-only
+authorizer cases fail specifically on forbidden unused context reads; prefix and
+pending-token persistence controls already pass. The scoped red run has two
+failures/eight passes, then all ten pass after repair. An initial test attempt
+shared model-config denial with FTS cases, blocking their legitimate lineage
+configuration reads; that extra denial is now local to ID resolution. The original
+search authorizer and production search behavior are unchanged.
+
+Twenty-eight related profile/foreign-session/accounting cases and two selected
+existing full-reader/prefix cases pass, giving 40 scoped native cases across five
+files. This includes a selected subset of the large state test file, not the full
+file or native suite. The four previous PID cases remain unverified; a fresh OS
+process-inspection probe is refused, with no guard bypass or child spawned.
+
+Actual native Mac Python 3.14.9 compares the original and candidate resolver methods
+on the same synthetic read-only database. Seven alternating 40-call timing batches
+give median batch averages of 0.825658 versus 0.008156 ms per exact lookup. Three
+separate allocation batches give median traced peaks of 3,824,400 versus 9,944
+bytes. All IDs match. Setup/warmup are outside measurement; version order alternates,
+timing and tracing stay separate. Ranges, payload and limits are recorded in the
+[read-path guide](session-metadata-reads.md#exact-session-id-lookups-v0854). No whole-service
+RSS, startup, live workload or billed saving is established.
+
+Tests retain the prior isolated source/home, read-only native dependencies, locked
+temporary test tools, self-tested scoped audit/null/scratch/exit adaptations, one
+worker and zero file retries. No owner source/config/profile/database/app/service,
+pause/ESTOP, quota or timer change. Native-extension/OS-wide containment remains
+unproven. Owner adoption and Linux runtime proof are separate.
+
+The export retains all 995 targets, before hashes, pinned v0.22.5 base and test
+selection; exactly two existing after hashes change. Installed, reverse/base and
+reapply/installed checks pass, and the reapplied focused file passes ten again.
+Those counts overlap. Companion suite: 124 run, 122 pass/two Linux-only skips.
+Tracked-only release inventory verifies 222 rows and patch hashes. Raw diff and
+changed native-source whitespace checks pass without a format exception this
+round. Read-only owner-source comparison records eight targets pending adoption.
+
 # v0.8.53 — Bound retained terminal Git-label memory
 
 The native status-bar Git-label cache now retains at most 128 cwd entries in
