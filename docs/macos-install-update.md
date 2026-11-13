@@ -4,12 +4,13 @@ This guide starts from an **existing, working native Hermes installation**. It i
 
 ## Choose the patch base first
 
-The numbered source-apply walkthrough below uses the historical cumulative
-patch. The optional role-workflow unit uses a different upstream base:
+The numbered source-apply walkthrough uses the current consolidated stable kit.
+The historical cumulative kit and the optional role unit remain alternatives:
 
 | Patch | Required upstream | Preparation instructions |
 | --- | --- | --- |
-| Cumulative kit | v0.22.2, pinned in `patches/manifest.json` | Sections 1–4 below |
+| Consolidated stable kit | v0.22.5, pinned in `patches/stable-full/manifest.json` | Sections 1–4 below |
+| Historical cumulative kit | v0.22.2, pinned in `patches/manifest.json` | [Historical installation guide](installation-and-rollback.md) |
 | Role-specific THINK/ACTION | v0.22.5, pinned in `patches/stable-role-workflows/manifest.json` | [Fresh role-workflow checkout](stable-role-workflows.md#apply-to-a-fresh-isolated-checkout) |
 
 Choose one full patch for a fresh matching checkout. Do not apply the cumulative
@@ -17,26 +18,66 @@ patch to v0.22.5, stack it with the role unit, or reuse the old Python 3.13 pilo
 interpreter as evidence that a new upstream environment is compatible. Prepare
 the matching frozen environment through native Hermes PM, preserving the
 installation's existing extras and plugin selection. CLI, Desktop and adoption
-checks below remain separate requirements for either route.
+checks below remain separate requirements for each route.
 
 The pilot applied public releases **v0.6.43 and v0.6.44** to separate clean checkouts, launched each CLI, and reopened the same synthetic session/search database after switching versions. That proves source installation and fixture continuity. It does not prove authentication, a real bot loop or production migration. **Use v0.6.45 or newer for the repaired Python 3.13 Desktop startup:** the subsequent native Desktop test found a missing `Path` import in the earlier backend. Read the [verification record](verification.md) for the repair and Desktop acceptance limits.
 
 ## 1. Select an existing runtime and a fresh trial directory
 
-Keep the original source, application bundle and private home intact. Quit nothing and copy no credentials or history. Replace the two runtime paths below with your existing installation's paths, not a newly selected system Python.
+Keep the original source, application bundle and private home intact. Quit nothing
+and copy no credentials or history. A PM-managed install keeps its dependencies
+outside the source tree: `source/venv/bin/python` may not exist. The Python at the
+first `exec` in `source/.hermes/bin/hermes` is the existing **store Python**;
+it is not by itself the dependency-carrying interpreter for a fresh trial.
+
+Set the existing home/source and that published store-Python path below. Read the
+committed selection through native PM helpers without bootstrapping the owner app,
+installing dependencies or guessing a generation path. The resolver prints only
+the selected interpreter. Missing or invalid committed state must stop this recipe;
+repair it separately through native PM. Legacy non-PM installations keep their
+own interpreter contract and need their corresponding validation recipe.
 
 ```sh
 set -eu
-export HERMES_EXISTING_SOURCE="$HOME/.hermes/hermes-agent"
-export HERMES_NATIVE_PYTHON="$HERMES_EXISTING_SOURCE/venv/bin/python"
+export HERMES_EXISTING_HOME="$HOME/.hermes"
+export HERMES_EXISTING_SOURCE="$HERMES_EXISTING_HOME/hermes-agent"
+export HERMES_BOOTSTRAP_PYTHON="/absolute/path/from/the/installed/launcher/python3"
+test -x "$HERMES_BOOTSTRAP_PYTHON"
+HERMES_NATIVE_PYTHON="$(
+  env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$HOME" \
+    HERMES_HOME="$HERMES_EXISTING_HOME" \
+    "$HERMES_BOOTSTRAP_PYTHON" -I -B -S - "$HERMES_EXISTING_SOURCE" <<'PY'
+import os
+from pathlib import Path
+import sys
+source = Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(source))
+from pm.environments import committed_venv, venv_python
+environment = committed_venv(source)
+if environment is None:
+    raise SystemExit("No committed dependency environment; use native PM separately")
+python = venv_python(environment)
+if not python.is_file() or not os.access(python, os.X_OK):
+    raise SystemExit("Committed dependency interpreter unavailable")
+print(python)
+PY
+)"
+export HERMES_NATIVE_PYTHON
 export LEGION_TRIAL="$HOME/HermesLegionTrial"
 test -d "$HERMES_EXISTING_SOURCE/.git"
 test -x "$HERMES_NATIVE_PYTHON"
+"$HERMES_NATIVE_PYTHON" -I -B -S -c 'import sys; assert sys.prefix != sys.base_prefix, "This probe requires a dependency venv whose prefix survives -S"'
 test ! -e "$LEGION_TRIAL"
 umask 077
 mkdir "$LEGION_TRIAL"
 mkdir "$LEGION_TRIAL/runtime-home"
+mkdir "$LEGION_TRIAL/tmp"
 ```
+
+The site-hook-free probe was verified with native Python 3.14.9, where `-S`
+retains the venv prefix. If the prefix check fails on an older/different runtime,
+stop this recipe and use that installation's supported validation path. Do not
+upgrade Python or forge its prefix to make a smoke check pass.
 
 Use a physical output parent. On macOS, temporary paths spelled through `/var` can resolve under `/private/var`; the setup exporter intentionally refuses linked ancestors. Resolve your chosen parent before creating a new output directory. Do not relax the symlink guard or reuse an incomplete output.
 
@@ -48,39 +89,106 @@ Start in an already downloaded Legion release, whose inventory you have verified
 export LEGION_ROOT="$(pwd -P)"
 python3 "$LEGION_ROOT/scripts/verify_release.py"
 export HERMES_CHECKOUT="$LEGION_TRIAL/source-first"
-legion_base_commit="$(python3 -c 'import json; print(json.load(open("patches/manifest.json"))["upstream_commit"])')"
+legion_base_commit="$(python3 -c 'import json; print(json.load(open("patches/stable-full/manifest.json"))["upstream_commit"])')"
 test ! -e "$HERMES_CHECKOUT"
 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0 git -c core.hooksPath=/dev/null -c maintenance.auto=false clone --shared --no-checkout "$HERMES_EXISTING_SOURCE" "$HERMES_CHECKOUT"
 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0 git -C "$HERMES_CHECKOUT" -c core.hooksPath=/dev/null -c core.autocrlf=false -c gc.auto=0 checkout --detach "$legion_base_commit"
-python3 "$LEGION_ROOT/scripts/verify_checkout.py" "$HERMES_CHECKOUT" --phase base
-git -C "$HERMES_CHECKOUT" apply --check "$LEGION_ROOT/patches/0001-legion.patch"
-git -C "$HERMES_CHECKOUT" apply "$LEGION_ROOT/patches/0001-legion.patch"
-python3 "$LEGION_ROOT/scripts/verify_checkout.py" "$HERMES_CHECKOUT" --phase installed
+python3 "$LEGION_ROOT/scripts/verify_checkout.py" "$HERMES_CHECKOUT" --phase base \
+  --manifest "$LEGION_ROOT/patches/stable-full/manifest.json"
+git -C "$HERMES_CHECKOUT" apply --check "$LEGION_ROOT/patches/stable-full/0001-stable-full.patch"
+git -C "$HERMES_CHECKOUT" apply "$LEGION_ROOT/patches/stable-full/0001-stable-full.patch"
+python3 "$LEGION_ROOT/scripts/verify_checkout.py" "$HERMES_CHECKOUT" --phase installed \
+  --manifest "$LEGION_ROOT/patches/stable-full/manifest.json"
 ```
 
 A shared clone borrows the original Git object store. Keep that store available and do not prune it while the trial depends on it. This is an experiment-space saving, not an independent backup. Missing objects, a different base or changed files must stop preparation; do not force a checkout, fetch implicitly or patch the running installation.
 
 ## 3. Check the native CLI without private state
 
-The following child receives no inherited token variables. Its home is the fresh trial home, and its source and interpreter are explicit. `--version` checks native startup, not provider access. Lazy dependency installation is disabled; if prerequisites are missing, stop and use the upstream package manager separately.
+The following child receives no inherited token variables. Its home, source and
+dependency-carrying interpreter are explicit. `-I -B -S` skips ambient Python
+paths, bytecode writes and site startup hooks; only the selected dependency
+directories and trial source are added. Missing editable plugins or prerequisites
+are a stop condition, not permission to install or drop this boundary.
+`--version` checks native startup, not provider access. Lazy installation is disabled.
 
 ```sh
 env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin \
   HOME="$LEGION_TRIAL/runtime-home" \
   HERMES_HOME="$LEGION_TRIAL/runtime-home/.hermes" \
-  PYTHONPATH="$HERMES_CHECKOUT" PYTHONDONTWRITEBYTECODE=1 \
+  TMPDIR="$LEGION_TRIAL/tmp" \
   HERMES_DISABLE_LAZY_INSTALLS=1 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0 \
   LANG=en_US.UTF-8 \
-  "$HERMES_NATIVE_PYTHON" -B -m hermes_cli.main --version
+  "$HERMES_NATIVE_PYTHON" -I -B -S -c '
+import runpy, sys, sysconfig
+source = sys.argv.pop(1)
+sys.path[:0] = [source, sysconfig.get_path("purelib"), sysconfig.get_path("platlib")]
+runpy.run_module("hermes_cli.main", run_name="__main__", alter_sys=True)
+' "$HERMES_CHECKOUT" --version
 ```
 
-The reported Hermes/upstream version is **not** the Legion release identifier. Keep the release inventory, applied-source manifest and loaded module path as the source identity evidence. In the pilot, an additional Python audit hook denied network and optional installer/tool subprocesses; a single synthetic SessionDB row and search result were verified before and after the update. No real conversation was read or copied.
+The reported Hermes/upstream version is **not** the Legion release identifier.
+Keep release inventory, source hashes and loaded module path as identity evidence.
+If an acceptance guard denies Git metadata subprocesses, version text can say
+`vunknown`; it does not invalidate matching source hashes or establish version
+metadata readiness. This command alone is not network isolation.
+
+For fixture-backed continuity, admit only the new synthetic home explicitly:
+
+```sh
+mkdir -p "$LEGION_TRIAL/runtime-home/.hermes"
+printf 'Hermes Legion synthetic native acceptance\n' > "$LEGION_TRIAL/runtime-home/.hermes/.legion-synthetic"
+env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+  HOME="$LEGION_TRIAL/runtime-home" HERMES_HOME="$LEGION_TRIAL/runtime-home/.hermes" \
+  TMPDIR="$LEGION_TRIAL/tmp" HERMES_DISABLE_LAZY_INSTALLS=1 \
+  GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0 LANG=en_US.UTF-8 \
+  "$HERMES_NATIVE_PYTHON" -I -B -S \
+  "$LEGION_ROOT/verification/native_source_runtime.py" seed \
+  "$HERMES_CHECKOUT" "$LEGION_TRIAL/runtime-home/.hermes"
+```
+
+The standalone assertion fixture checks PM selection without an in-tree venv,
+invalid committed-state refusal, native config/profile creation and a registered
+local search over synthetic older text. It checks unrelated settings, fallback
+policy and retained bytes. It refuses a seed replay; never add the marker to an
+owner home. Run with the existing network/process controls required by your
+environment. No provider or embedding request is part of this fixture.
 
 ## 4. Test an update without overwriting the old version
 
-Download and verify the next Legion release into another directory. Repeat step 2 with its `LEGION_ROOT` and a **new** `HERMES_CHECKOUT`, such as `$LEGION_TRIAL/source-next`. Repeat step 3 with the same trial home and the newly selected source. Keep both source directories. The pilot selected versioned source directories between separate CLI processes; it did not modify code in a running process.
+Download and verify the next Legion release into another directory. Repeat step 2
+with its `LEGION_ROOT` and a **new** `HERMES_CHECKOUT`, such as
+`$LEGION_TRIAL/source-next`. Repeat the startup command with the same trial home.
+Run the fixture command with `verify` in place of `seed`; it must recover the same
+settings, profile and search content without changing the watched fixture bytes.
+The old source may then run `verify` against that same state; never restore an
+older database to simulate rollback. Keep both source directories until acceptance.
 
 Use only synthetic fixture data for compatibility testing. Do not open the same SQLite database concurrently in old and new trials. Retaining a fixture is not enough to prove compatibility with every existing production database or future schema change. A source rollback must never restore an old live database or rewind notification receipts.
+
+### Managed-runtime acceptance (v0.8.47)
+
+On a real ARM64 Mac, the old in-tree-venv precondition failed. The native PM
+resolver selected the committed Python 3.14.9 dependency environment read-only.
+Fresh pinned v0.22.5 checkouts accepted the v0.8.37 and current kit patches with
+983 and 993 exact installed hashes. Separate native processes seeded, updated and
+reopened the same synthetic settings/profile/search state; watched bytes remained
+unchanged. A missing-session read failed as expected. Bare store Python with its
+store bound still refused an uncommitted trial environment.
+
+The extra macOS OS sandbox was unavailable (`sandbox_apply` refused it). Trusted
+Python children instead ran self-tested audit guards before dependencies/Hermes
+imports, denying sockets, processes, out-of-trial Python writes and protected
+owner-state Python reads. Native Git metadata probes and an IPv6 capability probe
+were denied; version output was degraded. Audit coverage does not contain every
+native-extension operation or prove complete network isolation. Outer filesystem
+permissions separately protected owner files. No owner config/profile/database,
+service, timer, pause or ESTOP was changed, and no provider work was requested.
+
+This proves the listed source/runtime compatibility and synthetic continuity on
+Mac. It is not installed-app activation, Desktop UX, original-session adoption,
+live goal judging, Linux runtime proof or a performance saving. Native kit bytes
+and dependencies are unchanged; only the companion recipe/fixture changed.
 
 ## 5. Keep Desktop activation separate
 

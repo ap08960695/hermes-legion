@@ -1,3 +1,31 @@
+# v0.8.47 — PM-managed Mac install/update compatibility
+
+The old Mac recipe's in-tree venv is absent on this real PM-managed installation.
+Native PM metadata resolves its committed dependency interpreter read-only. Two
+fresh v0.22.5 trial checkouts accept the v0.8.37 and current kit patches with 983
+and 993 exact installed hashes. The reusable native assertion fixture seeds under
+the older source, reads under the newer source, then reopens under the old source
+without rewinding the database. Synthetic settings, profile and older multilingual
+search content remain intact; watched bytes match. Invalid committed selection,
+missing-session reads, seed replay and bare-store-Python guards are exercised.
+
+The OS sandbox preflight was refused. Self-tested Python audit guards denied
+processes, sockets and forbidden Python file operations before trusted dependency
+and native imports. Denied optional metadata/capability probes degraded version
+text; source hashes are the identity evidence. This is guarded synthetic native
+compatibility, not complete OS/network isolation, installed Desktop activation,
+provider/goal judging, Linux runtime adoption or a performance gain. All native
+patch artifacts and dependencies are unchanged. See the
+[exact Mac scope and limitations](macos-install-update.md#managed-runtime-acceptance-v0847).
+
+The companion suite passes 115 tests with two Linux-only skips. Two new admission
+tests reject missing/invalid markers and mismatched homes before native imports,
+preserving synthetic owner-like state. A tracked-only export of the intended
+public tree passes all 222 inventory rows. An independent temporary index includes
+the two reviewed new fixtures before driver staging; the real index stays untouched.
+Both documented Gitleaks 8.30.1 scans pass with no leaks reported, including the
+existing 177-commit history. No full native pytest suite or production test is claimed.
+
 # v0.8.46 — Release history fsmonitor fence and accurate judge evidence
 
 A real marker-writing Git fsmonitor hook runs during the old release history

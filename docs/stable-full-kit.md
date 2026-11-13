@@ -10,6 +10,14 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Managed Mac runtime compatibility (v0.8.47)
+
+The [Mac recipe](macos-install-update.md#managed-runtime-acceptance-v0847) now
+resolves the existing committed PM dependency interpreter instead of assuming an
+in-tree venv. A reusable native fixture verifies settings/profile/search continuity
+between pinned source versions using synthetic state. The public kit still covers
+993 targets on v0.22.5; native patch bytes and test selection are unchanged.
+
 ## Release inspection and live judge evidence (v0.8.46)
 
 The companion release verifier disables repository fsmonitor hooks while checking
