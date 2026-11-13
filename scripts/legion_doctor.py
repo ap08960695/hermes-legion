@@ -37,7 +37,10 @@ def _skill_copy_check(copy):
             'files_checked': len(files), 'missing_files': missing, 'different_files': different}
 
 
-def diagnose(*, team=None, bundle=None, checkout=None, phase='installed', snapshot=None, now=None, skill_copy=None):
+def diagnose(*, team=None, bundle=None, checkout=None, phase='installed', snapshot=None, now=None,
+             skill_copy=None, manifest=None):
+    if manifest is not None and checkout is None:
+        raise ValueError('manifest requires checkout')
     checks = []
     if skill_copy is not None:
         try:
@@ -77,7 +80,7 @@ def diagnose(*, team=None, bundle=None, checkout=None, phase='installed', snapsh
         checks.append({'code': 'checkout-not-inspected', 'status': 'unknown'})
     else:
         try:
-            verify(checkout, read_json(ROOT / 'patches/manifest.json'), phase)
+            verify(checkout, read_json(manifest if manifest is not None else ROOT / 'patches/manifest.json'), phase)
             checks.append({'code': 'pinned-checkout-' + phase, 'status': 'pass'})
         except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError):
             checks.append({'code': 'checkout-incompatible', 'status': 'fail'})
@@ -92,6 +95,7 @@ def main():
     parser.add_argument('--team', type=Path)
     parser.add_argument('--bundle', type=Path)
     parser.add_argument('--checkout', type=Path)
+    parser.add_argument('--manifest', type=Path, help='explicit patch manifest; requires --checkout')
     parser.add_argument('--skill-copy', type=Path, help='explicit installed goal-driven-execution directory')
     parser.add_argument('--phase', choices=['base', 'installed'], default='installed')
     parser.add_argument('--snapshot', type=Path)
@@ -104,7 +108,8 @@ def main():
             raise ValueError('snapshot requires team')
         result = diagnose(team=read_json(args.team) if args.team else None, bundle=args.bundle,
                           checkout=args.checkout, phase=args.phase,
-                          snapshot=read_json(args.snapshot) if args.snapshot else None, now=args.now, skill_copy=args.skill_copy)
+                          snapshot=read_json(args.snapshot) if args.snapshot else None, now=args.now,
+                          skill_copy=args.skill_copy, manifest=args.manifest)
     except (ValueError, OSError, KeyError, TypeError, AttributeError):
         result = {'mode': 'offline-only', 'executed': False, 'offline_ready': False,
                   'runtime_ready': 'unknown', 'checks': [{'code': 'invalid-input', 'status': 'fail'}]}

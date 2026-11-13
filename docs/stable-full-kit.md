@@ -10,6 +10,14 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Explicit offline doctor manifest (v0.8.48)
+
+The doctor can now check this kit with
+`--manifest patches/stable-full/manifest.json`, preserving the historical default
+for cumulative-kit users. It reuses the existing source verifier and keeps runtime
+readiness unknown. See [manifest selection](offline-setup-tools.md#select-the-matching-patch-manifest-v0848).
+The pinned v0.22.5 base, 993 targets, native patch and test selection are unchanged.
+
 ## Managed Mac runtime compatibility (v0.8.47)
 
 The [Mac recipe](macos-install-update.md#managed-runtime-acceptance-v0847) now

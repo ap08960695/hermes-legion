@@ -56,6 +56,27 @@ Only point this check at an isolated checkout prepared by the [installation guid
 python3 scripts/legion_doctor.py --bundle "$LEGION_BUNDLE" --checkout "$HERMES_CHECKOUT" --phase installed
 ```
 
+### Select the matching patch manifest (v0.8.48)
+
+Omitting `--manifest` retains the historical cumulative kit's
+`patches/manifest.json` (v0.22.2 base). For the consolidated stable kit, select its
+v0.22.5 manifest explicitly:
+
+```sh
+python3 scripts/legion_doctor.py --bundle "$LEGION_BUNDLE" \
+  --checkout "$HERMES_CHECKOUT" --phase installed \
+  --manifest patches/stable-full/manifest.json
+```
+
+Use the matching manifest for another published patch unit as needed. The Python
+`diagnose` function accepts the same optional `manifest` path. An explicit manifest
+requires a checkout. There is no automatic manifest inference or fallback to
+another pin: a wrong revision, changed target, unreadable/malformed manifest or
+unrelated source change remains a refusal. Treat the manifest as reviewed input,
+not a signed authority or proof that every file in a larger checkout was covered.
+Rejected paths/content stay out of diagnostic messages; `runtime_ready` remains
+`unknown` even when the selected source checks pass.
+
 Use `--phase base` before applying the patch. This runs only the existing checkout verifier's read-only Git commands and file hashes; it never imports Hermes. Git filesystem-monitor helpers, external diff/text conversion, lazy fetching, interactive prompts and optional index locks are disabled for inspection. A different revision or changed target fails, rather than triggering an update/install.
 
 ## 5. Check an explicitly selected installed skill

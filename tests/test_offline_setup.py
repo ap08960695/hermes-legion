@@ -181,6 +181,66 @@ class SetupTests(unittest.TestCase):
         self.assertIn('checkout-incompatible', [x['code'] for x in json.loads(result.stdout)['checks']])
         self.assertEqual((fixture.root / 'module.py').read_bytes(), before)
 
+    def test_doctor_selects_a_patch_manifest_for_base_and_installed_checks(self):
+        from test_release_tools import CheckoutTests
+        checkout = CheckoutTests(); checkout.setUp()
+        self.addCleanup(checkout.temp.cleanup)
+        selected = self.base / 'selected-manifest.json'
+        selected.write_text(json.dumps(checkout.manifest))
+        for profile in self.team['profiles']:
+            profile['model'] = self.models[profile['id']]
+        team, _ = self.inputs()
+        for phase in ('base', 'installed'):
+            with self.subTest(phase=phase):
+                if phase == 'installed':
+                    (checkout.root / 'module.py').write_text('result = 2\n')
+                    (checkout.root / 'new.py').write_text('new = True\n')
+                before = {p.name: p.read_bytes() for p in checkout.root.glob('*.py')}
+                status = checkout.git('status', '--porcelain')
+                default = self.cli('legion_doctor.py', '--team', team,
+                                   '--checkout', checkout.root, '--phase', phase)
+                self.assertEqual(default.returncode, 1)
+                self.assertIn('checkout-incompatible', [row['code'] for row in json.loads(default.stdout)['checks']])
+                result = self.cli('legion_doctor.py', '--team', team, '--checkout', checkout.root,
+                                  '--phase', phase, '--manifest', selected)
+                self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+                report = json.loads(result.stdout)
+                self.assertTrue(report['offline_ready'])
+                self.assertFalse(report['executed'])
+                self.assertEqual(report['runtime_ready'], 'unknown')
+                self.assertIn({'code': 'pinned-checkout-' + phase, 'status': 'pass'}, report['checks'])
+                self.assertEqual({p.name: p.read_bytes() for p in checkout.root.glob('*.py')}, before)
+                self.assertEqual(checkout.git('status', '--porcelain'), status)
+
+    def test_doctor_selected_manifest_refusals_do_not_echo_private_input(self):
+        from test_release_tools import CheckoutTests
+        checkout = CheckoutTests(); checkout.setUp()
+        self.addCleanup(checkout.temp.cleanup)
+        selected = self.base / 'synthetic-private-canary.json'
+        wrong = copy.deepcopy(checkout.manifest)
+        wrong['upstream_commit'] = '0' * 40
+        changed = copy.deepcopy(checkout.manifest)
+        changed['files'][0]['before_sha256'] = 'f' * 64
+        before = (checkout.root / 'module.py').read_bytes()
+        for payload in (json.dumps(wrong), json.dumps(changed), '{synthetic-private-canary', None):
+            with self.subTest(payload=payload):
+                if payload is None:
+                    selected.unlink()
+                else:
+                    selected.write_text(payload)
+                result = self.cli('legion_doctor.py', '--checkout', checkout.root,
+                                  '--phase', 'base', '--manifest', selected)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn('checkout-incompatible', [row['code'] for row in json.loads(result.stdout)['checks']])
+                self.assertNotIn('synthetic-private-canary', result.stdout + result.stderr)
+                self.assertEqual((checkout.root / 'module.py').read_bytes(), before)
+
+    def test_doctor_manifest_without_checkout_is_an_input_error(self):
+        result = self.cli('legion_doctor.py', '--manifest', self.base / 'synthetic-private-canary.json')
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(json.loads(result.stdout)['checks'], [{'code': 'invalid-input', 'status': 'fail'}])
+        self.assertNotIn('synthetic-private-canary', result.stdout + result.stderr)
+
     def test_doctor_reports_stale_snapshot_without_pretending_to_refresh_it(self):
         # A synthetic registered team is configured, but observation time is outside its snapshot.
         for p in self.team['profiles']: p['model'] = self.models[p['id']]

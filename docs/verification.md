@@ -1,3 +1,22 @@
+# v0.8.48 — Explicit patch manifests in the offline doctor
+
+The doctor previously accepted only the historical cumulative-kit manifest. Its
+new optional `--manifest` and API argument reuse the existing strict checkout
+verifier, preserving the historical default. Base/installed CLI regressions first
+failed on the missing option; they now pass. Wrong revisions/hashes, malformed or
+missing manifests, and a manifest without a checkout remain failures without
+echoing rejected paths or content.
+
+On this Mac, the correctly applied 993-target v0.22.5 source is refused under the
+historical pin and passes with the explicit stable-full pin. Its Git status is
+unchanged; `executed` remains false and runtime readiness remains unknown. Native
+patch artifacts and test selection are unchanged.
+
+An installed-Desktop journey stopped at loopback preflight (`listen EPERM`) before
+any app/backend launch. No binding workaround, owner-state change, provider work,
+pause/ESTOP or timer change was attempted. No new Desktop or runtime acceptance is
+claimed. See [manifest selection](offline-setup-tools.md#select-the-matching-patch-manifest-v0848).
+
 # v0.8.47 — PM-managed Mac install/update compatibility
 
 The old Mac recipe's in-tree venv is absent on this real PM-managed installation.
