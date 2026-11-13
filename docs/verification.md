@@ -1,3 +1,41 @@
+# v0.8.58 — Stream prepared-image cache-key hashing
+
+`_analysis_cache_key` reuses `hashlib.file_digest` on a context-managed binary file
+instead of allocating full image bytes for SHA-256. Metadata evaluation order and
+final key identity remain. No new helper/dependency/minimum Python, cache setting,
+route, prompt/history, image-preparation or provider behavior.
+
+All 32 original content/route/request cases pass baseline. Five new cases expose
+two original stream-path failures with five controls in the focused file, then
+all seven pass after edit. They cover stable keys without whole-file read, same-size
+valid PNG changes with preserved mtime, real handle closure on success/digest error
+and missing/open-error fallback. Whole three-file selection passes 37; native
+saved/runtime/direct/registered/concurrent boundaries remain. Reapplied focused
+file passes seven again; counts overlap. No full native-suite claim.
+
+Actual Mac Python 3.14.9 uses original function AST and imported candidate against
+one real native-prepared valid PNG, 12,589,062 bytes, 2048×2048 RGB. Seven alternating
+10-call time batches give median batch-average 4.738133 to 4.601042 ms. Three separate
+traced batches give peak 12,665,605 to 470,798 bytes, identical across each variant's
+three batches. All keys match; prepared SHA unchanged. Setup/import/preparation/
+warmup excluded. See [method, ranges and limits](vision-cache-routes.md#streaming-content-keys-v0858).
+No whole-service/vision-workload RSS, usage, cache-hit or live-owner gain claim.
+
+Borrowed committed runtime/dependencies read-only; isolated locked test tools,
+self-tested scoped audit/null/scratch/exit guard, prior duplicate-flag/per-process
+probe fidelity, one CPU/worker and zero retries. No new harness correction needed.
+OS/native-extension containment remains unproven. No owner source/config/profile/
+database/apps/services, stop/quota/timer change; blocked HTTP/PID cases not rerun.
+
+Export retains all 998 paths, base/before hashes and native test-selection bytes.
+Only vision runtime and existing content-regression after hashes change. Installed/
+reverse/base/reapply checks pass; native and raw root whitespace pass without a
+format exception this round. Companion suite: 124 run, 122 pass/two Linux-only skips, 3.849 s. Tracked-only inventory
+verifies 222 rows and patch hashes; both exact secret scans pass without leaks,
+188 history commits. Advisor accepts scoped key-path gains. Owned trial/pointer
+removed, borrowed dependencies retained. Final hash/scan refresh precedes driver
+signal; owner adoption and Linux/live/workload proof remain separate.
+
 # v0.8.57 — Tolerate overflowing MCP cache expiry metadata
 
 Native `get_cached_entry` catches only OverflowError around its existing TTL

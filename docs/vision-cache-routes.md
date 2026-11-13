@@ -54,3 +54,44 @@ The tested route inputs are context-local runtime fields and the saved `model`
 section. Environment-only endpoint changes without a runtime binding, provider
 fallback selection, credential rotation and changes during an in-flight request
 are not newly validated by this release.
+
+
+## Streaming content keys (v0.8.58)
+
+The prepared-image cache key now streams the file through `hashlib.file_digest`
+instead of creating a full `read_bytes()` copy for SHA-256. The repository already
+uses this stdlib pattern and requires Python 3.11 or newer. Existing metadata is
+resolved before opening the file; its final identity list, JSON serialization and
+key SHA stay identical. Profile, prompt, model, endpoint/mode/auth and crop inputs,
+capacity/TTL, preparation, provider selection and history remain unchanged.
+
+Five native regression cases cover no whole-file read, same-size changed valid PNG
+with preserved mtime, actual stream closure on success/digest failure, and missing/
+open-error fallback. Original source has two expected stream-path failures and
+five passing controls; candidate and reapply pass all seven content cases. Together
+with existing saved/runtime/direct/registered/concurrent route and request-cache
+cases, 37 native tests pass across three files. External LLM calls use fixed
+responses; native route cases retain real preparation, extraction and cache behavior.
+No provider request is issued.
+
+Actual native Mac Python 3.14.9 prepares a valid 2048×2048 synthetic uncompressed
+RGB PNG. Input and prepared file are each 12,589,062 bytes. The original function
+is compiled from its exact unaltered AST with the same native globals; candidate
+is imported normally. Both hash the same native-prepared path/home/route/prompt.
+Every key matches and prepared bytes remain unchanged. Generation, preparation,
+imports and five warmups per variant precede measurement. Seven alternating
+10-call timing batches run without tracing; three separate alternating 10-call
+allocation batches follow GC.
+
+| Key-path measurement | Whole-file bytes | Streamed file |
+| --- | ---: | ---: |
+| Median batch-average time | 4.738133 ms | 4.601042 ms |
+| Batch-average time range | 4.720092–4.763554 ms | 4.576067–4.632033 ms |
+| Median traced batch peak | 12,665,605 bytes | 470,798 bytes |
+
+All three allocation peaks equal their respective medians. This is one large
+synthetic prepared-image key component. It establishes no whole-service RSS,
+complete vision-workload peak, startup, production cache-hit-rate or billed saving.
+Image ingestion, normalization, base64 and provider processing retain their normal
+cost. Linux parity, original owner-session continuation and app adoption remain
+separate.

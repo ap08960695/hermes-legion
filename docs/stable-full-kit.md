@@ -10,6 +10,14 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Streaming vision content keys (v0.8.58)
+
+Native content-key hashing streams the prepared image through the existing stdlib
+file-digest pattern, preserving key bytes, route/profile boundaries and error fallback.
+See [native regressions and measured key-path allocation](vision-cache-routes.md#streaming-content-keys-v0858).
+Only existing vision runtime/regression after hashes change. All 998 paths, before
+hashes, pinned base and native test selection remain; no dependency change.
+
 ## Overflow-safe MCP cache expiry (v0.8.57)
 
 The shared cache reader treats numeric overflow in existing TTL validation as a

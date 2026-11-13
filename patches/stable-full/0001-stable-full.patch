@@ -76339,10 +76339,10 @@ index 0000000000000000000000000000000000000000..13b3fa1891aa2a957b7b1eb5744cfec3
 +    asyncio.run(scenario())
 diff --git a/tests/tools/test_vision_analysis_content_cache.py b/tests/tools/test_vision_analysis_content_cache.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..8e6d3e6ab6a31146e542530e11785f7e04d19998
+index 0000000000000000000000000000000000000000..030de277657ac8d0149580ab459923b567343a22
 --- /dev/null
 +++ b/tests/tools/test_vision_analysis_content_cache.py
-@@ -0,0 +1,44 @@
+@@ -0,0 +1,113 @@
 +import asyncio
 +import json
 +from unittest.mock import AsyncMock
@@ -76387,6 +76387,75 @@ index 0000000000000000000000000000000000000000..8e6d3e6ab6a31146e542530e11785f7e
 +    monkeypatch.setattr(vt, "async_call_llm", AsyncMock(side_effect=RuntimeError("boom")))
 +    assert _run(image)["success"] is False
 +    assert not vt._ANALYSIS_CACHE
++
++
++def test_content_key_streams_bytes_and_detects_same_size_change(image, monkeypatch):
++    import os
++    from pathlib import Path
++    from PIL import Image
++
++    Image.new("RGB", (4, 4), (200, 30, 30)).save(image, compress_level=0)
++    before = image.stat()
++    expected = vt._analysis_cache_key(image, "q", "m", {})
++    assert expected is not None
++    native_read = Path.read_bytes
++
++    def forbid_whole_read(path):
++        if path == image:
++            raise AssertionError("content key must not allocate whole image bytes")
++        return native_read(path)
++
++    monkeypatch.setattr(Path, "read_bytes", forbid_whole_read)
++    assert vt._analysis_cache_key(image, "q", "m", {}) == expected
++    Image.new("RGB", (4, 4), (20, 30, 30)).save(image, compress_level=0)
++    os.utime(image, ns=(before.st_atime_ns, before.st_mtime_ns))
++    assert image.stat().st_size == before.st_size
++    assert image.stat().st_mtime_ns == before.st_mtime_ns
++    changed = vt._analysis_cache_key(image, "q", "m", {})
++    assert changed is not None and changed != expected
++
++
++@pytest.mark.parametrize("digest_error", [False, True])
++def test_content_key_closes_file_on_success_and_digest_error(image, monkeypatch, digest_error):
++    from pathlib import Path
++
++    native_open, native_digest = Path.open, vt.hashlib.file_digest
++    handles = []
++
++    def track_open(path, *args, **kwargs):
++        stream = native_open(path, *args, **kwargs)
++        if path == image:
++            handles.append(stream)
++        return stream
++
++    def digest(stream, *args, **kwargs):
++        if digest_error and stream in handles:
++            raise OSError("synthetic digest read error")
++        return native_digest(stream, *args, **kwargs)
++
++    monkeypatch.setattr(Path, "open", track_open)
++    monkeypatch.setattr(vt.hashlib, "file_digest", digest)
++    key = vt._analysis_cache_key(image, "q", "m", {})
++    assert (key is None) == digest_error
++    assert len(handles) == 1 and handles[0].closed
++
++
++@pytest.mark.parametrize("missing", [False, True])
++def test_content_key_bypasses_cache_on_file_open_error(image, monkeypatch, missing):
++    from pathlib import Path
++
++    if missing:
++        image.unlink()
++    else:
++        native_open = Path.open
++
++        def fail_open(path, *args, **kwargs):
++            if path == image:
++                raise OSError("synthetic open error")
++            return native_open(path, *args, **kwargs)
++
++        monkeypatch.setattr(Path, "open", fail_open)
++    assert vt._analysis_cache_key(image, "q", "m", {}) is None
 diff --git a/tests/tools/test_vision_request_cache.py b/tests/tools/test_vision_request_cache.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..ddaac9da41fd9fd04cb97d1aa0dd55e2c0ab0164
@@ -82609,7 +82678,7 @@ index 0000000000000000000000000000000000000000..349b657033f13320255a52203cf00cf6
 +
 +CACHE = VisionCache()
 diff --git a/tools/vision_tools.py b/tools/vision_tools.py
-index c244fd4fa1ea32757b751592b593243b101ef0e2..55bc25864973ba5c92d4b0935b9292679ef6ac79 100644
+index c244fd4fa1ea32757b751592b593243b101ef0e2..a1e59122697c1a371925970f93881028c38522e3 100644
 --- a/tools/vision_tools.py
 +++ b/tools/vision_tools.py
 @@ -10,3 +10,6 @@ import base64
@@ -82624,7 +82693,7 @@ index c244fd4fa1ea32757b751592b593243b101ef0e2..55bc25864973ba5c92d4b0935b929267
 +import re
 +import time
  import uuid
-@@ -832,2 +837,47 @@ async def _call_vision_llm(call_kwargs: dict, empty_log: str, response=None):
+@@ -832,2 +837,49 @@ async def _call_vision_llm(call_kwargs: dict, empty_log: str, response=None):
  
 +# Content-addressed reuse of aux analyses: key = sha256(prepared image bytes) + prompt + route.
 +# Remote/data URLs hash AFTER the download the analysis needs anyway. Only non-empty successes
@@ -82643,7 +82712,9 @@ index c244fd4fa1ea32757b751592b593243b101ef0e2..55bc25864973ba5c92d4b0935b929267
 +                    _read_main_provider(), _read_main_model(), os.getenv("AUXILIARY_VISION_MODEL", ""),
 +                    {field: _read_main_field(field, readonly=True)
 +                     for field in ("base_url", "api_mode", "auth_mode")},
-+                    prompt, crop_offset, hashlib.sha256(image_path.read_bytes()).hexdigest()]
++                    prompt, crop_offset]
++        with image_path.open("rb") as stream:
++            identity.append(hashlib.file_digest(stream, "sha256").hexdigest())
 +        return hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode()).hexdigest()
 +    except Exception:
 +        return None
@@ -82672,12 +82743,12 @@ index c244fd4fa1ea32757b751592b593243b101ef0e2..55bc25864973ba5c92d4b0935b929267
 +
 +
  async def _run_analysis(
-@@ -865,2 +915,4 @@ async def _run_analysis(
+@@ -865,2 +917,4 @@ async def _run_analysis(
              result["scale_note"] = scale_note
 +        if debug_call_data.get("cached"):
 +            result["cached"] = True
          debug_call_data.update(success=True, analysis_length=analysis_length)
-@@ -896,2 +948,8 @@ async def vision_analyze_tool(
+@@ -896,2 +950,8 @@ async def vision_analyze_tool(
          logger.info("Image ready (%.1f KB)", prepared.size_bytes / 1024)
 +        cache_key = await asyncio.to_thread(_analysis_cache_key, prepared.path, prompt, model, prepared.crop_offset)
 +        cached = _analysis_cache_get(cache_key)
@@ -82686,14 +82757,14 @@ index c244fd4fa1ea32757b751592b593243b101ef0e2..55bc25864973ba5c92d4b0935b929267
 +            debug_call_data["cached"] = True
 +            return cached
          # Send at full resolution first; on a size rejection, downscale and retry.
-@@ -924,3 +982,5 @@ async def vision_analyze_tool(
+@@ -924,3 +984,5 @@ async def vision_analyze_tool(
              call_kwargs, "Vision LLM returned empty content, retrying once", response)
 -        return analysis, _build_scale_note(_scale_info or None, prepared.crop_offset or None)
 +        outcome = (analysis, _build_scale_note(_scale_info or None, prepared.crop_offset or None))
 +        _analysis_cache_put(cache_key, outcome)
 +        return outcome
      return await _run_analysis("image", image_url, user_prompt, model, stage)
-@@ -1012,5 +1072,16 @@ def _configured_aux_model(sections: tuple, env_vars: tuple) -> Optional[str]:
+@@ -1012,5 +1074,16 @@ def _configured_aux_model(sections: tuple, env_vars: tuple) -> Optional[str]:
  
 -async def _handle_vision_analyze(args: dict[str, Any], **kw: Any) -> str:
 +async def _handle_vision_analyze(args: dict[str, Any], **kw: Any):
