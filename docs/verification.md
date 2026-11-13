@@ -1,3 +1,65 @@
+# v0.8.59 — Reject boolean goal-judge wait targets
+
+The shared integer-alias helper now skips booleans before conversion. Previously,
+JSON true in any PID/time alias selected target 1 and could override a later valid
+PID/time. The two-line fix retains session/PID/time priority, normal no-target
+continuation, overflow handling, integer 1, numeric strings, finite-number coercion
+and legacy done:true. No memo, timeout, provider, scheduler or wait-execution change.
+
+A guarded actual native Mac Python 3.14.9 probe reproduces six true-to-1 results
+and boolean override of a later valid PID. All 27 existing focused cases pass
+baseline. Twelve new raw-JSON true/false cases and fourteen judge API cases then
+give twelve expected assertion failures and 41 passes. The fixed focused selection
+passes 53; seven admitted files pass 146, zero failures/skips/retries. These cover
+goals, memo, judge delegations, timeout, auxiliary accounting, delegated decisions
+and board counts. The 53 focused cases overlap the 146. See
+[behavior and compatibility](goal-result-waits.md#boolean-judge-wait-targets-v0859).
+
+The native command uses the guarded interpreter and locked tools described below:
+
+```sh
+bash scripts/run_tests.sh -j 1 \
+  tests/hermes_cli/test_goals.py \
+  tests/hermes_cli/test_goal_judge_memo.py \
+  tests/hermes_cli/test_goal_judge_delegations.py \
+  tests/hermes_cli/test_goal_judge_timeout_config.py \
+  tests/hermes_cli/test_goal_aux_accounting.py \
+  tests/hermes_cli/test_goal_delegated_decisions.py \
+  tests/hermes_cli/test_goal_kanban_board_counts.py \
+  -k 'not test_parked_on_live_pid_does_not_continue_or_judge and not test_stop_waiting_clears_barrier and not test_barrier_on_a_live_process_does_not_expire and not test_judge_wait_pid_parks_loop'
+```
+
+The four excluded cases are:
+
+- `test_parked_on_live_pid_does_not_continue_or_judge`
+- `test_stop_waiting_clears_barrier`
+- `test_barrier_on_a_live_process_does_not_expire`
+- `test_judge_wait_pid_parks_loop`
+
+These remain unverified under the prior process-ancestry boundary. No guard is
+bypassed or actual wait/signalling added to the new regressions. Committed native
+runtime/dependencies are borrowed read-only; separate locked pytest 9.1.1 and
+pytest-asyncio 1.3.0 tools, scoped Python audit guards, verified null sink,
+trial-local scratch, one CPU/worker, zero file retries and fresh exit-7/negative
+selfchecks retain prior admission. OS/native-extension containment is unproven.
+No owner home/config/profile/database/app/service or stop/quota/timer change.
+
+The source export retains base v0.22.5, all 998 paths/before hashes and native
+selection bytes. Only existing goals runtime/regression after hashes change.
+Installed/reverse/base/reapply checks pass all 998; reapplied focused cases pass
+53 again. Companion suite: 124 run, 122 pass/two Linux-only skips, 3.859 s.
+Native changed-source and raw root whitespace checks pass. The tracked-only
+222-file release inventory passes. Exact Gitleaks directory and all-history scans
+exit zero with no leaks; history covers 189 commits. Final refresh follows cleanup.
+
+The attempted fresh isolated UI lane stops before app/backend launch or dependency
+copy: required sandbox-exec containment fails even for true with sandbox_apply
+EPERM. A fresh loopback bind succeeds but does not establish UI readiness. Existing
+v0.8.7 vision-routing proof already covers the historical catalog-fixture failure;
+it is not a new fix or an unresolved resolver bug in this round. Live terminal
+goals, owner-process adoption, representative workload gains and Linux parity
+remain separate.
+
 # v0.8.58 — Stream prepared-image cache-key hashing
 
 `_analysis_cache_key` reuses `hashlib.file_digest` on a context-managed binary file

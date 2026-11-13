@@ -10,6 +10,14 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Boolean judge wait targets (v0.8.59)
+
+The shared wait-target parser skips JSON booleans before integer conversion. Valid
+later aliases and session/PID/time priority remain, including integer 1, numeric
+strings and legacy done:true. See [native regressions](goal-result-waits.md#boolean-judge-wait-targets-v0859).
+Only existing goals runtime/regression after hashes change. All 998 targets,
+before hashes, pinned base and native test-selection bytes remain.
+
 ## Streaming vision content keys (v0.8.58)
 
 Native content-key hashing streams the prepared image through the existing stdlib

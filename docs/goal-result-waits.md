@@ -77,3 +77,33 @@ Source installation, native PID observation, live terminal-goal acceptance and
 production adoption remain separate. The known four PID checks from v0.8.50 stay
 unverified; no guard is bypassed or stopped timer resumed. See the
 [verification record](verification.md) for admitted selection and release checks.
+
+
+## Boolean judge wait targets (v0.8.59)
+
+JSON `true` previously became integer 1 in every PID/time alias. It could select
+PID 1 instead of a later valid PID, or select a one-second wait. The judge prompt
+requires integers; this was Python's boolean-to-integer coercion rather than an
+intentional wait target.
+
+The shared parser now skips booleans before its existing conversion. This covers
+`wait_on_pid`, `pid`, `wait_pid`, `wait_for_seconds`, `seconds` and `wait_seconds`.
+A later valid alias remains eligible; invalid PID targets still fall through to
+time, and no usable target still produces `continue`. Session > PID > time
+priority, parse/transport flags and overflow handling remain. Integer 1, numeric
+strings, finite fractional-number conversion and legacy `done: true` retain their
+existing behavior. No duration cap, delay, polling or provider change is added.
+
+The actual Mac Python 3.14.9 parser reproduces all six true-to-1 conversions in a
+synthetic home, including an invalid boolean overriding a later valid PID. Native
+regressions add twelve true/false alias cases and fourteen real `judge_goal` API
+fallback/priority/coercion/legacy controls with a fixed judge response. Before
+repair twelve assertions fail and 41 focused controls pass; after repair all 53
+focused cases pass. The seven-file admitted selection passes 146; reapplied
+focused checks pass 53 again. Counts overlap. No real PID/time wait or model call
+is executed by the new cases.
+
+This closes the boolean conversion bug, not live terminal-goal acceptance or
+owner-app adoption. Four previously unadmitted PID-observation cases remain
+excluded; stopped timers and owner pauses/ESTOP are preserved. Callers sending
+invalid boolean targets now receive the normal fallback rather than target 1.
