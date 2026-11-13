@@ -251,7 +251,53 @@ separately, alternating version order:
 
 These are one payload-heavy synthetic read path's results, not whole-service RSS,
 startup, production workload or billed savings. Consumers that subsequently load
-the full session still pay for that read. Classic title-or-ID resume has its own
-full-row exact lookup; only its local-prefix fallback uses this shared resolver.
+the full session still pay for that read. At v0.8.54, classic title-or-ID resume
+retained its own full-row exact lookup; v0.8.55 below removes that identity read.
 No unrelated direct reader, prefix query, schema, cache, prompt or route changes.
 Owner installation/adoption and Linux runtime acceptance remain separate.
+
+
+## Classic resume identity (v0.8.55)
+
+Classic `_resolve_session_by_name_or_id` now calls `get_session_metadata` for its
+initial exact-ID check. The selector consumes only the returned ID. It retains
+ID-before-title priority, local-prefix fallback, ambiguity/missing behavior and
+compression-tip projection. Fork/delegate children still do not replace the
+compression continuation. Context readers used after selection retain their cost.
+
+Seven native tests exercise the actual selector and real read-only SessionDB.
+SQLite authorizers refuse prompt/tool blob reads while permitting legitimate
+lineage config reads. Exact ID, title and local prefix must reach the expected
+compression tip; ambiguous/missing, read failure and absent-store controls return
+None. Constructor mode, connection closure and existing database bytes are checked.
+The corrected original-code run has three targeted failures/four passing controls;
+all seven pass after the one-call change and after export/reapply.
+
+Preservation starts after explicit native home initialization and an ordinary CLI
+import in a setup child. Each lookup runs in a fresh process, with no setup
+connections/config caches and no preexisting WAL/SHM. Complete profile file bytes
+and directory inventory, including SOUL.md and logs, remain unchanged except for
+precisely named derived SQLite metadata: WAL is absent/empty, SHM may appear, no
+journal appears. This is not a no-filesystem-write or nonempty-WAL guarantee.
+Bare-home initialization creates standard scaffolding/SOUL.md; cold CLI import
+creates log files. Those existing behaviors are outside this selector change.
+
+Actual Mac Python 3.14.9 compares the original native function, compiled from its
+unaltered function AST with the same native globals, against the imported candidate.
+Both execute real open/read/compression-tip/close on the same synthetic database.
+Its root has a 1,703,936-character prompt and 1,048,576-character unused config
+payload. Setup/import and five warmups per variant precede measurement. Seven
+alternating 40-call timing batches run without tracing; three separate alternating
+40-call tracing batches follow GC. Every returned tip matches; database SHA stays
+unchanged, WAL absent/empty and journal absent.
+
+| Measurement | Original full reader | Metadata reader |
+| --- | ---: | ---: |
+| Median batch-average selector time | 2.191502 ms | 1.355344 ms |
+| Timing batch-average range | 2.174574–2.421924 ms | 1.344363–1.408475 ms |
+| Median traced batch peak | 3,903,339 bytes | 256,853 bytes |
+
+All three allocation peaks equal their respective medians. This payload-heavy
+component fixture includes database open/close, excludes CLI import and later
+transcript use, and establishes no whole-service RSS, startup, representative
+workload, model-usage or billed saving.

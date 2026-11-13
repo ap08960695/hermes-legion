@@ -37785,7 +37785,7 @@ index ab93f87785dc2843071e197be44b6682837973ff..a4dc1deb33fd0ac767f84edf4ceb9c8c
 +    return migrate_control_state('loop:', old_session_id, new_session_id, LoopState.from_json, _get_session_db)
  
 diff --git a/hermes_cli/main.py b/hermes_cli/main.py
-index 03f6c60555fa0578a6063d29017437e6d268d7cf..b5f76fb0922a7a942b836acb97fb2604518b00f1 100644
+index 03f6c60555fa0578a6063d29017437e6d268d7cf..93a523d6c60eec23192b9bc43b864fa58436747a 100644
 --- a/hermes_cli/main.py
 +++ b/hermes_cli/main.py
 @@ -1347,3 +1347,3 @@ def _resolve_last_session(source: str = "cli") -> Optional[str]:
@@ -37798,6 +37798,11 @@ index 03f6c60555fa0578a6063d29017437e6d268d7cf..b5f76fb0922a7a942b836acb97fb2604
 -        sessions = db.search_sessions(source=source, limit=1, skip_launch_stubs=True)
 +        sessions = db.search_sessions(source=source, limit=1, skip_launch_stubs=True, ids_only=True)
          return sessions[0]["id"] if sessions else None
+@@ -1364,3 +1364,3 @@ def _resolve_session_by_name_or_id(name_or_id: str) -> Optional[str]:
+         # Exact session ID first, then title (with auto-latest for lineage).
+-        session = db.get_session(name_or_id)
++        session = db.get_session_metadata(name_or_id)
+         resolved_id = session["id"] if session else db.resolve_session_by_title(name_or_id)
 @@ -2765,3 +2765,3 @@ _BUILTIN_SUBCOMMANDS = frozenset(
          "config", "console", "cron", "curator", "dashboard", "serve", "debug", "doctor",
 -        "dump", "egress", "fallback", "gateway", "hooks", "import", "insights",
@@ -63602,6 +63607,150 @@ index 0000000000000000000000000000000000000000..69a184e145fb53c0027146b0a6d0a56a
 +    assert (root / first / relative).is_file()
 +    meta = json.loads((root / second / 'manifest.json').read_text())
 +    assert relative in meta['failed_files']
+diff --git a/tests/hermes_cli/test_resume_metadata_reads.py b/tests/hermes_cli/test_resume_metadata_reads.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..042bbb5a914f5b50cadd7f2014959a49977373bf
+--- /dev/null
++++ b/tests/hermes_cli/test_resume_metadata_reads.py
+@@ -0,0 +1,138 @@
++"""Classic resume selects identity and lineage without loading prompt/tool blobs."""
++import json
++import sqlite3
++import subprocess
++import sys
++from pathlib import Path
++
++import pytest
++
++from hermes_cli import main as cli_main
++from hermes_state import SessionDB
++
++ROOT = "local-" + "a" * 64
++TIP = "local-" + "b" * 64
++TITLE = "Synthetic retained plan"
++AMBIGUOUS = "local-" + "c" * 16
++
++
++def _storage_snapshot(home):
++    files = {path.relative_to(home).as_posix(): path.read_bytes()
++             for path in home.rglob("*") if path.is_file()}
++    directories = {path.relative_to(home).as_posix() for path in home.rglob("*") if path.is_dir()}
++    return files, directories
++
++
++def _assert_data_preserved(home, before):
++    before, directories = before
++    assert "state.db-wal" not in before and "state.db-shm" not in before
++    after, after_directories = _storage_snapshot(home)
++    assert after_directories == directories
++    assert set(after) - set(before) <= {"state.db-wal", "state.db-shm"}
++    for name, data in before.items():
++        assert after.get(name) == data
++    # Native readonly SQLite may create derived WAL-index metadata, never data frames.
++    assert after.get("state.db-wal", b"") == b""
++    assert "state.db-journal" not in after
++
++
++@pytest.fixture
++def archive(tmp_path, monkeypatch):
++    home = tmp_path / "home"
++    home.mkdir()
++    monkeypatch.setenv("HERMES_HOME", str(home))
++    from hermes_cli.config import ensure_hermes_home
++    ensure_hermes_home()
++    subprocess.run([sys.executable, "-c", "import hermes_cli.main"],
++                   capture_output=True, text=True, check=True)
++    assert all((home / "logs" / name).is_file() for name in ("agent.log", "errors.log"))
++    assert (home / "SOUL.md").is_file()
++    assert all((home / name).is_dir() for name in ("sessions", "logs", "skills", "memories"))
++    with SessionDB(home / "state.db") as db:
++        db.create_session(ROOT, source="cli", system_prompt="Synthetic retained context. " * 16384)
++        db.set_session_title(ROOT, TITLE)
++        db.end_session(ROOT, "compression")
++        db.create_session(TIP, source="cli", parent_session_id=ROOT)
++        db.set_session_title(TIP, TITLE + " #2")
++        for sid, marker in (("fork", "_branched_from"), ("delegate", "_delegate_from")):
++            db.create_session(sid, source="cli", parent_session_id=ROOT, model_config={marker: ROOT})
++        db.create_session("title-collision", source="cli")
++        db.set_session_title("title-collision", ROOT)
++        for ending in ("0", "1"):
++            db.create_session(AMBIGUOUS + ending * 48, source="tui")
++    return home
++
++
++def _watch_readers(monkeypatch, authorizer):
++    original = SessionDB.__init__
++    opened = []
++
++    def initialize(db, *args, **kwargs):
++        assert kwargs.get("read_only") is True
++        original(db, *args, **kwargs)
++        with db._read_ctx() as connection:
++            connection.set_authorizer(authorizer)
++        opened.append(db)
++
++    monkeypatch.setattr(SessionDB, "__init__", initialize)
++    return opened
++
++
++def _deny_context(action, table, column, *_):
++    if action == sqlite3.SQLITE_READ and (
++        table == "system_prompts" and column == "prompt"
++        or table == "sessions" and column in {"system_prompt", "tool_names"}
++    ):
++        return sqlite3.SQLITE_DENY
++    return sqlite3.SQLITE_OK
++
++
++def _run_lookup(home, query, expected, deny_reads=False):
++    before = _storage_snapshot(home)
++    # Separate process keeps setup connections and configuration caches out of lookup.
++    result = subprocess.run([sys.executable, __file__, str(home), query,
++                             json.dumps(expected), str(int(deny_reads))],
++                            capture_output=True, text=True)
++    assert result.returncode == 0, result.stdout + result.stderr
++    _assert_data_preserved(home, before)
++
++
++@pytest.mark.parametrize("query, expected", [
++    (ROOT, TIP),
++    (TITLE, TIP),
++    (ROOT[:22], TIP),
++    (AMBIGUOUS, None),
++    ("Missing retained plan", None),
++])
++def test_resume_selects_without_context_reads(archive, query, expected):
++    _run_lookup(archive, query, expected)
++
++
++def test_resume_lookup_failure_closes_readonly_store(archive):
++    _run_lookup(archive, ROOT, None, deny_reads=True)
++
++
++def test_resume_missing_store_stays_missing(tmp_path, monkeypatch):
++    home = tmp_path / "empty-home"
++    home.mkdir()
++    monkeypatch.setattr(cli_main, "get_hermes_home", lambda: home)
++    before = _storage_snapshot(home)
++    assert cli_main._resolve_session_by_name_or_id(ROOT) is None
++    assert _storage_snapshot(home) == before
++
++
++if __name__ == "__main__":
++    home, query, expected, deny_reads = sys.argv[1:]
++    home = Path(home)
++    before = _storage_snapshot(home)
++    assert "state.db-wal" not in before[0] and "state.db-shm" not in before[0]
++    with pytest.MonkeyPatch.context() as monkeypatch:
++        monkeypatch.setattr(cli_main, "get_hermes_home", lambda: home)
++        authorizer = (lambda action, *_: sqlite3.SQLITE_DENY
++                      if action == sqlite3.SQLITE_READ else sqlite3.SQLITE_OK) if int(deny_reads) else _deny_context
++        opened = _watch_readers(monkeypatch, authorizer)
++        result = cli_main._resolve_session_by_name_or_id(query)
++        assert len(opened) == 1 and opened[0].read_only
++        assert opened[0]._conn is None and opened[0]._read_conns_closed
++        _assert_data_preserved(home, before)
++        assert result == json.loads(expected), (query, result, expected)
 diff --git a/tests/hermes_cli/test_session_export_stream.py b/tests/hermes_cli/test_session_export_stream.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..923cdc045da81959f10a5e17947fd7664f1c458d

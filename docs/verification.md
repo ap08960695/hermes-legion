@@ -1,3 +1,58 @@
+# v0.8.55 — Avoid context reads during classic resume selection
+
+The native classic title-or-ID selector reuses `get_session_metadata` for its
+initial ID check. One call changes; title/local-prefix priority, compression-tip
+and fork/delegate handling, fallbacks and full-reader API remain unchanged.
+
+New `tests/hermes_cli/test_resume_metadata_reads.py` runs actual read-only SQLite
+selection in fresh child processes. Its seven cases cover exact ID/title/prefix
+continuation, ambiguity/missing/read failure/absent store, actual constructor mode,
+connection closure and complete initialized-profile file/directory preservation.
+The corrected unchanged-source run gives three targeted positive-ID failures and
+four controls; candidate and reapplied export both pass seven.
+
+Three earlier six-fail/one-pass attempts exposed fixture assumptions, before the
+production edit: readonly SQLite creates empty WAL/derived SHM; native config
+initialization creates SOUL.md and standard directories; fresh CLI import creates
+agent.log/errors.log. The native write trace runs through SessionDB readonly open,
+pragmas, load_config_readonly, ensure_hermes_home and initialize_home. The config
+API name describes shared-cache semantics, not filesystem immutability. Explicit
+native profile initialization and ordinary import now precede seed/snapshot; no
+selector prewarming. Fresh lookup preserves every existing byte and directory,
+including logs, with only validated empty-WAL/derived-SHM additions. No bare-home
+or existing nonempty-WAL preservation claim. See [scope and measurement](session-metadata-reads.md#classic-resume-identity-v0855).
+
+Four adjacent files pass 33 cases with one Linux-only skip; together five files
+pass 40 unique cases/one skip, also after reapply. Optional
+`test_resume_compressed_gateway_id.py` has three setup TypeErrors in both candidate
+and byte-identical original: its zero-argument config-loader stub receives the
+native explicit path. Its behavior assertions never run; fixture remains unchanged.
+This is a recorded coverage gap, not a passing full native suite. Prior four PID
+cases remain unverified; no process-guard bypass or fresh live model/service run.
+
+Actual native Mac Python 3.14.9 measures real selector open/read/tip/close on one
+payload-heavy synthetic read-only database. Seven alternating 40-call batches give
+median batch-average 2.191502 to 1.355344 ms; three separate tracing batches give
+median peak 3,903,339 to 256,853 bytes. All IDs match and database bytes remain.
+Import/setup/warmup are outside measurement. No whole-service or live usage claim.
+
+Same committed native dependencies and isolated locked test tools, self-tested
+scoped Python audit/null/scratch/exit adaptations, one worker/CPU and zero file
+retries. Native-extension/OS-wide containment is not established. Owner source,
+config/profile/database/app/service, quota, ESTOP/pauses and timers are untouched.
+Read-only owner-source comparison records ten pending source/test targets.
+
+The v0.22.5 export has 996 targets: existing main after hash changes and one new
+regression target/selection. All previous before hashes and other after hashes
+remain. Installed/reverse/base/reapply checks pass; native and raw root whitespace
+checks pass. Companion suite: 124 run, 122 pass/two Linux-only skips, 3.866 s.
+Tracked-only inventory verifies 222 rows and patch hashes. Both documented exact
+secret scans pass without leaks; history scans 185 commits. Advisor accepts the
+scoped fixture boundary, documented optional Gateway coverage gap and final
+handoff. Owned trial source/tools/fixtures/cache/log tree and pointer are removed;
+borrowed original dependencies remain. Final inventory/scan refresh precedes the
+driver commit signal.
+
 # v0.8.54 — Avoid full-context reads for exact session IDs
 
 The exact branch of native `resolve_session_id` calls `get_session_metadata`

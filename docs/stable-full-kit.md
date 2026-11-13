@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **995-path** Legion source, interface and optimization alternative
+This is the complete **996-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,15 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Classic resume identity lookup (v0.8.55)
+
+The classic title-or-ID selector now uses the existing small metadata reader for
+its initial exact-ID check. ID/title/local-prefix priority and compression-tip
+projection remain intact. See [native regression and measured selector limits](session-metadata-reads.md#classic-resume-identity-v0855).
+The existing main module after hash changes and one new regression target is added:
+996 paths on the same v0.22.5 base. Every prior before hash remains, and all other
+prior after hashes are unchanged. Native test selection includes the new file.
 
 ## Metadata-only exact session ID lookup (v0.8.54)
 
