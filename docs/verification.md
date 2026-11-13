@@ -1,3 +1,41 @@
+# v0.8.52 — Refuse linked snapshot backup roots
+
+The companion snapshot helper checks the unresolved `HOME/backups` entry before
+resolving it. This repairs the boundary once in `_candidate`, shared by API calls
+and CLI preflight/apply. Linked roots pointing outside or inside the selected home
+and dangling roots are refused. Explicit home aliases and physical nested backup
+compaction retain their existing behavior. No native source patch changes.
+
+All eleven existing storage cases pass before edits. Four new tests add linked-root
+API/CLI refusal and compatibility controls. Against the old helper, the fifteen-test
+file reports six failing subcases from accepted linked roots and two expected
+file-not-found errors for dangling links. With the narrow repair, all fifteen pass.
+Refusal checks preserve source bytes, links and directory inventory; a later linked
+descendant also leaves the earlier valid CLI selection untouched.
+
+On ARM64 Mac, the actual PM-selected Python 3.14.9 and installed native `SessionDB`
+create a synthetic session/message database. Its source module matches the stable
+manifest. Linked-root CLI apply refuses without mutation; physical-root apply then
+compresses it, decompression matches every original byte, and a fresh native process
+reads the retained multilingual message. An initial harness-only assertion assumed
+the snapshot had no native lock siblings; replacing it with the actual before/after
+inventory comparison resolves that failure. Production helper code is unchanged
+after its focused green run.
+
+Native children use a clean environment, isolated home, `-I -B -S` and self-tested
+Python audit guards against owner-state reads, out-of-trial writes, network and
+process starts. These guards do not contain every native-extension operation or
+prove OS-wide isolation. Trial files are removed; borrowed source/dependencies and
+owner configuration, profiles, databases, services, pauses/ESTOP and timers remain.
+
+The full companion suite runs 124 tests: 122 pass and two Linux-only cases skip.
+The tracked-only disposable package verifies all 222 inventory rows and patch
+hashes. Native patch/manifests remain byte-identical to v0.8.51, with no source
+apply/reverse rerun claimed. Both exact directory/history secret scans pass with
+no leaks found; the advisor accepts this scoped handoff using supplied evidence.
+This is snapshot safety and native fixture readback, not live model acceptance,
+original-session adoption, a whole-disk guarantee or race-safe filesystem access.
+
 # v0.8.51 — Handle overflowing judge wait targets
 
 The shared native wait-target parser now catches `OverflowError` alongside its

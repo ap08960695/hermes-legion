@@ -95,6 +95,76 @@ class BackupCompactionTests(unittest.TestCase):
         self.assertEqual(self.path.read_bytes(), self.before)
         self.assertFalse(self.path.with_name("snapshot.db.gz").exists())
 
+    def test_linked_backup_roots_are_refused_without_mutation(self):
+        for destination in ("outside", "inside", "dangling"):
+            for apply in (False, True):
+                with self.subTest(destination=destination, apply=apply), tempfile.TemporaryDirectory() as tmp:
+                    base = Path(tmp)
+                    home = base / "home"
+                    home.mkdir()
+                    target = home / "stored" if destination == "inside" else base / destination
+                    source = target / "old/snapshot.db"
+                    if destination != "dangling":
+                        source.parent.mkdir(parents=True)
+                        source.write_bytes(self.before)
+                        os.utime(source, (time.time() - 48 * 3600,) * 2)
+                    root = home / "backups"
+                    root.symlink_to(target, target_is_directory=True)
+                    before = sorted(p.relative_to(base) for p in base.rglob("*"))
+                    with self.assertRaises(ValueError):
+                        storage.compact_backup(home, "old/snapshot.db", apply=apply)
+                    self.assertEqual(before, sorted(p.relative_to(base) for p in base.rglob("*")))
+                    self.assertTrue(root.is_symlink())
+                    self.assertEqual(os.readlink(root), str(target))
+                    if destination == "dangling":
+                        self.assertFalse(target.exists())
+                    else:
+                        self.assertEqual(source.read_bytes(), self.before)
+
+    def test_cli_linked_root_refuses_all_selections_without_mutation(self):
+        home = self.home / "selected"
+        home.mkdir()
+        (home / "backups").symlink_to(self.home / "backups", target_is_directory=True)
+        second = self.path.with_name("second.db")
+        second.write_bytes(self.before)
+        os.utime(second, (time.time() - 48 * 3600,) * 2)
+        before = sorted(p.relative_to(self.home) for p in self.home.rglob("*"))
+        for apply in (False, True):
+            with self.subTest(apply=apply):
+                command = [sys.executable, str(Path(storage.__file__)), "--home", str(home),
+                           "old/snapshot.db", "old/second.db"]
+                result = subprocess.run([*command, *(["--apply"] if apply else [])],
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("REFUSED:", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(self.path.read_bytes(), self.before)
+                self.assertEqual(second.read_bytes(), self.before)
+                self.assertEqual(before, sorted(p.relative_to(self.home) for p in self.home.rglob("*")))
+
+    def test_cli_later_linked_directory_preserves_earlier_valid_selection(self):
+        (self.home / "backups/linked").symlink_to(self.path.parent, target_is_directory=True)
+        before = sorted(p.relative_to(self.home) for p in self.home.rglob("*"))
+        result = subprocess.run([
+            sys.executable, str(Path(storage.__file__)), "--home", str(self.home), "--apply",
+            "old/snapshot.db", "linked/snapshot.db"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("REFUSED:", result.stderr)
+        self.assertEqual(self.path.read_bytes(), self.before)
+        self.assertEqual(before, sorted(p.relative_to(self.home) for p in self.home.rglob("*")))
+
+    def test_explicit_home_alias_keeps_physical_backup_compaction(self):
+        alias = self.home / "home-alias"
+        alias.symlink_to(self.home, target_is_directory=True)
+        planned = storage.compact_backup(alias, "old/snapshot.db")
+        self.assertEqual(planned["status"], "planned")
+        applied = storage.compact_backup(alias, "old/snapshot.db", apply=True)
+        self.assertEqual(applied["status"], "compacted")
+        self.assertFalse(self.path.exists())
+        with gzip.open(self.path.with_name("snapshot.db.gz"), "rb") as stream:
+            self.assertEqual(stream.read(), self.before)
+
     def test_hard_links_and_non_sqlite_files_are_refused(self):
         link = self.path.parent / "other.db"
         try:

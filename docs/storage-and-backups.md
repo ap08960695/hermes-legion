@@ -68,6 +68,23 @@ remain. The next attempt refuses existing outputs. Inspect that state rather
 than overwriting or repeating the operation blindly. This helper does not
 automatically delete old backups, run on a timer or change native retention.
 
+### Backup-root boundary (v0.8.52)
+
+Snapshot compaction now rejects a symlink at `HOME/backups` before resolving it.
+Previously, resolving that entry first hid the link from later checks and allowed
+preview and apply to select files outside the chosen home. Links to another
+directory inside the home and dangling links are also refused. An explicitly
+selected home alias still resolves normally; its `backups` entry must be physical.
+Existing descendant-link, sidecar, identity and exclusive-output checks remain.
+
+API and CLI regressions check refusal without changing target bytes or inventory,
+including multiple selections. Physical nested backups still compact and restore
+exactly. On ARM64 macOS, a synthetic database created by native Hermes is refused
+through a linked root, then compacted through its physical root and reopened in a
+fresh native process after exact-byte decompression. No owner database is used.
+This closes the demonstrated pre-existing-link escape; pathname checks do not
+establish protection against concurrent directory/link substitution.
+
 ## Age out disposable data on a schedule
 
 Worker scratch trees, maintenance backups, side builds and evidence reports grow

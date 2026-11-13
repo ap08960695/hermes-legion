@@ -35,7 +35,10 @@ def _candidate(home, relative, min_age_hours):
     if (isinstance(min_age_hours, bool) or not isinstance(min_age_hours, (float, int))
             or not math.isfinite(min_age_hours) or min_age_hours < 1):
         raise ValueError("minimum age must be at least one finite hour")
-    root = (Path(home).resolve(strict=True) / "backups").resolve(strict=True)
+    root = Path(home).resolve(strict=True) / "backups"
+    if root.is_symlink():
+        raise ValueError("symlink backup paths are refused")
+    root = root.resolve(strict=True)
     rel = Path(relative)
     if rel.is_absolute() or ".." in rel.parts or not rel.parts:
         raise ValueError("select a relative file inside the backup directory")
