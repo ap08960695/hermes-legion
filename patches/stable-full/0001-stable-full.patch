@@ -73913,6 +73913,86 @@ index 0000000000000000000000000000000000000000..2b40f304ff87882eda1df718e51743a8
 +        os.close(lock)
 +        pool.shutdown(wait=True)
 +    write.result()
+diff --git a/tests/tools/test_mcp_schema_cache_ttl.py b/tests/tools/test_mcp_schema_cache_ttl.py
+index b1198336042942219743ba93d97cae2a67e208a9..099a689eff9179220113f36b4658b9162432a21e 100644
+--- a/tests/tools/test_mcp_schema_cache_ttl.py
++++ b/tests/tools/test_mcp_schema_cache_ttl.py
+@@ -2,2 +2,3 @@
+ 
++import json
+ import time
+@@ -51 +52,71 @@ def test_cache_scope_round_trips():
+     assert sc.get_cached_entry("srv", "fp")["cache_scope"] == "private"
++
++
++@pytest.mark.parametrize("field", ["ttl_ms", "written_at"])
++@pytest.mark.parametrize("value", [
++    pytest.param(10**400, id="huge-positive"),
++    pytest.param(-(10**400), id="huge-negative"),
++    pytest.param(float("inf"), id="infinity"),
++    pytest.param(float("nan"), id="nan"),
++    pytest.param("invalid", id="text"),
++    pytest.param(None, id="null"),
++])
++def test_unusable_ttl_metadata_is_a_readonly_miss(field, value):
++    sc.write_cache_entry("srv", "fp", tools=[{"name": "kept"}], ttl_ms=60_000)
++    path = sc._cache_path()
++    data = json.loads(path.read_text())
++    data["srv"][field] = value
++    path.write_text(json.dumps(data))
++    before = path.read_bytes()
++    assert sc.get_cached_entry("srv", "fp") is None
++    assert path.read_bytes() == before
++
++
++def test_exact_expiry_and_defensive_copy_remain(monkeypatch):
++    clock = [1_000.0]
++    monkeypatch.setattr(sc.time, "time", lambda: clock[0])
++    sc.write_cache_entry("srv", "fp", tools=[{"name": "kept"}], ttl_ms=1_000)
++    entry = sc.get_cached_entry("srv", "fp")
++    entry["tools"][0]["name"] = "changed"
++    assert sc.get_cached_entry("srv", "fp")["tools"] == [{"name": "kept"}]
++    clock[0] += 1.0
++    assert sc.get_cached_entry("srv", "fp") is None
++
++
++@pytest.mark.parametrize("field", ["ttl_ms", "written_at"])
++def test_unusable_ttl_does_not_abort_other_lazy_servers(field, monkeypatch):
++    import socket
++    import subprocess
++    from unittest.mock import Mock
++    from tools import mcp_tool as mt, mcp_tool_discovery as discovery
++    from tools.registry import ToolRegistry
++
++    for attr in ("_lazy_server_tool_names", "_lazy_server_configs", "_lazy_server_fingerprints",
++                 "_mcp_tool_server_names", "_server_trust_levels", "_tool_read_only_hints",
++                 "_server_cost_policies", "_server_tool_scopes"):
++        monkeypatch.setattr(mt, attr, {})
++    monkeypatch.setattr(mt, "_server_connecting", set())
++    registry = ToolRegistry()
++    monkeypatch.setattr("tools.registry.registry", registry)
++    transport = Mock(side_effect=AssertionError("cache-only registration must not connect"))
++    monkeypatch.setattr(subprocess, "Popen", transport)
++    monkeypatch.setattr(socket.socket, "connect", transport)
++    monkeypatch.setattr(socket.socket, "bind", transport)
++    configs = {name: {"command": "synthetic-" + name, "lazy": True} for name in ("bad", "healthy")}
++    schema = {"type": "object", "properties": {"value": {"type": "string"}}, "required": ["value"]}
++    for name, cfg in configs.items():
++        sc.write_cache_entry(name, sc.config_fingerprint(cfg),
++                             tools=[{"name": "kept", "inputSchema": schema}], ttl_ms=60_000)
++    path = sc._cache_path()
++    data = json.loads(path.read_text())
++    data["bad"][field] = 10**400
++    path.write_text(json.dumps(data))
++    before = path.read_bytes()
++
++    eager, tool_count, server_count = discovery._register_lazy_from_cache(configs)
++    assert eager == {"bad": configs["bad"]}
++    assert (tool_count, server_count) == (1, 1)
++    assert registry.get_schema("mcp__healthy__kept")["parameters"] == schema
++    assert registry.get_schema("mcp__bad__kept") is None
++    assert path.read_bytes() == before
++    transport.assert_not_called()
 diff --git a/tests/tools/test_process_log_idle.py b/tests/tools/test_process_log_idle.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..38acb07eef0babfe6dd013e2eb63c461b348558d
@@ -80914,7 +80994,7 @@ index ec5a72610e075f300d5493c9e1f71d18f21d83de..d38195358a49647edcc75530f62aef3d
 +    ["from_task_id", "remaining"],
 +)
 diff --git a/tools/mcp_schema_cache.py b/tools/mcp_schema_cache.py
-index c78542c9b5a48613c765e4cd55df8521e022ac60..f00317ae6bc2942df7e57a3a2cf3566ff9111551 100644
+index c78542c9b5a48613c765e4cd55df8521e022ac60..765374525a9ca0b054e112508701d69539809171 100644
 --- a/tools/mcp_schema_cache.py
 +++ b/tools/mcp_schema_cache.py
 @@ -7,2 +7,6 @@ from __future__ import annotations
@@ -80979,19 +81059,22 @@ index c78542c9b5a48613c765e4cd55df8521e022ac60..f00317ae6bc2942df7e57a3a2cf3566f
 +
 +
  def get_cached_entry(server_name: str, fingerprint: str) -> Optional[dict]:
-@@ -69,5 +108,8 @@ def get_cached_entry(server_name: str, fingerprint: str) -> Optional[dict]:
+@@ -69,5 +108,11 @@ def get_cached_entry(server_name: str, fingerprint: str) -> Optional[dict]:
      written_at = entry.get("written_at")
 -    expired = (isinstance(ttl_ms, (int, float)) and isinstance(written_at, (int, float))
 -               and (time.time() - written_at) * 1000.0 >= float(ttl_ms))
 -    return None if expired else entry
 +    if "ttl_ms" in entry:
-+        if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (ttl_ms, written_at)):
-+            return None
-+        if (time.time() - written_at) * 1000.0 >= ttl_ms:
++        try:
++            if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (ttl_ms, written_at)):
++                return None
++            if (time.time() - written_at) * 1000.0 >= ttl_ms:
++                return None
++        except OverflowError:
 +            return None
 +    return copy.deepcopy(entry)
  
-@@ -85,4 +127,5 @@ def write_cache_entry(server_name: str, fingerprint: str, *, tools: list[dict],
+@@ -85,4 +130,5 @@ def write_cache_entry(server_name: str, fingerprint: str, *, tools: list[dict],
          entry["cache_scope"] = cache_scope
 -    with _cache_lock:
 -        data = _load_all()

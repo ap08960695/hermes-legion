@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **997-path** Legion source, interface and optimization alternative
+This is the complete **998-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,15 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Overflow-safe MCP cache expiry (v0.8.57)
+
+The shared cache reader treats numeric overflow in existing TTL validation as a
+cache miss. Healthy cached servers still register through native lazy discovery.
+See [regressions and boundaries](mcp-schema-publication.md#overflow-safe-expiry-metadata-v0857).
+The cache runtime after hash changes and one existing upstream TTL regression target
+is added: 998 paths on the same base. All previous before hashes and other after
+hashes remain. Native test selection already contained the TTL file and is unchanged.
 
 ## Native compressed-resume acceptance (v0.8.56)
 

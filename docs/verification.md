@@ -1,3 +1,48 @@
+# v0.8.57 — Tolerate overflowing MCP cache expiry metadata
+
+Native `get_cached_entry` catches only OverflowError around its existing TTL
+finite-validation/deadline operations and returns the ordinary miss sentinel.
+One persisted bad hint no longer aborts the shared lazy-discovery loop before
+healthy entries register. No discovery, writer, lock, schema, numeric policy,
+provider, retry or cache-deletion change. See [native regressions and boundaries](mcp-schema-publication.md#overflow-safe-expiry-metadata-v0857).
+
+Five original TTL cases pass. New actual disk-cache signed-field and real mixed
+lazy-discovery tests give six targeted overflow failures/fourteen controls before
+production edit. All twenty pass after repair and after export/reapply. Healthy
+required schema parameters, bad-server eager set, unchanged file bytes, zero
+transport calls, malformed/nonfinite misses, exact expiry and defensive copy hold.
+
+Adjacent SDK/publication files give 33 unique native passes/one Linux-only skip
+across three files. Initial publication attempt fails because a temporary Python
+wrapper misreads duplicate -B as filename; second reaches native writer but startup
+checks race a shared positive probe path. Tracker bookkeeping errors/timeouts are
+recorded for that second attempt, not attributed to production cache code. Narrow
+temporary corrections handle only redundant leading -B/-S/-I (unknowns rejected)
+and use per-process positive probe names. Negative/admission/null checks remain.
+
+Three concurrent guarded wrappers each exit7 and are reaped; probe files disappear.
+An owned native spawn failure child exits7 and is joined/reaped. Corrected actual
+two-writer test requires both child exitcodes zero and finally joins; all four
+publication cases pass; corrected runner reports no tracker diagnostics. No OS/native-extension containment
+claim. No previously blocked HTTP/PID cases or live service/model work attempted.
+
+Export998 targets: only cache runtime after hash changes among prior997; add existing
+pinned TTL regression before/after row. All previous before/other after hashes stay.
+Export script initially assumes the test needs adding to selection; it is already
+selected, so that assertion refuses after writing patch/manifest. Explicit final
+checks prove selection bytes unchanged and export coherent. Installed/reverse/base/
+reapply998 checks pass; focused reapplied twenty pass. No incomplete artifact claim.
+
+Native changed-source and nonpatch-text whitespace pass. Raw root diff --check
+returns2 solely for one literal-space empty inner patch context record; canonical
+Git full-index/binary/U1 format is retained. This format disposition is separate
+from successful patch roundtrip/hash checks; no checker or attribute weakening.
+Companion suite: 124 run, 122 pass/two Linux-only skips, 3.963 s. Tracked-only inventory
+verifies 222 rows and patch hashes; both exact secret scans pass without leaks,
+187 history commits. Advisor explicitly accepts the one canonical context record
+while preserving raw-check exit2. Owned trial/pointer removed; original dependencies
+remain. Final hash/scan refresh precedes driver signal.
+
 # v0.8.56 — Restore native compressed-resume acceptance
 
 `tests/hermes_cli/test_resume_compressed_gateway_id.py` replaces its stale
