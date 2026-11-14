@@ -5784,10 +5784,10 @@ index 0000000000000000000000000000000000000000..4455992455b9a0f634f3013dc282c1b3
 +})
 diff --git a/apps/desktop/electron/local-gateway-python-admission.test.ts b/apps/desktop/electron/local-gateway-python-admission.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..bf22d4d3536fa637cd163a8debfcc66092197ac6
+index 0000000000000000000000000000000000000000..2e7b0cc41e90cd813a7d801b885e90ef04ce0fb8
 --- /dev/null
 +++ b/apps/desktop/electron/local-gateway-python-admission.test.ts
-@@ -0,0 +1,254 @@
+@@ -0,0 +1,381 @@
 +import { EventEmitter } from 'node:events'
 +import { PassThrough } from 'node:stream'
 +
@@ -5831,6 +5831,7 @@ index 0000000000000000000000000000000000000000..bf22d4d3536fa637cd163a8debfcc660
 +beforeEach(async () => {
 +  vi.resetModules()
 +  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
++  vi.spyOn(process, 'availableMemory').mockReturnValue(536870912)
 +  helpers = []
 +  spawn.mockReset().mockImplementation(() => {
 +    const helper = new Helper()
@@ -6042,15 +6043,141 @@ index 0000000000000000000000000000000000000000..bf22d4d3536fa637cd163a8debfcc660
 +  await expect(a).rejects.toThrow('Gateway ticket')
 +  expect(helpers[0].kill).toHaveBeenCalledOnce()
 +})
++
++
++it('waits below available memory threshold and resumes the original request', async () => {
++  vi.mocked(process.availableMemory).mockReturnValue(536870911)
++  const a = mint()
++  expect(helpers).toHaveLength(0)
++  await vi.advanceTimersByTimeAsync(250)
++  expect(helpers).toHaveLength(0)
++  vi.mocked(process.availableMemory).mockReturnValue(536870912)
++  await vi.advanceTimersByTimeAsync(100)
++  expect(helpers).toHaveLength(1)
++  helpers[0].reply('fresh')
++  await expect(a).resolves.toBe('fresh')
++})
++
++it.each([0, -1, NaN, Infinity, 536870912.5, Number.MAX_SAFE_INTEGER + 1])('does not start on an invalid memory observation %s', async amount => {
++  vi.mocked(process.availableMemory).mockReturnValue(amount)
++  const a = mint()
++  expect(helpers).toHaveLength(0)
++  await vi.advanceTimersByTimeAsync(10000)
++  await expect(a).rejects.toThrow('admission timed out')
++  const observations = vi.mocked(process.availableMemory).mock.calls.length
++  vi.mocked(process.availableMemory).mockReturnValue(536870912)
++  await vi.advanceTimersByTimeAsync(1000)
++  expect(helpers).toHaveLength(0)
++  expect(process.availableMemory).toHaveBeenCalledTimes(observations)
++})
++
++it('waits after an observation error and recovers when the API returns', async () => {
++  vi.mocked(process.availableMemory).mockImplementation(() => { throw new Error('observation failed') })
++  const a = mint()
++  expect(helpers).toHaveLength(0)
++  await vi.advanceTimersByTimeAsync(100)
++  expect(helpers).toHaveLength(0)
++  vi.mocked(process.availableMemory).mockReturnValue(536870912)
++  await vi.advanceTimersByTimeAsync(100)
++  helpers[0].reply('recovered')
++  await expect(a).resolves.toBe('recovered')
++})
++
++it('waits safely when the memory API is missing', async () => {
++  Object.defineProperty(process, 'availableMemory', { value: undefined, configurable: true })
++  const a = mint()
++  expect(helpers).toHaveLength(0)
++  await vi.advanceTimersByTimeAsync(10000)
++  await expect(a).rejects.toThrow('admission timed out')
++  expect(helpers).toHaveLength(0)
++  expect(vi.getTimerCount()).toBe(0)
++})
++
++it('reuses an eligible bridge under pressure without another observation', async () => {
++  const a = mint(); helpers[0].reply('a1'); await a
++  vi.mocked(process.availableMemory).mockReturnValue(0)
++  const before = vi.mocked(process.availableMemory).mock.calls.length
++  const b = mint()
++  expect(helpers).toHaveLength(1)
++  expect(helpers[0].frames).toHaveLength(2)
++  helpers[0].reply('a2')
++  await expect(b).resolves.toBe('a2')
++  await vi.advanceTimersByTimeAsync(5000)
++  expect(helpers[0].kill).toHaveBeenCalledOnce()
++  expect(process.availableMemory).toHaveBeenCalledTimes(before)
++})
++
++it('cancels memory waiting on reset without a late spawn', async () => {
++  vi.mocked(process.availableMemory).mockReturnValue(0)
++  const a = mint()
++  expect(helpers).toHaveLength(0)
++  api.closeGatewayTicketBridges()
++  await expect(a).rejects.toThrow('runtime changed')
++  vi.mocked(process.availableMemory).mockReturnValue(536870912)
++  await vi.advanceTimersByTimeAsync(20000)
++  expect(helpers).toHaveLength(0)
++  expect(vi.getTimerCount()).toBe(0)
++})
++
++it('keeps replacement work when the observation resets the runtime', async () => {
++  let replacement: Promise<string> | undefined
++  vi.mocked(process.availableMemory).mockImplementationOnce(() => {
++    api.closeGatewayTicketBridges()
++    replacement = mint('replacement')
++
++    return 536870912
++  })
++  const a = mint()
++  expect(helpers).toHaveLength(1)
++  expect(helpers[0].frames[0].endpoint.profile_id).toBe('/private/replacement')
++  await expect(a).rejects.toThrow('runtime changed')
++  helpers[0].reply('replacement')
++  await expect(replacement).resolves.toBe('replacement')
++})
++
++it('does not spawn when observation advances past the mint deadline', async () => {
++  vi.mocked(process.availableMemory).mockImplementationOnce(() => {
++    vi.spyOn(performance, 'now').mockReturnValue(10000)
++
++    return 536870912
++  })
++  const a = mint()
++  expect(helpers).toHaveLength(0)
++  await expect(a).rejects.toThrow('admission timed out')
++  await vi.advanceTimersByTimeAsync(20000)
++  expect(helpers).toHaveLength(0)
++})
++
++it('stops memory polling while capacity blocks the next FIFO admission', async () => {
++  vi.mocked(process.availableMemory).mockReturnValue(0)
++  const a = mint(); const b = mint('b')
++  expect(helpers).toHaveLength(0)
++  vi.mocked(process.availableMemory).mockReturnValue(536870912)
++  await vi.advanceTimersByTimeAsync(100)
++  expect(helpers).toHaveLength(1)
++  expect(helpers[0].frames[0].endpoint.profile_id).toBe('/private/a')
++  const observations = vi.mocked(process.availableMemory).mock.calls.length
++  await vi.advanceTimersByTimeAsync(1000)
++  expect(helpers).toHaveLength(1)
++  expect(process.availableMemory).toHaveBeenCalledTimes(observations)
++  helpers[0].reply('a'); await a
++  await vi.advanceTimersByTimeAsync(100)
++  expect(helpers).toHaveLength(1)
++  expect(helpers[0].kill).toHaveBeenCalledOnce()
++  expect(process.availableMemory).toHaveBeenCalledTimes(observations)
++  helpers[0].emit('close')
++  expect(helpers[1].frames[0].endpoint.profile_id).toBe('/private/b')
++  helpers[1].reply('b'); await expect(b).resolves.toBe('b')
++})
 diff --git a/apps/desktop/electron/local-gateway-python.ts b/apps/desktop/electron/local-gateway-python.ts
-index 25f6be5afdd223c7e4ce48c37075a1f034f19150..b834586ae3f45a315702307912c07900bd18e0d2 100644
+index 25f6be5afdd223c7e4ce48c37075a1f034f19150..1e21ad12c96721ed20998c8e9654b2d393c35982 100644
 --- a/apps/desktop/electron/local-gateway-python.ts
 +++ b/apps/desktop/electron/local-gateway-python.ts
 @@ -54,2 +54,3 @@ interface PendingTicket {
    timer: ReturnType<typeof setTimeout>
 +  deadline: number
  }
-@@ -57,3 +58,95 @@ interface PendingTicket {
+@@ -57,3 +58,118 @@ interface PendingTicket {
  const bridges = new Map<string, TicketBridge>()
 +const liveBridges = new Set<TicketBridge>()
  let bridgeGeneration = 0
@@ -6058,6 +6185,7 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..b834586ae3f45a315702307912c07900
 +let helperLimit = 1
 +let helperIdleMs = 5000
 +let pumping = false
++let memoryPoll: ReturnType<typeof setTimeout> | undefined
 +
 +export function configureGatewayTicketHelpers(config: {
 +  gatewayTicketHelperLimit?: number
@@ -6090,9 +6218,19 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..b834586ae3f45a315702307912c07900
 +  if (performance.now() >= job.deadline) { return new Error('Gateway ticket helper admission timed out') }
 +}
 +
++function ticketHelperMemoryReady(): boolean {
++  try {
++    const available = process.availableMemory()
++
++    return Number.isSafeInteger(available) && available >= 536_870_912
++  } catch { return false }
++}
++
 +function pumpAdmissions(): void {
 +  if (pumping) { return }
 +  pumping = true
++  clearTimeout(memoryPoll)
++  memoryPoll = undefined
 +
 +  try {
 +    while (admissions.length) {
@@ -6113,6 +6251,18 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..b834586ae3f45a315702307912c07900
 +        idle?.dispose()
 +
 +        return
++      }
++
++      if (!bridge) {
++        const ready = ticketHelperMemoryReady()
++
++        if (admissions[0] !== job || admissionError(job)) { continue }
++
++        if (!ready) {
++          memoryPoll = setTimeout(pumpAdmissions, 100)
++
++          return
++        }
 +      }
 +
 +      admissions.shift()
@@ -6146,11 +6296,11 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..b834586ae3f45a315702307912c07900
 +  } finally { pumping = false }
 +}
 
-@@ -72,2 +165,3 @@ class TicketBridge {
+@@ -72,2 +188,3 @@ class TicketBridge {
      }))
 +    liveBridges.add(this)
      this.child.stderr.resume()
-@@ -77,8 +171,14 @@ class TicketBridge {
+@@ -77,8 +194,14 @@ class TicketBridge {
      this.child.stdin.on('error', () => this.dispose())
 -    this.child.on('close', () => this.dispose())
 +    this.child.once('close', () => {
@@ -6168,7 +6318,7 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..b834586ae3f45a315702307912c07900
 
 +  request(endpoint: TicketEndpoint, purpose: GatewayTicketPurpose, deadline: number): Promise<string> {
      return new Promise((resolve, reject) => {
-@@ -95,4 +195,11 @@ class TicketBridge {
+@@ -95,4 +218,11 @@ class TicketBridge {
 
 -      const timer = setTimeout(() => this.dispose(), 10_000)
 -      this.pending.set(id, { resolve, reject, timer })
@@ -6182,12 +6332,12 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..b834586ae3f45a315702307912c07900
 +      const timer = setTimeout(() => this.dispose(), remaining)
 +      this.pending.set(id, { resolve, reject, timer, deadline })
        // Private stdin carries identity as data. EOF also retires the helper if Desktop exits.
-@@ -119,3 +226,3 @@ class TicketBridge {
+@@ -119,3 +249,3 @@ class TicketBridge {
 
 -        if (!waiter) { this.dispose();
 +        if (!waiter || performance.now() >= waiter.deadline) { this.dispose();
 
-@@ -134,3 +241,7 @@ class TicketBridge {
+@@ -134,3 +264,7 @@ class TicketBridge {
 
 -    if (!this.pending.size) { this.idleTimer = setTimeout(() => this.dispose(), 30_000) }
 +    if (!this.pending.size) {
@@ -6196,7 +6346,10 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..b834586ae3f45a315702307912c07900
 +      pumpAdmissions()
 +    }
    }
-@@ -157,3 +268,8 @@ export function closeGatewayTicketBridges(): void {
+@@ -156,4 +290,11 @@ export function closeGatewayTicketBridges(): void {
+   bridgeGeneration++
++  clearTimeout(memoryPoll)
++  memoryPoll = undefined
 
 -  for (const bridge of bridges.values()) { bridge.dispose() }
 +  for (const job of admissions.splice(0)) {
@@ -6206,12 +6359,12 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..b834586ae3f45a315702307912c07900
 +
 +  for (const bridge of liveBridges) { bridge.dispose() }
  }
-@@ -272,3 +388,3 @@ export function createGatewayTicketResolver(resolveBackend: () => Promise<Resolv
+@@ -272,3 +413,3 @@ export function createGatewayTicketResolver(resolveBackend: () => Promise<Resolv
 
 -export function mintGatewayTicketWithPython(
 +export async function mintGatewayTicketWithPython(
    backend: { command: string; env?: NodeJS.ProcessEnv },
-@@ -278,2 +394,9 @@ export function mintGatewayTicketWithPython(
+@@ -278,2 +419,9 @@ export function mintGatewayTicketWithPython(
  ): Promise<string> {
 +  const deadline = performance.now() + 10_000
 +  endpoint = { ...endpoint }
@@ -6221,7 +6374,7 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..b834586ae3f45a315702307912c07900
 +  }
 +
    const env = { ...process.env, ...backend.env, HERMES_HOME: endpoint.profile_id,
-@@ -282,10 +405,25 @@ export function mintGatewayTicketWithPython(
+@@ -282,10 +430,25 @@ export function mintGatewayTicketWithPython(
    const key = JSON.stringify([backend.command, cwd, Object.entries(env).sort(([a], [b]) => a.localeCompare(b))])
 -  let bridge = bridges.get(key)
 +  const bridge = bridges.get(key)
@@ -6231,7 +6384,8 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..b834586ae3f45a315702307912c07900
 -    bridges.set(key, bridge)
 -  }
 +  if (bridge) { return bridge.request(endpoint, purpose, deadline) }
-+
+
+-  return bridge.request(endpoint, purpose)
 +  if (admissions.length >= 256) { throw new Error('Gateway ticket helper queue is full') }
 +
 +  return new Promise((resolve, reject) => {
@@ -6247,8 +6401,7 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..b834586ae3f45a315702307912c07900
 +        pumpAdmissions()
 +      }, Math.max(0, deadline - performance.now()))
 +    }
-
--  return bridge.request(endpoint, purpose)
++
 +    admissions.push(job)
 +    pumpAdmissions()
 +  })
@@ -89788,10 +89941,10 @@ index 44d25bc19bae30f9665f7c418a2dcf102e6fbccb..5da0d8f166ceea8d8f39f533e026aecc
 +| `lazy` | bool | both | Register the server's tools from the on-disk schema cache at startup and only spawn/connect it on the first tool call (default: `false`, or `true` for eligible stdio servers under `mcp.memory_saving`). Needs one prior live connect to fill the cache; a missing or stale entry falls back to the normal eager connect. Status surfaces show the server as `lazy` with its cached tool count until first use |
  | `idle_timeout_seconds` | number | stdio | Optional stdio server recycle after idle time (`0` disables). May also live under a `lifecycle:` mapping |
 diff --git a/website/docs/user-guide/desktop.md b/website/docs/user-guide/desktop.md
-index 2021ee43feb046d980a57b30d68a6e3e2c98d616..272f5fea0f6eb96e865e4d3e8f57d598df7d02d2 100644
+index 2021ee43feb046d980a57b30d68a6e3e2c98d616..f9b44824ab7ae03ba6947cafa3fc98ee26ab5c69 100644
 --- a/website/docs/user-guide/desktop.md
 +++ b/website/docs/user-guide/desktop.md
-@@ -250,2 +250,34 @@ The pre-window reader is a small YAML subset, not the full parser the rest of He
+@@ -250,2 +250,43 @@ The pre-window reader is a small YAML subset, not the full parser the rest of He
 
 +#### On-demand gateway ticket helpers
 +
@@ -89819,6 +89972,15 @@ index 2021ee43feb046d980a57b30d68a6e3e2c98d616..272f5fea0f6eb96e865e4d3e8f57d598
 +can make a waiting request time out. Queue-full, admission timeout and runtime-reset
 +errors are distinct from native owner or credential refusal. Smaller limits reduce
 +peak RAM but can slow profile switching and cause more cold starts.
++
++Before starting a new helper, Desktop requires at least 512 MiB from the
++execution host's `process.availableMemory()` snapshot. Low, missing or invalid
++observations (including an exception or unavailable API) wait within that same
++ten-second mint budget. One 100 ms poll runs only while memory blocks an admission
++that has a free helper slot; idle, reset, queue drain and capacity waiting stop it.
++Existing eligible helpers can still serve their own profile under pressure. A
++waiting request can expire with the existing helper-admission timeout; no credential
++retry is added. The observation is not a memory reservation or a global RAM limit.
 +
 +This limits ticket-helper processes per Electron process. It does not bound the
 +requests or stdin buffering already assigned to a helper, other helper entrypoints

@@ -10,6 +10,15 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Ticket-helper memory admission (v0.16.0)
+
+New Desktop ticket helpers wait below 512 MiB observed execution-host availability
+or on unknown observations, within the existing mint deadline. One bounded poll
+runs only for memory-blocked admissions with capacity. Existing helper reuse,
+FIFO, reset and actual-close slot accounting stay intact. [Behavior, native
+controlled-overlap measurements and limits](release-notes-v0.16.0.md). Three
+existing source/test/doc targets change; the kit remains at 1,030 targets.
+
 ## On-demand ticket helpers (v0.15.0)
 
 Desktop starts one Python ticket helper at a time by default and retires unused

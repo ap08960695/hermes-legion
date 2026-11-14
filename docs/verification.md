@@ -1,3 +1,71 @@
+# v0.16.0 — Ticket-helper memory admission
+
+[Plain-language behavior and native Mac controlled-overlap evidence](release-notes-v0.16.0.md).
+One existing production scheduler, its existing admission test and native Desktop
+guide change. New bridges with capacity require a safe integer memory snapshot
+at least 512 MiB; low/unknown, missing API, invalid value or exception waits within
+the original ten-second mint budget. One 100 ms scheduler poll runs only while
+memory blocks an eligible head. Existing bridges remain reusable; FIFO admissions,
+256 waiting requests, real-close reservations, idle and reset remain intact.
+Head identity, generation and deadline are rechecked after observation.
+
+Thirteen clean old-code failures prove pressure/invalid/missing/error waiting,
+reset and replacement safety, clock expiry and memory-to-capacity transition.
+Fourteen new memory cases reuse the existing process fixture; the old cap/idle
+cases use a deterministic healthy observation. Post-export selection: **43 passed,
+one Windows-only skip**, seven files, 1.31 seconds, exit 0. Existing real client
+cases retain profile/owner/protocol/purpose/control-home/cwd-shadow, bundled and
+runtime lookup coverage. The private AF_UNIX temp base is relocated into an owned
+short root; product behavior is not changed for test permissions.
+
+One native preflight before implementation used one helper, two fresh grants,
+actual healthy observation and two runtime processes at 71.984375 MiB total RSS.
+Final recursive-ancestry paired case runs the same real native CLI import and
+native ticket program; only memory observation is modeled. Peak summed RSS
+including Node controller: **157.15625 → 126.28125 MiB**, 19.6% lower. Python
+workload-only peak: 90.359375 → 59.6875 MiB. Runtime processes 3 → 2; overlap true →
+false. Ticket latency 136.219 → 1649.366 ms; whole-case completion 1.846 → 2.039 seconds. Helpers
+retire to zero on both sides. Separate actual healthy Node observation admits
+normally, retains overlap and returns the same native grant. Full descendant
+sampling includes the controller; one ps observer is excluded from RSS/counts,
+with known maximum four processes including it, below 4 GiB. Same config bytes and
+native program; runtime stopped after every run. Six audit negative controls and
+real AF_UNIX positive pass, not full OS containment.
+
+One pair, 20 ms target samples, shared RSS pages, finite samples and controller sampling
+allocation overhead; no physical-pressure or general workload saving claim.
+Initial known-PID-only pair was replaced by recursive-ancestry acceptance, not
+counted as independent repeated measurements. Old measurements remain private.
+The actual Electron app was not launched; package versions/typings alone are
+not Electron-runtime proof. No other-machine/ai connection, real gateway/worker,
+provider/model call or owner state/control mutation was used for acceptance.
+Assigned buffers/runtime metadata lookup and broader gateway/MCP idle work stay open.
+
+Initial implementation had an invalid optional variable declaration; it was
+corrected before behavior acceptance. One progress-report command used the test
+cwd instead of the kit root and failed read-only; absolute roots corrected it.
+Neither is credited as an extra product fix or a meaningful old-code red.
+Whole-Electron TypeScript no-emit, two-file ESLint and all three development
+bundles pass, without launching or packaging an app. Cumulative target count stays
+**1,030**: three existing targets change. All 1,027 unrelated prior rows/source
+bytes/patch sections stay exact, including P0 SSH. Actual reverse/base/reapply,
+every target hash and strict installed compatibility pass. Incremental/root
+whitespace clean; the same 13 inherited cumulative diagnostics remain.
+
+Companion verification: **133 run, 131 passed, two Linux-only skips**, 4.577
+seconds, exit 0, with task TMPDIR and bytecode disabled. Release inventory
+verification passes **231 files / 232 intended tracked paths** on a disposable
+copy; private index and copy are removed and real index stays unchanged. Final
+advisor, exact secret scans, protected hashes, cleanup and zero-SSH gate handoff.
+
+Final advisor finds no concrete blocker using supplied code/evidence. Original
+app/config and all 1,030 source hashes match; 20 recorded PID/birthtime identities
+have no survivor. Cleanup removes nine exact owned dependency/build/cache/export/
+short-fixture paths (1,231,024,079 logical bytes, no physical-space saving claim).
+Existing source/app/runtime/borrowed objects, backups, matched inputs and receipts
+remain. Exact first directory/history secret scans exit 0 with no leaks across
+214 commits. Final report/scans/preservation/zero-SSH still precede driver signal.
+
 # v0.15.0 — On-demand Desktop ticket helpers
 
 [Plain-language settings, native Mac measurements and limits](release-notes-v0.15.0.md).
