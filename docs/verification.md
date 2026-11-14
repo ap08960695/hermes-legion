@@ -1,3 +1,38 @@
+# v0.21.0 — One native idle-cleanup job per runner
+
+[User-visible behavior and controlled Mac measurements](release-notes-v0.21.0.md).
+The meaningful old regression saw zero agents cached instead of three while
+one callback was blocked. Eleven standalone native unittest cases pass after
+implementation, including real shutdown finalization, native executor quiesce,
+DB-close refusal while a writer lives, and SQLite close/reopen history readback.
+An explicit two-second test drain budget distinguishes the blocked writer from
+idle pool threads; a preliminary zero-budget probe counted both and was corrected.
+
+The four fresh old/current/current/old component cases use real native methods
+and four synthetic persisted sessions with fixed 200 ms provider callbacks.
+Concurrent idle-sweep commits are **4 → 1**, peak sampled threads including main
+**5 → 2**. Median cleanup **213.076 → 846.627 ms**; peak RSS **117.726563 /
+117.593750 MiB**, idle **117.164063 / 117.140625 MiB**. No RSS saving or speed
+claim. Initial configs and native SQLite history readback match; configs remain
+byte-exact, all native processes stop. External recursive sampling is 20 ms,
+one native child plus one excluded observer, under 4 GiB extra RSS. Synthetic
+callbacks, sampling gaps, allocator noise and four cases limit the result.
+
+The worker claims one current eligible entry under the cache lock; waiting agents
+remain cached for native shutdown or later use. A token fences repeated sweeps,
+queued cancellation, immediate completion, partial submission failure and stale
+callbacks. Lock-order inspection finds executor acquisition beneath cache locking;
+executor shutdown releases its lock before stopping/joining workers. Existing
+provider commit/soft-release/error policy and per-owner profile scope remain.
+No new setting, pool, timer, trim or model call is added. The shared pool retains
+idle threads until normal shutdown. Other eviction paths are not globally capped.
+
+Two existing pytest test seams await completion and drain their executor; they
+are not claimed run with pytest. The selected runtime lacks pytest/Ruff; no
+provisioning, canonical native suite/lint, installed app, full gateway workload,
+real provider, other-host or other-OS acceptance is claimed. Mandatory companion,
+release, native export/roundtrip, preservation, advisor and scans gate handoff.
+
 # v0.20.0 — Optional dashboard warmup in the canonical gateway
 
 [User-visible behavior, configuration and measured tradeoff](release-notes-v0.20.0.md).

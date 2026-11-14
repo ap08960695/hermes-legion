@@ -10,6 +10,8 @@ Historical source comments and release payloads received [privacy maintenance](d
 
 ## What is included
 
+- [v0.21.0: bounded idle cache cleanup](docs/release-notes-v0.21.0.md), one idle-sweep cleanup job per runner using the existing executor; four native Mac cases reduced concurrent idle callbacks from four to one, with longer cleanup and essentially unchanged RSS.
+
 - [v0.20.0: on-demand local dashboard loading](docs/release-notes-v0.20.0.md), an opt-out from background dashboard warmup; four canonical Mac startup cases used 14.0% less median idle RSS, with a slower first dashboard request.
 - [v0.19.0: gateway memory diagnostics](docs/release-notes-v0.19.0.md), reading one native local snapshot from the CLI, with current RSS available on macOS; no polling or model call.
 - [v0.18.0: optional on-demand gateway preset](docs/release-notes-v0.18.0.md), using existing controls to defer turn warmup and cached MCP startup; one native initialized-runner Mac pair used 19.2% less idle RSS, with longer first-use initialization.

@@ -32883,7 +32883,7 @@ index 2db32d7fea601f4ba3266adf0495035ed57362f3..1a5e2655744de2ce040d7a5f4e8b55e7
 +        (60, "Scratch cache cleanup", profile_scoped_chore(runner, housekeeping_scratch_cache)),
          (60, "Paste sweep", _housekeeping_paste_sweep)]
 diff --git a/gateway/run_agent_cache.py b/gateway/run_agent_cache.py
-index dd51a6f273b1112217d3c0f1001537b95074d1c1..ebb48a88a870c4d7cb9cf1e980b9eb4dc48c3080 100644
+index dd51a6f273b1112217d3c0f1001537b95074d1c1..f9be383e722a2255dfdda3e1d31f8857df7c22d2 100644
 --- a/gateway/run_agent_cache.py
 +++ b/gateway/run_agent_cache.py
 @@ -15,2 +15,3 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -32908,18 +32908,92 @@ index dd51a6f273b1112217d3c0f1001537b95074d1c1..ebb48a88a870c4d7cb9cf1e980b9eb4d
 -                "mid-turn agents — will re-check on next insert.",
 +                "mid-turn or unflushed agents — will re-check on next insert.",
                  len(_cache), cap, remaining_over_cap,
-@@ -1127,3 +1131,3 @@ class GatewayAgentCacheMixin:
-         """Evict cached agents idle past the idle TTL (lock acquired internally; cleanup on daemon
+@@ -1125,28 +1129,62 @@ class GatewayAgentCacheMixin:
+
+-    def _sweep_idle_cached_agents(self) -> int:
+-        """Evict cached agents idle past the idle TTL (lock acquired internally; cleanup on daemon
 -        threads; mid-turn agents SKIPPED); returns the number evicted."""
-+        threads; mid-turn or unflushed agents SKIPPED); returns the number evicted."""
-         _cache = getattr(self, "_agent_cache", None)
-@@ -1139,4 +1143,4 @@ class GatewayAgentCacheMixin:
-                 agent = _tuple_agent(entry)
+-        _cache = getattr(self, "_agent_cache", None)
+-        _lock = getattr(self, "_agent_cache_lock", None)
+-        if _cache is None or _lock is None:
+-            return 0
++    def _idle_cache_cleanup_candidate(self):
++        """First eligible entry; caller holds the cache lock through selection and removal."""
+         now = time.time()
+         idle_ttl = self._agent_cache_idle_ttl()
+-        to_evict: list[tuple] = []
+         running_ids = self._running_agent_ids()
++        for key, entry in self._agent_cache.items():
++            agent = _tuple_agent(entry)
++            if agent is None or id(agent) in running_ids or not transcript_persistence_caught_up(agent):
++                continue
++            last_activity = getattr(agent, "_last_activity_ts", None)
++            if last_activity is None or (now - last_activity) <= idle_ttl:
++                continue
++            return key, agent
++        return None
++
++    def _sweep_idle_cached_agents(self) -> bool:
++        """Submit at most one idle cleanup job; waiting agents remain owned by the cache."""
++        _cache = getattr(self, "_agent_cache", None)
++        _lock = getattr(self, "_agent_cache_lock", None)
++        if _cache is None or _lock is None:
++            return False
+         with _lock:
+-            for key, entry in list(_cache.items()):
+-                agent = _tuple_agent(entry)
 -                if agent is None or id(agent) in running_ids:
 -                    continue  # mid-turn — don't tear it down
-+                if agent is None or id(agent) in running_ids or not transcript_persistence_caught_up(agent):
-+                    continue  # Never discard a live or not-yet-durable transcript.
-                 last_activity = getattr(agent, "_last_activity_ts", None)
+-                last_activity = getattr(agent, "_last_activity_ts", None)
+-                if last_activity is None or (now - last_activity) <= idle_ttl:
+-                    continue
+-                to_evict.append((key, agent))
+-            for key, _ in to_evict:
+-                _cache.pop(key, None)
+-        for key, agent in to_evict:
+-            logger.info("Agent cache idle-TTL evict: session=%s (idle=%.0fs)", key, now - getattr(agent, "_last_activity_ts", now))
+-            self._spawn_release_thread(self._commit_then_release_soft, (agent, key), f"agent-cache-idle-{key[:24]}",
+-                                       inline_fallback=False, session_key=key)
+-        return len(to_evict)
++            if (getattr(self, "_idle_cache_cleanup_token", None) is not None
++                    or not getattr(self, "_running", True) or getattr(self, "_executor_closing", False)
++                    or self._idle_cache_cleanup_candidate() is None):
++                return False
++            token = self._idle_cache_cleanup_token = object()
++            try:
++                import contextvars
++                future = self._get_housekeeping_executor().submit(
++                    contextvars.copy_context().run, self._release_idle_cached_agents, token)
++            except BaseException:
++                if self._idle_cache_cleanup_token is token:
++                    self._idle_cache_cleanup_token = None
++                raise
++        # An already completed future invokes this inline, so attach outside the cache lock.
++        future.add_done_callback(lambda done: self._finish_idle_cache_cleanup(done, token))
++        return True
++
++    def _release_idle_cached_agents(self, token) -> None:
++        while True:
++            with self._agent_cache_lock:
++                if (self._idle_cache_cleanup_token is not token
++                        or not getattr(self, "_running", True) or getattr(self, "_executor_closing", False)):
++                    return
++                candidate = self._idle_cache_cleanup_candidate()
++                if candidate is None:
++                    return
++                key, agent = candidate
++                self._agent_cache.pop(key)
++            logger.info("Agent cache idle-TTL evict: session=%s (idle=%.0fs)",
++                        key, time.time() - agent._last_activity_ts)
++            self._run_release_in_profile_scope(self._commit_then_release_soft, (agent, key), key)
++
++    def _finish_idle_cache_cleanup(self, future, token) -> None:
++        failure = None if future.cancelled() else future.exception()
++        with self._agent_cache_lock:
++            if self._idle_cache_cleanup_token is token:
++                self._idle_cache_cleanup_token = None
++        if failure is not None:
++            logger.debug("Idle agent cleanup failed: %s", failure)
 diff --git a/gateway/run_api.py b/gateway/run_api.py
 index cbb599dcacc02ac7ef193703c027c6df002af9d6..fbeb34374388a0ca908375481621618d624f6fa4 100644
 --- a/gateway/run_api.py
@@ -33265,6 +33339,17 @@ index 0000000000000000000000000000000000000000..5dc9743da53ea73d259cc6c7bfeae3e8
 +        return dict(result)
 +
 +    return handler
+diff --git a/gateway/run_watchers.py b/gateway/run_watchers.py
+index 05a932550c01338e20234ccbd9ceaee225792a84..e40f20f703f0245c54f883dceaae37f11cf6859b 100644
+--- a/gateway/run_watchers.py
++++ b/gateway/run_watchers.py
+@@ -52,4 +52,4 @@ class GatewaySessionWatchersMixin:
+         try:
+-            if evicted := self._sweep_idle_cached_agents():
+-                logger.info("Agent cache idle sweep: evicted %d agent(s)", evicted)
++            if self._sweep_idle_cached_agents():
++                logger.info("Agent cache idle sweep: cleanup submitted")
+         except Exception as e:
 diff --git a/gateway/runtime_memory.py b/gateway/runtime_memory.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..1d3699f0d8a03bbc3778b30adddff8e253cddb4f
@@ -56978,10 +57063,10 @@ index 2ee30833283cbfac99e69c5b1582f560c7b29288..80e18c5531a722de57729493f532087a
          old_agent.commit_memory_session = lambda msgs=None: commit_calls.append(msgs)
 diff --git a/tests/gateway/test_agent_cache_durability.py b/tests/gateway/test_agent_cache_durability.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..a82ca3f6154a9b00692de409f8a6439f1fce4bb3
+index 0000000000000000000000000000000000000000..9f9fede1b0c0d41fc2d0d29e4cfee3c28ecafdb4
 --- /dev/null
 +++ b/tests/gateway/test_agent_cache_durability.py
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,41 @@
 +"""Resource eviction must not discard the only up-to-date transcript."""
 +from collections import OrderedDict
 +from types import SimpleNamespace
@@ -57001,7 +57086,12 @@ index 0000000000000000000000000000000000000000..a82ca3f6154a9b00692de409f8a6439f
 +    recent=SimpleNamespace(_session_messages=[],_last_flushed_db_idx=0,_last_activity_ts=float("inf"))
 +    runner._agent_cache=OrderedDict(old=(old,"sig"),recent=(recent,"sig"))
 +    released=[]
-+    runner._spawn_release_thread=lambda target,args,*a,**k: released.append(args[0])
++    completed=threading.Event()
++    def release(agent, key):
++        released.append(agent)
++        completed.set()
++    runner._commit_then_release_soft=release
++    runner._spawn_release_thread=lambda target,args,*a,**k: target(*args)
 +    def sweep():
 +        if policy=="ttl":runner._sweep_idle_cached_agents()
 +        else:
@@ -57010,10 +57100,14 @@ index 0000000000000000000000000000000000000000..a82ca3f6154a9b00692de409f8a6439f
 +    assert "old" in runner._agent_cache
 +    assert not released
 +    old._last_flushed_db_idx=1
-+    sweep()
-+    assert "old" not in runner._agent_cache
-+    assert released==[old]
-+    assert "recent" in runner._agent_cache
++    try:
++        sweep()
++        assert completed.wait(5)
++        assert "old" not in runner._agent_cache
++        assert released==[old]
++        assert "recent" in runner._agent_cache
++    finally:
++        assert runner._shutdown_executor(drain_timeout=5)==0
 diff --git a/tests/gateway/test_agent_cache_limit_order.py b/tests/gateway/test_agent_cache_limit_order.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..23e30e985e14d1e6e4c68267ee45aacdd77a13eb
@@ -57034,7 +57128,7 @@ index 0000000000000000000000000000000000000000..23e30e985e14d1e6e4c68267ee45aacd
 +    monkeypatch.setattr(pressure, "_finite_limit", lambda path: limits.get(str(path)))
 +    assert pressure.resolve_memory_high_mb("auto") == int(expected * 1024 * 0.65)
 diff --git a/tests/gateway/test_agent_cache_pressure.py b/tests/gateway/test_agent_cache_pressure.py
-index daeeece18ae7a6663844b8d24da1a7950dc43ffd..8d6b8de8d0c033cd256a74ff52d0391bc27c4924 100644
+index daeeece18ae7a6663844b8d24da1a7950dc43ffd..f341aa7b806c2138f8b2e32e3c010e2eda831b43 100644
 --- a/tests/gateway/test_agent_cache_pressure.py
 +++ b/tests/gateway/test_agent_cache_pressure.py
 @@ -384,3 +384,3 @@ class TestConfiguredBoundsReachTheCache:
@@ -57043,10 +57137,20 @@ index daeeece18ae7a6663844b8d24da1a7950dc43ffd..8d6b8de8d0c033cd256a74ff52d0391b
 +                runner._agent_cache[f"s{i}"] = (MagicMock(_session_messages=[], _last_flushed_db_idx=0), "sig")
              runner._enforce_agent_cache_cap()
 @@ -400,3 +400,3 @@ class TestConfiguredBoundsReachTheCache:
- 
+
 -        stale = MagicMock()
 +        stale = MagicMock(_session_messages=[], _last_flushed_db_idx=0)
          stale._last_activity_ts = _t.time() - 5.0
+@@ -404,4 +404,7 @@ class TestConfiguredBoundsReachTheCache:
+
+-        assert runner._sweep_idle_cached_agents() == 1
+-        assert "s-stale" not in runner._agent_cache
++        try:
++            assert runner._sweep_idle_cached_agents() is True
++            _wait_for(lambda: "s-stale" not in runner._agent_cache)
++        finally:
++            assert runner._shutdown_executor(drain_timeout=5) == 0
+
 diff --git a/tests/gateway/test_bot_relay_profile_selector.py b/tests/gateway/test_bot_relay_profile_selector.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..d7c418f16a5aebc23b418dd5e14adace40d6703f
@@ -57899,6 +58003,344 @@ index b55b18f3613f0077edff29c4b20d3c08ea9e8236..3908ee37b02a26c6bc95a5a412a37d99
 -from agent import conversation_compression as cc
 +from agent import conversation_compression_prompt as cc
  from gateway.run import _seed_hygiene_system_prompt
+diff --git a/tests/gateway/test_idle_cache_cleanup_unittest.py b/tests/gateway/test_idle_cache_cleanup_unittest.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..193db184c574f60a3989da8205fbd46fe35a94de
+--- /dev/null
++++ b/tests/gateway/test_idle_cache_cleanup_unittest.py
+@@ -0,0 +1,332 @@
++"""Native idle-cleanup behavior with synthetic provider callbacks; no inference."""
++import asyncio
++import logging
++from hermes_state import SessionDB
++
++from collections import OrderedDict
++from types import SimpleNamespace
++import threading
++from pathlib import Path
++import tempfile
++from concurrent.futures import Future
++from unittest.mock import patch
++import unittest
++
++from gateway.agent_cache_pressure import AgentCacheBounds
++from gateway.run import GatewayRunner
++
++
++class IdleCleanupFixture(unittest.TestCase):
++    def setUp(self):
++        self.runner = GatewayRunner.__new__(GatewayRunner)
++        self.runner._agent_cache_lock = threading.Lock()
++        self.runner._agent_cache = OrderedDict()
++        self.runner._running_agents = {}
++        self.runner._running = True
++        self.runner._agent_cache_bounds_cache = AgentCacheBounds(idle_ttl_secs=1)
++        self.gate = threading.Event()
++        self.entered = threading.Event()
++        self.done = threading.Event()
++        self.lock = threading.Lock()
++        self.active = self.peak = 0
++        self.closed = []
++
++    def tearDown(self):
++        self.gate.set()
++        self.runner._running = False
++        self.runner._shutdown_executor(drain_timeout=5)
++        for thread in threading.enumerate():
++            if thread.name.startswith('agent-cache-idle-'):
++                thread.join(5)
++                self.assertFalse(thread.is_alive())
++
++    def agent(self, key, *, block=False):
++        def commit(messages):
++            with self.lock:
++                self.active += 1
++                self.peak = max(self.peak, self.active)
++                self.entered.set()
++            try:
++                if block:
++                    self.assertTrue(self.gate.wait(5))
++            finally:
++                with self.lock:
++                    self.active -= 1
++        def close():
++            with self.lock:
++                self.closed.append(key)
++                if len(self.closed) == 4:
++                    self.done.set()
++        messages = [{'role': 'user', 'content': 'saved ' + key}]
++        agent = SimpleNamespace(_session_messages=messages, _db_flush_scan_prefix=messages[:],
++            _last_flushed_db_idx=1, _last_activity_ts=1, _memory_manager=object(),
++            commit_memory_session=commit, release_clients=close)
++        self.runner._agent_cache[key] = (agent, 'signature')
++        return agent
++
++class IdleCleanupTests(IdleCleanupFixture):
++    def test_one_idle_worker_leaves_waiting_agents_owned_by_cache(self):
++        agents = [self.agent(str(i), block=True) for i in range(4)]
++        self.assertTrue(self.runner._sweep_idle_cached_agents())
++        self.assertTrue(self.entered.wait(5))
++        with self.runner._agent_cache_lock:
++            self.assertEqual(len(self.runner._agent_cache), 3)
++        self.assertEqual(self.peak, 1)
++        self.assertFalse(self.runner._sweep_idle_cached_agents())
++        self.gate.set()
++        self.assertTrue(self.done.wait(5))
++        self.assertEqual(self.runner._shutdown_executor(drain_timeout=5), 0)
++        self.assertEqual(self.peak, 1)
++        self.assertCountEqual(self.closed, ['0', '1', '2', '3'])
++        for agent in agents:
++            self.assertEqual(agent._session_messages, [])
++            self.assertIsNone(agent._db_flush_scan_prefix)
++
++
++class ReservationTests(IdleCleanupFixture):
++    def watch_completion(self):
++        finished = threading.Event()
++        original = self.runner._finish_idle_cache_cleanup
++        def done(future, token):
++            original(future, token)
++            finished.set()
++        self.runner._finish_idle_cache_cleanup = done
++        return finished
++
++    def test_protected_entries_are_not_submitted(self):
++        agents = [self.agent(str(i)) for i in range(4)]
++        self.runner._running_agents['0'] = agents[0]
++        agents[1]._last_flushed_db_idx = 0
++        agents[2]._last_activity_ts = float('inf')
++        del agents[3]._last_activity_ts
++        self.runner._agent_cache['pending'] = (None, 'sig')
++        before = self.runner._agent_cache.copy()
++        self.assertFalse(self.runner._sweep_idle_cached_agents())
++        self.assertEqual(self.runner._agent_cache, before)
++        self.assertFalse(self.closed)
++
++    def test_waiting_entries_are_rechecked_before_claim(self):
++        agents = [self.agent(str(i), block=True) for i in range(4)]
++        finished = self.watch_completion()
++        self.assertTrue(self.runner._sweep_idle_cached_agents())
++        self.assertTrue(self.entered.wait(5))
++        with self.runner._agent_cache_lock:
++            self.runner._running_agents['1'] = agents[1]
++            agents[2]._last_flushed_db_idx = 0
++            replacement = SimpleNamespace(_last_activity_ts=float('inf'), _session_messages=[], _last_flushed_db_idx=0)
++            self.runner._agent_cache['3'] = (replacement, 'new')
++        self.gate.set()
++        self.assertTrue(finished.wait(5))
++        self.assertEqual(self.closed, ['0'])
++        self.assertIs(self.runner._agent_cache['3'][0], replacement)
++        self.assertEqual(set(self.runner._agent_cache), {'1', '2', '3'})
++        self.assertIsNone(self.runner._idle_cache_cleanup_token)
++
++    def test_partially_failed_submit_cannot_claim_after_resubmission(self):
++        for i in range(4):
++            self.agent(str(i), block=True)
++        captured = []
++        class FailingExecutor:
++            def submit(self, fn, *args):
++                captured.append((fn, args))
++                raise RuntimeError('synthetic thread start failure')
++        with patch.object(self.runner, '_get_housekeeping_executor', return_value=FailingExecutor()):
++            with self.assertRaisesRegex(RuntimeError, 'thread start failure'):
++                self.runner._sweep_idle_cached_agents()
++        self.assertEqual(len(self.runner._agent_cache), 4)
++        self.assertIsNone(self.runner._idle_cache_cleanup_token)
++        finished = self.watch_completion()
++        self.assertTrue(self.runner._sweep_idle_cached_agents())
++        self.assertTrue(self.entered.wait(5))
++        fn, args = captured[0]
++        fn(*args)
++        self.assertEqual(len(self.runner._agent_cache), 3)
++        self.assertEqual(self.peak, 1)
++        self.gate.set()
++        self.assertTrue(finished.wait(5))
++        self.assertCountEqual(self.closed, ['0', '1', '2', '3'])
++
++    def test_cancelled_queued_job_preserves_cache_and_allows_resubmission(self):
++        for i in range(4):
++            self.agent(str(i))
++        future = Future()
++        executor = SimpleNamespace(submit=lambda *args: future)
++        with patch.object(self.runner, '_get_housekeeping_executor', return_value=executor):
++            self.assertTrue(self.runner._sweep_idle_cached_agents())
++            self.assertFalse(self.runner._sweep_idle_cached_agents())
++            self.assertEqual(len(self.runner._agent_cache), 4)
++            self.assertTrue(future.cancel())
++        self.assertIsNone(self.runner._idle_cache_cleanup_token)
++        finished = self.watch_completion()
++        self.assertTrue(self.runner._sweep_idle_cached_agents())
++        self.assertTrue(finished.wait(5))
++        self.assertCountEqual(self.closed, ['0', '1', '2', '3'])
++
++    def test_already_completed_callback_attaches_without_cache_lock(self):
++        self.agent('0')
++        future = Future()
++        future.set_result(None)
++        with patch.object(self.runner, '_get_housekeeping_executor', return_value=SimpleNamespace(submit=lambda *args: future)):
++            self.assertTrue(self.runner._sweep_idle_cached_agents())
++        self.assertEqual(len(self.runner._agent_cache), 1)
++        self.assertIsNone(self.runner._idle_cache_cleanup_token)
++        finished = self.watch_completion()
++        self.assertTrue(self.runner._sweep_idle_cached_agents())
++        self.assertTrue(finished.wait(5))
++        self.assertEqual(self.closed, ['0'])
++
++    def test_old_completion_does_not_clear_replacement_reservation(self):
++        old, current = object(), object()
++        self.runner._idle_cache_cleanup_token = current
++        future = Future()
++        future.set_result(None)
++        self.runner._finish_idle_cache_cleanup(future, old)
++        self.assertIs(self.runner._idle_cache_cleanup_token, current)
++
++    def test_native_soft_provider_failure_still_releases_history(self):
++        agent = self.agent('0')
++        def fail(messages):
++            raise RuntimeError('synthetic provider failure')
++        agent.commit_memory_session = fail
++        finished = self.watch_completion()
++        with self.assertLogs('gateway.run', level='DEBUG') as logs:
++            self.assertTrue(self.runner._sweep_idle_cached_agents())
++            self.assertTrue(finished.wait(5))
++        self.assertTrue(any('Pre-evict memory commit failed' in row for row in logs.output))
++        self.assertEqual(self.closed, ['0'])
++        self.assertEqual(agent._session_messages, [])
++        self.assertIsNone(agent._db_flush_scan_prefix)
++
++    def test_each_claim_enters_its_own_profile_before_commit_and_release(self):
++        from agent import secret_scope
++        from hermes_constants import get_hermes_home
++        previous = secret_scope.is_multiplex_active()
++        seen = []
++        with tempfile.TemporaryDirectory() as temporary:
++            homes = {name: Path(temporary) / name for name in ('a', 'b')}
++            for name, home in homes.items():
++                home.mkdir()
++                (home / '.env').write_text('SYNTHETIC_MARKER=' + name + '\n')
++                agent = self.agent(name)
++                def observe(messages=None, *, name=name, phase='commit'):
++                    scope = secret_scope.current_secret_scope()
++                    seen.append((name, phase, get_hermes_home(), scope.get('SYNTHETIC_MARKER')))
++                agent.commit_memory_session = observe
++                agent.release_clients = lambda name=name, observe=observe: observe(phase='release')
++            self.runner.session_store = SimpleNamespace(_profile_home_for_key=lambda key: homes[key])
++            finished = self.watch_completion()
++            secret_scope.set_multiplex_active(True)
++            try:
++                self.assertTrue(self.runner._sweep_idle_cached_agents())
++                self.assertTrue(finished.wait(5))
++            finally:
++                self.gate.set()
++                self.runner._shutdown_executor(drain_timeout=5)
++                secret_scope.set_multiplex_active(previous)
++            self.assertEqual(seen, [
++                ('a', 'commit', homes['a'], 'a'), ('a', 'release', homes['a'], 'a'),
++                ('b', 'commit', homes['b'], 'b'), ('b', 'release', homes['b'], 'b')])
++
++    def test_stop_before_claim_keeps_agents_cached(self):
++        self.agent('0')
++        self.runner._running = False
++        self.assertFalse(self.runner._sweep_idle_cached_agents())
++        self.assertEqual(len(self.runner._agent_cache), 1)
++        self.assertFalse(self.closed)
++
++
++class ShutdownOwnershipTests(unittest.TestCase):
++    def test_shutdown_finalizes_waiting_agents_and_keeps_live_writer_db_open(self):
++        async def drive():
++            with tempfile.TemporaryDirectory() as temporary:
++                runner = GatewayRunner()
++                runner._running = True
++                runner._agent_cache_bounds_cache = AgentCacheBounds(idle_ttl_secs=1)
++                db = SessionDB(db_path=Path(temporary) / 'state.db')
++                runner._session_db = db
++                gate, entered = threading.Event(), threading.Event()
++                commits, closes, db_closes, messages = [], [], [], []
++                lock = threading.Lock()
++                native_close = db.close
++                def close_db():
++                    db_closes.append(True)
++                    native_close()
++                db.close = close_db
++                for index in range(4):
++                    key = 's' + str(index)
++                    db.create_session(key, 'cli')
++                    db.append_message(key, role='user', content='saved ' + key)
++                    def commit(history, key=key):
++                        if key == 's0':
++                            entered.set()
++                            assert gate.wait(15)
++                        db.append_message(key, role='assistant', content='committed ' + key)
++                        with lock:
++                            commits.append(key)
++                    def close(key=key):
++                        with lock:
++                            closes.append(key)
++                    history = [{'role': 'user', 'content': 'saved ' + key}]
++                    agent = SimpleNamespace(_session_messages=history, _db_flush_scan_prefix=history[:],
++                        _last_flushed_db_idx=1, _last_activity_ts=1, _memory_manager=object(),
++                        commit_memory_session=commit, shutdown_memory_provider=commit,
++                        release_clients=close, close=close)
++                    runner._agent_cache[key] = (agent, 'signature')
++                pool = None
++                try:
++                    assert runner._sweep_idle_cached_agents()
++                    assert entered.wait(5)
++                    pool = runner._get_housekeeping_executor()
++                    assert len(runner._agent_cache) == 3
++                    # This is the existing stop-begin gate; execute the real native finalization phase next.
++                    runner._running = False
++                    ctx = SimpleNamespace(active_agents={}, elapsed=lambda: 0, api_live=0, deferred_count=lambda: 0)
++                    await runner._stop_finalize_agents_and_adapters(ctx)
++                    assert sorted(commits) == ['s1', 's2', 's3'], commits
++                    assert sorted(closes) == ['s1', 's2', 's3'], closes
++                    assert not runner._agent_cache
++                    class Capture(logging.Handler):
++                        def emit(self, record):
++                            messages.append(record.getMessage())
++                    capture = Capture()
++                    logger = logging.getLogger('gateway.run')
++                    logger.addHandler(capture)
++                    try:
++                        # A short explicit test budget lets idle pool threads exit while the provider stays blocked.
++                        with patch("gateway.run._EXECUTOR_QUIESCE_TIMEOUT", 2.0):
++                            runner._stop_quiesce_and_close_session_dbs(0, ctx)
++                    finally:
++                        logger.removeHandler(capture)
++                    assert not db_closes, db_closes
++                    assert any('1 executor worker(s) still running' in line and 'skipping' in line for line in messages), messages
++                    assert sum(thread.is_alive() for thread in pool._threads) == 1
++                    assert not runner._sweep_idle_cached_agents()
++                    gate.set()
++                    for thread in pool._threads:
++                        thread.join(5)
++                        assert not thread.is_alive()
++                    assert sorted(commits) == ['s0', 's1', 's2', 's3'], commits
++                    assert sorted(closes) == ['s0', 's1', 's2', 's3'], closes
++                    runner._stop_quiesce_and_close_session_dbs(0, ctx)
++                    assert db_closes
++                    reopened = SessionDB(db_path=Path(temporary) / 'state.db')
++                    try:
++                        for index in range(4):
++                            key = 's' + str(index)
++                            assert [(m['role'], m['content']) for m in reopened.get_messages(key)] == [
++                                ('user', 'saved ' + key), ('assistant', 'committed ' + key)]
++                    finally:
++                        reopened.close()
++                finally:
++                    gate.set()
++                    runner._running = False
++                    runner._shutdown_executor(drain_timeout=5)
++                    if pool is not None:
++                        for thread in pool._threads:
++                            thread.join(5)
++                            assert not thread.is_alive()
++                    db.close()
++        asyncio.run(drive())
++
++if __name__ == '__main__':
++    unittest.main(verbosity=2)
 diff --git a/tests/gateway/test_idle_update_safety.py b/tests/gateway/test_idle_update_safety.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..2fa930be86daf78897438b35d4c9822695ff3d45
@@ -90370,11 +90812,31 @@ index a78c4430c343a914ac9c6945084290ba62bb53fd..1adbea36a90cc5c3d26015f2e21b1796
 +
      case "paragraph":
 diff --git a/website/docs/developer-guide/gateway-monitoring.md b/website/docs/developer-guide/gateway-monitoring.md
-index 8963c052e46ba793f39238d4aff716256226635e..5c4b1f12b5584b578bfaffa79488448bc3321561 100644
+index 8963c052e46ba793f39238d4aff716256226635e..a994ea33ca7e3809d45538ef0f3c93756c545e79 100644
 --- a/website/docs/developer-guide/gateway-monitoring.md
 +++ b/website/docs/developer-guide/gateway-monitoring.md
-@@ -7,2 +7,55 @@ description: "Health export, structured diagnostics, fleet queries and how to ex
+@@ -7,2 +7,75 @@ description: "Health export, structured diagnostics, fleet queries and how to ex
 
++## Bounded idle cache cleanup
++
++When cached agents pass their configured idle TTL, one idle-sweep cleanup job
++per gateway runner claims and releases them one at a time. Waiting agents stay
++in the cache and are checked again before each claim: current turns, unflushed
++transcripts and recently used or replaced entries remain protected.
++
++The job uses the existing bounded housekeeping executor. Each claimed agent's
++memory commit precedes resource release under its owning profile. Native
++shutdown finalizes agents still cached and drains executor writers before closing
++session databases; a stuck writer retains the existing skip-close protection.
++Submission failure or cancellation before a claim leaves agents cached.
++
++No new setting, pool, timer, forced trim or provider call is added. LRU, pressure
++and explicit-boundary eviction remain separate; this is an idle-sweep concurrency
++bound, not a global cleanup limit or an RSS-saving guarantee. Cleanup can take
++longer or wait behind other housekeeping work. Existing pool threads remain until
++normal shutdown. Unexpected worker failure is logged; unclaimed agents stay cached,
++and no successful teardown is implied for the failed claimed agent.
++
 +## Local memory snapshot
 +
 +`hermes gateway memory` prints one JSON snapshot through the existing private
