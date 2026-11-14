@@ -1,3 +1,53 @@
+# v0.19.0 — Native gateway memory command and Mac current RSS
+
+[Usage, matched measurements and limitations](release-notes-v0.19.0.md).
+The native parser and command map invoke one existing private `memory-stats`
+query. A platform-owned lazy psutil fallback fills unknown current RSS only;
+existing readings, anonymous-RSS semantics and trim/admission behavior remain.
+No runtime monitor, model tool, dependency, allocation request or lifecycle
+change is introduced.
+
+Before implementation, a native fallback assertion failed (`None` versus 123
+KiB), while the existing parser rejected `gateway memory` with code 2. The
+existing-RSS control passed. Post-export **10 native unittest cases pass** in
+0.010 seconds, covering selected-home ContextVar dispatch, one-query behavior,
+unknown/zero RSS, malformed response refusal, current rather than cached/peak
+readings, expected failures and forbidden trim/GC/database effects. Seven audit
+negative controls pass; actual AF_UNIX traffic supplies the positive control.
+This is a Python audit harness, not OS containment. Selected native runtime has
+psutil but no pytest/Ruff; canonical native suite/lint were not provisioned.
+
+One final native control-server pair used identical initial config bytes and the
+same actual native CLI entry point against the exact old/current diagnostic
+module. RSS changed from unknown to **35,328 / 35,344 KiB** on its two queries;
+PID matched the server and an outside observer agreed within 2 MiB. The new
+server loaded psutil only on demand. Before-query RSS was 32.4375 / 32.265625
+MiB old/current; after the second query 33.203125 / 34.53125 MiB. These are
+observation/import costs, not RAM savings. Complete CLI timings were
+695.198/678.870 ms old and 699.500/689.429 ms current, including shared startup.
+No speed conclusion follows from one pair. A preliminary unequal-client probe
+is superseded, not counted as an independent repeat.
+
+Actual CLI exits **0/1/2** pass, including valid unknown RSS, missing server and
+invalid arguments. The socket is removed on shutdown; config bytes stay exact,
+SQLite high-water is not reset, allocations absent, and no children survive.
+Twenty-millisecond recursive sampling observed at most two native children plus
+one outside observer, peak summed child RSS 130.484375 MiB, under 4 GiB total.
+RSS includes shared pages; brief peaks can be missed. No full gateway, connected
+adapter, installed-app, production workload or other-platform proof is claimed.
+No model endpoint, other machine or owner control/state was touched.
+
+The cumulative patch pins **1,038 targets**: one prior diagnostic target changes
+and eight targets join it. All 1,029 unrelated prior rows/source bytes/patch
+sections, including Desktop P0 protection, remain exact. Actual reverse/base
+hashes/reapply/all-after-hashes and strict installed compatibility pass. The same
+13 inherited whitespace diagnostics remain; the new delta/root are clean.
+Companion suite: **133 run, 131 pass, two Linux-only skips**, 4.402 seconds.
+The tracked-only disposable release copy passes **237 files / 238 intended
+paths**, with private index/copy removed and the real index unchanged. Exact
+Gitleaks directory/history scans both exit 0, no leaks, 217 history commits;
+final report/preservation rescans gate the driver handoff.
+
 # v0.18.0 — Optional on-demand gateway preset
 
 [Application, native consumer contracts and measured tradeoff](on-demand-gateway.md).

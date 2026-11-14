@@ -10,6 +10,7 @@ Historical source comments and release payloads received [privacy maintenance](d
 
 ## What is included
 
+- [v0.19.0: gateway memory diagnostics](docs/release-notes-v0.19.0.md), reading one native local snapshot from the CLI, with current RSS available on macOS; no polling or model call.
 - [v0.18.0: optional on-demand gateway preset](docs/release-notes-v0.18.0.md), using existing controls to defer turn warmup and cached MCP startup; one native initialized-runner Mac pair used 19.2% less idle RSS, with longer first-use initialization.
 - [v0.17.0: profile defaults for MCP idle retirement](docs/release-notes-v0.17.0.md), an opt-in timeout that releases idle stdio peers and their supervisor; one native Mac component pair used 24.7% less idle RSS, with longer next-call latency.
 - [v0.16.0: ticket-helper memory admission](docs/release-notes-v0.16.0.md), waiting for low/unknown execution-host memory within the existing mint deadline; one controlled native Mac overlap case used 19.6% less sampled peak RSS.

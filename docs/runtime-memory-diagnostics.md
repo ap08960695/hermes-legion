@@ -8,6 +8,37 @@ The normal status request remains unchanged.
 
 ## Read a small snapshot
 
+Since v0.19.0, after applying the complete patch and adopting it through the
+supported [idle update lifecycle](idle-updates.md), use:
+
+```sh
+hermes gateway memory
+```
+
+Use the serving gateway's launch profile (`hermes -p NAME gateway memory` for a
+standalone named-profile gateway). The existing selected-home control transport
+chooses the socket; this command never searches other profiles. Check the returned
+`pid`. A shared gateway's RSS covers the entire answering process and cannot be
+attributed exclusively to the selected profile.
+
+The command emits pretty JSON and exits 0 for a valid snapshot, including unknown
+RSS. An unavailable or malformed response emits a concise stderr message, leaves
+stdout empty and exits 1. Invalid arguments exit 2. The single native query uses
+the existing five-second timeout; "unavailable" also covers timeout, permissions
+and response failures, so it does not prove the gateway stopped. No retry or
+lifecycle action is added; shared CLI bootstrap/recovery remains native.
+
+Existing RSS observations remain authoritative. When RSS is unknown, a lazy
+platform-owned psutil sample supplies current resident memory in KiB, including
+on macOS. Expected import/access/OS failures leave it unknown; unsupported
+anonymous RSS remains `null`. This is current RSS, not a high-water mark.
+The first fallback query loads psutil and can increase the observed process's
+footprint. [Mac component measurements and limitations](release-notes-v0.19.0.md).
+No monitoring loop, trim, garbage collection or allocation tracing is enabled.
+
+For direct control queries, including the deliberate allocation request below,
+the existing Python interface remains available:
+
 After applying the complete patch and loading it through the documented
 [idle update lifecycle](idle-updates.md), run this from the installed source using
 its existing managed Python environment and the intended Gateway launch profile:

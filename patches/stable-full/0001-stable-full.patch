@@ -33232,10 +33232,10 @@ index 0000000000000000000000000000000000000000..5dc9743da53ea73d259cc6c7bfeae3e8
 +    return handler
 diff --git a/gateway/runtime_memory.py b/gateway/runtime_memory.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..11eb994bc1a4ea82f578232f4253d6f98e64eb20
+index 0000000000000000000000000000000000000000..1d3699f0d8a03bbc3778b30adddff8e253cddb4f
 --- /dev/null
 +++ b/gateway/runtime_memory.py
-@@ -0,0 +1,156 @@
+@@ -0,0 +1,160 @@
 +"""On-demand process counters; no heap contents, user data or cache mutation."""
 +
 +import ctypes
@@ -33389,6 +33389,10 @@ index 0000000000000000000000000000000000000000..11eb994bc1a4ea82f578232f4253d6f9
 +              'bundled_locales': _bundled_locale_counters(),
 +              'plugin_code': _plugin_code_counters(),
 +              'session_db_registry': registry.stats() if registry is not None else None}
++    if result['process']['rss_kib'] is None:
++        from hermes_platform.host.runtime import current_process_rss_kib
++
++        result['process']['rss_kib'] = current_process_rss_kib()
 +    if include_allocations:
 +        result['allocations'] = _allocation_snapshot()
 +    return result
@@ -35673,6 +35677,45 @@ index 0000000000000000000000000000000000000000..4e79b5fc30dad6fbb4af84d6a2cf0944
 +    except Exception as exc:
 +        logger.debug('Continuation %s migration not confirmed: %s', prefix, exc)
 +        return False
+diff --git a/hermes_cli/gateway.py b/hermes_cli/gateway.py
+index cbd3e49f799612c230a3b5519d31d3029deb3752..e04c6e927d4f222feea5156e9b627ab0ed5f225a 100644
+--- a/hermes_cli/gateway.py
++++ b/hermes_cli/gateway.py
+@@ -23,2 +23,3 @@ from pathlib import Path
+ from hermes_cli import gateway_service_owner, setup_platforms
++from hermes_cli.gateway_memory import cmd_memory
+
+@@ -5669,3 +5670,3 @@ _GATEWAY_SUBCOMMANDS = {
+     "uninstall": _cmd_uninstall, "start": _cmd_start, "stop": _cmd_stop, "restart": _cmd_restart,
+-    "status": _cmd_status, "list": _cmd_list, "migrate-legacy": _cmd_migrate_legacy, "migrate": _cmd_migrate,
++    "status": _cmd_status, "memory": cmd_memory, "list": _cmd_list, "migrate-legacy": _cmd_migrate_legacy, "migrate": _cmd_migrate,
+ }
+diff --git a/hermes_cli/gateway_memory.py b/hermes_cli/gateway_memory.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..cb9ea9091065e5dab2aa9530863b9a5601ad1c56
+--- /dev/null
++++ b/hermes_cli/gateway_memory.py
+@@ -0,0 +1,20 @@
++"""On-demand gateway memory observation through the existing private control channel."""
++
++
++def cmd_memory(args):
++    """Print one scalar snapshot without starting or changing the gateway."""
++    import json
++    import sys
++
++    from gateway.control_socket import query_gateway_control
++    from hermes_constants import get_hermes_home
++
++    result = query_gateway_control(get_hermes_home(), "memory-stats", timeout=5)
++    process = result.get("process") if isinstance(result, dict) else None
++    if not (isinstance(result, dict) and type(result.get("pid")) is int and result["pid"] > 0
++            and isinstance(process, dict) and "rss_kib" in process
++            and (process["rss_kib"] is None
++                 or (type(process["rss_kib"]) is int and process["rss_kib"] >= 0))):
++        print("Gateway memory observation unavailable", file=sys.stderr)
++        raise SystemExit(1)
++    print(json.dumps(result, indent=2))
 diff --git a/hermes_cli/goal_command.py b/hermes_cli/goal_command.py
 index 0c19ebf3641b5e809a20f999988c19a38428881d..cc59114db3a89152e24266ed1cfc7596de919e8f 100644
 --- a/hermes_cli/goal_command.py
@@ -42317,6 +42360,15 @@ index a25c6cd5cf87cc3e30dd52a3b92a027bbc70a7ea..a28839f04b99cec84b9d798b1c5458f7
 +    if len(_cache) > _CACHE_MAX_ENTRIES:
 +        del _cache[next(iter(_cache))]
      return label
+diff --git a/hermes_cli/subcommands/gateway.py b/hermes_cli/subcommands/gateway.py
+index 2ecf5016fa40618d2f3c31e7af8c8b5b7db1b123..bcf9c349a2a321300b79bcc6c2d7a70e7cb2f969 100644
+--- a/hermes_cli/subcommands/gateway.py
++++ b/hermes_cli/subcommands/gateway.py
+@@ -163,2 +163,4 @@ def build_gateway_parser(
+
++    gateway_subparsers.add_parser("memory", help="Read one gateway memory snapshot without changing it")
++
+     # gateway install
 diff --git a/hermes_cli/subcommands/pause.py b/hermes_cli/subcommands/pause.py
 index 6416df092b283f9d38dc4318e440f96da3c6052d..818832c6ffaeb019ab0407b0eff82cabf0d7f42e 100644
 --- a/hermes_cli/subcommands/pause.py
@@ -44258,6 +44310,29 @@ index 0000000000000000000000000000000000000000..6fac6b249574291b4c6d9f184ba90f47
 +    """
 +    getuid = getattr(os, 'getuid', None)
 +    return getuid() if getuid is not None else None
+diff --git a/hermes_platform/host/runtime.py b/hermes_platform/host/runtime.py
+index bcc7edbdd35c59cdb302cf1f37d64d24a5063734..959c5aa2b3ded5cc73c4a3f86df82d3d7e843a69 100644
+--- a/hermes_platform/host/runtime.py
++++ b/hermes_platform/host/runtime.py
+@@ -1,2 +1,2 @@
+-"""Cached runtime-environment predicates for WSL, containers, and Termux."""
++"""Runtime-environment predicates and current-process resource observations."""
+
+@@ -7,2 +7,14 @@ import os
+
++def current_process_rss_kib() -> int | None:
++    """Sample current resident memory; unavailable observations stay unknown."""
++    try:
++        import psutil
++    except ImportError:
++        return None
++    try:
++        return psutil.Process().memory_info().rss // 1024
++    except (OSError, psutil.Error):
++        return None
++
++
+ def is_termux() -> bool:
 diff --git a/hermes_state.py b/hermes_state.py
 index 833f4b738f4698034b7da22276fbcf7bfd3f9768..2b4bd6ff713e5a9e043d3175d03b248298b59816 100644
 --- a/hermes_state.py
@@ -58940,6 +59015,49 @@ index 0000000000000000000000000000000000000000..5eefc5c684ac68e02ddd07ce2cbad052
 +                    asyncio.run(runner._session_db.close())
 +    finally:
 +        set_multiplex_active(previous)
+diff --git a/tests/gateway/test_runtime_memory_rss.py b/tests/gateway/test_runtime_memory_rss.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..14466ee27b05812faa35f72ab09c826c89491c7a
+--- /dev/null
++++ b/tests/gateway/test_runtime_memory_rss.py
+@@ -0,0 +1,37 @@
++"""Current RSS fallback is diagnostic-only; existing observations remain authoritative."""
++import unittest
++from types import SimpleNamespace
++from unittest.mock import patch
++
++from gateway.runtime_memory import collect_runtime_memory
++
++
++class RuntimeMemoryRssTests(unittest.TestCase):
++    def test_missing_rss_uses_current_process_and_preserves_unknown_anon(self):
++        process = {'rss_kib': None, 'rss_anon_kib': None, 'thread_count': 7}
++        with patch('hermes_cli.mem_trim.collect_memory_snapshot', return_value=process), patch(
++            'psutil.Process', return_value=SimpleNamespace(
++                memory_info=lambda: SimpleNamespace(rss=123 * 1024))
++        ):
++            result = collect_runtime_memory()
++        self.assertEqual(result['process'], {'rss_kib': 123, 'rss_anon_kib': None, 'thread_count': 7})
++        self.assertNotIn('allocations', result)
++        self.assertFalse(result['sqlite']['reset_highwater'])
++
++    def test_existing_rss_including_zero_never_samples_fallback(self):
++        for rss in (0, 456):
++            with self.subTest(rss=rss), patch(
++                'hermes_cli.mem_trim.collect_memory_snapshot',
++                return_value={'rss_kib': rss, 'rss_anon_kib': 100, 'thread_count': 3}
++            ), patch('psutil.Process', side_effect=AssertionError('unnecessary sampling')):
++                self.assertEqual(collect_runtime_memory()['process']['rss_kib'], rss)
++
++    def test_observation_never_trims_collects_or_opens_a_session_database(self):
++        with patch('hermes_cli.mem_trim.trim_memory', side_effect=AssertionError('trim')), patch(
++            'gc.collect', side_effect=AssertionError('gc')
++        ), patch('sqlite3.connect', side_effect=AssertionError('database')):
++            self.assertNotIn('allocations', collect_runtime_memory())
++
++
++if __name__ == '__main__':
++    unittest.main()
 diff --git a/tests/gateway/test_scratch_housekeeping.py b/tests/gateway/test_scratch_housekeeping.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..5fc23ec5193fa91c7ff9971057c01e016b629bbe
@@ -60668,6 +60786,90 @@ index 0000000000000000000000000000000000000000..c32f55ae16a63a4761daa18422f495d3
 +    assert migrate('parent', 'child') is True
 +    assert other_db.get_meta(new) == other_raw
 +    assert original_db.get_meta(old) == raw and original_db.get_meta(new) is None
+diff --git a/tests/hermes_cli/test_gateway_memory.py b/tests/hermes_cli/test_gateway_memory.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..41ded3750c31f344a960834e4f4f17d063f7ff4c
+--- /dev/null
++++ b/tests/hermes_cli/test_gateway_memory.py
+@@ -0,0 +1,78 @@
++"""Gateway memory uses native parsing/dispatch and one selected-home observation."""
++import argparse
++import contextlib
++import io
++import json
++from pathlib import Path
++import tempfile
++import unittest
++from unittest.mock import patch
++
++from hermes_cli.gateway import gateway_command
++from hermes_cli.subcommands.gateway import build_gateway_parser
++from hermes_constants import reset_hermes_home_override, set_hermes_home_override
++
++
++class GatewayMemoryCommandTests(unittest.TestCase):
++    def setUp(self):
++        self.parser = argparse.ArgumentParser()
++        build_gateway_parser(self.parser.add_subparsers(), cmd_gateway=gateway_command,
++                             cmd_proxy=lambda args: None, cmd_gateway_enroll=lambda args: None)
++
++    def invoke(self, payload):
++        args = self.parser.parse_args(['gateway', 'memory'])
++        output, error = io.StringIO(), io.StringIO()
++        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(error), patch(
++            'gateway.control_socket.query_gateway_control', return_value=payload
++        ) as query:
++            try:
++                args.func(args)
++            except SystemExit as exc:
++                code = exc.code
++            else:
++                code = 0
++        return code, output.getvalue(), error.getvalue(), query
++
++    def test_native_parser_dispatches_one_selected_home_query(self):
++        with tempfile.TemporaryDirectory() as directory:
++            home = Path(directory) / 'selected-profile'
++            token = set_hermes_home_override(home)
++            try:
++                payload = {'pid': 123, 'process': {'rss_kib': 456}, 'caches': {'agents': 2}}
++                code, output, error, query = self.invoke(payload)
++            finally:
++                reset_hermes_home_override(token)
++        self.assertEqual(code, 0)
++        self.assertEqual(json.loads(output), payload)
++        self.assertTrue(output.endswith('\n'))
++        self.assertEqual(error, '')
++        query.assert_called_once_with(home, 'memory-stats', timeout=5)
++
++    def test_unknown_and_zero_rss_are_successful_observations(self):
++        for rss in (None, 0):
++            with self.subTest(rss=rss):
++                payload = {'pid': 123, 'process': {'rss_kib': rss}}
++                code, output, error, query = self.invoke(payload)
++                self.assertEqual((code, json.loads(output), error), (0, payload, ''))
++                self.assertEqual(query.call_count, 1)
++
++    def test_unavailable_and_malformed_observations_fail_without_output(self):
++        invalid = [None, [], {}, {'pid': True, 'process': {'rss_kib': 1}},
++                   {'pid': 0, 'process': {'rss_kib': 1}}, {'pid': 1, 'process': []},
++                   {'pid': 1, 'process': {}}, {'pid': 1, 'process': {'rss_kib': True}},
++                   {'pid': 1, 'process': {'rss_kib': -1}}, {'pid': 1, 'process': {'rss_kib': 1.5}}]
++        for payload in invalid:
++            with self.subTest(payload=payload):
++                code, output, error, query = self.invoke(payload)
++                self.assertEqual((code, output), (1, ''))
++                self.assertIn('unavailable', error)
++                self.assertEqual(query.call_count, 1)
++
++    def test_extra_arguments_are_parser_errors(self):
++        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
++            self.parser.parse_args(['gateway', 'memory', '--start'])
++        self.assertEqual(error.exception.code, 2)
++
++
++if __name__ == '__main__':
++    unittest.main()
 diff --git a/tests/hermes_cli/test_gateway_multiplex_status.py b/tests/hermes_cli/test_gateway_multiplex_status.py
 index c4e4080046e70116f98165e92debbe3e98ecfeec..999318a1677ce3f47db910ca86c8491596b51818 100644
 --- a/tests/hermes_cli/test_gateway_multiplex_status.py
@@ -69387,6 +69589,49 @@ index 0000000000000000000000000000000000000000..8b93da97996f531b0205e0ef7c852d3f
 +    from hermes_platform.host import identity
 +
 +    assert identity.current_user_id() is None
+diff --git a/tests/hermes_platform/test_process_rss.py b/tests/hermes_platform/test_process_rss.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..113b5146e4141c2beaaf1d3769f14549d0bc9c38
+--- /dev/null
++++ b/tests/hermes_platform/test_process_rss.py
+@@ -0,0 +1,37 @@
++"""Current-process RSS is sampled afresh; unavailable observations stay unknown."""
++import builtins
++import unittest
++from types import SimpleNamespace
++from unittest.mock import patch
++
++import psutil
++from hermes_platform.host.runtime import current_process_rss_kib
++
++
++class ProcessRssTests(unittest.TestCase):
++    def test_current_rss_is_not_cached_or_a_highwater_value(self):
++        with patch('psutil.Process') as process:
++            process.return_value.memory_info.side_effect = [SimpleNamespace(rss=2049), SimpleNamespace(rss=1024)]
++            self.assertEqual(current_process_rss_kib(), 2)
++            self.assertEqual(current_process_rss_kib(), 1)
++            self.assertEqual(process.call_count, 2)
++
++    def test_expected_sampling_failures_remain_unknown(self):
++        for error in (OSError('synthetic'), psutil.AccessDenied(), psutil.NoSuchProcess(1)):
++            with self.subTest(error=error), patch('psutil.Process', side_effect=error):
++                self.assertIsNone(current_process_rss_kib())
++
++    def test_missing_dependency_remains_unknown(self):
++        original = builtins.__import__
++
++        def without_psutil(name, *args, **kwargs):
++            if name == 'psutil':
++                raise ImportError('synthetic missing dependency')
++            return original(name, *args, **kwargs)
++
++        with patch('builtins.__import__', side_effect=without_psutil):
++            self.assertIsNone(current_process_rss_kib())
++
++
++if __name__ == '__main__':
++    unittest.main()
 diff --git a/tests/hermes_state/test_ascii_token_runs.py b/tests/hermes_state/test_ascii_token_runs.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..ca15cbe1b70178c7ff1b6dc2f953dfba657cc89b
@@ -89896,6 +90141,42 @@ index a78c4430c343a914ac9c6945084290ba62bb53fd..1adbea36a90cc5c3d26015f2e21b1796
 +      );
 +
      case "paragraph":
+diff --git a/website/docs/developer-guide/gateway-monitoring.md b/website/docs/developer-guide/gateway-monitoring.md
+index 8963c052e46ba793f39238d4aff716256226635e..03cc1e330189f230d6cd164c5eff3bb6c568a703 100644
+--- a/website/docs/developer-guide/gateway-monitoring.md
++++ b/website/docs/developer-guide/gateway-monitoring.md
+@@ -7,2 +7,31 @@ description: "Health export, structured diagnostics, fleet queries and how to ex
+
++## Local memory snapshot
++
++`hermes gateway memory` prints one JSON snapshot through the existing private
++local control channel. It does not start or restart a gateway, trim memory,
++collect garbage, evict caches, open session databases or call a model. This is
++an on-demand local diagnostic, separate from OTLP export below.
++Normal CLI bootstrap/recovery remains native; this handler adds no lifecycle action.
++
++Use the serving gateway's launch profile (`hermes -p NAME gateway memory` for
++a standalone named-profile gateway). Targeting follows the native selected-home
++control transport; the command does not search other profiles. Check the returned
++`pid`: RSS belongs to the entire answering process, including all profiles it
++serves, rather than the selected profile alone.
++
++`process.rss_kib` is current resident memory in KiB, not a peak. When the existing
++native observation is unavailable, an on-demand psutil sample supplies current
++RSS, including on macOS. Unsupported anonymous RSS and unavailable measurements
++remain `null`, never an asserted zero. The first fallback query can incur import
++cost. Cache/SQLite counters keep their existing read-only semantics; allocation
++tracing is not enabled or requested by this command.
++
++Exit 0 means a valid snapshot (even if RSS is unknown); exit 1 with an stderr
++"unavailable" diagnostic means no usable observation within the existing
++five-second control-query timeout or another transport/response failure. It does
++not prove the gateway stopped. Invalid arguments exit 2. No retry or lifecycle
++action follows a failure.
++
++## Exported service health
++
+ Service health monitoring plus structured operational diagnostics for the
 diff --git a/website/docs/developer-guide/relay-shared-metrics.md b/website/docs/developer-guide/relay-shared-metrics.md
 index 147cc683c12eac21dca4cac947b6e2407e850a0d..fe13d913ae38473d7bbabb0cd3e829adddaa5771 100644
 --- a/website/docs/developer-guide/relay-shared-metrics.md
