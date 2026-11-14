@@ -1,3 +1,63 @@
+# v0.8.75 — Prepare request-cache admission once before locking
+
+Three changed production lines compute the existing vision request-cache admission
+once before the shared lock, then reuse its decision for publication and logging.
+Preparation stays inside the original exception/cleanup scope; no new await or
+policy is added. [Cross-thread progress and native evidence](vision-cache-routes.md#request-cache-completion-admission-v0875).
+Pending ownership, publication/TTL, capacity/LRU, follower settlement, cancellation,
+native pixels, routes and the separate inner payload budget remain.
+
+Original native probe:one owner, two validations [lock-held,lock-free]. Candidate:
+one lock-free validation, with identical returned/cached values and empty pending
+state. Baseline80 passes/five files. Two invariant tests add five cases before
+product edit: meaningful red five failures/sixteen prior passes. A gated target
+owner allows another consumer's nonblocking lock probe, actual unrelated cached
+hit and new-key completion before gate release; followers settle with either the
+owner value or native admission error, and cleanup remains. Actual registry calls
+use real PNG/preparation/key/extraction and fixed external-provider boundaries;
+ASCII/Unicode success and provider-error repeats each validate once per owner,
+with no admission/provider work on a hit. Source PNG/output/reservations preserved.
+
+Actual exported reverse/base/reapplication:85 passes/five complete files, zero
+failures/skips/retries/exclusions,8.7s. Request21/content19/route14/native20/history11.
+Existing cancellation/size/TTL/route/inner-byte/native/history cases retain every
+assertion. Actual imported path/hash matches export. Seven alternating untraced
+64-owner batches on the same200,033-byte result yield median0.167342->0.084298ms
+owner completion. Separate count phases show128->64 validations, but64 producer
+calls/retained keys on both implementations, equal outputs and no pending work.
+These are component timings/validation counts, not whole-tool latency, memory,
+model-call, cache-hit-rate or billing savings. Validation still synchronously
+occupies its active event loop; cross-thread progress does not establish service
+throughput or continuous Captain concurrency.
+
+Borrowed PM-selected3.14.9/deps read-only, separate PM-locked pytest9.1.1/asyncio
+1.3.0, private HOME/HERMES_HOME/TMPDIR and unchanged scoped Python owner-read/write/
+SQLite/network/process/null/leading-flag/per-PID negatives/exit7; one CPU/worker.
+No full native suite/pinned whole-source lint/health/OS containment, live provider/
+model/API/UI/service/fleet/original-session/terminal-goal proof. Owner source/data/
+apps/config/control/quota/ESTOP/pauses/stopped timers remain untouched.
+
+Same1004 targets/basebf0203a(v0.22.5)/all before/unrelated after hashes/sections and
+selection. Only existing request-cache runtime/test after hashes/sections change.
+Temp-index full-index binary-U1 installed/reverse/check/base/reapply pass; native/
+raw-root whitespace clean. Read-only owner972/1004 match,32 pending normal lead
+adoption/Linux validation. No new public file/dependency/lock/config/cache layer.
+Required companion:133 run,131 pass/two Linux skips,4.479s,exit0. Tracked-only222
+inventory/current hashes/exact7paths/empty real index/unchanged selection/neutral
+history pass; disposable copy removed. Both exact directory/history secret scans
+pass (205 commits,no leaks). Advisors82/83 accept bounded design/handoff using
+supplied evidence only; actual mandated CLI/session/outcome recorded privately.
+
+All own native/probe/benchmark/export/companion/release/scan/advisor handles are
+terminal. Actual separate-argv Git common/object-path checks establish owned clone
+paths and separate borrowed owner objects before exact cleanup. Owned trial/source/
+test-tools/fixtures/home/log/cache/temp-index/probe/benchmark/export tree, pointer
+and setup are removed; absence and borrowed resources/protected hashes verified.
+Pre-cleanup714092KiB is not attributed saving; no owner backup created or purged.
+Final records/hashes/inventory/scope/index/preservation/selection/whitespace/exact
+scans precede subject-only driver handoff. Broad standing goal remains active.
+
+
 # v0.8.74 — Bound retained auxiliary vision analysis payload
 
 The existing content cache now adds a 32 MiB charged key/entry payload limit to its

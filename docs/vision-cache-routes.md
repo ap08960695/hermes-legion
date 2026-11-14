@@ -160,3 +160,63 @@ Source/runtime dependencies are borrowed read-only through PM-selected Python
 service, Gateway, UI or real model workload is launched. Existing processes need
 normal idle adoption; current read-only source comparison finds 974/1004 matching
 kit targets and 30 pending normal lead adoption/Linux validation.
+
+
+## Request-cache completion admission (v0.8.75)
+
+The outer request cache previously encoded and parsed each owner's result while
+holding the shared cache lock, then repeated admission for its completion log.
+It now computes the existing `cacheable(result)` decision once, before taking the
+lock and inside the original exception/cleanup scope. Publication and logging
+consume the same decision. No policy, byte check, JSON check or cache key changes.
+
+The owner keeps its pending reservation while admission runs. Publication and
+LRU eviction remain under the lock, TTL still starts at publication, followers
+still await the same future, and failures still settle that future and remove
+the reservation. Existing constructor budgets, capacity fallback, cancellation,
+provider behavior, native pixel bypass and the separate inner cache remain.
+Admission is still synchronous: the active event loop pays its encoding/parsing
+cost. Consumers on other threads/event loops can use unrelated cached entries or
+reserve new work while that preparation runs; no new await or offload is added.
+
+The original native probe observes two validations for one owner: first with the
+lock held, then without it. The candidate observes one lock-free validation.
+Both return the same result on a cached repeat, call the producer once and leave
+no pending reservation. Two invariant tests add five cases before product edit;
+all five fail meaningfully on the original, while the prior sixteen cases pass.
+
+A controlled gate pauses only target-owner validation. Another consumer probes
+the lock without blocking; a real cached hit and independent new-key completion
+finish before gate release. Same-key followers remain waiting and then receive
+the owner's result or the native admission error. The gate releases in `finally`.
+Actual registry dispatch with a real temporary PNG/preparation/key/extraction
+uses fixed external-provider responses. ASCII/Thai/non-BMP success is admitted
+once and a hit adds no admission/provider call; rejected provider-error results
+are evaluated once per explicitly repeated owner. Outputs, source PNG and pending
+cleanup remain intact. Existing cancellation, result-size, TTL, route, inner-byte,
+native-pixel and history cases run in the same complete selection.
+
+Native baseline:80 passes/five files. After actual exported reverse/base/
+reapplication:85 passes/five files, zero failures/skips/retries/exclusions,8.7s.
+Counts are request21,content19,route14,native20,history11. Actual imported module
+path/hash matches the exported manifest.
+
+Seven alternating untraced timing batches compare the original exact AST-bound
+async method, using the same unchanged module globals and native policy, with the
+imported candidate. Each batch has64 distinct cold keys and the same200,033-byte
+JSON result containing200,000 ASCII analysis characters. Separate counted batches
+verify equivalent outputs,64 retained keys,64 producer calls and empty reservations.
+
+| Component fixture metric | Original | Prepared admission |
+|---|---:|---:|
+| Median owner completion | 0.167342 ms | 0.084298 ms |
+| Validations per64-owner counted batch | 128 | 64 |
+| Producer calls per counted batch | 64 | 64 |
+
+There is no allocation/RSS measurement or external provider call in this benchmark.
+These are component timings and Python validation counts, not whole-tool response
+time, physical model requests, billed usage or a production cache-hit improvement.
+Tests use isolated PM-selected Mac Python3.14.9 and private synthetic homes with
+unchanged scoped audit negatives. No service, Gateway, UI or real model workload
+is launched. Read-only owner source comparison finds972/1004 matching targets;
+32 await normal lead adoption and Linux validation.

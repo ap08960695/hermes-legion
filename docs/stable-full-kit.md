@@ -10,6 +10,17 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Request-cache completion admission (v0.8.75)
+
+The vision request cache now computes each owner's admission once before taking
+its shared cache lock, then uses that decision for publication and logging.
+[Native cross-thread progress, follower/error and registry proof](vision-cache-routes.md#request-cache-completion-admission-v0875).
+Publication, policy, TTL, capacity, reservations, cancellation, native pixel bypass
+and the separate inner payload budget remain. Same1004 targets/base/selection:
+only the existing request-cache runtime/test after hashes and sections change.
+No new public file, dependency, lock, config, cache layer or asynchronous offload.
+Component measurements do not establish whole-tool latency or fewer model calls.
+
 ## Vision analysis byte budget (v0.8.74)
 
 The auxiliary content cache now combines its existing count/TTL/LRU limits with a

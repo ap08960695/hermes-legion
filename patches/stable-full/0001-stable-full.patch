@@ -77681,10 +77681,10 @@ index 0000000000000000000000000000000000000000..4cab347b7d111c40033f8295a9105133
 +    assert not vision_request_cache.CACHE.pending
 diff --git a/tests/tools/test_vision_request_cache.py b/tests/tools/test_vision_request_cache.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..ddaac9da41fd9fd04cb97d1aa0dd55e2c0ab0164
+index 0000000000000000000000000000000000000000..63c0be8dbed68ebaac8015c4de3506bf6731e3e8
 --- /dev/null
 +++ b/tests/tools/test_vision_request_cache.py
-@@ -0,0 +1,191 @@
+@@ -0,0 +1,305 @@
 +import asyncio
 +from concurrent.futures import ThreadPoolExecutor
 +import json
@@ -77876,6 +77876,120 @@ index 0000000000000000000000000000000000000000..ddaac9da41fd9fd04cb97d1aa0dd55e2
 +    assert asyncio.run(handler(args, task_id='task1')) == {'_multimodal': True}
 +    assert asyncio.run(handler(args, task_id='task1'))['success'] is False
 +    assert len(native_calls) == 2
++
++
++@pytest.mark.parametrize('admission_error', [False, True])
++def test_owner_admission_allows_unrelated_progress_and_settles_followers(monkeypatch, admission_error):
++    store = cache.VisionCache()
++    owner_value = '\ud800' if admission_error else json.dumps({'success': True, 'analysis': 'gated owner'})
++    other_value = json.dumps({'success': True, 'analysis': 'independent result'})
++    entered, release, joined = threading.Event(), threading.Event(), threading.Event()
++    calls, admissions = [], []
++
++    async def ready():
++        return RESULT
++
++    assert asyncio.run(store.run('ready', ready)) == RESULT
++    policy, wrap = store.cacheable, asyncio.wrap_future
++
++    def checked(result):
++        admissions.append(result)
++        if result == owner_value and not entered.is_set():
++            entered.set()
++            assert release.wait(10)
++        return policy(result)
++
++    def wrapped(future):
++        if future is target_future:
++            joined.set()
++        return wrap(future)
++
++    def probe_lock():
++        acquired = store.lock.acquire(blocking=False)
++        if acquired:
++            store.lock.release()
++        return acquired
++
++    async def owner_call():
++        calls.append('owner')
++        return owner_value
++
++    async def other_call():
++        calls.append('other')
++        return other_value
++
++    async def forbidden_call():
++        raise AssertionError('cached hit or follower must not call the provider')
++
++    monkeypatch.setattr(store, 'cacheable', checked)
++    with ThreadPoolExecutor(4) as pool:
++        owner = pool.submit(asyncio.run, store.run('owner', owner_call))
++        try:
++            assert entered.wait(3)
++            assert pool.submit(probe_lock).result(3), 'admission must leave the shared cache lock free'
++            with store.lock:
++                target_future = store.pending['owner']
++            monkeypatch.setattr(asyncio, 'wrap_future', wrapped)
++            hit = pool.submit(asyncio.run, store.run('ready', forbidden_call))
++            other = pool.submit(asyncio.run, store.run('other', other_call))
++            follower = pool.submit(asyncio.run, store.run('owner', forbidden_call))
++            assert hit.result(3) == RESULT
++            assert other.result(3) == other_value
++            assert joined.wait(3)
++            assert not owner.done() and not follower.done()
++            assert not release.is_set()
++        finally:
++            release.set()
++        if admission_error:
++            for task in (owner, follower):
++                with pytest.raises(UnicodeEncodeError):
++                    task.result(3)
++            assert 'owner' not in store.done
++        else:
++            assert owner.result(3) == follower.result(3) == owner_value
++            assert store.done['owner'][1] == owner_value
++    assert calls == ['owner', 'other']
++    assert admissions.count(owner_value) == admissions.count(other_value) == 1
++    assert store.done['ready'][1] == RESULT and store.done['other'][1] == other_value
++    assert not store.pending
++
++
++@pytest.mark.parametrize('analysis, provider_error', [('offline result', False), ('คำตอบ🙂', False), ('', True)])
++def test_registry_admission_runs_once_per_owner_and_never_on_hit(tmp_path, monkeypatch, analysis, provider_error):
++    from unittest.mock import AsyncMock
++    from PIL import Image
++    from tools.registry import registry
++
++    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
++    image = tmp_path / 'input.png'
++    Image.new('RGB', (4, 4), (30, 60, 90)).save(image)
++    before = image.read_bytes()
++    store = cache.VisionCache()
++    monkeypatch.setattr(cache, 'CACHE', store)
++    monkeypatch.setattr(vision, '_ANALYSIS_CACHE', type(vision._ANALYSIS_CACHE)())
++    monkeypatch.setattr(vision, '_should_use_native_vision_fast_path', lambda: False)
++    llm = AsyncMock(return_value='fixed provider response',
++                    side_effect=RuntimeError('synthetic provider error') if provider_error else None)
++    monkeypatch.setattr(vision, 'async_call_llm', llm)
++    monkeypatch.setattr(vision, 'extract_content_or_reasoning', lambda response: analysis)
++    policy, admissions = store.cacheable, []
++
++    def checked(result):
++        admissions.append(result)
++        return policy(result)
++
++    monkeypatch.setattr(store, 'cacheable', checked)
++    args = {'image_url': str(image), 'question': 'describe the fixture'}
++    results = [json.loads(registry.dispatch('vision_analyze', args, task_id='fixture-task',
++                                           session_id='fixture-session')) for _ in range(2)]
++    assert results[0] == results[1]
++    assert results[0]['success'] is (not provider_error)
++    if not provider_error:
++        assert results[0]['analysis'] == analysis
++    expected = 2 if provider_error else 1
++    assert llm.await_count == len(admissions) == expected
++    assert len(store.done) == (0 if provider_error else 1)
++    assert not store.pending and image.read_bytes() == before
 diff --git a/tests/tools/test_web_clean_plain_text.py b/tests/tools/test_web_clean_plain_text.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..c2b6ac693c33f30cc2953ba3872a53abf9a0a604
@@ -83908,10 +84022,10 @@ index f52fa3d14ec56d1822bb7e393e3a178be6852eb1..f8b03e0358a2bbd9a8783fa593de92d1
          validation_error = best_match(validator_cls(validation_schema).iter_errors(candidate_args))
 diff --git a/tools/vision_request_cache.py b/tools/vision_request_cache.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..349b657033f13320255a52203cf00cf61b0ef0e9
+index 0000000000000000000000000000000000000000..1cab465b249058c87d1a634d19b22097537c38f9
 --- /dev/null
 +++ b/tools/vision_request_cache.py
-@@ -0,0 +1,105 @@
+@@ -0,0 +1,106 @@
 +"""Bounded auxiliary vision reuse, isolated by caller and route; no provider calls here."""
 +import asyncio
 +from collections import OrderedDict
@@ -83968,12 +84082,13 @@ index 0000000000000000000000000000000000000000..349b657033f13320255a52203cf00cf6
 +            return await asyncio.shield(asyncio.wrap_future(future))
 +        try:
 +            result = await call()
++            cacheable = self.cacheable(result)
 +            with self.lock:
-+                if self.cacheable(result):
++                if cacheable:
 +                    self.done[key] = (time.monotonic(), result)
 +                    while len(self.done) > self.capacity:
 +                        self.done.popitem(last=False)
-+            logger.info("vision_reuse outcome=owner_completed cacheable=%s", self.cacheable(result))
++            logger.info("vision_reuse outcome=owner_completed cacheable=%s", cacheable)
 +            future.set_result(result)
 +            return result
 +        except BaseException as exc:
