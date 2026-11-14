@@ -10,6 +10,8 @@ Historical source comments and release payloads received [privacy maintenance](d
 
 ## What is included
 
+- [v0.14.0: shared Desktop source-update checks](docs/release-notes-v0.14.0.md), reusing identical running checks and queueing distinct work; one native cached two-request Mac case used 50.2% less peak RSS and launched one interpreter instead of two.
+
 - [v0.13.0: memory-aware Desktop checks](docs/release-notes-v0.13.0.md), waiting below a 512 MiB execution-host threshold; one modeled-pressure native Mac case used 37.1% less peak RSS, with longer completion time.
 
 - [v0.12.0: lighter session metadata startup](docs/release-notes-v0.12.0.md), avoiding a turn-engine import for saved-message metadata; one cached-startup case used 13.2% less RSS before opening history, with storage and peak memory essentially unchanged.

@@ -1,3 +1,74 @@
+# v0.14.0 — Share Desktop source-update checks
+
+[Plain-language behavior and native Mac measurements](release-notes-v0.14.0.md).
+One existing production file now owns a global FIFO around actual source-check
+execution. Adjacent identical ordinary checks share raw output; each caller
+parses independently. Exact command/args/cwd/environment snapshots separate
+execution identities. Force and channel changes are independent barriers, and
+later reads do not join across distinct work. One active plus 256 pending distinct
+operations is bounded; identical joins use no extra slot. Failures release the
+slot without retrying, and completed results are not retained. No new setting,
+module, timer, pool or launcher/recovery/update-apply behavior is introduced.
+
+Six meaningful old-source failures prove duplicate process launches, concurrent
+nonidentical work, missing ordering/barriers and unbounded admission. The final
+new cases additionally verify independent nested result objects, fresh later
+checks, two separate forced checks, raw/JSON failure recovery, every execution
+input and environment snapshot, full-queue identical joining, overflow recovery,
+managed launcher routing and legacy null status. The process boundary is mocked
+in those unit cases; the system under test is the real source-check bridge.
+
+Post-export native selection: **35 passed, one Windows-only skip**, seven files,
+18.90 seconds, exit 0. Existing native tests exercise real legacy/managed source
+checks and source-channel/handoff behavior with local Git and loopback transport.
+Whole-Electron TypeScript no-emit and two-file ESLint pass with no errors or lint
+warnings. All three Electron development bundles compile; no app is launched or
+packaged. Companion: **133 run, 131 passed, two Linux-only skips**, 4.590 seconds,
+exit 0, task TMPDIR and bytecode disabled. No full native-suite pass is claimed.
+
+Single-request generated-launcher preflight peaks at 67.34 MiB with two sampled
+processes. Matched two-request native cached case: **134.875 to 67.234375 MiB**
+peak summed RSS, **50.2% lower**, two interpreter launches to one, four maximum
+sampled descendants to two including Git, 1240.90 to 641.82 ms. Both callers get
+identical status and separate objects; config/cache bytes remain exact; no test
+runtime survives. The actual generated bootstrap/recovery program matches a
+fresh native regeneration. A private isolated dependency/audit prefix supplies
+the existing PM Python 3.14.9 runtime; no application, SSH, network or model is used.
+Eight negative audit controls and a SQLite positive pass; base audit function ASTs
+match the exercised adapter. These Python checks are not complete OS containment.
+
+One pair with 15 ms target samples and shared RSS pages; brief children may be
+missed. Known native/Git topology and PID/RSS supervision keep the case within
+four processes and 4 GiB. This is not a whole-update/download/apply, gateway-idle,
+physical-pressure, app-adoption, Windows or model/token result. Global source-check
+serialization also delays other installs behind a slow check. Existing six-minute
+execution timeout excludes queue waiting. Configurable global helper admission
+and other helper entrypoints remain separate work.
+
+Fixture-only corrections: embedded audit prefix originally assumed __file__ under
+python -c; its trial root is now literal. A typed synthetic commit shape and the
+mock's import type were corrected. These are not product fixes or extra credited
+reds. No outside-root test fixture was run this round. The source fixture launcher
+and private baseline sibling were removed after measurement.
+
+Cumulative export adds two targets (the previously unpatched source bridge plus
+its new test): **1,026 versus 1,024**, same pinned upstream. Actual reverse/base/
+reapplication, all hashes and strict installed-checkout compatibility pass.
+Every prior target byte and patch section stays exact, including P0 SSH paths.
+Incremental/root whitespace is clean; the same 13 inherited cumulative warnings
+remain. Release inventory and exact directory/all-history secret scans gate the
+source handoff. Full standing GOAL, owner-app adoption and broader Add4/5 remain open.
+
+Release verification passes 229 inventory files / 230 intended tracked paths on
+a disposable copy; its private index and copy are removed, real index unchanged.
+The first exact directory/all-history Gitleaks scans exit 0 with no leaks across
+212 history commits. Final advisor accepts the supplied source/results with no
+concrete blocker. Protected app/config hashes match; nine recorded PID/birthtime
+identities have no survivor. Owned COW dependencies, compiler outputs, caches,
+preflight home and export objects are removed: 1,231,282,524 logical bytes, with
+no physical-space saving claimed. Final matched profiles, inputs and evidence
+remain. Final report scans and zero-SSH check gate the driver-owned commit.
+
 # v0.13.0 — POSIX Desktop memory admission
 
 [Plain-language notes and modeled-pressure Mac measurements](release-notes-v0.13.0.md).

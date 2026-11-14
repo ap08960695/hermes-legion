@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1024-path** Legion source, interface and optimization alternative
+This is the complete **1026-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,15 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Shared source-update checks (v0.14.0)
+
+Adjacent identical ordinary Desktop source checks share one running native
+process. Distinct requests serialize across installations; force and channel
+changes remain independent ordering barriers. Caller results are parsed
+separately, and completed results are not retained. [Behavior, measured native
+case and limits](release-notes-v0.14.0.md). One production target changes and one
+colocated behavior test is added; launcher recovery and P0 SSH paths are unchanged.
 
 ## Memory-aware Desktop checks (v0.13.0)
 

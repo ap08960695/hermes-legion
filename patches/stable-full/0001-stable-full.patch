@@ -8222,6 +8222,316 @@ index 0000000000000000000000000000000000000000..8e676340c5b6c9c7e29f2715f1fc38b8
 +    drain()
 +  })
 +}
+diff --git a/apps/desktop/electron/updater/checkout-source-queue.test.ts b/apps/desktop/electron/updater/checkout-source-queue.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..c8523a21864b696ee3c9335d2d118a6668ce94c5
+--- /dev/null
++++ b/apps/desktop/electron/updater/checkout-source-queue.test.ts
+@@ -0,0 +1,224 @@
++import assert from 'node:assert/strict'
++import type * as ChildProcess from 'node:child_process'
++import fs from 'node:fs'
++import os from 'node:os'
++import path from 'node:path'
++
++import { afterEach, beforeEach, test, vi } from 'vitest'
++
++import { readSourceUpdate, type SourceUpdateProbe } from './checkout-source'
++
++interface Execution {
++  command: string
++  args: string[]
++  options: { cwd: string; env: NodeJS.ProcessEnv }
++  resolve: (value: { stdout: string; stderr: string }) => void
++  reject: (error: Error) => void
++}
++
++const executions = vi.hoisted(() => [] as Execution[])
++vi.mock('node:child_process', async importOriginal => ({
++  ...await importOriginal<typeof ChildProcess>(),
++  execFile: Object.assign(() => { throw new Error('Use the native promisified process boundary') }, {
++    [Symbol.for('nodejs.util.promisify.custom')]: (command: string, args: string[], options: Execution['options']) =>
++      new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
++        executions.push({ command, args, options, resolve, reject })
++      })
++  })
++}))
++
++let root: string
++let probe: SourceUpdateProbe
++const flush = () => new Promise(resolve => setImmediate(resolve))
++const response = (branch = 'main') => ({ stdout: JSON.stringify({ supported: true, behind: -1, branch, commits: [] }), stderr: '' })
++
++beforeEach(() => {
++  assert.equal(executions.length, 0)
++  root = fs.mkdtempSync(path.join(os.tmpdir(), 'source-check-queue-'))
++  probe = { python: 'synthetic-python', git: 'synthetic-git', updateRoot: root, hermesHome: path.join(root, 'profile') }
++})
++
++afterEach(async () => {
++  // Release every process boundary, including jobs queued behind a failed assertion.
++  for (let i = 0; i < 300; i++) {
++    await flush()
++
++    if (!executions.length) { break }
++
++    for (const execution of executions.splice(0)) { execution.resolve(response()) }
++  }
++
++  vi.unstubAllEnvs()
++  fs.rmSync(root, { recursive: true, force: true })
++})
++
++test('identical ordinary checks launch once, return independent objects, and do not cache results', async () => {
++  const calls = [readSourceUpdate(probe), readSourceUpdate({ ...probe })]
++
++  try {
++    await flush()
++    assert.equal(executions.length, 1, 'duplicate checks must share one interpreter')
++    executions.shift()!.resolve(response())
++    const [first, second] = await Promise.all(calls)
++    assert.equal(first.behind, null)
++    assert.notEqual(first, second)
++    first.commits.push({ sha: 'a'.repeat(40), summary: 'caller-only', author: 'synthetic', at: 0 })
++    assert.deepEqual(second.commits, [])
++    const later = readSourceUpdate(probe)
++    calls.push(later)
++    await flush()
++    assert.equal(executions.length, 1, 'completed results are never retained')
++    executions.shift()!.resolve(response('fresh'))
++    assert.equal((await later).branch, 'fresh')
++  } finally { await settle(calls) }
++})
++
++async function settle(calls: Promise<unknown>[]) {
++  for (let i = 0; i < 300; i++) {
++    await flush()
++
++    if (!executions.length) { break }
++
++    for (const execution of executions.splice(0)) { execution.resolve(response()) }
++  }
++
++  await Promise.allSettled(calls)
++}
++
++test('force and channel changes are independent FIFO barriers between matching checks', async () => {
++  const calls = [
++    readSourceUpdate(probe),
++    readSourceUpdate({ ...probe, force: true }),
++    readSourceUpdate({ ...probe, force: true }),
++    readSourceUpdate({ ...probe, setChannel: 'stable' }),
++    readSourceUpdate(probe),
++    readSourceUpdate(probe)
++  ]
++
++  try {
++    for (let i = 0; i < 5; i++) {
++      await flush()
++      assert.equal(executions.length, 1, 'only one source check may run')
++      const execution = executions.shift()!
++      assert.equal(execution.args.includes('--force'), (i === 1 || i === 2))
++      assert.equal(execution.args.includes('--set-channel'), i === 3)
++      execution.resolve(response(String(i)))
++    }
++
++    const results = await Promise.all(calls)
++    assert.deepEqual(results.map(r => r.branch), ['0', '1', '2', '3', '4', '4'])
++  } finally { await settle(calls) }
++})
++
++test('every command input and environment snapshot remains distinct in one global queue', async () => {
++  const variants: SourceUpdateProbe[] = [
++    probe,
++    { ...probe, python: 'other-python' },
++    { ...probe, git: 'other-git' },
++    { ...probe, hermesHome: path.join(root, 'other-profile') },
++    { ...probe, updateRoot: path.join(root, 'other-install') },
++    { ...probe, branch: 'feature' },
++    { ...probe, channel: 'stable' },
++    { ...probe, cachePath: path.join(root, 'other-cache') },
++    { ...probe, branchConfigPath: path.join(root, 'other-config') }
++  ]
++
++  const calls = variants.map(p => readSourceUpdate(p))
++  vi.stubEnv('LEGION_SYNTHETIC_CHECK_IDENTITY', 'first')
++  calls.push(readSourceUpdate(probe))
++  vi.stubEnv('LEGION_SYNTHETIC_CHECK_IDENTITY', 'second')
++  calls.push(readSourceUpdate(probe))
++
++  try {
++    for (let i = 0; i < calls.length; i++) {
++      await flush()
++      assert.equal(executions.length, 1)
++      const execution = executions.shift()!
++
++      if (i < variants.length) {
++        const expected = variants[i]
++        assert.equal(execution.command, expected.python)
++        assert.equal(execution.options.cwd, expected.updateRoot)
++        assert.equal(execution.options.env.HERMES_HOME, expected.hermesHome)
++        assert.ok(execution.args.includes(expected.git))
++      } else {
++        assert.equal(execution.options.env.LEGION_SYNTHETIC_CHECK_IDENTITY, i === variants.length ? 'first' : 'second')
++      }
++
++      execution.resolve(response(String(i)))
++    }
++
++    assert.deepEqual((await Promise.all(calls)).map(r => r.branch), calls.map((_, i) => String(i)))
++  } finally { await settle(calls) }
++})
++
++test('failed executions and malformed JSON release flights without retrying or stalling later work', async () => {
++  const calls = [readSourceUpdate(probe), readSourceUpdate(probe)]
++  const failed = Promise.allSettled(calls)
++
++  try {
++    await flush()
++    assert.equal(executions.length, 1)
++    executions.shift()!.reject(new Error('synthetic process failure'))
++    assert.ok((await failed).every(r => r.status === 'rejected'))
++    const malformed = [readSourceUpdate(probe), readSourceUpdate(probe)]
++    calls.push(...malformed)
++    const malformedResults = Promise.allSettled(malformed)
++    await flush()
++    assert.equal(executions.length, 1)
++    executions.shift()!.resolve({ stdout: 'invalid JSON', stderr: '' })
++    assert.ok((await malformedResults).every(r => r.status === 'rejected'))
++    const later = readSourceUpdate(probe)
++    calls.push(later)
++    await flush()
++    assert.equal(executions.length, 1)
++    executions.shift()!.resolve(response('recovered'))
++    assert.equal((await later).branch, 'recovered')
++  } finally { await settle(calls) }
++})
++
++test('one active plus 256 pending distinct operations is bounded and overflow does not wedge admission', async () => {
++  const calls = Array.from({ length: 256 }, () => readSourceUpdate({ ...probe, force: true }))
++  calls.push(readSourceUpdate(probe), readSourceUpdate(probe))
++  const overflow = readSourceUpdate({ ...probe, force: true })
++  calls.push(overflow)
++  let overflowError: Error | undefined
++  void overflow.catch(error => { overflowError = error })
++
++  try {
++    await flush()
++    assert.equal(executions.length, 1)
++    assert.match(overflowError?.message ?? '', /busy/i)
++    await settle(calls)
++    const later = readSourceUpdate(probe)
++    calls.push(later)
++    await flush()
++    assert.equal(executions.length, 1)
++    executions.shift()!.resolve(response('available'))
++    assert.equal((await later).branch, 'available')
++  } finally { await settle(calls) }
++})
++
++test('managed launchers share their own check while legacy null status remains supported', async () => {
++  const launcher = path.join(root, '.hermes', 'bin', process.platform === 'win32' ? 'hermes.exe' : 'hermes')
++  fs.mkdirSync(path.dirname(launcher), { recursive: true })
++  fs.mkdirSync(path.join(root, 'pm'))
++  fs.writeFileSync(launcher, '')
++  const calls = [readSourceUpdate(probe), readSourceUpdate(probe)]
++
++  try {
++    await flush()
++    assert.equal(executions.length, 1)
++    const execution = executions.shift()!
++    assert.equal(execution.command, launcher)
++    assert.deepEqual(execution.args.slice(0, 2), ['--run-module', 'hermes_cli.source_check'])
++    execution.resolve(response('managed'))
++    assert.deepEqual((await Promise.all(calls)).map(r => r.branch), ['managed', 'managed'])
++    fs.rmSync(path.join(root, 'pm'), { recursive: true })
++    const legacy = readSourceUpdate(probe)
++    calls.push(legacy)
++    await flush()
++    executions.shift()!.resolve({ stdout: 'null', stderr: '' })
++    assert.equal(await legacy, null)
++  } finally { await settle(calls) }
++})
+diff --git a/apps/desktop/electron/updater/checkout-source.ts b/apps/desktop/electron/updater/checkout-source.ts
+index c93a53e419252ff7d13d44cfd79abd9cdcee85a0..ce4d95fec6dd14b5fdfb6827fe38ae90ba5eec0b 100644
+--- a/apps/desktop/electron/updater/checkout-source.ts
++++ b/apps/desktop/electron/updater/checkout-source.ts
+@@ -29,2 +29,10 @@ const execute: typeof execFile.__promisify__ = promisify(execFile)
+
++let sourceCheckFlight: {
++  key: string | null
++  response: Promise<{ stdout: string; stderr: string }>
++} | undefined
++
++let sourceCheckCount = 0
++const MAX_PENDING_SOURCE_CHECKS = 256
++
+ /** The two channels a source checkout can select from Settings. */
+@@ -112,16 +120,50 @@ export async function readSourceUpdate(probe: SourceUpdateProbe): Promise<Source
+
+-  const result: { stdout: string; stderr: string } = await execute(
+-    viaCmd ? (process.env.ComSpec ?? 'cmd.exe') : command,
+-    viaCmd
+-      ? ['/d', '/v:off', '/s', '/c', `""${command}" ${args.map((arg: string): string => `"${arg}"`).join(' ')}"`]
+-      : args,
+-    hiddenWindowsChildOptions({
+-      cwd: probe.updateRoot,
+-      env: sourceUpdateEnvironment(probe.updateRoot, probe.hermesHome),
+-      encoding: 'utf8',
+-      timeout: 360000,
+-      maxBuffer: 1024 * 1024,
+-      windowsVerbatimArguments: viaCmd
+-    })
+-  )
++  const file = viaCmd ? (process.env.ComSpec ?? 'cmd.exe') : command
++
++  const argv = viaCmd
++    ? ['/d', '/v:off', '/s', '/c', `""${command}" ${args.map((arg: string): string => `"${arg}"`).join(' ')}"`]
++    : args
++
++  const cwd = probe.updateRoot
++  const env = sourceUpdateEnvironment(cwd, probe.hermesHome)
++  const key = JSON.stringify([file, argv, cwd, Object.entries(env).sort(([a], [b]) => a.localeCompare(b))])
++  let flight = sourceCheckFlight
++
++  if (probe.force || probe.setChannel || !flight || flight.key !== key) {
++    if (sourceCheckCount >= 1 + MAX_PENDING_SOURCE_CHECKS) {
++      throw new Error('Source update checks are busy. Wait for a pending check to finish.')
++    }
++
++    sourceCheckCount++
++
++    // Failed checks must not block later independent requests.
++    const response = (flight?.response ?? Promise.resolve()).catch(() => {}).then(() => execute(
++      file,
++      argv,
++      hiddenWindowsChildOptions({
++        cwd,
++        env,
++        encoding: 'utf8',
++        timeout: 360000,
++        maxBuffer: 1024 * 1024,
++        windowsVerbatimArguments: viaCmd
++      })
++    ))
++
++    const next = { key: probe.force || probe.setChannel ? null : key, response }
++
++    const release = () => {
++      sourceCheckCount--
++
++      if (sourceCheckFlight === next) {
++        sourceCheckFlight = undefined
++      }
++    }
++
++    sourceCheckFlight = next
++    void response.then(release, release)
++    flight = next
++  }
++
++  const result = await flight.response
+
 diff --git a/apps/desktop/src/api/client.ts b/apps/desktop/src/api/client.ts
 index 68c5a3e1b74856ec19591084e20c681d92984ba5..0ae229939f6a02d078660078690cf24a19abb351 100644
 --- a/apps/desktop/src/api/client.ts
