@@ -1,3 +1,47 @@
+# v0.11.0 — Defer MCP SDK until an actual connection
+
+[Plain-language notes and Mac measurements](release-notes-v0.11.0.md).
+Three discovery gates use the existing cheap package-availability flag. The
+existing connection preparation path still loads the SDK before transport/type
+feature flags are needed. No new policy, dependency, pool or lifecycle change.
+
+Final six-case regression runs against the previous gates produced four
+metadata-import failures and two passing missing-package/safe-worker controls.
+Real SDK/stdio cold-seeded cache cases also failed the no-import assertion through
+both public registration entry points. Initial fixture corrections covered a
+too-strict loader-call assertion, native tool-name spelling, explicit lazy-state
+cleanup and an unsupported repeated-registration return assumption. Those setup
+failures are not product regressions or credited additional reds.
+
+Post-export native standard-library run: 24 passed, 3.317 s, exit 0. Actual
+installed SDK/stdio cases pass fresh cached discovery, direct registration,
+one-server concurrent first calls, warm counter/schema preservation, cold-cache
+connection fallback and a live local probe. HTTP preparation imports SDK and
+transport flags with preflight disabled; no HTTP network request is claimed.
+Five Python audit negative controls pass; this is not a complete OS sandbox.
+
+Final paired fresh-client case: 151.21875 -> 116.703125 MiB before use (22.8%
+less), one process on both; discovery255.04 ->5.20 ms, concurrent first-call
+batch55.83 ->325.74 ms, warm0.53 ->0.58 ms. Whole-case peaks199.75/199.72 MiB
+do not demonstrate peak-memory reduction. Same final case/bootstrap/peer/schema;
+20 ms sampling includes shared pages. At most three processes, below 4 GiB;
+every native case ends with no child/server/supervisor survivors.
+
+Full cumulative export has 1,020 targets, pinned to the unchanged upstream
+revision. Actual reverse/base/reapply hashes pass; all prior unrelated target
+bytes and patch sections remain exact. Incremental native whitespace is clean;
+the same thirteen inherited cumulative diagnostics remain. Canonical native
+pytest and pinned Ruff are unavailable locally, freshly checked; neither full
+native-suite nor installed-app/gateway/Linux/Windows acceptance is claimed.
+
+Companion acceptance with task TMPDIR: 133 run, 131 passed, two Linux-only
+skips, 4.111 s, exit 0. Intended-tracked-only release copy passes 226 inventory
+files (227 paths including the manifest); private copy/index removed and real
+index unchanged. Exact directory/history Gitleaks scans both exit 0, no leaks,
+209 history commits. Final report-only rescans gate the driver signal. Original
+app protected hashes and the retained trial config backup match; no app launch
+or other-machine access. Required Desktop SSH count is zero.
+
 # v0.10.0 — On-demand MCP startup for a profile
 
 [Plain-language notes, configuration and Mac measurements](release-notes-v0.10.0.md).

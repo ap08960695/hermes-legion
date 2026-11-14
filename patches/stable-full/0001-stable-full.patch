@@ -76827,6 +76827,105 @@ index 0000000000000000000000000000000000000000..f4a47147c22d782a975361b8c0081b8e
 +
 +if __name__ == "__main__":
 +    unittest.main()
+diff --git a/tests/tools/test_mcp_metadata_startup.py b/tests/tools/test_mcp_metadata_startup.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..f3c17e9b0f7064ce0869c79f1f4afc5e8ecda8f1
+--- /dev/null
++++ b/tests/tools/test_mcp_metadata_startup.py
+@@ -0,0 +1,93 @@
++"""Cached and empty MCP discovery needs no SDK until a connection is requested."""
++import copy
++import json
++from pathlib import Path
++import tempfile
++import unittest
++from unittest.mock import patch
++
++from hermes_constants import reset_hermes_home_override, set_hermes_home_override
++from tools import mcp_tool as core
++from tools import mcp_tool_discovery as discovery
++from tools.mcp_schema_cache import config_fingerprint, write_cache_entry
++from tools.mcp_tool_lifecycle import shutdown_mcp_servers
++from tools.mcp_tool_scope import _server_key
++from tools.registry import registry
++
++
++class McpMetadataStartupTests(unittest.TestCase):
++    def setUp(self):
++        self.temp = tempfile.TemporaryDirectory()
++        self.home = Path(self.temp.name)
++        token = set_hermes_home_override(self.home)
++        self.addCleanup(self.temp.cleanup)
++        self.addCleanup(reset_hermes_home_override, token)
++        self.addCleanup(shutdown_mcp_servers)
++        self.key = _server_key("metadata_echo")
++        self.addCleanup(discovery._forget_lazy_server, self.key)
++        self.servers = {"metadata_echo": {"command": "python3", "args": ["echo.py"], "lazy": True}}
++        self.tool = {"name": "echo", "description": "Cached echo", "inputSchema": {
++            "type": "object", "properties": {"value": {"type": "string"}}, "required": ["value"]},
++            "annotations": {"readOnlyHint": True}}
++        self.utility = {"name": "mcp__metadata_echo__list_prompts", "description": "Cached prompts",
++                        "parameters": {"type": "object", "properties": {}}}
++        write_cache_entry("metadata_echo", config_fingerprint(self.servers["metadata_echo"]),
++                          tools=[self.tool], utility_tools=[{"schema": self.utility, "handler_key": "list_prompts"}])
++        (self.home / "config.yaml").write_text(json.dumps({"mcp_servers": self.servers}))
++
++    def test_cached_tools_and_utilities_register_without_loading_sdk(self):
++        with patch.object(core, "_MCP_AVAILABLE", True), patch.object(
++                core, "_ensure_mcp_sdk", side_effect=AssertionError("metadata must not load SDK")):
++            names = discovery.register_mcp_servers(self.servers)
++            self.assertIn("mcp__metadata_echo__echo", names)
++            self.assertIn(self.utility["name"], names)
++            schema = copy.deepcopy(registry.get_entry("mcp__metadata_echo__echo").schema)
++            self.assertEqual(schema["parameters"], self.tool["inputSchema"])
++            self.assertEqual(registry.get_entry(self.utility["name"]).schema, self.utility)
++            self.assertFalse(core._servers)
++            self.assertIsNone(core._death_supervisor)
++
++    def test_profile_discovery_keeps_cached_schema_without_loading_sdk(self):
++        with patch.object(core, "_MCP_AVAILABLE", True), patch.object(
++                core, "_ensure_mcp_sdk", side_effect=AssertionError("metadata must not load SDK")):
++            names = discovery.discover_mcp_tools(["metadata_echo"])
++            self.assertIn("mcp__metadata_echo__echo", names)
++            self.assertEqual(registry.get_entry("mcp__metadata_echo__echo").schema["parameters"],
++                             self.tool["inputSchema"])
++            self.assertFalse(core._servers)
++            self.assertIsNone(core._death_supervisor)
++
++    def test_empty_and_disabled_registration_needs_no_sdk(self):
++        with patch.object(core, "_MCP_AVAILABLE", True), patch.object(
++                core, "_ensure_mcp_sdk", side_effect=AssertionError("empty registration must not load SDK")):
++            self.assertEqual(discovery.register_mcp_servers({}), [])
++            disabled = {name: {**cfg, "enabled": False} for name, cfg in self.servers.items()}
++            self.assertEqual(discovery.register_mcp_servers(disabled), [])
++            self.assertFalse(core._servers)
++
++    def test_empty_probe_needs_no_sdk(self):
++        (self.home / "config.yaml").write_text(json.dumps({"mcp_servers": {}}))
++        with patch.object(core, "_MCP_AVAILABLE", True), patch.object(
++                core, "_ensure_mcp_sdk", side_effect=AssertionError("empty probe must not load SDK")):
++            self.assertEqual(discovery.probe_mcp_server_tools(), {})
++
++    def test_missing_sdk_still_refuses_even_valid_cached_tools(self):
++        with patch.object(core, "_MCP_AVAILABLE", False), patch.object(
++                core, "_import_sdk_names", side_effect=AssertionError("missing SDK must not import")):
++            self.assertEqual(discovery.register_mcp_servers(self.servers), [])
++            self.assertEqual(discovery.discover_mcp_tools(), [])
++            self.assertEqual(discovery.probe_mcp_server_tools(), {})
++            self.assertFalse(core._servers)
++            self.assertNotIn(self.key, core._lazy_server_configs)
++
++    def test_safe_worker_still_refuses_cached_tools(self):
++        with patch("agent.safe_worker_policy.safe_worker_enabled", return_value=True), patch.object(
++                core, "_ensure_mcp_sdk", side_effect=AssertionError("safe worker must not import SDK")):
++            self.assertEqual(discovery.register_mcp_servers(self.servers), [])
++            self.assertEqual(discovery.discover_mcp_tools(), [])
++            self.assertFalse(core._servers)
++            self.assertNotIn(self.key, core._lazy_server_configs)
++
++
++if __name__ == "__main__":
++    unittest.main()
 diff --git a/tests/tools/test_mcp_schema_cache.py b/tests/tools/test_mcp_schema_cache.py
 index a25eb2b6899b61a41520953ee1487fefb758adbb..faf7955215253d3454f5df27d5b6801f5670fd07 100644
 --- a/tests/tools/test_mcp_schema_cache.py
@@ -85001,7 +85100,7 @@ index 0d5947682a1a62007c1f516f70aa244a47191704..cd72b2803764fd52206d4618554eaef3
 +                    cfg.setdefault("lazy", True)
          return safe_servers
 diff --git a/tools/mcp_tool_discovery.py b/tools/mcp_tool_discovery.py
-index 3eb3657d9979c84eb4aa261c2e9d8239b8fc8066..9bf00fea0bfb203a8c16deeafd4ecbde894d30cb 100644
+index 3eb3657d9979c84eb4aa261c2e9d8239b8fc8066..bdea18b6ae27cff4103a44842293f18280f6f40d 100644
 --- a/tools/mcp_tool_discovery.py
 +++ b/tools/mcp_tool_discovery.py
 @@ -260,2 +260,12 @@ def _adopt_server(name: str, server: _core.MCPServerTask) -> None:
@@ -85044,6 +85143,24 @@ index 3eb3657d9979c84eb4aa261c2e9d8239b8fc8066..9bf00fea0bfb203a8c16deeafd4ecbde
 +            logger.debug("Waiting for lazy MCP connection '%s' failed: %s", server_name, exc)
 +            return False
          logger.warning("Lazy MCP connect failed for '%s': %s%s",
+@@ -546,3 +563,3 @@ def register_mcp_servers(servers: dict[str, dict]) -> list[str]:
+         return []
+-    if not _core._ensure_mcp_sdk():
++    if not _core._MCP_AVAILABLE:
+         logger.debug("MCP SDK not available -- skipping explicit MCP registration")
+@@ -629,5 +646,4 @@ def discover_mcp_tools(allowed_mcp_names: Optional[list[str]] = None) -> list[st
+             return []
+-    # SDK import deferred to here so a config without servers — or a -t filter that keeps
+-    # none — never pays it.
+-    if not _core._ensure_mcp_sdk():
++    # Cached schemas need no SDK; actual connections load it in _prepare_run.
++    if not _core._MCP_AVAILABLE:
+         logger.debug("MCP SDK not available -- skipping MCP tool discovery")
+@@ -901,3 +917,3 @@ def probe_mcp_server_tools() -> dict[str, list[tuple]]:
+     registered and failed servers are omitted."""
+-    if not _core._ensure_mcp_sdk():
++    if not _core._MCP_AVAILABLE:
+         return {}
 diff --git a/tools/process_registry.py b/tools/process_registry.py
 index f1884286ffd778417a5f749b64282a329864112e..ac97e0080a50266490282b3019e7ff4d5e1357d2 100644
 --- a/tools/process_registry.py
