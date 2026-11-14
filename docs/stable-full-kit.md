@@ -10,6 +10,18 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Web full-text write admission (v0.8.71)
+
+Both extraction-cache payloads and full-text paging copies now check the containing
+volume before overwriting. Admission counts final UTF-8 bytes, including the paging
+cap suffix, and leaves an observed 1 GiB margin. Low or unknown space retains prior
+files; the requested extraction still returns its fresh result with an accurate
+storage-failure footer. [Native preservation and boundary proof](storage-and-backups.md#web-full-text-write-admission-v0871).
+Same 1002 targets/base and selection: only two existing runtime after hashes and
+the existing storage-pressure test after hash change. Generic spill semantics,
+derived cache, JSON-index persistence and cache policy remain unchanged. This is
+payload admission, not a quota, total-cache-size bound or automatic pruning.
+
 ## Oversized web-cache timestamps (v0.8.69)
 
 Disposable search-cache metadata with an overflowing integer timestamp now causes

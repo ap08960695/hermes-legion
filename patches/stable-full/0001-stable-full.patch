@@ -71485,15 +71485,16 @@ index 0000000000000000000000000000000000000000..95a2aebe06a446ca205dee853f991b35
 +    assert mc.get_cached_entry('s','same') is None
 diff --git a/tests/tools/test_derived_cache_disk_pressure.py b/tests/tools/test_derived_cache_disk_pressure.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..8692d3a7680b5ada4fe6b1ceeab990bdda6b640b
+index 0000000000000000000000000000000000000000..47b219249f91040d2442fa70079f1fc46da92957
 --- /dev/null
 +++ b/tests/tools/test_derived_cache_disk_pressure.py
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,271 @@
 +"""Optional cache writes preserve useful results under storage pressure/failure."""
 +
 +import errno
 +import os
 +import shutil
++from pathlib import Path
 +
 +import pytest
 +
@@ -71588,6 +71589,177 @@ index 0000000000000000000000000000000000000000..8692d3a7680b5ada4fe6b1ceeab990bd
 +    assert target.exists() is stored
 +    if stored:
 +        assert target.read_bytes() == b'\xe0\xb8\x81'
++
++
++@pytest.fixture
++def web_cache_root(tmp_path, monkeypatch):
++    import hermes_constants
++    from tools import web_result_cache as cache
++
++    root = tmp_path / "web"
++    root.mkdir()
++    monkeypatch.setattr(cache, "_cache_dir", lambda: root)
++    monkeypatch.setattr(cache, "_web_config", dict)
++    monkeypatch.setattr(hermes_constants, "get_hermes_dir", lambda *args: root)
++    usage = shutil.disk_usage(root)
++    monkeypatch.setattr(shutil, "disk_usage", lambda parent: usage._replace(free=10 * 1024**3))
++    return root
++
++
++@pytest.mark.parametrize("kind", ["cache", "paging"])
++@pytest.mark.parametrize(("content", "extra", "stored"), [
++    ("abc", 2, False), ("abc", 3, True), ("ก", 2, False), ("ก", 3, True),
++])
++def test_web_full_text_admission_counts_utf8_bytes(web_cache_root, monkeypatch, kind, content, extra, stored):
++    from tools import web_result_cache as cache, web_tools_truncate as truncate
++
++    url = "https://example.com/boundary"
++    usage = shutil.disk_usage(web_cache_root)
++    monkeypatch.setattr(shutil, "disk_usage", lambda parent: usage._replace(free=1024**3 + extra))
++    if kind == "cache":
++        cache.extract_cache_put(url, content, provider="offline-fixture")
++        hit = cache.extract_cache_get(url, provider="offline-fixture")
++        path = cache._entry_file_path(url, None, "offline-fixture")
++        assert (hit is not None) is stored
++        if stored:
++            assert hit["content"] == content and hit["cached"] is True
++        else:
++            assert not (web_cache_root / cache._INDEX_FILENAME).exists()
++    else:
++        saved = truncate._store_full_text(url, content)
++        assert (saved is not None) is stored
++        path = Path(saved) if saved is not None else None
++    if stored:
++        assert path.read_bytes() == (b"abc" if content == "abc" else b"\xe0\xb8\x81")
++    else:
++        assert not list(web_cache_root.glob("*.md"))
++
++
++@pytest.mark.parametrize("extra", [-1, 0])
++def test_web_paging_admission_counts_final_capped_text(web_cache_root, monkeypatch, extra):
++    from tools import web_tools_truncate as truncate
++
++    url = "https://example.com/capped"
++    old = Path(truncate._store_full_text(url, "old"))
++    monkeypatch.setattr(truncate, "MAX_STORED_TEXT_CHARS", 3)
++    expected = ("กขค\n\n[... stored copy truncated at 3 chars "
++                "of 5; re-extract a more specific URL for the rest ...]")
++    usage = shutil.disk_usage(web_cache_root)
++    monkeypatch.setattr(shutil, "disk_usage", lambda parent: usage._replace(
++        free=1024**3 + len(expected.encode("utf-8")) + extra))
++    saved = truncate._store_full_text(url, "กขคงจ")
++    if extra == 0:
++        assert saved == str(old) and old.read_text(encoding="utf-8") == expected
++    else:
++        assert saved is None and old.read_bytes() == b"old"
++
++
++def test_web_mixed_batch_preserves_refused_entries(web_cache_root, monkeypatch):
++    import json
++    from tools import web_result_cache as cache
++
++    a, b, c, refused = ["https://example.com/" + name for name in ("a", "b", "c", "refused")]
++    cache.extract_cache_put_many([(a, "prior a", "A"), (b, "prior b", "B")], provider="offline-fixture")
++    index = web_cache_root / cache._INDEX_FILENAME
++    before = json.loads(index.read_text(encoding="utf-8"))
++    unrelated = web_cache_root / "unrelated.md"
++    unrelated.write_bytes(b"durable fixture")
++    usage = shutil.disk_usage(web_cache_root)
++    pressures = iter([0, None, 10 * 1024**3, 10 * 1024**3])
++
++    def space(parent):
++        assert parent == web_cache_root
++        free = next(pressures)
++        if free is None:
++            raise OSError("synthetic volume observation unavailable")
++        return usage._replace(free=free)
++
++    monkeypatch.setattr(shutil, "disk_usage", space)
++    cache.extract_cache_put_many([
++        (a, "refused replacement", "changed"), (refused, "refused new", ""),
++        (b, "fresh b", "new B"), (c, "fresh c", "new C"),
++    ], provider="offline-fixture")
++    assert cache.extract_cache_get(a, provider="offline-fixture")["content"] == "prior a"
++    assert cache.extract_cache_get(refused, provider="offline-fixture") is None
++    assert cache.extract_cache_get(b, provider="offline-fixture")["content"] == "fresh b"
++    assert cache.extract_cache_get(c, provider="offline-fixture")["content"] == "fresh c"
++    after = json.loads(index.read_text(encoding="utf-8"))
++    assert after[cache._url_digest(a, None, "offline-fixture")] == before[cache._url_digest(a, None, "offline-fixture")]
++    assert cache._url_digest(refused, None, "offline-fixture") not in after
++    assert unrelated.read_bytes() == b"durable fixture"
++
++
++@pytest.mark.parametrize("measurement", ["full", "unknown"])
++def test_registered_extract_returns_fresh_text_without_persistence(web_cache_root, monkeypatch, measurement, caplog):
++    import json
++    import logging
++    import time
++    from types import SimpleNamespace
++    from agent import web_search_registry
++    from tools import web_result_cache as cache, web_tools, web_tools_extract, web_tools_truncate as truncate, website_policy
++
++    good, fresh = "https://example.com/good", "https://example.com/fresh"
++    provider_name = "offline-fixture"
++    cache.extract_cache_put_many([(good, "cached good", ""), (fresh, "previous cached page", "")], provider=provider_name)
++    truncate._store_full_text(fresh, "previous paging copy")
++    index_path = web_cache_root / cache._INDEX_FILENAME
++    index = json.loads(index_path.read_text(encoding="utf-8"))
++    index[cache._url_digest(fresh, None, provider_name)]["fetched_at"] = time.time() - cache.ttl_seconds() - 1
++    index_path.write_text(json.dumps(index), encoding="utf-8")
++    unrelated = web_cache_root / "unrelated.md"
++    unrelated.write_bytes(b"durable fixture")
++    before = {p.name: p.read_bytes() for p in web_cache_root.iterdir() if p.is_file()}
++    body = "FRESH HEAD\n" + "กขคงจ\n" * 1000 + "FRESH TAIL"
++    calls, checked, policy = [], [], []
++
++    async def extract(urls, **kwargs):
++        calls.append(list(urls))
++        return [{"url": url, "content": body, "title": "Fresh"} for url in urls]
++
++    async def safe(url):
++        checked.append(url)
++        return True
++
++    def allowed(url):
++        policy.append(url)
++        return None
++
++    def forbidden(*args, **kwargs):
++        pytest.fail("No fallback or provider switch allowed")
++
++    provider = SimpleNamespace(name=provider_name, supports_extract=lambda: True, extract=extract)
++    monkeypatch.setattr(web_tools, "_ensure_web_plugins_loaded", lambda: None)
++    monkeypatch.setattr(web_tools, "_get_extract_backend", lambda: provider_name)
++    monkeypatch.setattr(web_tools, "_load_web_config", lambda: {"keyless_rescue": False})
++    monkeypatch.setattr(web_search_registry, "get_provider", lambda name: provider)
++    monkeypatch.setattr(web_search_registry, "get_active_extract_provider", forbidden)
++    monkeypatch.setattr(web_tools, "async_is_safe_url", safe)
++    monkeypatch.setattr(website_policy, "check_website_access", allowed)
++    monkeypatch.setattr(web_tools_extract, "_rescue_extract", forbidden)
++    monkeypatch.setattr(cache, "_INDEX_MAX_ENTRIES", 1)
++    usage = shutil.disk_usage(web_cache_root)
++
++    def pressure(parent):
++        assert parent == web_cache_root
++        if measurement == "unknown":
++            raise OSError("synthetic volume observation unavailable")
++        return usage._replace(free=0)
++
++    monkeypatch.setattr(shutil, "disk_usage", pressure)
++    with caplog.at_level(logging.DEBUG):
++        for _ in range(2):
++            result = json.loads(web_tools.registry.dispatch("web_extract", {"urls": [good, fresh], "char_limit": 2000}))
++            assert "error" not in result, result
++            rows = result["results"]
++            assert rows[0]["content"] == "cached good"
++            assert "FRESH HEAD" in rows[1]["content"] and "FRESH TAIL" in rows[1]["content"]
++            assert {p.name: p.read_bytes() for p in web_cache_root.iterdir() if p.is_file()} == before
++            assert "Full text saved to:" not in rows[1]["content"]
++            assert "Full text could not be stored" in rows[1]["content"]
++    assert calls == [[fresh], [fresh]]  # The retained old entry stays expired under the same TTL.
++    assert checked == [good, fresh, good, fresh]
++    assert good in policy and fresh in policy
++    assert "Failed to cache web extract" in caplog.text and "Failed to store full web_extract text" in caplog.text
 diff --git a/tests/tools/test_document_read_dedup.py b/tests/tools/test_document_read_dedup.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..1f237a96d262f09f8bd0ff49ac3ece15ceac6c61
@@ -83544,7 +83716,7 @@ index c244fd4fa1ea32757b751592b593243b101ef0e2..a1e59122697c1a371925970f93881028
 +async def _handle_vision_analyze_uncached(image_url: str, question: str, region: Any, task_id: Any):
      # No concurrency gate around the whole analysis — the CPU burst is bounded inside the
 diff --git a/tools/web_result_cache.py b/tools/web_result_cache.py
-index c747f3f30947fd5ef4eb13d5c51e2bb85156e951..1f73a007536b56c527a2fd5881aabf3d1204319c 100644
+index c747f3f30947fd5ef4eb13d5c51e2bb85156e951..1cd6302448a39161eeefa2c39c3e723dc63be147 100644
 --- a/tools/web_result_cache.py
 +++ b/tools/web_result_cache.py
 @@ -9,2 +9,4 @@ Lives here, not in tool dispatch, so hits sit *after* every safety check and ski
@@ -83824,7 +83996,7 @@ index c747f3f30947fd5ef4eb13d5c51e2bb85156e951..1f73a007536b56c527a2fd5881aabf3d
 -    except Exception:
 +    except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError):
          return None
-@@ -285,18 +436,30 @@ def extract_cache_put(
+@@ -285,18 +436,29 @@ def extract_cache_put(
      ceiling are not cached (serving a capped copy back as if whole would silently lose the tail)."""
 -    if not content or not _cacheable(url):
 -        return
@@ -83843,8 +84015,7 @@ index c747f3f30947fd5ef4eb13d5c51e2bb85156e951..1f73a007536b56c527a2fd5881aabf3d
 +
 +def extract_cache_put_many(pages: list[tuple[str, str, str]], format: Optional[str] = None, provider: str = "") -> None:
 +    """Publish successful pages together; failed/oversized pages cannot hide the other successes."""
-+    from tools.web_tools_truncate import MAX_STORED_TEXT_CHARS
-+    from tools.spill_safety import write_text_exclusive
++    from tools.web_tools_truncate import MAX_STORED_TEXT_CHARS, _write_full_text
 +    updates = {}
 +    for url, content, title in pages:
 +        if not content or not _cacheable(url):
@@ -83853,7 +84024,7 @@ index c747f3f30947fd5ef4eb13d5c51e2bb85156e951..1f73a007536b56c527a2fd5881aabf3d
 +            file_path = _entry_file_path(url, format, provider)
 +            if len(content) > MAX_STORED_TEXT_CHARS or file_path is None:
 +                continue
-+            write_text_exclusive(file_path, content, private=False, overwrite=True)
++            _write_full_text(file_path, content)
 +            updates[_url_digest(url, format, provider)] = {
                  "url": url, "file": str(file_path), "title": title or "", "fetched_at": time.time(),
              }
@@ -84059,7 +84230,7 @@ index 5070f00ec7c7bd660ca82e141e336f292674295d..918bc9e171fec664658d64165ccaec05
 +        cached_results[position] = copy.deepcopy(bound.get(url, _result_entry(url, _NO_RESULT_ERROR)))
 +    return [cached_results[i] for i in range(len(safe_urls))]
 diff --git a/tools/web_tools_truncate.py b/tools/web_tools_truncate.py
-index d3596ba659b3615e587a42c5c1be8fae238bdd61..f333b9b9b2df715f5f822d23410d8d04207b8702 100644
+index d3596ba659b3615e587a42c5c1be8fae238bdd61..35e7289b0eb42553ac1cd51b173fff96d80210c2 100644
 --- a/tools/web_tools_truncate.py
 +++ b/tools/web_tools_truncate.py
 @@ -50,2 +50,7 @@ def convert_base64_images_to_links(text: str) -> str:
@@ -84070,6 +84241,29 @@ index d3596ba659b3615e587a42c5c1be8fae238bdd61..f333b9b9b2df715f5f822d23410d8d04
 +        return text
 +
      def _md_repl(m: re.Match[str]) -> str:
+@@ -58,2 +63,13 @@ def convert_base64_images_to_links(text: str) -> str:
+ 
++def _write_full_text(path, content: str) -> None:
++    import shutil
++    from tools.spill_safety import write_text_exclusive
++
++    # shortcut: allocation and other writers can consume the reserve; use filesystem quotas for a hard limit.
++    if shutil.disk_usage(path.parent).free - len(content.encode("utf-8")) < 1024**3:
++        raise OSError("insufficient free space to preserve the 1 GiB web text reserve")
++    # Keep cache/web readable by remote backends; retain the exclusive symlink-safe overwrite.
++    write_text_exclusive(path, content, private=False, overwrite=True)
++
++
+ def _store_full_text(url: str, content: str) -> Optional[str]:
+@@ -74,7 +90,3 @@ def _store_full_text(url: str, content: str) -> Optional[str]:
+             )
+-        from tools.spill_safety import write_text_exclusive
+-        # Deterministic name in a well-known dir: refuse symlinks (lstat-unlink + exclusive create);
+-        # same-URL re-extraction legitimately overwrites. Not private: cache/web is bind-mounted
+-        # into remote backends' container UID.
+-        write_text_exclusive(path, content, private=False, overwrite=True)
++        _write_full_text(path, content)
+         return str(path)
 diff --git a/toolsets.py b/toolsets.py
 index 7572ad12850dde68d70ad0876c10d0a32ff20b16..209cb8dbe9798bcafc95cd2a8436448def970559 100644
 --- a/toolsets.py

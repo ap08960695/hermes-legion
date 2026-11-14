@@ -459,3 +459,47 @@ writers can change actual space after observation; a hard limit requires a quota
 Extra flushes and volume observations add unmeasured packing cost. No production
 cleanup, disk saving, whole-Hermes test or global disk-full prevention is claimed.
 Owner data, ESTOP/pauses and stopped timers remain untouched.
+
+
+## Web full-text write admission (v0.8.71)
+
+Web extraction writes two kinds of optional text under the profile's web cache:
+provider/format-specific reuse payloads and paging copies for truncated responses.
+Previously neither checked volume space before the exclusive writer removed a
+previous file. Actual isolated Mac probes replace both copies and the index with
+zero volume observations under modeled full/unavailable space. This demonstrates
+missing admission, not physical disk pressure or actual data loss.
+
+One web-specific helper now checks the destination parent before either full-text
+write. It requires observed free space minus the final UTF-8 byte count to remain
+at least 1 GiB; equality is accepted. The paging check follows its existing character
+cap and counts the appended truncation suffix. Each optional copy checks separately.
+Low space raises through the existing optional-write handling; an unavailable volume
+observation follows that same path. Prior payload/paging files remain, a fully refused
+batch leaves the index exact, and only successful mixed-batch writes get new metadata.
+
+The current provider result is still returned. If paging persistence is refused,
+the footer reports that full text could not be stored and gives no saved path.
+An expired prior entry remains expired, so a later request can fetch again under
+the same TTL; a retained valid entry can still hit. No fallback, retry, route,
+profile, policy/safety check, character cap, cache key or freshness change is added.
+The shared generic spill writer's symlink-safe exclusive overwrite and remote-backend
+readability remain; no owner installation or production cache was changed.
+
+Thirteen cases join the existing storage-pressure file. Original code: eight
+behavioral failures, thirteen passes including the eight prior cases. Four ASCII/Thai
+budget rows across both writers, final capped text/suffix, mixed low/unknown/success writes,
+and repeated registered extraction calls cover real files and index bytes. The
+registered fixed-provider case keeps an unrelated hit and old copies, returns
+fresh head/tail content, exercises normal safety/policy call sites and traps
+fallback/provider switches. Both low and unknown observations are covered. All
+124 cases across eight native cache/truncation/spill files pass, including final
+exported reapplication on native Mac Python 3.14.9 (8.8 s); no tests retried/excluded.
+
+Admission covers these full-text payload writes. Existing JSON-index persistence,
+its 500-entry limit, derived-cache admission and retention policy remain unchanged.
+It does not bound all cache files or prune old payloads. Allocation, metadata and
+other writers can consume space after observation; a hard limit requires a quota.
+Extra encoding/volume checks add unmeasured cost. No total-disk guarantee, production
+cleanup, disk/RAM/model-usage saving, live provider request or full-Hermes-suite
+result is claimed. Owner data, ESTOP/pauses and stopped timers remain intact.

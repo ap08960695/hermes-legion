@@ -1,3 +1,49 @@
+# v0.8.71 — Admit optional web full-text writes before overwrite
+
+One web-specific helper now checks the destination volume against the final UTF-8
+payload size plus 1 GiB before extraction-cache or paging-text overwrite. Low or
+unknown space retains prior files; existing optional error handling returns the
+fresh provider result and an accurate storage-failure footer. Each copy checks
+independently. [Preservation, boundaries and limits](storage-and-backups.md#web-full-text-write-admission-v0871).
+
+Actual original native probes for modeled full/unavailable space observe zero
+volume checks, replace both prior copies/index and claim a saved paging path.
+No actual disk pressure/loss is claimed. Baseline: 70 native cases across four
+files. Thirteen new storage-pressure cases give eight meaningful original failures
+and thirteen passes, with no fixture/import failures. Final eight-file selection:
+124 pass, no failures/skips/retries/exclusions, 8.8 s after export/reapplication.
+Real files, UTF-8 equality/next-byte boundaries, cap suffix, mixed-batch metadata,
+prior/unrelated/index bytes, repeated actual registry dispatch and fresh text/
+truthful footer are covered. Fixed selected-provider and policy/safety boundaries
+use existing fixture seams; no external request or paid fallback is performed.
+
+Borrowed PM-selected native Python 3.14.9/dependencies and separate PM-locked
+pytest 9.1.1/asyncio 1.3.0 tools; private HOME/HERMES_HOME/TMPDIR, unchanged self-tested
+Python audit/owner-read/write/socket/process/null/leading-flag/per-PID guards,
+exit-7 propagation, one CPU compile/worker. No native full-suite, OS/native-extension
+containment, UI/service/model/fleet, HTTP2/PID4, live terminal-goal or workload claim.
+Owner installation/control/quota/ESTOP/pauses/timers untouched. Lead handles adoption
+and Linux; current read-only public-source comparison: 974/1002 match, 28 pending.
+
+Same 1002-target v0.22.5 base bf0203a and every before/unrelated after hash/selection.
+Exactly three existing patch sections/after hashes change. Temporary index export
+and installed/reverse/base/reapply checks pass. No new public file/dependency/lock/
+selection. Native source whitespace clean. Raw companion diff check returns 2 for
+one literal-space empty unified-patch context record at line 84245; no source
+whitespace error, all nonpatch whitespace clean. Patch format remains valid.
+
+This bounds full-text admission only: existing JSON-index persistence, generic
+spill behavior, derived cache and TTL/eviction remain. No quota/total-cache bound/
+automatic pruning; encoding/observation cost unmeasured. Required companion: 133
+run, 131 pass/two Linux skips, 4.456 s, exit 0. Tracked-only 222-file inventory and
+current hashes pass; both exact directory/all-history scans exit 0 with no leaks
+(201 commits). Advisor75 accepts this explicitly partial payload-admission step.
+Exact owned trial/source/test-tools/fixtures/log/home/cache/temp-index/probe tree,
+pointer and setup removed; absence verified. Borrowed runtime/source/dependencies/
+objects retained. Pre-cleanup 714016 KiB is not attributed saving. Final records,
+hashes, inventory and exact scans refresh before driver signal. Broad goal stays
+active; source installation and loaded-owner adoption remain separate.
+
 # v0.8.70 — Admit encoded archive writes against the reserve
 
 The companion retention packer checks each encoded gzip/tar write against observed
