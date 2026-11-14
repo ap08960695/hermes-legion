@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **998-path** Legion source, interface and optimization alternative
+This is the complete **999-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,16 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Compression parent metadata (v0.8.64)
+
+The shared compression-child gate uses the existing metadata reader when callable,
+while receipt-local snapshots retain their existing reader and transaction. Child
+fork/reset/delegate checks and failures keep their behavior. See [native proof and
+measurement](session-metadata-reads.md#compression-parent-checks-v0864).
+One existing runtime after hash changes; its existing upstream regression file is
+added as a patch target, giving 999. The previous 998 before hashes and other after
+hashes stay unchanged. Pinned base and native test-selection bytes remain.
 
 ## Case-alias profile links (v0.8.61)
 

@@ -1,3 +1,66 @@
+# v0.8.64 — Avoid unused context reads in compression parent checks
+
+The shared compression-child gate selects the existing metadata reader when
+callable. Receipt snapshots without that API retain their existing full reader
+and transaction. Child marker rules, parent decisions, direct token flushing and
+exception propagation remain. Callable None/error results never retry full context.
+
+Original baseline: 17 pass. Writer/read-only SQLite authorizers then expose ten
+unused-context failures with 28 controls passing. The first candidate passes 38
+focused cases but breaks two worker tests because CompressionSnapshot aliases the
+helper without a metadata API. Actual adapter regressions reproduce both absent/
+noncallable failures before compatible dispatch. Final focused selection: 43 pass,
+including callable success/None/error, exact exception identity, direct token
+flushing, original full-reader access, main/WAL/data-version preservation and
+snapshot receipt connection/savepoint/no-write/no-flush checks.
+
+Seven files pass 68 unique native cases, also after actual patch reapplication;
+no failed integration case is excluded. Repeated gates overlap. Commands under
+the isolated native test environment:
+
+```sh
+bash scripts/run_tests.sh -j 1 \
+  tests/hermes_state/test_compression_lineage_guard.py \
+  tests/hermes_state/test_session_md_export.py \
+  tests/hermes_state/test_runtime_worker_history.py \
+  tests/hermes_state/test_runtime_worker_compaction.py \
+  tests/hermes_state/test_display_projection_parity.py \
+  tests/gateway/test_session_history_canonical.py
+bash scripts/run_tests.sh -j 1 tests/gateway/test_failure_writer_ownership.py \
+  -k test_failure_owner_follows_only_live_lineage_markers
+```
+
+Other ownership-file cases are outside this selection. Prior two HTTP/four PID
+cases remain unverified. Native Mac Python 3.14.9 uses borrowed committed runtime
+and dependencies, isolated PM-locked pytest 9.1.1/asyncio 1.3.0, private HOME/
+HERMES_HOME/TMPDIR and unchanged self-tested Python owner-read/write/SQLite/socket/
+process/null guards. Each canonical run uses one worker and zero file retries.
+No Hermes service/model/fleet/UI launch or OS/native-extension containment claim.
+
+The equal-parent helper fixture reports median 0.786236 to 0.009057 ms and traced
+peak 3,823,988 to 10,142 bytes, with equal decisions and preserved DB/WAL hashes.
+These are direct-helper measurements, not receipt-snapshot, full resume, service
+RSS or representative-workload gains. See [method and limits](session-metadata-reads.md#compression-parent-checks-v0864).
+
+The pinned v0.22.5 export has 999 targets: one existing runtime after hash changes
+and one existing upstream test becomes a patch target. All previous 998 before
+hashes and other after hashes remain; native test-selection bytes are unchanged.
+Installed/reverse/base/reapply checks pass. An initial exporter refused a mistaken
+existing-target assumption before writes; its following candidate rerun is not
+export proof. Corrected roundtrip and separately named reapplied runs supply it.
+
+Native changed-source and root nonpatch whitespace checks pass. Raw root
+`git diff --check` exits 2 for exactly one literal-space empty-context record at
+`patches/stable-full/0001-stable-full.patch:66148`; no other warning. Advisor 59
+accepts this format exception; patch format and whitespace checker remain unchanged.
+Required companion: 127 run, 125 pass/two Linux-only skips, 3.924 s. Tracked-only
+222-file inventory and exact Gitleaks directory/all-history scans pass, no leaks,
+194 commits. Owned trial/pointer/setup removed and absence verified; borrowed
+runtime/objects retained. Pre-cleanup 709752 KiB is not attributed disk saving.
+Final hash/inventory/scan refresh precedes driver handoff. Read-only owner source
+comparison records 979/999 matches, 20 pending normal source/test adoption.
+No owner installation, data, service, control, quota, ESTOP, pause or timer change.
+
 # v0.8.63 — Bind snapshot CLI selection to one physical home
 
 The CLI resolves its selected home once inside controlled error handling, then

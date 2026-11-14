@@ -336,3 +336,51 @@ guard. The admitted rerun excludes only
 `test_ordinary_daemon_cli_launch_policy`; those two remain network-unadmitted and
 unverified. No socket permission or fallback is added, and no full native-suite,
 live work, memory, speed, cache or model-usage improvement is claimed this round.
+
+
+## Compression parent checks (v0.8.64)
+
+The shared compression-child gate needs only its parent's `end_reason`. Direct
+SessionDB calls now use the existing metadata reader instead of hydrating the
+parent's system prompt, tool pin and model configuration. Token-count flushing
+remains. Child branch, delegate, tool and reset checks still inspect the full
+child before the parent read; foreign inherited markers retain their meaning.
+
+The same algorithm is aliased by `CompressionSnapshot` inside a worker receipt.
+That adapter deliberately has no metadata API and must stay on its receipt
+connection. An absent or noncallable metadata reader uses the adapter's existing
+full reader. A callable reader returning None or raising never retries full
+context. No extra connection, flush, commit, SQL projection, cache, schema,
+provider request or ownership rule is added to the snapshot path.
+
+Seventeen original native lineage tests pass baseline. Writer/read-only SQLite
+authorizers then expose ten intended unused-context failures, with 28 controls
+passing. Full child rows are loaded before denying parent context columns; full
+reader denial confirms the guard. The initial unconditional metadata call passes
+38 focused tests but breaks two actual worker integration cases. Actual snapshot
+regressions reproduce absent/noncallable-reader failures before compatibility
+dispatch; callable success/None/error cases also enforce no full-reader retry.
+
+The final seven-file selection passes 68 unique native cases, including after
+export/reapply: 43 focused, lineage/export, display/resume counts, worker history/
+compaction, in-process Gateway history and one selected input-ownership case.
+No failed integration case is excluded. Tests preserve parent decisions, main/WAL
+bytes and data version, pending-token persistence, full-reader access, exception
+identity, receipt connection/transaction and absence of snapshot token flushing.
+This is synthetic native storage proof, not a running Gateway or model journey.
+
+Native Mac Python 3.14.9 compares the original function AST with the imported
+final helper using the same preloaded child and a synthetic parent with a
+1,703,936-byte prompt and a 1,048,576-character config payload. Setup and five
+warmups per variant precede seven alternating 40-call timing batches. Three
+separate 40-call tracing batches follow GC. No token delta is pending; every
+result is True and database/WAL hashes remain unchanged.
+
+| Measurement | Original parent read | Metadata parent read |
+| --- | ---: | ---: |
+| Median batch-average helper time | 0.786236 ms | 0.009057 ms |
+| Median traced batch peak | 3,823,988 bytes | 10,142 bytes |
+
+These payload-heavy direct-helper measurements exclude setup, import and other
+lineage reads. They do not measure receipt-snapshot savings, complete resume or
+Gateway latency, whole-service RSS, representative workload or provider usage.

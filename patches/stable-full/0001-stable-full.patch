@@ -41217,7 +41217,7 @@ index 0000000000000000000000000000000000000000..824b1942f89253c57b0e4ac272e0bc21
 +        self._position += length
 +        return value
 diff --git a/hermes_state_compression.py b/hermes_state_compression.py
-index b3e999dd66c55324219c30e38c6822441d26e01d..f3489c89fb0f87f22edaeddd8da8c6486278ee2d 100644
+index b3e999dd66c55324219c30e38c6822441d26e01d..6393a92f92fc63e1a302c908ef2b5d52510eba3e 100644
 --- a/hermes_state_compression.py
 +++ b/hermes_state_compression.py
 @@ -376,3 +376,4 @@ class SessionCompressionMixin:
@@ -41275,6 +41275,13 @@ index b3e999dd66c55324219c30e38c6822441d26e01d..f3489c89fb0f87f22edaeddd8da8c648
 +        from hermes_state_prefix import apply_compaction_prefix
 +        apply_compaction_prefix(self, conn, child_session_id, prefix_snapshot)
          # Carried handoff tail rows arrive without a timestamp and would otherwise be stamped
+@@ -910,3 +931,5 @@ class SessionCompressionMixin:
+             return False
+-        parent = self.get_session(parent_id)
++        # Receipt-local snapshots retain their existing reader without a second handle.
++        reader = getattr(self, "get_session_metadata", None)
++        parent = (reader if callable(reader) else self.get_session)(parent_id)
+         return bool(parent and parent.get("end_reason") == "compression")
 diff --git a/hermes_state_global_recall.py b/hermes_state_global_recall.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..ca9adce08d7c5c0f435e8ba38223e587234fce45
@@ -66133,6 +66140,149 @@ index 0000000000000000000000000000000000000000..64c9835869e795fcc74d5a4049a4cdd8
 +    row = db.get_session(sid)
 +    assert row["system_prompt"] == ("original prefix" if in_place else "legacy child prefix")
 +    assert json.loads(row["tool_names"]) == json.loads(pin)
+diff --git a/tests/hermes_state/test_compression_lineage_guard.py b/tests/hermes_state/test_compression_lineage_guard.py
+index 3686d7cd5d420512b0ffc4575aa0fb05f0a79193..55ea1c54054aba2393b0b99c64405cc27e7bdaf2 100644
+--- a/tests/hermes_state/test_compression_lineage_guard.py
++++ b/tests/hermes_state/test_compression_lineage_guard.py
+@@ -4,2 +4,4 @@ from __future__ import annotations
+ 
++from contextlib import nullcontext
++import sqlite3
+ import time
+@@ -348 +350,133 @@ def test_compression_lease_blocks_non_owner_but_allows_owner_flush(
+     ]
++
++
++@pytest.mark.parametrize("read_only", [False, True])
++@pytest.mark.parametrize("reason, source, config, parent_id, expected", [
++    ("compression", "cli", {}, "parent", True),
++    (None, "cli", {}, "parent", False),
++    ("cli_exit", "cli", {}, "parent", False),
++    ("compression", "cli", {}, "absent", False),
++    ("compression", "cli", {}, None, False),
++    ("compression", "cli", {"_branched_from": "parent"}, "parent", False),
++    ("compression", "subagent", {"_delegate_from": "parent"}, "parent", False),
++    ("compression", "cli", {"_reset_from": "parent"}, "parent", False),
++    ("compression", "tool", {}, "parent", False),
++    ("compression", "subagent", {"_branched_from": "foreign", "_delegate_from": "foreign",
++                                "_reset_from": "foreign"}, "parent", True),
++])
++def test_compression_child_gate_keeps_decisions_without_parent_context(
++    db, read_only, reason, source, config, parent_id, expected,
++):
++    prompt = "Synthetic parent context. " * 8192
++    db.create_session("parent", source="cli", system_prompt=prompt,
++                      model_config={"parent_fixture": "x" * 32768})
++    if reason is not None:
++        db.end_session("parent", reason)
++    db.create_session("child", source=source, model_config=config,
++                      parent_session_id="parent" if parent_id else None)
++    child = db.get_session("child")
++    if parent_id == "absent":
++        # A detached row can outlive its parent; the lookup must still return False.
++        child["parent_session_id"] = "absent"
++    watched = [db.db_path, db.db_path.with_name("state.db-wal")]
++    before = {p: p.read_bytes() for p in watched if p.exists()}
++    version = db._conn.execute("PRAGMA data_version").fetchone()[0]
++
++    def deny_context(action, table, column, *_):
++        if action == sqlite3.SQLITE_READ and (
++            (table == "sessions" and column in {"system_prompt", "tool_names", "model_config"})
++            or (table == "system_prompts" and column == "prompt")
++        ):
++            return sqlite3.SQLITE_DENY
++        return sqlite3.SQLITE_OK
++
++    with SessionDB(db.db_path, read_only=True) if read_only else nullcontext(db) as reader:
++        with reader._read_ctx() as conn:
++            conn.set_authorizer(deny_context)
++        try:
++            with pytest.raises(sqlite3.DatabaseError):
++                reader.get_session("parent")
++            assert reader._is_compression_child_row(child) is expected
++        finally:
++            with reader._read_ctx() as conn:
++                conn.set_authorizer(None)
++        assert reader.get_session("parent")["system_prompt"] == prompt
++    assert db._conn.execute("PRAGMA data_version").fetchone()[0] == version
++    assert {p: p.read_bytes() for p in before} == before
++
++
++def test_compression_child_gate_flushes_counts_and_propagates_read_failure(db, monkeypatch):
++    _compression_parent(db)
++    db.create_session("child", source="cli", parent_session_id="parent")
++    child = db.get_session("child")
++    # No token writer starts, so this lookup must persist the pending delta itself.
++    db._token_queue.append(("parent", {"input_tokens": 17, "api_call_count": 1}))
++    assert db._conn.execute("SELECT input_tokens FROM sessions WHERE id='parent'").fetchone()[0] == 0
++    assert db._is_compression_child_row(child) is True
++    assert tuple(db._conn.execute(
++        "SELECT input_tokens, api_call_count FROM sessions WHERE id='parent'",
++    ).fetchone()) == (17, 1)
++
++    def deny_reason(action, table, column, *_):
++        if action == sqlite3.SQLITE_READ and table == "sessions" and column == "end_reason":
++            return sqlite3.SQLITE_DENY
++        return sqlite3.SQLITE_OK
++
++    def full_context_must_not_run(*_args, **_kwargs):
++        pytest.fail("A failed metadata reader must not retry full context")
++
++    monkeypatch.setattr(db, "get_session", full_context_must_not_run)
++    with db._read_ctx() as conn:
++        conn.set_authorizer(deny_reason)
++    try:
++        with pytest.raises(sqlite3.DatabaseError):
++            db._is_compression_child_row(child)
++    finally:
++        with db._read_ctx() as conn:
++            conn.set_authorizer(None)
++
++
++@pytest.mark.parametrize("metadata", ["absent", "noncallable", "success", "missing", "error"])
++def test_compression_snapshot_keeps_reads_inside_receipt_transaction(db, metadata):
++    from hermes_state_worker_compression import CompressionSnapshot
++
++    _compression_parent(db)
++    db.create_session("child", source="cli", parent_session_id="parent")
++    child = db.get_session("child")
++    db._token_queue.append(("parent", {"input_tokens": 17, "api_call_count": 1}))
++    with db._lock:
++        conn = db._conn
++        conn.execute("SAVEPOINT compression_gate_fixture")
++        try:
++            view = CompressionSnapshot(db, conn)
++            if metadata == "noncallable":
++                view.get_session_metadata = None
++            elif metadata != "absent":
++                failure = OSError("Synthetic metadata failure")
++
++                def read_metadata(sid):
++                    if metadata == "error":
++                        raise failure
++                    if metadata == "missing":
++                        return None
++                    return dict(conn.execute("SELECT end_reason FROM sessions WHERE id=?", (sid,)).fetchone())
++
++                def full_context_must_not_run(*_args, **_kwargs):
++                    pytest.fail("A callable metadata reader must never fall back to full context")
++
++                view.get_session_metadata = read_metadata
++                view.get_session = full_context_must_not_run
++            changes = conn.total_changes
++            if metadata == "error":
++                with pytest.raises(OSError) as caught:
++                    view._is_compression_child_row(child)
++                assert caught.value is failure
++            else:
++                assert view._is_compression_child_row(child) is (metadata != "missing")
++            assert view.conn is conn and conn.in_transaction
++            assert conn.total_changes == changes
++            assert conn.execute("SELECT input_tokens FROM sessions WHERE id='parent'").fetchone()[0] == 0
++            assert len(db._token_queue) == 1
++        finally:
++            conn.execute("ROLLBACK TO compression_gate_fixture")
++            conn.execute("RELEASE compression_gate_fixture")
 diff --git a/tests/hermes_state/test_fresh_schema_atomicity.py b/tests/hermes_state/test_fresh_schema_atomicity.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..6b473f4b0decbc2856bca9cb4224eb30dbd635e8
