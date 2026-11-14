@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1038-path** Legion source, interface and optimization alternative
+This is the complete **1042-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,14 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## On-demand dashboard loading (v0.20.0)
+
+`gateway.dashboard_warmup: false` skips optional post-READY dashboard warmup,
+using the existing lazy first-request mount. Default warmup and auth-required
+preload remain intact. [Native canonical startup measurements and first-use
+tradeoff](release-notes-v0.20.0.md). Two existing targets change and four join
+the kit; all 1,036 unrelated prior targets and P0 protection remain exact.
 
 ## Gateway memory diagnostics (v0.19.0)
 

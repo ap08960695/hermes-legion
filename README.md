@@ -10,6 +10,7 @@ Historical source comments and release payloads received [privacy maintenance](d
 
 ## What is included
 
+- [v0.20.0: on-demand local dashboard loading](docs/release-notes-v0.20.0.md), an opt-out from background dashboard warmup; four canonical Mac startup cases used 14.0% less median idle RSS, with a slower first dashboard request.
 - [v0.19.0: gateway memory diagnostics](docs/release-notes-v0.19.0.md), reading one native local snapshot from the CLI, with current RSS available on macOS; no polling or model call.
 - [v0.18.0: optional on-demand gateway preset](docs/release-notes-v0.18.0.md), using existing controls to defer turn warmup and cached MCP startup; one native initialized-runner Mac pair used 19.2% less idle RSS, with longer first-use initialization.
 - [v0.17.0: profile defaults for MCP idle retirement](docs/release-notes-v0.17.0.md), an opt-in timeout that releases idle stdio peers and their supervisor; one native Mac component pair used 24.7% less idle RSS, with longer next-call latency.

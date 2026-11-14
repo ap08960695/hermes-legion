@@ -1,3 +1,66 @@
+# v0.20.0 — Optional dashboard warmup in the canonical gateway
+
+[User-visible behavior, configuration and measured tradeoff](release-notes-v0.20.0.md).
+The new `gateway.dashboard_warmup` key defaults to true. Its canonical config
+field, serialization and native loader bridge feed only the existing background
+warmup scheduling seam. Missing/invalid values keep warmup enabled; literal
+opt-out preserves the existing lazy first-request mount. Auth-required or
+already-loaded dashboard preload, session transport and lifecycle are unchanged.
+
+Before implementation, the explicit-false scheduling test failed because a
+warmup task was created; the default control passed. Actual canonical boot then
+caught an omitted config-loader bridge, reproduced by the native CLI-to-loader
+test and fixed in the shared bridge. Post-export **eight native unittest cases
+pass**, 0.456 seconds. They cover default/disabled scheduling, invalid values,
+serialization, raw unrelated settings, actual native CLI/load path, lazy HTTP
+mount/singleflight, auth-required preload selection and close-during-lifespan
+cleanup. The auth selection test uses a real listener with mocked mount, not a
+public-auth provider. Existing Uvicorn/websockets deprecation warnings remain
+visible. No existing native pytest test was altered; pytest/Ruff are unavailable,
+so no canonical native suite/lint pass is claimed.
+
+Four fresh canonical `start_gateway` lifetimes ran in ABBA order, including real
+ownership, authority/control/API, runner, cron/housekeeping, READY and awaited
+native shutdown. Both arms disabled turn warmup and configured no MCP servers or
+messaging adapters. A separate completed native CLI process applied the single
+key before each backend started. Initial config backups matched; only the
+effective boolean differed and all config bytes stayed exact during each run.
+Idle was fixed at three seconds after READY, explicitly awaiting default warmup.
+Opt-out kept the dashboard module unloaded until first request. No legacy TUI
+server was loaded.
+
+Default idle RSS **213.578125 / 213.890625 MiB**, opt-out **183.859375 /
+183.703125 MiB**; medians **213.734375 → 183.781250 MiB**, lower by
+**29.953125 MiB / 14.014%**, passing the frozen 5% and 10 MiB gate. Median first
+real dashboard health request **16.753 → 473.287 ms**; second **2.203 → 1.117 ms**.
+The series does not establish a second-request speed gain. Median lifetime peak
+**226.695313 / 226.679688 MiB** is essentially unchanged. Import cost moves later.
+Health responses returned 200 with equal payloads; route signatures matched,
+protected requests returned 401 in every case, native runner/authority bindings
+and withheld-token policy remained. All lifetimes stopped with zero descendants.
+
+Outside recursive 20 ms samples observed one native process per lifetime, plus
+one excluded observer; total extra RAM stayed below 4 GiB. RSS includes shared
+pages and can miss brief peaks. This is synthetic canonical local startup and
+dashboard API evidence, not app UX, messaging/model/public-auth/other-platform
+acceptance or a general production saving. Preliminary config-in-process and
+missing-bridge runs are retained privately, superseded rather than repeats.
+
+The kit has **1,042 targets**: two prior targets change and four join it. All
+1,036 unrelated prior rows/source bytes/patch sections, including P0 Desktop
+fan-out protection, remain exact. Actual reverse/base/reapply/all-after-hashes,
+strict installed compatibility, companion suite, release inventory and secret
+scan results gate the driver handoff. The existing preset remains unchanged;
+application and proof limits are documented in the release notes.
+
+Companion **133 run, 131 pass, two Linux-only skips**, 4.425 seconds. The
+tracked-only disposable release copy passes **238 files / 239 intended paths**;
+its copy and private index are removed, the real index unchanged. Exact
+Gitleaks directory/history scans both exit 0 with no leaks, 218 history commits.
+Eight audit negative controls pass; protected app/config backups and all source
+hashes match, ten recorded PID/birth identities are absent and the owned-runtime
+scan is empty. Final report/preservation scans gate the driver signal.
+
 # v0.19.0 — Native gateway memory command and Mac current RSS
 
 [Usage, matched measurements and limitations](release-notes-v0.19.0.md).

@@ -32768,6 +32768,32 @@ index d737ae11b26e78579c1b8f41284d4528b6487c20..ddc0637c041c0e71b4b5a962ab607236
 +            return min(finite)
 +    return _finite_limit(Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"))
  
+diff --git a/gateway/config.py b/gateway/config.py
+index 8f97b5bd260b95bb6e952bf170cb963f0afd64e6..8901ccfc1e1d7c23b4de1bbb4a2050e0c67b0ca7 100644
+--- a/gateway/config.py
++++ b/gateway/config.py
+@@ -650,2 +650,3 @@ class GatewayConfig:
+     profile_routes: list = field(default_factory=list)  # gateway/profile_routing.py
++    dashboard_warmup: bool = True
+
+@@ -655,3 +656,3 @@ class GatewayConfig:
+         "stt_echo_transcripts", "group_sessions_per_user", "thread_sessions_per_user",
+-        "max_concurrent_sessions", "multiplex_profiles",
++        "max_concurrent_sessions", "multiplex_profiles", "dashboard_warmup",
+         "on_all_adapters_down",
+@@ -788,2 +789,3 @@ class GatewayConfig:
+             multiplex_profiles=None if multiplex_profiles is None else _coerce_bool(multiplex_profiles, True),
++            dashboard_warmup=_bool_token(pick("dashboard_warmup")) is not False,
+             room_link_url=room_link_url if isinstance(room_link_url, str) else None,
+diff --git a/gateway/config_loader.py b/gateway/config_loader.py
+index 3328704ceb78474fae84f2d8646841893b076167..817af49e61172a91ec0bc0140b1d8c845ed2aae4 100644
+--- a/gateway/config_loader.py
++++ b/gateway/config_loader.py
+@@ -97,3 +97,3 @@ _TOPLEVEL_BRIDGE: tuple = (
+     *_presence(
+-        "reset_triggers", "always_log_local", "write_sessions_json", "loop_watchdog",
++        "reset_triggers", "always_log_local", "write_sessions_json", "loop_watchdog", "dashboard_warmup",
+         "loop_watchdog_probe_interval_s", "loop_watchdog_probe_timeout_s", "loop_watchdog_max_strikes",
 diff --git a/gateway/control_socket.py b/gateway/control_socket.py
 index f5a8122f18c15dee89f7ec5fcbae8803fdabf816..4637ac9e96649f7aa67b83682fbb5e3d16872959 100644
 --- a/gateway/control_socket.py
@@ -32894,6 +32920,15 @@ index dd51a6f273b1112217d3c0f1001537b95074d1c1..ebb48a88a870c4d7cb9cf1e980b9eb4d
 +                if agent is None or id(agent) in running_ids or not transcript_persistence_caught_up(agent):
 +                    continue  # Never discard a live or not-yet-durable transcript.
                  last_activity = getattr(agent, "_last_activity_ts", None)
+diff --git a/gateway/run_api.py b/gateway/run_api.py
+index cbb599dcacc02ac7ef193703c027c6df002af9d6..fbeb34374388a0ca908375481621618d624f6fa4 100644
+--- a/gateway/run_api.py
++++ b/gateway/run_api.py
+@@ -209,2 +209,4 @@ def warm_gateway_dashboard(runner) -> None:
+     clients — Desktop, the dashboard SPA — call its routes right away). Never raises."""
++    if getattr(getattr(runner, "config", None), "dashboard_warmup", True) is False:
++        return
+     handle = getattr(runner, "session_api", None)
 diff --git a/gateway/run_bootstrap.py b/gateway/run_bootstrap.py
 index 0a682990e7ffb6f3ec6e49c5a1b8c43f5caf3797..fabf449fe12218476d1528c44b495b38a9e07f0f 100644
 --- a/gateway/run_bootstrap.py
@@ -35429,7 +35464,7 @@ index cc90cbb213f6fe92a64679b37395b39b7da85c26..6255d1886094e705b1e5761d8bf07b65
 +
  def load_newest_good_backup(config_path: Path) -> Optional[dict]:
 diff --git a/hermes_cli/config_defaults.py b/hermes_cli/config_defaults.py
-index 63ff490ee732eca4f4d604c29d221f4704b5969c..a3a9bd432aac2e15f0db6d722a7f2a159c48c1ee 100644
+index 63ff490ee732eca4f4d604c29d221f4704b5969c..abb237b858522e12b4c1aae921a32a44fa457600 100644
 --- a/hermes_cli/config_defaults.py
 +++ b/hermes_cli/config_defaults.py
 @@ -34,2 +34,3 @@ DEFAULT_CONFIG = {
@@ -35526,6 +35561,11 @@ index 63ff490ee732eca4f4d604c29d221f4704b5969c..a3a9bd432aac2e15f0db6d722a7f2a15
 -        # boards and both dispatch lanes. None = ~MemTotal / 512 MiB clamped to [2, 8]; where
 -        # MemTotal is unreadable (macOS/Windows) None means no cap.
          # Global concurrency cap (#33488): when set to a positive int, the HOST never has more than N tasks
+@@ -2114,2 +2134,4 @@ DEFAULT_CONFIG = {
+     "gateway": {  # Gateway settings (messaging platforms: Telegram, Discord, Slack, ...).
++        # False keeps the local dashboard cold until its first request; auth-required preload still wins.
++        "dashboard_warmup": True,
+         "unmanaged_idle_exit_seconds": 600,  # client-auto-started gateway only; 0 disables
 diff --git a/hermes_cli/config_effective.py b/hermes_cli/config_effective.py
 index ac32724b3908508cf18f2787eba33f414920a904..651733a87888936533687f63c57ccbd2fe4e6cc2 100644
 --- a/hermes_cli/config_effective.py
@@ -57364,6 +57404,194 @@ index a338fefee85e09bcdd9b66982540611d62b26b18..4389454e38092ec2ab16fbeab88830e2
 +        cfg = {'auth': {'adopt_external_logins': False},
 +               'model': {'provider': 'anthropic', 'default': 'primary-model', 'base_url': primary.base_url},
                 'providers': {'box': {'base_url': backup.base_url, 'api_key': 'sk-different-account'}},
+diff --git a/tests/gateway/test_dashboard_warmup_policy.py b/tests/gateway/test_dashboard_warmup_policy.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..5dca765a9b92ed21b4236d1c5ebdc911dace4492
+--- /dev/null
++++ b/tests/gateway/test_dashboard_warmup_policy.py
+@@ -0,0 +1,182 @@
++"""Gateway dashboard warmup is optional; lazy mounting and lifecycle remain native."""
++import asyncio
++import argparse
++import contextlib
++import io
++import json
++from pathlib import Path
++import sys
++import tempfile
++from types import SimpleNamespace
++import unittest
++from unittest.mock import AsyncMock, patch
++
++from gateway.config import GatewayConfig
++from gateway.run_api import GatewayDashboardMount, start_gateway_api, stop_gateway_api, warm_gateway_dashboard
++
++
++class DashboardWarmupSchedulingTests(unittest.IsolatedAsyncioTestCase):
++    async def test_disabled_policy_does_not_schedule_mount(self):
++        runner = SimpleNamespace(config=SimpleNamespace(dashboard_warmup=False))
++        mount = GatewayDashboardMount(runner, SimpleNamespace())
++        mount.ensure = AsyncMock()
++        runner.session_api = SimpleNamespace(app=mount)
++        warm_gateway_dashboard(runner)
++        task = getattr(runner, '_gateway_dashboard_warmup', None)
++        if task is not None:
++            await task
++        self.assertIsNone(task)
++        mount.ensure.assert_not_awaited()
++
++    async def test_default_policy_schedules_existing_mount(self):
++        runner = SimpleNamespace()
++        mount = GatewayDashboardMount(runner, SimpleNamespace())
++        mount.ensure = AsyncMock()
++        runner.session_api = SimpleNamespace(app=mount)
++        warm_gateway_dashboard(runner)
++        await runner._gateway_dashboard_warmup
++        mount.ensure.assert_awaited_once()
++
++    async def test_invalid_injected_policy_does_not_opt_out(self):
++        runner = SimpleNamespace(config=SimpleNamespace(dashboard_warmup=None))
++        mount = GatewayDashboardMount(runner, SimpleNamespace())
++        mount.ensure = AsyncMock()
++        runner.session_api = SimpleNamespace(app=mount)
++        warm_gateway_dashboard(runner)
++        await runner._gateway_dashboard_warmup
++        mount.ensure.assert_awaited_once()
++
++
++class DashboardWarmupConfigTests(unittest.TestCase):
++    def test_missing_invalid_and_recognized_values(self):
++        for value in (None, '', 'invalid', [], {}, 2, float('inf')):
++            with self.subTest(value=value):
++                self.assertTrue(GatewayConfig.from_dict({'gateway': {'dashboard_warmup': value}}).dashboard_warmup)
++        self.assertTrue(GatewayConfig.from_dict({}).dashboard_warmup)
++        for value in (False, 'false', 'off', 0):
++            with self.subTest(value=value):
++                config = GatewayConfig.from_dict({'gateway': {'dashboard_warmup': value}})
++                self.assertFalse(config.dashboard_warmup)
++                self.assertFalse(GatewayConfig.from_dict(config.to_dict()).dashboard_warmup)
++        self.assertTrue(GatewayConfig.from_dict({'dashboard_warmup': True,
++                                               'gateway': {'dashboard_warmup': False}}).dashboard_warmup)
++
++    def test_native_cli_sets_one_key_without_replacing_profile(self):
++        from hermes_cli.config import DEFAULT_CONFIG, config_command, read_user_config_raw
++        from hermes_cli.subcommands.config import build_config_parser
++        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
++
++        self.assertTrue(DEFAULT_CONFIG['gateway']['dashboard_warmup'])
++        with tempfile.TemporaryDirectory() as directory:
++            home = Path(directory)
++            original = {'model': {'default': 'synthetic', 'provider': 'custom'},
++                        'credential_pool': {'synthetic': []}, 'fallback_model': [],
++                        'gateway': {'multiplex_profiles': False}, 'unrelated': {'preserve': True}}
++            path = home / 'config.yaml'
++            path.write_text(json.dumps(original) + '\n')
++            backup = path.read_bytes()
++            token = set_hermes_home_override(home)
++            try:
++                parser = argparse.ArgumentParser()
++                build_config_parser(parser.add_subparsers(), cmd_config=config_command)
++                with contextlib.redirect_stdout(io.StringIO()):
++                    args = parser.parse_args(['config', 'set', 'gateway.dashboard_warmup', 'false'])
++                    args.func(args)
++                output = io.StringIO()
++                with contextlib.redirect_stdout(output):
++                    args = parser.parse_args(['config', 'get', 'gateway.dashboard_warmup', '--json'])
++                    args.func(args)
++                self.assertIs(json.loads(output.getvalue()), False)
++                expected = {**original, 'gateway': {**original['gateway'], 'dashboard_warmup': False}}
++                self.assertEqual(read_user_config_raw(path), expected)
++                self.assertFalse(GatewayConfig.from_dict(read_user_config_raw(path)).dashboard_warmup)
++                from gateway.config import load_gateway_config
++                self.assertFalse(load_gateway_config().dashboard_warmup)
++            finally:
++                reset_hermes_home_override(token)
++            self.assertEqual(json.loads(backup), original)
++
++
++class DashboardLazyMountTests(unittest.IsolatedAsyncioTestCase):
++    def make_web(self, entered, release, exits):
++        @contextlib.asynccontextmanager
++        async def lifespan(app):
++            entered.set()
++            if release is not None:
++                await release.wait()
++            try:
++                yield
++            finally:
++                exits.append(True)
++
++        class App:
++            state = SimpleNamespace(gateway_runner=None)
++            router = SimpleNamespace(lifespan_context=lifespan)
++
++            async def __call__(self, scope, receive, send):
++                await send({'type': 'http.response.start', 'status': 200, 'headers': []})
++                await send({'type': 'http.response.body', 'body': b'synthetic dashboard'})
++
++        return SimpleNamespace(app=App(), _configure_auth_gate=lambda *args: None)
++
++    async def test_first_requests_mount_once_after_opt_out(self):
++        entered, exits = asyncio.Event(), []
++        web = self.make_web(entered, None, exits)
++        runner = SimpleNamespace(config=GatewayConfig(dashboard_warmup=False), session_authority=object())
++        mount = GatewayDashboardMount(runner, SimpleNamespace(bound_host='127.0.0.1', bound_port=1))
++        runner.session_api = SimpleNamespace(app=mount)
++        warm_gateway_dashboard(runner)
++        self.assertFalse(mount.loaded)
++        messages = []
++
++        async def send(message):
++            messages.append(message)
++
++        with patch.dict(sys.modules, {'hermes_cli.web_server': None}), patch(
++            'importlib.import_module', return_value=web
++        ) as load:
++            await asyncio.gather(*(mount({'type': 'http'}, AsyncMock(), send) for _ in range(2)))
++        load.assert_called_once_with('hermes_cli.web_server')
++        self.assertTrue(mount.loaded and entered.is_set())
++        self.assertEqual([m['status'] for m in messages if m['type'] == 'http.response.start'], [200, 200])
++        self.assertIs(web.app.state.gateway_runner, runner)
++        self.assertTrue(web.app.state.withhold_session_token)
++        await mount.close()
++        self.assertEqual(exits, [True])
++        self.assertIsNone(web.app.state.gateway_runner)
++
++
++    async def test_close_during_lifespan_entry_never_leaves_mount_bound(self):
++        entered, release, exits = asyncio.Event(), asyncio.Event(), []
++        web = self.make_web(entered, release, exits)
++        runner = SimpleNamespace(session_authority=object())
++        mount = GatewayDashboardMount(runner, SimpleNamespace(bound_host='127.0.0.1', bound_port=1))
++        with patch.dict(sys.modules, {'hermes_cli.web_server': web}):
++            task = asyncio.create_task(mount.ensure())
++            await asyncio.wait_for(entered.wait(), 2)
++            await mount.close()
++            release.set()
++            with self.assertRaisesRegex(RuntimeError, 'stopped'):
++                await task
++        self.assertFalse(mount.loaded)
++        self.assertEqual(exits, [True])
++        self.assertIsNone(web.app.state.gateway_runner)
++
++
++class DashboardAuthPreloadTests(unittest.IsolatedAsyncioTestCase):
++    async def test_auth_required_listener_preloads_despite_opt_out(self):
++        runner = SimpleNamespace(config=GatewayConfig(dashboard_warmup=False), session_authority=object())
++        with patch('hermes_cli.web_server_boundary._dashboard_public_hosts',
++                   return_value=frozenset({'example.invalid'})), patch.object(
++            GatewayDashboardMount, 'ensure', new_callable=AsyncMock
++        ) as ensure:
++            handle = await start_gateway_api(runner)
++            try:
++                self.assertTrue(handle.app._state.auth_required)
++                ensure.assert_awaited_once()
++            finally:
++                await stop_gateway_api(handle)
++
++
++if __name__ == '__main__':
++    unittest.main()
 diff --git a/tests/gateway/test_derived_session_after_delete.py b/tests/gateway/test_derived_session_after_delete.py
 index 85c8ef62c936e7b33a2855c46f623b87b5f1b4e0..1f4d6406d6076b623ce6e8026079fa1d3ec41fb9 100644
 --- a/tests/gateway/test_derived_session_after_delete.py
@@ -90142,10 +90370,10 @@ index a78c4430c343a914ac9c6945084290ba62bb53fd..1adbea36a90cc5c3d26015f2e21b1796
 +
      case "paragraph":
 diff --git a/website/docs/developer-guide/gateway-monitoring.md b/website/docs/developer-guide/gateway-monitoring.md
-index 8963c052e46ba793f39238d4aff716256226635e..03cc1e330189f230d6cd164c5eff3bb6c568a703 100644
+index 8963c052e46ba793f39238d4aff716256226635e..5c4b1f12b5584b578bfaffa79488448bc3321561 100644
 --- a/website/docs/developer-guide/gateway-monitoring.md
 +++ b/website/docs/developer-guide/gateway-monitoring.md
-@@ -7,2 +7,31 @@ description: "Health export, structured diagnostics, fleet queries and how to ex
+@@ -7,2 +7,55 @@ description: "Health export, structured diagnostics, fleet queries and how to ex
 
 +## Local memory snapshot
 +
@@ -90175,6 +90403,30 @@ index 8963c052e46ba793f39238d4aff716256226635e..03cc1e330189f230d6cd164c5eff3bb6
 +action follows a failure.
 +
 +## Exported service health
++
++### Keep an unused local dashboard cold
++
++The gateway normally warms the dashboard after publishing READY. To leave a
++loopback dashboard unloaded until its first HTTP/dashboard request, set
++`gateway.dashboard_warmup` to `false` with the native config CLI. The default is
++`true`; missing or unrecognized values preserve warmup. Recognized boolean
++tokens follow the gateway parser. The running gateway uses its launch-profile
++configuration, including when it serves several profiles.
++
++Back up the selected profile first and preserve the old value, then run
++`hermes config set gateway.dashboard_warmup false`. Adopt the setting during the
++supported idle lifecycle; this command does not restart or interrupt work.
++Restore the previous value with `config set`, or `hermes config unset
++gateway.dashboard_warmup` if it was absent.
++
++This skips only optional background scheduling. A listener requiring dashboard
++authentication still preloads its auth providers, and an already-loaded
++dashboard stays loaded. First-request mounting, concurrent singleflight,
++lifespan cleanup, native session WebSockets and authorization retain their
++existing paths. No dashboard unload or idle-retirement policy is added.
++The first dashboard request pays the deferred import cost; active-dashboard
++peak RAM need not decrease. Client-owned idle-exit gateways already skip this
++warmup, so this setting adds no saving there.
 +
  Service health monitoring plus structured operational diagnostics for the
 diff --git a/website/docs/developer-guide/relay-shared-metrics.md b/website/docs/developer-guide/relay-shared-metrics.md
