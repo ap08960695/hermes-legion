@@ -92,3 +92,54 @@ storage-pressure controls remain. Python runs use private HOME/HERMES_HOME/TMPDI
 one worker, no file retries and the unchanged scoped audit guard. OS/native-extension
 containment and live service/model/UI use remain unverified. Installation/adoption
 and Linux/workload validation are separate; owner controls remain untouched.
+
+
+## Overflowing TTL configuration (v0.8.76)
+
+The shared web-cache TTL reader now catches `OverflowError` alongside its existing
+conversion errors. A JSON/YAML integer such as `10**400` or its negative survives
+normal config loading but cannot convert to a Python float. Previously, a cold search with caching enabled
+failed before reaching its selected provider, and otherwise usable stored
+extraction entries could fail during their TTL check. Both signs now use the
+established20-minute invalid-conversion default.
+
+This is an exception-tuple-only change. It does not rewrite config, introduce a
+numeric limit, sign-clamp the original integer, or alter normal TTL policy. A
+representable high value still clamps to1440 minutes; low values still clamp to
+one minute. Infinity/numeric strings retain their original conversion/clamp
+behavior, including a string such as `1e400`. Null, bad strings/types, booleans,
+fractional values and the existing NaN behavior remain. Defaulting a conversion
+failure is distinct from clamping a value that converted successfully.
+
+Two invariant tests add24 cases to the existing disk-sharing file before product
+edit. Each fixture writes a real synthetic `config.yaml` and verifies the raw
+value through both native config readers; no replacement TTL/config getter can
+hide the failure. Signed direct TTL cases and four enabled actual registry cases
+fail on the original (six failures/38 passes), while fourteen other config controls,
+four cache-disabled controls and all20 previous cases pass. Source config bytes
+remain unchanged. Native config loading can create its ordinary synthetic
+last-known-good backup inside the isolated home; no owner config is involved.
+
+Controlled wall and monotonic clocks plus aligned derived-file mtimes verify
+memory memo, a separate memo's disk reuse, and extraction hits just before and
+exactly at expiry. Read/expiry operations preserve seeded cache bytes. Actual
+registry search uses the configured fixture backend, normal provider selection,
+fixed provider responses and the original managed-fallback policy; keyless rescue
+is disabled and trapped. Success/error/repeat counts, returned provider errors,
+healthy-query isolation and `cache_enabled=False` retain their expected behavior.
+No external provider, model or network request runs.
+
+The baseline has102 passes/five files. After exported reverse/base/reapplication,
+all126 cases in those complete files pass in6.9s, zero failures/skips/retries/
+exclusions: result43,sharing44,metadata18,eviction11,batch10. A separate native
+post-reapplication probe reads both signed real configs, returns1200 seconds and
+preserves their bytes; imported runtime path/hash matches the exported manifest.
+
+No performance, workload cache-hit-rate, billed saving, full native suite, live
+provider or application result is claimed. Cache keys, clocks, byte/count/reserve
+limits, locks, profiles, safety/authorization, selected provider and fallback
+rules remain unchanged. This restores the normal requested provider path where
+config conversion previously aborted; it does not add retries or another provider.
+Tests use private homes and borrowed read-only PM-selected Mac Python3.14.9/deps.
+Current read-only owner comparison is972/1004 matching targets,32 pending normal
+lead adoption and Linux validation. Owner state and controls remain untouched.

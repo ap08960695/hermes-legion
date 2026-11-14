@@ -1,3 +1,56 @@
+# v0.8.76 — Recover overflowing web-cache TTL configuration
+
+The shared TTL float-conversion handler now includes `OverflowError` in its
+existing exception tuple. Signed unrepresentable integers use the established
+20-minute default; representable extremes/string/nonfinite clamp behavior stays.
+No config rewrite, sign clamp, new numeric limit, provider fallback or retry.
+[Native real-config and cache/registry proof](search-cache-memory.md#overflowing-ttl-configuration-v0876).
+
+Baseline102 passes/five files. Two invariant tests add24 cases before product edit:
+meaningful red six failures/38 passes, no setup/import failures. Both signed values
+reach the native TTL reader through actual config loading; fresh-memo registered
+search fails before its selected provider on the original. Fourteen other config
+controls, four disabled-cache controls and all20 prior cases pass. Source config
+bytes remain exact; ordinary synthetic LKG backup creation stays in private homes.
+Controlled wall/monotonic clocks and derived mtimes cover memory/disk/extraction
+hits before/exactly at expiry, retaining seeded cache bytes. Actual registry calls
+preserve success/error/repeat counts, selected backend/provider, healthy queries
+and disabled caching; original managed policy stays, rescue is disabled/trapped.
+
+Actual exported reverse/base/reapplication:126 passes/five complete files, zero
+failures/skips/retries/exclusions,6.9s. Result43/sharing44/metadata18/eviction11/batch10.
+Post-reapplication native probe reads both signed configs, returns1200 seconds,
+preserves input bytes, and verifies imported path/hash against export. No actual
+provider/model/network call. No performance, usage or workload saving measurement.
+
+Borrowed PM-selected3.14.9/deps read-only, separate PM-locked pytest9.1.1/asyncio
+1.3.0, private HOME/HERMES_HOME/TMPDIR and unchanged scoped Python owner-read/write/
+SQLite/network/process/null/leading-flag/per-PID negatives/exit7; one compile/test worker.
+No full native suite/pinned whole-source lint/health/OS containment, live API/UI/
+service/fleet/original-session/terminal-goal proof. Owner source/data/apps/config/
+control/quota/ESTOP/pauses/stopped timers remain untouched.
+
+Same1004 targets/basebf0203a(v0.22.5)/all before/unrelated after hashes/sections and
+selection. Only existing result-cache runtime/disk-sharing test after hashes and
+sections change. Temp-index full-index binary-U1 installed/reverse/check/base/
+reapply pass; native/raw-root whitespace clean. Read-only owner972/1004 match,32
+pending normal lead adoption/Linux validation. No new public file/dependency/lock.
+Required companion:133 run,131 pass/two Linux skips,4.415s,exit0. Tracked-only222
+inventory/current hashes/exact7paths/empty real index/unchanged selection/neutral
+history pass; copy removed. Both exact directory/history secret scans pass
+(206 commits,no leaks). Advisors84/85 accept bounded design/handoff using supplied
+evidence only; actual mandated CLI/session/outcome recorded privately.
+
+All own native/probe/export/companion/release/scan/advisor handles are terminal.
+Separate-argv Git common/object-path checks establish owned clone paths and
+independent borrowed owner stores before exact cleanup. Owned trial/source/test-
+tools/fixtures/home/log/cache/synthetic LKG/temp-index/probe/export tree, pointer
+and setup removed; absence and borrowed resources/protected hashes verified.
+Pre-cleanup729388KiB is not attributed saving; no owner backup created or purged.
+Final records/hashes/inventory/scope/index/preservation/selection/whitespace/exact
+scans precede subject-only driver handoff. Broad standing goal remains active.
+
+
 # v0.8.75 — Prepare request-cache admission once before locking
 
 Three changed production lines compute the existing vision request-cache admission

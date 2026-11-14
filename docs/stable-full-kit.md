@@ -10,6 +10,16 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Web-cache TTL conversion recovery (v0.8.76)
+
+Unrepresentable integers in `web.cache_ttl_minutes` now use the existing20-minute
+invalid-conversion default. The shared reader no longer aborts search or usable
+extraction-cache hits with `OverflowError`. [Actual config, expiry and registry
+proof](search-cache-memory.md#overflowing-ttl-configuration-v0876).
+Representable values, strings, clamp behavior and every cache/provider control
+remain. Same1004 targets/base/selection: only the existing runtime/disk-sharing test
+after hashes/sections change. No new dependency, config, range, fallback or cache.
+
 ## Request-cache completion admission (v0.8.75)
 
 The vision request cache now computes each owner's admission once before taking

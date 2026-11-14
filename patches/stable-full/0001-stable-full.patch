@@ -78252,10 +78252,10 @@ index 0000000000000000000000000000000000000000..ebde5deada5d2020f7299c29ae29bd53
 +    assert cache.extract_cache_get(bad, provider=provider.name)["content"] == "fresh bad"
 diff --git a/tests/tools/test_web_search_disk_sharing.py b/tests/tools/test_web_search_disk_sharing.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..557348eeb975c1498cfe556c6bb0b03d29309637
+index 0000000000000000000000000000000000000000..8d296915c47949b29cb134dad3e72f8ba506200c
 --- /dev/null
 +++ b/tests/tools/test_web_search_disk_sharing.py
-@@ -0,0 +1,175 @@
+@@ -0,0 +1,273 @@
 +"""Persistent memo keeps the existing search semantics across processes/profiles."""
 +import pytest
 +
@@ -78431,6 +78431,104 @@ index 0000000000000000000000000000000000000000..557348eeb975c1498cfe556c6bb0b03d
 +        assert again == {'success': True, 'data': {'web': value['data']['web'][:5]}}
 +        provider.search.assert_called_once_with(query, 10)
 +        assert other.read_bytes() == other_bytes
++
++
++def _ttl_config(tmp_path, monkeypatch, raw, *, enabled=True):
++    import json
++    from hermes_cli import config
++    from tools import web_tools
++
++    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
++    path = tmp_path / 'config.yaml'
++    path.write_text(json.dumps({'web': {'backend': 'offline-fixture', 'keyless_rescue': False,
++                                      'cache_enabled': enabled, 'cache_ttl_minutes': raw}}))
++    before = path.read_bytes()
++    assert config.get_config_path() == path
++    assert web_tools._load_web_config()['cache_ttl_minutes'] == raw
++    assert cache._web_config()['cache_ttl_minutes'] == raw
++    assert path.read_bytes() == before
++    return path, before
++
++
++@pytest.mark.parametrize('raw, seconds', [
++    (10**400, 1200), (-10**400, 1200), (None, 1200), ('bogus', 1200), ({}, 1200),
++    (0, 60), (99999, 86400), ('1e400', 86400), ('-1e400', 60), ('nan', 60),
++    ('inf', 86400), ('-inf', 60), (True, 60), (False, 60), (2.5, 150), ('20', 1200),
++], ids=['overflow-positive', 'overflow-negative', 'null', 'invalid-string', 'invalid-type',
++        'floor', 'ceiling', 'overflow-string', 'negative-overflow-string', 'nan',
++        'infinity', 'negative-infinity', 'true', 'false', 'fraction', 'numeric-string'])
++def test_real_config_ttl_defaults_and_cache_expiry(tmp_path, monkeypatch, raw, seconds):
++    import os
++    from tools import web_search_disk_cache as disk
++
++    path, before = _ttl_config(tmp_path, monkeypatch, raw)
++    assert cache.ttl_seconds() == seconds
++    clock = [2000000000.0, 5000.0]
++    monkeypatch.setattr(cache.time, 'time', lambda: clock[0])
++    monkeypatch.setattr(cache.time, 'monotonic', lambda: clock[1])
++    memo = cache.SearchMemo()
++    value = {'success': True, 'data': {'web': [{'title': 'TTL fixture'}]}}
++    memo.store('offline-fixture', 'ttl fixture', 5, value)
++    url = 'https://example.test/ttl-fixture'
++    cache.extract_cache_put(url, 'retained content', title='TTL article', provider='offline-fixture')
++    for entry in disk._root().glob('*.txt'):
++        os.utime(entry, (clock[0], clock[0]))
++    cached_bytes = {p: p.read_bytes() for p in (tmp_path / 'cache').rglob('*') if p.is_file()}
++    for elapsed, hit in ((seconds - 0.001, True), (seconds, False)):
++        clock[:] = [2000000000.0 + elapsed, 5000.0 + elapsed]
++        assert memo.lookup('offline-fixture', 'ttl fixture', 5) == (value if hit else None)
++        assert cache.SearchMemo().lookup('offline-fixture', 'ttl fixture', 5) == (value if hit else None)
++        page = cache.extract_cache_get(url, provider='offline-fixture')
++        assert (page is not None) is hit
++        if hit:
++            assert page['content'] == 'retained content' and page['cached'] is True
++    assert all(p.read_bytes() == data for p, data in cached_bytes.items())
++    assert path.read_bytes() == before
++
++
++@pytest.mark.parametrize('sign', [1, -1], ids=['positive', 'negative'])
++@pytest.mark.parametrize('provider_error', [False, True], ids=['success', 'provider-error'])
++@pytest.mark.parametrize('enabled', [True, False], ids=['enabled', 'disabled'])
++def test_registered_search_uses_real_overflow_ttl_config(tmp_path, monkeypatch, sign, provider_error, enabled):
++    import json
++    from types import SimpleNamespace
++    from unittest.mock import Mock, call
++    from agent import web_search_registry
++    from tools import web_tools
++    from tools.registry import registry
++
++    path, before = _ttl_config(tmp_path, monkeypatch, sign * 10**400, enabled=enabled)
++    monkeypatch.setattr(cache, 'search_memo', cache.SearchMemo())
++    value = {'success': True, 'data': {'web': [
++        {'title': 'TTL fixture ' + str(i), 'url': 'https://example.test/' + str(i)} for i in range(10)
++    ]}}
++    failure = {'success': False, 'error': 'synthetic TTL provider failure'}
++    def search(query, limit):
++        return failure if provider_error and query == 'ttl query' else value
++    provider = SimpleNamespace(name='offline-fixture', supports_search=lambda: True, search=Mock(side_effect=search))
++    def resolve(name):
++        assert name == provider.name, 'fixture must not select another provider'
++        return provider
++    monkeypatch.setattr(web_tools, '_ensure_web_plugins_loaded', lambda: None)
++    monkeypatch.setattr(web_search_registry, 'get_provider', resolve)
++    managed = Mock(wraps=web_tools._managed_search_fallback)
++    rescue = Mock(side_effect=AssertionError('fixture disables keyless rescue'))
++    monkeypatch.setattr(web_tools, '_managed_search_fallback', managed)
++    monkeypatch.setattr(web_tools, '_rescue_search', rescue)
++    sliced = {'success': True, 'data': {'web': value['data']['web'][:3]}}
++    for query, expected in [('ttl query', failure if provider_error else sliced), ('healthy query', sliced)]:
++        for _ in range(2):
++            assert json.loads(registry.dispatch('web_search', {'query': query, 'limit': 3})) == expected
++    primary_calls = 2 if provider_error or not enabled else 1
++    healthy_calls = 1 if enabled else 2
++    assert provider.search.call_args_list == ([call('ttl query', 10)] * primary_calls
++                                              + [call('healthy query', 10)] * healthy_calls)
++    assert managed.call_count == (primary_calls if provider_error else 0)
++    rescue.assert_not_called()
++    if not enabled:
++        assert not cache.search_memo._store
++        assert not list((tmp_path / 'cache/web-search-v1').glob('*.txt'))
++    assert path.read_bytes() == before
 diff --git a/tests/tools/test_web_search_flight_lifetime.py b/tests/tools/test_web_search_flight_lifetime.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..e4856071ec7d0bc5c899e94416a74f39589240d2
@@ -84252,7 +84350,7 @@ index c244fd4fa1ea32757b751592b593243b101ef0e2..20edf6378e08c5e538f2d7ec838384bc
 +async def _handle_vision_analyze_uncached(image_url: str, question: str, region: Any, task_id: Any):
      # No concurrency gate around the whole analysis — the CPU burst is bounded inside the
 diff --git a/tools/web_result_cache.py b/tools/web_result_cache.py
-index c747f3f30947fd5ef4eb13d5c51e2bb85156e951..fb2271fb8bd3b98f45b61c45eda2b020d5f1e1e9 100644
+index c747f3f30947fd5ef4eb13d5c51e2bb85156e951..c2a2ca3d5108e40ab1c3f5d8c2253b4f5c0cb50d 100644
 --- a/tools/web_result_cache.py
 +++ b/tools/web_result_cache.py
 @@ -9,2 +9,4 @@ Lives here, not in tool dispatch, so hits sit *after* every safety check and ski
@@ -84278,6 +84376,11 @@ index c747f3f30947fd5ef4eb13d5c51e2bb85156e951..fb2271fb8bd3b98f45b61c45eda2b020
 +_SEARCH_MAX_ENTRIES = 256
 +_SEARCH_MAX_BYTES = 32 * 1024 * 1024  # retained Python keys/responses, not process RSS
  
+@@ -50,3 +59,3 @@ def ttl_seconds() -> float:
+         minutes = float(raw) if raw is not None else DEFAULT_TTL_MINUTES
+-    except (TypeError, ValueError):
++    except (TypeError, ValueError, OverflowError):
+         minutes = DEFAULT_TTL_MINUTES
 @@ -79,2 +88,22 @@ def _deep_copy(response: dict) -> dict:
  
 +def _search_entry_bytes(key: tuple, response: dict) -> int:
