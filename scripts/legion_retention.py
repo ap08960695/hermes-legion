@@ -283,6 +283,18 @@ def _verify_archive(archive, entry):
         raise ValueError("archive inventory incomplete")
 
 
+class _ArchiveWriter:
+    def __init__(self, stream, parent):
+        self.stream, self.parent = stream, parent
+
+    def write(self, data):
+        self.stream.flush()
+        # shortcut: allocation and other writers can change free space; use filesystem quotas for a hard limit.
+        if shutil.disk_usage(self.parent).free < 1024**3 + len(data):
+            raise OSError("insufficient free space to preserve the 1 GiB archive reserve")
+        return self.stream.write(data)
+
+
 def pack(entry, can_remove=None):
     before = source_stamp(entry)
     source_bytes = sum(p.stat().st_size for p in entry.rglob("*") if p.is_file())
@@ -295,7 +307,7 @@ def pack(entry, can_remove=None):
     tmp = Path(name)
     try:
         with os.fdopen(fd, "wb") as output:
-            with tarfile.open(fileobj=output, mode="w:gz") as tar:
+            with tarfile.open(fileobj=_ArchiveWriter(output, entry.parent), mode="w:gz") as tar:
                 tar.add(entry, arcname=entry.name)
             output.flush()
             os.fsync(output.fileno())

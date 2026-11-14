@@ -135,8 +135,10 @@ SHA-256 and the full inventory with the source, and reads through the gzip check
 trailer. It syncs the archive and its directory, publishes without overwriting an
 existing archive, and keeps an unchanged-source check before removal. Source changes,
 archive corruption or new process holders preserve the original. The pack admission
-check reserves the uncompressed source size plus 1 GiB; concurrent writers can still
-consume that space. An interruption after publication can leave both copies: inspect
+check reserves the uncompressed source size plus 1 GiB. Each encoded write also
+flushes pending output and checks that observed free space covers that write plus
+1 GiB. Allocation and concurrent writers can still consume space after observation;
+these checks are not a filesystem quota. An interruption after publication can leave both copies: inspect
 and reconcile them explicitly instead of overwriting the archive.
 
 The companion helper was installed with matching bytes on Linux and macOS. It does
@@ -423,3 +425,37 @@ Activity checks remain non-atomic. Activation after the last check can still rac
 with deletion; atomic concurrency needs shared writer/retention ownership. This
 release neither clears process-observation refusals nor changes owner controls,
 ESTOP/pauses or stopped timers. No production data was purged or saving attributed.
+
+
+## Encoded archive reserve (v0.8.70)
+
+A source-size estimate cannot account for gzip/tar headers and trailers or later
+space pressure. In a disposable Mac fixture, a one-byte report creates a 231-byte
+archive after the original one-time admission accepts modeled free space of
+1 GiB plus one byte. This demonstrates an admission gap, not actual disk pressure.
+
+The shared packer now passes encoded output through a private write-only sink.
+Before each write it flushes pending output, observes the containing volume, and
+requires free space of at least 1 GiB plus the incoming encoded byte count. Equality
+is accepted. Insufficient or unavailable space raises through the existing failure
+path, retaining the source and removing the temporary archive. Gzip finalization
+and trailer writes remain inside that cleanup scope; later eligible reports proceed.
+The initial source-size admission, archive verification/checksum, source/activity
+checks, exclusive publication and fsync ordering remain in place.
+
+Real tar/gzip/file tests meter actual raw writes beneath buffering. They cover
+encoded overhead, later unknown observations, trailer denial, write failure,
+lossless ample-space readback, later-report progress, unchanged unrelated bytes
+and temporary cleanup. A direct sink check covers exact admission, next-byte
+refusal, flush-before-observation and unchanged flush/observation/write errors.
+The original produces three source-preservation failures on each of Python 3.12.10
+and Hermes' PM-selected 3.14.9. Fixed retention selection: 30 run, 28 pass/two
+Linux skips on each interpreter; these counts overlap. Native Python runs only
+stdlib companion tests from a temporary cwd with private HOME/HERMES_HOME/TMPDIR
+and -I/-B/-S; no Hermes app, provider or service is launched.
+
+This remains best-effort admission. Filesystem allocation granularity and other
+writers can change actual space after observation; a hard limit requires a quota.
+Extra flushes and volume observations add unmeasured packing cost. No production
+cleanup, disk saving, whole-Hermes test or global disk-full prevention is claimed.
+Owner data, ESTOP/pauses and stopped timers remain untouched.

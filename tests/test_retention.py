@@ -396,6 +396,167 @@ class RetentionTests(unittest.TestCase):
         self.assertEqual(failure, "source changed after archive publication; both copies retained")
         self.assertEqual(list(entry.parent.glob(".legion-pack-*")), [])
 
+    def test_encoded_archive_pressure_keeps_source_and_continues_later_report(self):
+        import gzip
+        reserve = 1024**3
+        for mode in ("full", "unknown", "trailer", "write-error", "ample"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                home = Path(tmp).resolve()
+                source = make(home / "reports/a-first/report.txt", 5, "x")
+                later = make(home / "reports/z-later/report.txt", 5, "later report")
+                unrelated = make(home / "state.db", 100, "durable fixture")
+                for directory in (source.parent, later.parent):
+                    age_dir(directory, 5)
+                archive = source.parent.with_name("a-first.tar.gz")
+                meters, pending = [], []
+                pressure_seen = []
+                usage = shutil.disk_usage(home)
+                real_fdopen, real_close = retention.os.fdopen, gzip.GzipFile.close
+
+                class Meter(io.RawIOBase):
+                    def __init__(self, raw):
+                        super().__init__()
+                        self.raw, self.accepted, self.written = raw, 0, 0
+                        self.chunks, self.closing = [], False
+                        self.first = not meters
+                        meters.append(self)
+
+                    def writable(self):
+                        return True
+
+                    def fileno(self):
+                        return self.raw.fileno()
+
+                    def tell(self):
+                        return self.raw.tell()
+
+                    def write(self, data):
+                        if self.first and mode == "write-error":
+                            raise OSError("synthetic archive write failure")
+                        count = self.raw.write(data)
+                        self.written += count
+                        self.chunks.append(count)
+                        return count
+
+                    def close(self):
+                        try:
+                            self.raw.close()
+                        finally:
+                            super().close()
+
+                class Buffered(io.BufferedWriter):
+                    def write(self, data):
+                        count = super().write(data)
+                        self.raw.accepted += count
+                        return count
+
+                def fdopen(fd, file_mode, *args, **kwargs):
+                    self.assertEqual(file_mode, "wb")
+                    return Buffered(Meter(real_fdopen(fd, file_mode, buffering=0)), buffer_size=8192)
+
+                def close(gzip_file):
+                    if meters and not meters[-1].closed:
+                        meters[-1].closing = True
+                    return real_close(gzip_file)
+
+                def space(parent):
+                    current = meters[-1] if meters and not meters[-1].closed else None
+                    if current is None:
+                        free = reserve + 2 if not meters and mode == "full" else reserve + 1024**2
+                    else:
+                        pending.append(current.accepted - current.written)
+                        self.assertEqual(os.fstat(current.fileno()).st_size, current.written)
+                        free = reserve + 1024**2 - current.written
+                        if current.first:
+                            if mode == "full":
+                                free = reserve + 2 - current.written
+                                if current.written:
+                                    pressure_seen.append("full")
+                            elif mode == "unknown" and current.written:
+                                pressure_seen.append("unknown")
+                                raise OSError("synthetic volume observation unavailable")
+                            elif mode == "trailer" and current.closing and any(n > 8 for n in current.chunks):
+                                pressure_seen.append("trailer")
+                                free = reserve + 3
+                    return usage._replace(free=free)
+
+                out = io.StringIO()
+                with patch.object(retention.os, "fdopen", fdopen), patch.object(
+                        gzip.GzipFile, "close", close), patch.object(retention.shutil, "disk_usage", space), \
+                        patch.object(retention, "held_paths", return_value=set()), redirect_stdout(out):
+                    code = retention.main(["--home", str(home), "--now", str(NOW), "--apply"])
+                with tarfile.open(home / "reports/z-later.tar.gz") as tar:
+                    self.assertEqual(tar.extractfile("z-later/report.txt").read(), b"later report")
+                self.assertFalse(later.parent.exists())
+                self.assertEqual(unrelated.read_text(), "durable fixture")
+                self.assertEqual(len(meters), 2)
+                self.assertTrue(all(m.closed for m in meters))
+                if mode == "ample":
+                    self.assertFalse(source.parent.exists())
+                    with tarfile.open(archive) as tar:
+                        self.assertEqual(tar.extractfile("a-first/report.txt").read(), b"x")
+                    self.assertEqual(code, 0)
+                    self.assertGreater(meters[0].written, 1)
+                else:
+                    self.assertTrue(source.exists(), "source removed despite encoded-write pressure or error")
+                    self.assertEqual(source.read_bytes(), b"x")
+                    self.assertFalse(archive.exists())
+                    self.assertEqual(code, 1)
+                    self.assertIn("failed reports/a-first", out.getvalue())
+                    self.assertNotIn("failed reports/z-later", out.getvalue())
+                    if mode != "write-error":
+                        self.assertIn(mode, pressure_seen)
+                    if mode == "full":
+                        self.assertEqual(meters[0].written, 2)
+                self.assertEqual(pending, [0] * len(pending))
+                self.assertEqual(list(archive.parent.glob(".legion-pack-*")), [])
+
+    def test_archive_writer_boundary_flush_and_error_order(self):
+        from unittest.mock import Mock
+        reserve = 1024**3
+        path = self.home / "encoded-boundary.bin"
+        usage = shutil.disk_usage(self.home)
+        observed = []
+        with path.open("wb", buffering=16) as output:
+            writer = retention._ArchiveWriter(output, self.home)
+            def space(parent):
+                size = os.fstat(output.fileno()).st_size
+                observed.append(size)
+                return usage._replace(free=reserve + 3 - size)
+            with patch.object(retention.shutil, "disk_usage", space):
+                self.assertEqual(writer.write(b"abc"), 3)
+                self.assertEqual(os.fstat(output.fileno()).st_size, 0)
+                with self.assertRaisesRegex(OSError, "1 GiB archive reserve"):
+                    writer.write(b"d")
+                self.assertEqual(os.fstat(output.fileno()).st_size, 3)
+            self.assertEqual(observed, [0, 3])
+        self.assertEqual(path.read_bytes(), b"abc")
+        with path.open("wb") as output:
+            writer = retention._ArchiveWriter(output, self.home)
+            failure = OSError("synthetic space observation unavailable")
+            with patch.object(retention.shutil, "disk_usage", side_effect=failure):
+                with self.assertRaises(OSError) as result:
+                    writer.write(b"blocked")
+            self.assertIs(result.exception, failure)
+        self.assertEqual(path.read_bytes(), b"")
+        stream = Mock(spec=["flush", "write"])
+        flush_failure = OSError("synthetic flush failure")
+        stream.flush.side_effect = flush_failure
+        writer = retention._ArchiveWriter(stream, self.home)
+        with patch.object(retention.shutil, "disk_usage", side_effect=AssertionError("space read before flush")):
+            with self.assertRaises(OSError) as result:
+                writer.write(b"blocked")
+        self.assertIs(result.exception, flush_failure)
+        stream.write.assert_not_called()
+        stream.flush.side_effect = None
+        write_failure = OSError("synthetic stream write failure")
+        stream.write.side_effect = write_failure
+        with patch.object(retention.shutil, "disk_usage", return_value=usage._replace(free=reserve + 1024)):
+            with self.assertRaises(OSError) as result:
+                writer.write(b"encoded")
+        self.assertIs(result.exception, write_failure)
+        stream.write.assert_called_once_with(b"encoded")
+
     def test_another_users_tree_is_retained(self):
         foreign = os.getuid() + 1
         real_lstat = Path.lstat

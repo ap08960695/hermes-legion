@@ -1,3 +1,39 @@
+# v0.8.70 — Admit encoded archive writes against the reserve
+
+The companion retention packer checks each encoded gzip/tar write against observed
+free space minus the write length, preserving the existing 1 GiB margin. It flushes
+pending output before observation. Initial source-size admission, verification,
+source/activity checks, exclusive publication, sync and removal gates remain.
+[Behavioral proof and limits](storage-and-backups.md#encoded-archive-reserve-v0870).
+
+Original actual one-byte source creates a 231-byte archive after modeled reserve+1
+admission with just one observation. The new original-code regression has three
+source-preservation failures on each Python 3.12.10 and native PM-selected 3.14.9:
+encoded overhead, unknown space and trailer pressure. No real disk pressure claim.
+Fixed retention: 30 run, 28 pass/two Linux skips on each, 0.207/0.183 s. Actual raw
+file writes beneath buffering prove flush ordering, source retention, temporary
+cleanup and later-report progress; ample space remains lossless. Direct sink checks
+cover exact boundary, next byte and flush/observation/write error propagation.
+Required full companion: 133 run, 131 pass/two Linux skips, 4.221 s, exit 0.
+
+Native interpreter runs stdlib companion tests only from a temporary cwd with
+private HOME/HERMES_HOME/TMPDIR and -I/-B/-S. No source/dependency clone, native full
+suite, model/API/service/UI/owner-state work or observer/containment bypass. No new
+HTTP2/PID4, original-session, terminal-goal, workload or Linux parity proof. Encoded
+admission is not a quota: allocation and external writers can change free space
+between observation and write. Additional packing overhead is unmeasured.
+
+All upstream patch/manifest/selection and verification bytes remain unchanged,
+including the 1002-target kit. Companion-only source, tests, README, storage and
+verification documentation and release inventory change; no new public file or
+dependency. Final tracked-only 222-file inventory, hashes, raw whitespace and exact
+whole-directory/all-history secret scans pass (200 commits, no leaks). Advisor73
+accepts the bounded handoff. Exact owned small trial/source-copy/fixtures/log/home/
+tmp tree and pointer removed; absence verified, borrowed native runtime/source/
+dependencies retained. Pre-cleanup 88 KiB is not attributed saving. Final gate
+refresh precedes the driver signal. Driver commits; lead handles adoption, Linux
+parity and publication. Broad goal remains active.
+
 # v0.8.69 — Keep overflowing web-cache timestamps inside the miss boundary
 
 A signed `10**400` timestamp in disposable disk search-cache metadata raises
