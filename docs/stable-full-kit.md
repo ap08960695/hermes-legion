@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1026-path** Legion source, interface and optimization alternative
+This is the complete **1030-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,16 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## On-demand ticket helpers (v0.15.0)
+
+Desktop starts one Python ticket helper at a time by default and retires unused
+helpers after five seconds. Both limits are launch-configurable; exact profile
+and runtime isolation and fresh native grants remain intact. Waiting admissions
+are bounded and share one mint deadline. [Behavior, measured native case and
+limits](release-notes-v0.15.0.md). Three runtime paths, one new behavior test and
+the native Desktop guide change; four targets are added to the cumulative kit.
+This is not whole-gateway or OS-wide memory admission.
 
 ## Shared source-update checks (v0.14.0)
 

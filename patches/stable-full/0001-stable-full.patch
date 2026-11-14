@@ -5782,15 +5782,490 @@ index 0000000000000000000000000000000000000000..4455992455b9a0f634f3013dc282c1b3
 +  assert.deepEqual(result, { empty: {}, section: { enabled: true }, scalar: null, list: null })
 +  assert.deepEqual(previous, { empty: {}, section: { enabled: true }, scalar: 'old', list: ['old'] })
 +})
+diff --git a/apps/desktop/electron/local-gateway-python-admission.test.ts b/apps/desktop/electron/local-gateway-python-admission.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..bf22d4d3536fa637cd163a8debfcc66092197ac6
+--- /dev/null
++++ b/apps/desktop/electron/local-gateway-python-admission.test.ts
+@@ -0,0 +1,254 @@
++import { EventEmitter } from 'node:events'
++import { PassThrough } from 'node:stream'
++
++import { afterEach, beforeEach, expect, it, vi } from 'vitest'
++
++import type * as TicketAPI from './local-gateway-python'
++import { readDesktopLaunchConfig } from './renderer-heap-flags'
++
++const { spawn } = vi.hoisted(() => ({ spawn: vi.fn() }))
++vi.mock('node:child_process', () => ({ spawn }))
++
++class Helper extends EventEmitter {
++  stdin = new PassThrough()
++  stdout = new PassThrough()
++  stderr = new PassThrough()
++  frames: any[] = []
++  kill = vi.fn(() => true)
++
++  constructor() {
++    super()
++    this.stdin.on('data', b => this.frames.push(JSON.parse(String(b))))
++  }
++
++  reply(ticket: string, index = this.frames.length - 1) {
++    this.stdout.write(JSON.stringify({ id: this.frames[index].id, ticket }) + '\n')
++  }
++}
++
++let api: typeof TicketAPI
++let helpers: Helper[]
++const endpoint = (profile = 'a') => ({ profile_id: `/private/${profile}`, instance_id: profile, runtime_protocol: 1 })
++const backend = { command: '/python' }
++
++const mint = (profile = 'a') => {
++  const result = api.mintGatewayTicketWithPython(backend, '/cwd', endpoint(profile), 'interactive')
++  void result.catch(() => {})
++
++  return result
++}
++
++beforeEach(async () => {
++  vi.resetModules()
++  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
++  helpers = []
++  spawn.mockReset().mockImplementation(() => {
++    const helper = new Helper()
++    helpers.push(helper)
++
++    return helper
++  })
++  api = await import('./local-gateway-python')
++})
++
++afterEach(async () => {
++  api.closeGatewayTicketBridges()
++
++  for (const helper of helpers) { helper.emit('close', 0) }
++  await Promise.resolve()
++  vi.restoreAllMocks()
++  vi.useRealTimers()
++})
++
++it('waits for actual close of an idle helper before admitting a different profile', async () => {
++  const a = mint()
++  helpers[0].reply('a1')
++  await expect(a).resolves.toBe('a1')
++  const b = mint('b')
++  expect(helpers).toHaveLength(1)
++  expect(helpers[0].kill).toHaveBeenCalledOnce()
++  helpers[0].emit('error', new Error('retiring'))
++  expect(helpers).toHaveLength(1)
++  helpers[0].emit('close', 0)
++  expect(helpers).toHaveLength(2)
++  helpers[1].reply('b1')
++  await expect(b).resolves.toBe('b1')
++})
++
++it('retires the default helper five seconds after its last reply, never while busy', async () => {
++  const a = mint()
++  await vi.advanceTimersByTimeAsync(6000)
++  expect(helpers[0].kill).not.toHaveBeenCalled()
++  helpers[0].reply('a')
++  await a
++  await vi.advanceTimersByTimeAsync(4999)
++  expect(helpers[0].kill).not.toHaveBeenCalled()
++  await vi.advanceTimersByTimeAsync(1)
++  expect(helpers[0].kill).toHaveBeenCalledOnce()
++})
++
++it('queues busy-profile admissions FIFO and mints fresh grants for queued matching requests', async () => {
++  const a = mint(); const b = mint('b'); const b2 = mint('b'); const c = mint('c')
++  expect(helpers).toHaveLength(1)
++  expect(helpers[0].kill).not.toHaveBeenCalled()
++  helpers[0].reply('a'); await a
++  helpers[0].emit('close')
++  expect(helpers[1].frames).toHaveLength(2)
++  helpers[1].reply('b1', 0); helpers[1].reply('b2', 1)
++  await expect(b).resolves.toBe('b1'); await expect(b2).resolves.toBe('b2')
++  helpers[1].emit('close')
++  helpers[2].reply('c'); await expect(c).resolves.toBe('c')
++})
++
++it('applies both parser settings and rejects invalid or out-of-section values', async () => {
++  api.configureGatewayTicketHelpers(readDesktopLaunchConfig('desktop:\n  gateway_ticket_helper_limit: 2 # cap\n  gateway_ticket_helper_idle_ms: 100\n'))
++  const a = mint(); const b = mint('b'); const c = mint('c')
++  expect(helpers).toHaveLength(2)
++  helpers[0].reply('a'); await a
++  helpers[0].emit('close')
++  helpers[2].reply('c'); helpers[1].reply('b'); await Promise.all([b, c])
++  await vi.advanceTimersByTimeAsync(100)
++  expect(helpers[1].kill).toHaveBeenCalledOnce()
++  expect(helpers[2].kill).toHaveBeenCalledOnce()
++
++  for (const value of ['0', '-1', '3', '1.5', 'true', '1oops', 'Infinity', '9007199254740993']) {
++    expect(readDesktopLaunchConfig(`desktop:\n  gateway_ticket_helper_limit: ${value}\n`).gatewayTicketHelperLimit).toBeUndefined()
++  }
++
++  for (const value of ['99', '30001', '1e3', 'false', 'NaN']) {
++    expect(readDesktopLaunchConfig(`desktop:\n  gateway_ticket_helper_idle_ms: ${value}\n`).gatewayTicketHelperIdleMs).toBeUndefined()
++  }
++
++  expect(readDesktopLaunchConfig('other:\n  gateway_ticket_helper_limit: 2\n').gatewayTicketHelperLimit).toBeUndefined()
++})
++
++it('keeps one ten-second budget across admission and exchange', async () => {
++  const a = mint(); const aError = a.catch(e => e)
++  const b = mint('b'); const bError = b.catch(e => e)
++  await vi.advanceTimersByTimeAsync(9000)
++  helpers[0].reply('a'); await a
++  helpers[0].emit('close')
++  expect(helpers).toHaveLength(2)
++  await vi.advanceTimersByTimeAsync(1000)
++  expect(helpers[1].kill).toHaveBeenCalledOnce()
++  expect(await bError).toBeInstanceOf(Error)
++  await aError
++})
++
++it('bounds waiting requests and leaves the live helper usable after admission expiry', async () => {
++  const a = mint(); helpers[0].reply('a'); await a
++  const waiting = Array.from({ length: 256 }, (_, i) => mint(`b${i}`).catch(e => e))
++  await expect(mint('overflow')).rejects.toThrow('queue is full')
++  await vi.advanceTimersByTimeAsync(10000)
++  expect((await Promise.all(waiting)).every(e => e.message.includes('admission timed out'))).toBe(true)
++  helpers[0].emit('close')
++  const later = mint('later'); helpers[1].reply('later'); await expect(later).resolves.toBe('later')
++})
++
++it('reset cancels queued admissions and waits for retiring children without late spawns', async () => {
++  const a = mint(); const aError = a.catch(e => e)
++  const b = mint('b'); const bError = b.catch(e => e)
++  api.closeGatewayTicketBridges()
++  expect(await bError).toHaveProperty('message', expect.stringContaining('runtime changed'))
++  expect(await aError).toBeInstanceOf(Error)
++  const c = mint('c')
++  expect(helpers).toHaveLength(1)
++  helpers[0].emit('close')
++  expect(helpers).toHaveLength(2)
++  helpers[1].reply('c'); await c
++  await vi.advanceTimersByTimeAsync(10001)
++  expect(helpers).toHaveLength(2)
++})
++
++it('rolls back synchronous spawn failure and reserves before a reentrant request', async () => {
++  spawn.mockImplementationOnce(() => { throw new Error('spawn failed') })
++  await expect(mint()).rejects.toThrow('spawn failed')
++  let b: Promise<string> | undefined
++  spawn.mockImplementationOnce(() => {
++    b = mint('b')
++    const child = new Helper(); helpers.push(child)
++
++    return child
++  })
++  const a = mint(); expect(helpers).toHaveLength(1)
++  helpers[0].reply('a'); await a; helpers[0].emit('close')
++  helpers[1].reply('b'); await expect(b).resolves.toBe('b')
++})
++
++it('snapshots queued identity and full environment without sharing grants across keys', async () => {
++  const a = mint(); const ep = endpoint('b'); const env = { EXTRA: 'original' }
++  const b = api.mintGatewayTicketWithPython({ command: '/other-python', env }, '/other-cwd', ep, 'native-http')
++  ep.profile_id = '/mutated'; env.EXTRA = 'mutated'
++  helpers[0].reply('a'); await a; helpers[0].emit('close')
++  expect(helpers[1].frames[0].endpoint.profile_id).toBe('/private/b')
++  expect(spawn.mock.calls[1][0]).toBe('/other-python')
++  expect(spawn.mock.calls[1][2]).toMatchObject({ cwd: '/other-cwd', env: { EXTRA: 'original', HERMES_HOME: '/private/b' } })
++  helpers[1].reply('b'); await b
++})
++
++it('refuses oversized requests without starting or pinning a helper', async () => {
++  await expect(mint('x'.repeat(65536))).rejects.toThrow('too large')
++  expect(helpers).toHaveLength(0)
++  const a = mint(); helpers[0].reply('a'); await a
++  await vi.advanceTimersByTimeAsync(4999)
++  await expect(api.mintGatewayTicketWithPython(backend, '/cwd', { ...endpoint(), instance_id: 'x'.repeat(65536) }, 'interactive')).rejects.toThrow('too large')
++  await vi.advanceTimersByTimeAsync(1)
++  expect(helpers[0].kill).toHaveBeenCalledOnce()
++})
++
++
++it('refuses a constructor that crosses reset and holds its reservation until close', async () => {
++  spawn.mockImplementationOnce(() => {
++    api.closeGatewayTicketBridges()
++    const child = new Helper()
++    helpers.push(child)
++
++    return child
++  })
++  await expect(mint()).rejects.toThrow('runtime changed')
++  expect(helpers[0].frames).toHaveLength(0)
++  expect(helpers[0].kill).toHaveBeenCalledOnce()
++  const b = mint('b')
++  expect(helpers).toHaveLength(1)
++  helpers[0].emit('close')
++  helpers[1].reply('b')
++  await expect(b).resolves.toBe('b')
++})
++
++it('uses safe defaults when policy values are not supported integers', async () => {
++  api.configureGatewayTicketHelpers({ gatewayTicketHelperLimit: 99, gatewayTicketHelperIdleMs: 1.5 })
++  const a = mint(); const b = mint('b')
++  expect(helpers).toHaveLength(1)
++  helpers[0].reply('a'); await a; helpers[0].emit('close')
++  helpers[1].reply('b'); await b
++  await vi.advanceTimersByTimeAsync(4999)
++  expect(helpers[1].kill).not.toHaveBeenCalled()
++  await vi.advanceTimersByTimeAsync(1)
++  expect(helpers[1].kill).toHaveBeenCalledOnce()
++})
++
++
++it.each([2, 3])('retires an unused fresh helper when deadline expires at check %i', async check => {
++  spawn.mockImplementationOnce(() => {
++    const child = new Helper()
++    helpers.push(child)
++    const clock = vi.spyOn(performance, 'now')
++
++    for (let i = 1; i < check; i++) { clock.mockReturnValueOnce(0) }
++    clock.mockReturnValueOnce(10000)
++
++    return child
++  })
++  await expect(mint()).rejects.toThrow('admission timed out')
++  expect(helpers[0].frames).toHaveLength(0)
++  await vi.advanceTimersByTimeAsync(5000)
++  expect(helpers[0].kill).toHaveBeenCalledOnce()
++})
++
++it('refuses a response after its absolute deadline before the timeout callback runs', async () => {
++  const a = mint()
++  vi.spyOn(performance, 'now').mockReturnValue(10000)
++  helpers[0].reply('too late')
++  await expect(a).rejects.toThrow('Gateway ticket')
++  expect(helpers[0].kill).toHaveBeenCalledOnce()
++})
+diff --git a/apps/desktop/electron/local-gateway-python.ts b/apps/desktop/electron/local-gateway-python.ts
+index 25f6be5afdd223c7e4ce48c37075a1f034f19150..b834586ae3f45a315702307912c07900bd18e0d2 100644
+--- a/apps/desktop/electron/local-gateway-python.ts
++++ b/apps/desktop/electron/local-gateway-python.ts
+@@ -54,2 +54,3 @@ interface PendingTicket {
+   timer: ReturnType<typeof setTimeout>
++  deadline: number
+ }
+@@ -57,3 +58,95 @@ interface PendingTicket {
+ const bridges = new Map<string, TicketBridge>()
++const liveBridges = new Set<TicketBridge>()
+ let bridgeGeneration = 0
++let helperSlots = 0
++let helperLimit = 1
++let helperIdleMs = 5000
++let pumping = false
++
++export function configureGatewayTicketHelpers(config: {
++  gatewayTicketHelperLimit?: number
++  gatewayTicketHelperIdleMs?: number
++}): void {
++  const { gatewayTicketHelperLimit: limit, gatewayTicketHelperIdleMs: idle } = config
++  helperLimit = Number.isInteger(limit) && limit! >= 1 && limit! <= 2 ? limit! : 1
++  helperIdleMs = Number.isInteger(idle) && idle! >= 100 && idle! <= 30_000 ? idle! : 5000
++}
++
++interface TicketAdmission {
++  command: string
++  cwd: string
++  env: NodeJS.ProcessEnv
++  key: string
++  endpoint: TicketEndpoint
++  purpose: GatewayTicketPurpose
++  generation: number
++  deadline: number
++  timer: ReturnType<typeof setTimeout>
++  resolve: (ticket: string | PromiseLike<string>) => void
++  reject: (error: Error) => void
++}
++
++const admissions: TicketAdmission[] = []
++
++function admissionError(job: TicketAdmission): Error | undefined {
++  if (job.generation !== bridgeGeneration) { return new Error('Gateway ticket runtime changed; retry connection') }
++
++  if (performance.now() >= job.deadline) { return new Error('Gateway ticket helper admission timed out') }
++}
++
++function pumpAdmissions(): void {
++  if (pumping) { return }
++  pumping = true
++
++  try {
++    while (admissions.length) {
++      const job = admissions[0]
++      const error = admissionError(job)
++
++      if (error) {
++        admissions.shift(); clearTimeout(job.timer); job.reject(error)
++
++        continue
++      }
++
++      let bridge = bridges.get(job.key)
++
++      if (!bridge && helperSlots >= helperLimit) {
++        // Retiring children still consume a slot until the OS reports close.
++        const idle = [...bridges.values()].find(candidate => candidate.idle)
++        idle?.dispose()
++
++        return
++      }
++
++      admissions.shift()
++      clearTimeout(job.timer)
++
++      if (!bridge) {
++        helperSlots++
++
++        try { bridge = new TicketBridge(job.command, job.cwd, job.env, job.key) }
++        catch (error) { helperSlots--; job.reject(error as Error);
++
++ continue }
++
++        const stale = admissionError(job)
++
++        if (stale) { bridge.dispose(); job.reject(stale);
++
++ continue }
++
++        bridges.set(job.key, bridge)
++      }
++
++      const stale = admissionError(job)
++
++      if (stale) { job.reject(stale);
++
++ continue }
++
++      job.resolve(bridge.request(job.endpoint, job.purpose, job.deadline))
++    }
++  } finally { pumping = false }
++}
+
+@@ -72,2 +165,3 @@ class TicketBridge {
+     }))
++    liveBridges.add(this)
+     this.child.stderr.resume()
+@@ -77,8 +171,14 @@ class TicketBridge {
+     this.child.stdin.on('error', () => this.dispose())
+-    this.child.on('close', () => this.dispose())
++    this.child.once('close', () => {
++      this.dispose()
++      liveBridges.delete(this)
++      helperSlots--
++      pumpAdmissions()
++    })
++    this.idleTimer = setTimeout(() => this.dispose(), helperIdleMs)
+   }
+
+-  request(endpoint: TicketEndpoint, purpose: GatewayTicketPurpose): Promise<string> {
+-    clearTimeout(this.idleTimer)
++  get idle(): boolean { return !this.closed && !this.pending.size }
+
++  request(endpoint: TicketEndpoint, purpose: GatewayTicketPurpose, deadline: number): Promise<string> {
+     return new Promise((resolve, reject) => {
+@@ -95,4 +195,11 @@ class TicketBridge {
+
+-      const timer = setTimeout(() => this.dispose(), 10_000)
+-      this.pending.set(id, { resolve, reject, timer })
++      const remaining = deadline - performance.now()
++
++      if (remaining <= 0) { reject(new Error('Gateway ticket helper admission timed out'));
++
++ return }
++
++      clearTimeout(this.idleTimer)
++      const timer = setTimeout(() => this.dispose(), remaining)
++      this.pending.set(id, { resolve, reject, timer, deadline })
+       // Private stdin carries identity as data. EOF also retires the helper if Desktop exits.
+@@ -119,3 +226,3 @@ class TicketBridge {
+
+-        if (!waiter) { this.dispose();
++        if (!waiter || performance.now() >= waiter.deadline) { this.dispose();
+
+@@ -134,3 +241,7 @@ class TicketBridge {
+
+-    if (!this.pending.size) { this.idleTimer = setTimeout(() => this.dispose(), 30_000) }
++    if (!this.pending.size) {
++      clearTimeout(this.idleTimer)
++      this.idleTimer = setTimeout(() => this.dispose(), helperIdleMs)
++      pumpAdmissions()
++    }
+   }
+@@ -157,3 +268,8 @@ export function closeGatewayTicketBridges(): void {
+
+-  for (const bridge of bridges.values()) { bridge.dispose() }
++  for (const job of admissions.splice(0)) {
++    clearTimeout(job.timer)
++    job.reject(new Error('Gateway ticket runtime changed; retry connection'))
++  }
++
++  for (const bridge of liveBridges) { bridge.dispose() }
+ }
+@@ -272,3 +388,3 @@ export function createGatewayTicketResolver(resolveBackend: () => Promise<Resolv
+
+-export function mintGatewayTicketWithPython(
++export async function mintGatewayTicketWithPython(
+   backend: { command: string; env?: NodeJS.ProcessEnv },
+@@ -278,2 +394,9 @@ export function mintGatewayTicketWithPython(
+ ): Promise<string> {
++  const deadline = performance.now() + 10_000
++  endpoint = { ...endpoint }
++
++  if (Buffer.byteLength(JSON.stringify({ id: 1, endpoint, purpose }) + '\n') > 65536) {
++    throw new Error('Gateway ticket request too large')
++  }
++
+   const env = { ...process.env, ...backend.env, HERMES_HOME: endpoint.profile_id,
+@@ -282,10 +405,25 @@ export function mintGatewayTicketWithPython(
+   const key = JSON.stringify([backend.command, cwd, Object.entries(env).sort(([a], [b]) => a.localeCompare(b))])
+-  let bridge = bridges.get(key)
++  const bridge = bridges.get(key)
+
+-  if (!bridge) {
+-    bridge = new TicketBridge(backend.command, cwd, env, key)
+-    bridges.set(key, bridge)
+-  }
++  if (bridge) { return bridge.request(endpoint, purpose, deadline) }
++
++  if (admissions.length >= 256) { throw new Error('Gateway ticket helper queue is full') }
++
++  return new Promise((resolve, reject) => {
++    const job: TicketAdmission = {
++      command: backend.command, cwd, env, key, endpoint, purpose,
++      generation: bridgeGeneration, deadline, resolve, reject,
++      timer: setTimeout(() => {
++        const index = admissions.indexOf(job)
++
++        if (index < 0) { return }
++        admissions.splice(index, 1)
++        reject(new Error('Gateway ticket helper admission timed out'))
++        pumpAdmissions()
++      }, Math.max(0, deadline - performance.now()))
++    }
+
+-  return bridge.request(endpoint, purpose)
++    admissions.push(job)
++    pumpAdmissions()
++  })
+ }
 diff --git a/apps/desktop/electron/main.ts b/apps/desktop/electron/main.ts
-index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..2d82c1fd870a366481d11ad0bb8f1146f3e11327 100644
+index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..50c76d67a2c99ea113bb9bf4f8d168fff1551e3b 100644
 --- a/apps/desktop/electron/main.ts
 +++ b/apps/desktop/electron/main.ts
-@@ -2,2 +2,4 @@ import { type ChildProcess, execFileSync, spawn } from 'node:child_process'
+@@ -2,5 +2,7 @@ import { type ChildProcess, execFileSync, spawn } from 'node:child_process'
 
 +import { formatApiRequestFailure, isNotFoundApiError } from './api-request-log'
 +import { createConfigQuitGate } from './config-autosave-quit'
  import type { GatewayEndpoint } from './local-gateway'
+ import { configurePythonGatewayTicketClient, createLocalGatewayDials, createStaleGatewayRestarter, ensureLocalGateway, gatewayOwnerProfile, localGatewayDial, nativeGatewayHttpHeaders, redialLocalGateway, runGatewayEnsure, runGatewayOwnerRestart } from './local-gateway'
+-import { closeGatewayTicketBridges, createGatewayTicketResolver } from './local-gateway-python'
++import { closeGatewayTicketBridges, configureGatewayTicketHelpers, createGatewayTicketResolver } from './local-gateway-python'
+ import { createPluginWsUrlHandler } from './plugin-ws-url'
 @@ -137,2 +139,4 @@ import { composerImageTimestamp } from './composer-image-name'
  import { writeComposerPaste } from './composer-paste'
 +import { createConfigAutosaveQueue } from './config-autosave'
@@ -5805,18 +6280,34 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..2d82c1fd870a366481d11ad0bb8f1146
  import { createSshTeardownTracker } from './ssh-teardown'
 +import { markSshTransportHealthy, recordSshFailure } from './ssh-transport'
  import { createStreamThrottle } from './stream-throttle'
-@@ -9855,2 +9860,6 @@ async function bootstrapSshConnectionInner(profile, sshConfig, reuseToken, sourc
+@@ -1284,10 +1289,3 @@ const HERMES_HOME: string = resolveDesktopHermesHome({
+
+-// #77311: `desktop.electron_flags` and the renderer heap ceiling
+-// (`desktop.renderer_max_old_space_mb`) used to reach Chromium only through
+-// the `hermes desktop` launcher's argv, so a packaged app opened from its
+-// Start-menu / .desktop entry ran with no `--js-flags` at all. Apply them here
+-// from config.yaml, before `ready` — Chromium copies `js-flags` to renderer
+-// processes only from the browser's pre-launch command line.
+-// `desktop.ssh_path` (#103288) rides the same pre-window read: an explicit
+-// Windows ssh client for when the in-box OpenSSH is missing or broken.
++// Apply launch-only policy before Chromium and ticket helpers can start.
+ let desktopSshPathOverride = ''
+@@ -1304,2 +1302,3 @@ let desktopSshPathOverride = ''
+   const desktopLaunchConfig = readDesktopLaunchConfig(desktopLaunchYaml)
++  configureGatewayTicketHelpers(desktopLaunchConfig)
+   desktopSshPathOverride = desktopLaunchConfig.sshPath || ''
+@@ -9855,2 +9854,6 @@ async function bootstrapSshConnectionInner(profile, sshConfig, reuseToken, sourc
    } catch (error: any) {
 +    if (error.kind !== 'superseded' && ssh.controlPath) {
 +      recordSshFailure(ssh.controlPath)
 +    }
 +
      if (created) {
-@@ -9930,2 +9939,3 @@ async function bootstrapSshConnectionInner(profile, sshConfig, reuseToken, sourc
+@@ -9930,2 +9933,3 @@ async function bootstrapSshConnectionInner(profile, sshConfig, reuseToken, sourc
        })
 +      markSshTransportHealthy(ssh.controlPath)
        sshIsolatedKeepalives.start(scope, { baseUrl: result.baseUrl, token: result.token })
-@@ -12435,6 +12445,4 @@ function spawnSecondaryWindow({
+@@ -12435,6 +12439,4 @@ function spawnSecondaryWindow({
 
 -// Open (or focus) a standalone window for a single chat session.
 -function createSessionWindow(sessionId, { connectionId = null, profile = null, watch = false } = {}) {
@@ -5825,7 +6316,7 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..2d82c1fd870a366481d11ad0bb8f1146
 +const createSessionWindow = (sessionId, opts = {}) =>
 +  sessionWindows.openOrFocus(sessionId, () => spawnSecondaryWindow({ ...opts, sessionId }), opts)
 
-@@ -16134,9 +16142,2 @@ async function teardownConnectionScopedProfileBackend(connectionId, profile) {
+@@ -16134,9 +16136,2 @@ async function teardownConnectionScopedProfileBackend(connectionId, profile) {
 
 -// A 404 raised by `fetchJson` — the shape is `404: <body>` (see fetchJson).
 -// Session lookups are a probe ladder: "not on this profile" is a normal rung
@@ -5835,7 +6326,7 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..2d82c1fd870a366481d11ad0bb8f1146
 -}
 -
  async function handleHermesApiRequest(request) {
-@@ -16249,15 +16250,31 @@ async function handleHermesApiRequest(request) {
+@@ -16249,15 +16244,31 @@ async function handleHermesApiRequest(request) {
 
 -// Format an api-request failure for desktop.log. The renderer only ever sees
 -// the invoke rejection; the real stack lives here in main, so persist it
@@ -5879,7 +6370,7 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..2d82c1fd870a366481d11ad0bb8f1146
 +  notify: payload => nativeNotifications.show(payload)
 +})
 
-@@ -16272,22 +16289,24 @@ ipcMain.handle('hermes:api', async (_event, request) => {
+@@ -16272,22 +16283,24 @@ ipcMain.handle('hermes:api', async (_event, request) => {
    try {
 -    if (deletingProfile && registryConnectionId) {
 -      return await dispatchConnectionScopedProfileDelete(request, {
@@ -5921,7 +6412,7 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..2d82c1fd870a366481d11ad0bb8f1146
 +      return handleHermesApiRequest(request).finally(releaseProfileDeletion)
 +    })
    } catch (error) {
-@@ -18058,33 +18077,8 @@ function configureSpellChecker() {
+@@ -18058,33 +18071,8 @@ function configureSpellChecker() {
 
 -// Does quitting take the agent down with the app? Reads the primary profile's
 -// route through the same resolver resolveRemoteBackend uses, plus every backend
@@ -5961,7 +6452,7 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..2d82c1fd870a366481d11ad0bb8f1146
 +}), () => (backendConnectionState.getProcess() ? 1 : 0) +
 +  [...backendPool.values()].filter(entry => entry?.process).length + sshConnections.size)
 
-@@ -18163,2 +18157,8 @@ function heldQuitForActiveWork(event: Electron.Event): boolean {
+@@ -18163,2 +18151,8 @@ function heldQuitForActiveWork(event: Electron.Event): boolean {
  function registerChatWindow(window: BrowserWindow) {
 +  const deferClose = createConfigQuitGate({
 +    queue: configAutosaves, holdForActiveWork: () => false,
@@ -5970,17 +6461,17 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..2d82c1fd870a366481d11ad0bb8f1146
 +  })
 +
    chatWindows.add(window)
-@@ -18174,3 +18174,3 @@ function registerChatWindow(window: BrowserWindow) {
+@@ -18174,3 +18168,3 @@ function registerChatWindow(window: BrowserWindow) {
 
 -    if (!shouldGuardWindowClose(work, isQuittingForHandoff, IS_MAC, hasOtherChatWindows(window))) {
 +    if (shouldGuardWindowClose(work, isQuittingForHandoff, IS_MAC, hasOtherChatWindows(window)) && heldQuitForActiveWork(event)) {
        return
-@@ -18178,3 +18178,3 @@ function registerChatWindow(window: BrowserWindow) {
+@@ -18178,3 +18172,3 @@ function registerChatWindow(window: BrowserWindow) {
 
 -    heldQuitForActiveWork(event)
 +    deferClose(event)
    })
-@@ -18206,3 +18206,3 @@ app.on('before-quit', event => {
+@@ -18206,3 +18200,3 @@ app.on('before-quit', event => {
    // overlay-suppression latch must not leak into the next close (#130810).
 -  if (heldQuitForActiveWork(event)) {
 +  if (deferConfigQuit(event)) {
@@ -6122,6 +6613,34 @@ index 5ec95d2ad476bbf08534f6d08a025301a7c4af55..bc39482d4d701337f15161649bf3c68f
 -    `help="$( ${withRemoteTimeout(`${hermes} serve --help 2>&1`)} )"; ` +
 +    `help="$( ${hermes} serve --help 2>&1 )"; ` +
        `printf '%s' "$help" | grep -q ssh-session-token-file && ` +
+diff --git a/apps/desktop/electron/renderer-heap-flags.ts b/apps/desktop/electron/renderer-heap-flags.ts
+index 85cbbbc57e4c78cbac028c0aacbb371690a91d6e..29cd1d51dce68e4b6ef09031bc0da476cb100f70 100644
+--- a/apps/desktop/electron/renderer-heap-flags.ts
++++ b/apps/desktop/electron/renderer-heap-flags.ts
+@@ -17,2 +17,4 @@ export interface DesktopLaunchConfig {
+   sshPath?: string
++  gatewayTicketHelperLimit?: number
++  gatewayTicketHelperIdleMs?: number
+ }
+@@ -25,3 +27,3 @@ export interface PlannedSwitch {
+ /**
+- * Read the two launch keys out of `config.yaml` text without a YAML parser
++ * Read Desktop launch keys out of `config.yaml` text without a YAML parser
+  * (the main bundle ships none). Deliberately narrow: a top-level `desktop:`
+@@ -68,3 +70,12 @@ export function readDesktopLaunchConfig(yamlText: string): DesktopLaunchConfig {
+
+-    if (key === 'ssh_path') {
++    if (key === 'gateway_ticket_helper_limit' || key === 'gateway_ticket_helper_idle_ms') {
++      const scalar = unquote(value)
++      const number = /^\d+$/.test(scalar) ? Number(scalar) : NaN
++
++      if (key === 'gateway_ticket_helper_limit' && Number.isInteger(number) && number >= 1 && number <= 2) {
++        out.gatewayTicketHelperLimit = number
++      } else if (key === 'gateway_ticket_helper_idle_ms' && Number.isInteger(number) && number >= 100 && number <= 30_000) {
++        out.gatewayTicketHelperIdleMs = number
++      }
++    } else if (key === 'ssh_path') {
+       // YAML double quotes escape backslashes ("C:\\Git\\usr\\bin\\ssh.exe");
 diff --git a/apps/desktop/electron/session-windows.test.ts b/apps/desktop/electron/session-windows.test.ts
 index 2d57a5039b1a56bf6b32ff07f2b7f550bda0e19d..51e73b0b43b67ef2374e1174e1ea35590451ac73 100644
 --- a/apps/desktop/electron/session-windows.test.ts
@@ -89268,6 +89787,45 @@ index 44d25bc19bae30f9665f7c418a2dcf102e6fbccb..5da0d8f166ceea8d8f39f533e026aecc
 -| `lazy` | bool | both | Register the server's tools from the on-disk schema cache at startup and only spawn/connect it on the first tool call (default: `false`). Needs one prior live connect to fill the cache; a missing or stale entry falls back to the normal eager connect. Status surfaces show the server as `lazy` with its cached tool count until first use |
 +| `lazy` | bool | both | Register the server's tools from the on-disk schema cache at startup and only spawn/connect it on the first tool call (default: `false`, or `true` for eligible stdio servers under `mcp.memory_saving`). Needs one prior live connect to fill the cache; a missing or stale entry falls back to the normal eager connect. Status surfaces show the server as `lazy` with its cached tool count until first use |
  | `idle_timeout_seconds` | number | stdio | Optional stdio server recycle after idle time (`0` disables). May also live under a `lifecycle:` mapping |
+diff --git a/website/docs/user-guide/desktop.md b/website/docs/user-guide/desktop.md
+index 2021ee43feb046d980a57b30d68a6e3e2c98d616..272f5fea0f6eb96e865e4d3e8f57d598df7d02d2 100644
+--- a/website/docs/user-guide/desktop.md
++++ b/website/docs/user-guide/desktop.md
+@@ -250,2 +250,34 @@ The pre-window reader is a small YAML subset, not the full parser the rest of He
+
++#### On-demand gateway ticket helpers
++
++Desktop starts Python ticket helpers only when a connection needs a fresh ticket.
++By default, one helper is allowed per Electron process and an unused helper exits
++five seconds after its last reply. No helper pool is pre-started. To adjust these
++limits, edit the launch profile's `config.yaml` and restart Desktop:
++
++```yaml
++desktop:
++  gateway_ticket_helper_limit: 1       # integer 1–2; default 1
++  gateway_ticket_helper_idle_ms: 5000  # integer 100–30000; default 5000
++```
++
++Use the same top-level `desktop:` mapping and two-space indentation as the launch
++flags above. Missing, malformed or out-of-range values keep the safe defaults.
++There is no Settings control for these launch-only keys.
++
++Each helper stays bound to its interpreter, working directory, full environment
++and profile. Every request obtains a new ticket from the native owner. A busy
++helper finishes its requests before retirement. Other profiles wait for capacity,
++including the retiring process's actual exit. Up to 256 requests can wait in
++admission order within a ten-second total mint-helper budget. An existing eligible
++helper can still serve its profile while other admissions wait; sustained activity
++can make a waiting request time out. Queue-full, admission timeout and runtime-reset
++errors are distinct from native owner or credential refusal. Smaller limits reduce
++peak RAM but can slow profile switching and cause more cold starts.
++
++This limits ticket-helper processes per Electron process. It does not bound the
++requests or stdin buffering already assigned to a helper, other helper entrypoints
++or OS-wide memory. The separate runtime-command lookup keeps its existing
++30-second timeout and is outside this mint-helper budget and process count.
++
+ ### Settings & onboarding
 diff --git a/website/docs/user-guide/features/cron.md b/website/docs/user-guide/features/cron.md
 index 6e315619f22387697b0aaad59cd4afb60ee54435..35153492989e4b6d11bad6a0d81042ac6cca8782 100644
 --- a/website/docs/user-guide/features/cron.md

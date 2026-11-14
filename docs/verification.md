@@ -1,3 +1,82 @@
+# v0.15.0 — On-demand Desktop ticket helpers
+
+[Plain-language settings, native Mac measurements and limits](release-notes-v0.15.0.md).
+Three runtime paths, one new behavior test and the native Desktop guide change.
+Existing launch-config parsing/main wiring feeds one module-owned admission
+queue and lifecycle. Default helper cap 1, configurable 1–2; idle 5000 ms, configurable 100–30000 ms.
+Starting and retiring helpers consume slots until actual close. Busy helpers
+are never evicted; queued admissions are FIFO, bounded to 256 requests, while existing bridges
+may multiplex. One monotonic ten-second mint budget includes queue/retirement/
+spawn/exchange. Reset cancels waiting work and prevents stale startup. Native
+helper program/client and exact command/cwd/full-env/profile identity remain intact.
+
+Three meaningful old-source reds prove uncapped helpers, wrong idle lifetime and
+missing admission ordering. Final native selection: **29 passed, one Windows-only
+skip**, seven files, 1.27 seconds, exit 0. New cases cover actual-close/error barriers,
+busy/no-eviction, same-key fresh grants, parser-to-policy propagation, safe defaults,
+queue overflow/expiry, generation/reset, synchronous-spawn rollback, reentrant
+reservation, input snapshots and oversized frames. Review found two new deadline
+gaps: deterministic three-case red/green proof now covers an unused fresh child
+when expiry crosses either startup boundary, and an overdue reply arriving before
+its timer callback. Constructor idle retirement and per-waiter absolute deadline
+checks close those gaps. A process mock observes the actual production scheduler;
+there are no test-only production APIs.
+
+Existing real native tests pass profile/owner/protocol/purpose/control-home and
+cwd-shadow checks plus bundled/runtime lookup contracts. An initial driver used
+Vitest --root from the wrong process cwd: its bundled fixture linked the wrong
+source and failed. Old source reproduces the failure under that same bad cwd;
+corrected-cwd baseline **14 passed, one Windows-only skip** and patched selection pass.
+Resolved native module __file__ paths point inside the trial source. Only the
+AF_UNIX fixture temp base is relocated into an owned short root; product sources
+are not changed to accommodate the fixture. Initial whole-matrix red also had
+cleanup rejections and missing new setter; only the clean focused three reds
+are credited as original-feature regressions. A config-import startup, type-import,
+composite TypeScript flag and one documentation read-cwd error were harness
+corrections. No additional product fix is credited for them.
+
+Native one-helper preflight returns two fresh grants before implementation.
+Final same-case three-profile pair runs unchanged native Python 3.14.9 ticket code
+against private synthetic AF_UNIX controls in the Node caller process. Sampled
+request-window summed RSS including caller: **134.328125 → 72.15625 MiB**, 46.3% lower;
+maximum sampled processes 4 → 2; request 67.635 → 163.943 ms. At 5.5 seconds idle: helpers 3 → 0,
+total RSS 138.96875 → 47.53125 MiB. Exact initial grants and program hash match; no
+survivors. Separate parser 2/100 ms native case admits two helpers, queues third,
+and reaches zero after 250 ms idle; fresh revival and native identity refusals pass.
+Six audit negative controls pass for the measured helper adapter, not complete
+OS containment. Additional existing native tests use the selected PM interpreter
+and isolated homes without claiming that adapter fences every subprocess.
+
+One pair, 20 ms target samples, shared RSS pages; brief peaks/children may be missed.
+Request-window peak and later idle checkpoints are distinct measurements. Each
+native run is bounded to four runtime processes and below 4 GiB; no app, remote connection,
+real gateway/worker/model, whole-gateway idle or physical-pressure result. A
+smaller cap deliberately slows profile switching and can increase cold starts.
+The queue limit excludes assigned requests/stdin buffering, and runtime-command
+lookup retains its own 30-second timeout outside mint admission. Other helper entrypoints
+and processes, MCP retirement and broader memory admission remain open.
+
+Companion verification: **133 run, 131 passed, two Linux-only skips**, 4.518
+seconds, exit 0, with task TMPDIR and bytecode disabled.
+
+Whole-Electron no-emit TypeScript, three-file ESLint and all three development
+bundles pass; no app is launched or packaged. Cumulative export adds four targets:
+**1,030 versus 1,026**, same pinned upstream. Only the existing main target and four
+added paths change; unrelated prior rows/bytes/patch sections stay exact. Actual
+reverse/base/reapplication, every target hash, strict installed compatibility,
+companion tests, release inventory and exact directory/history scans gate handoff.
+Full standing GOAL remains unfinished; owner-app adoption is not claimed.
+
+Release verification passes **230 inventory files / 231 intended tracked paths**
+on a disposable copy; private index and copy are removed, real index unchanged.
+Exact directory/history scan logs report no leaks across 213 history commits.
+Final advisor finds no concrete blocker on supplied code and evidence. Original
+app/config and all 1,030 source hashes match; 14 observed PID/birthtime identities
+have no survivor. Owned dependencies, build/cache/export and short-fixture scratch
+are removed (1,231,230,232 logical bytes; no physical-space saving claimed).
+Source/app/runtime/borrowed objects, backups and receipts remain. Final report
+closure, rescans, preservation and zero Desktop SSH precede the driver-owned commit.
+
 # v0.14.0 — Share Desktop source-update checks
 
 [Plain-language behavior and native Mac measurements](release-notes-v0.14.0.md).
