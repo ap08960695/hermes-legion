@@ -1,3 +1,49 @@
+# v0.17.0 — Profile MCP idle defaults
+
+[Plain-language behavior and native Mac component evidence](release-notes-v0.17.0.md).
+Two production targets, the existing unittest and two native guides change.
+`mcp.idle_timeout_seconds` defaults to disabled; positive finite seconds supply
+the existing native timeout only to stdio/no-events entries missing both top
+and nested lifecycle idle keys, after portable merge. Boolean/nonfinite/invalid/
+overflow/disabled values leave healthy entries intact. Existing lazy behavior,
+explicit overrides, security and profile boundaries stay intact. No new module,
+dependency, tool, observer process, lifecycle or reconnect implementation.
+
+Seven new test methods produce twelve clean old-code failing subcases, then
+**25 native unittest cases pass**. Existing cache and concurrent-first-use cases
+remain in that selection. Actual canonical config parser set/get readback
+proves the default and positive inheritance while unrelated raw synthetic model,
+provider, credential-pool, fallback and server settings remain exact. Private
+audit negatives: five pass. Selected runtime lacks canonical pytest and pinned
+Ruff; no download or full-native-suite pass is claimed.
+
+Fresh native preflight used the actual loader, SDK, registry, supervisor and
+stdio echo peer: three processes, 180.844 MiB summed RSS, no shutdown survivors.
+Final matched pair uses the previous versus patched loader with identical initial
+config bytes and matching caches seeded separately. At 5.5 seconds idle, summed
+RSS **184.8125 → 139.21875 MiB**, 24.7% lower; recursive children **2 → 0**, including
+supervisor. Whole-case peak **184.875 → 185.09375 MiB**, essentially unchanged;
+maximum three sampled native processes on both sides. Next echo **2.624 →
+109.128 ms**. Patched children disappear 70.44 ms after the observed deadline.
+Fresh peer counter resets, schema stays registered, a subsequent six-second RPC
+finishes on that same peer beyond the five-second limit, and retirement resumes.
+Both runs preserve config bytes and end with zero children. Initial paired probe
+included restart inside the delayed RPC; replaced by the final separated-latency
+pair above, not counted as an independent repeated benchmark.
+
+Twenty-millisecond recursive samples include native parent/peer/supervisor and
+exclude one outer orchestration process. Known overall topology <=4, <4 GiB.
+Shared RSS pages, observer allocations and sampling limits apply. Python audit
+checks are not OS containment. No app/other-machine/SSH/model/network acceptance,
+physical-pressure, Linux/Windows execution or whole-gateway saving is claimed.
+
+Companion: **133 run, 131 passed, two Linux-only skips**. Export remains **1,030
+targets**; all 1,025 unrelated manifest rows/source bytes/patch sections exact,
+including P0. Actual reverse/base/reapply and strict installed compatibility
+pass. Thirteen inherited cumulative whitespace diagnostics remain unchanged;
+new native delta is clean. Release-copy, inventory and exact directory/history
+scans are required before the driver signal. Daily app and owner state untouched.
+
 # v0.16.0 — Ticket-helper memory admission
 
 [Plain-language behavior and native Mac controlled-overlap evidence](release-notes-v0.16.0.md).

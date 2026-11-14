@@ -10,6 +10,16 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Profile MCP idle defaults (v0.17.0)
+
+An opt-in profile timeout supplies existing idle retirement to eligible stdio
+servers. Explicit server policies win; HTTP/events receive no inherited timeout.
+Pair with cached lazy startup only for servers whose state may be discarded.
+[Behavior, native idle measurements and restart tradeoffs](release-notes-v0.17.0.md).
+Five existing default/loader/test/doc targets change; the kit stays at 1,030
+targets. P0 SSH protection and all unrelated targets remain exact. Whole-gateway
+idle RAM and daily-app adoption remain separate acceptance items.
+
 ## Ticket-helper memory admission (v0.16.0)
 
 New Desktop ticket helpers wait below 512 MiB observed execution-host availability

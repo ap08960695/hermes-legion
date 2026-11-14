@@ -35425,7 +35425,7 @@ index cc90cbb213f6fe92a64679b37395b39b7da85c26..6255d1886094e705b1e5761d8bf07b65
 +
  def load_newest_good_backup(config_path: Path) -> Optional[dict]:
 diff --git a/hermes_cli/config_defaults.py b/hermes_cli/config_defaults.py
-index 63ff490ee732eca4f4d604c29d221f4704b5969c..e07555fb608be27f05cc3dc53d659bc863a8c3f9 100644
+index 63ff490ee732eca4f4d604c29d221f4704b5969c..a3a9bd432aac2e15f0db6d722a7f2a159c48c1ee 100644
 --- a/hermes_cli/config_defaults.py
 +++ b/hermes_cli/config_defaults.py
 @@ -34,2 +34,3 @@ DEFAULT_CONFIG = {
@@ -35466,7 +35466,7 @@ index 63ff490ee732eca4f4d604c29d221f4704b5969c..e07555fb608be27f05cc3dc53d659bc8
 +        # Optional owner ceiling per model; bounds explicit session/task choices on supported wires.
 +        "reasoning_effort_limits": {},
          # Stored reasoning is replayed to every provider that can read it by default. This flag
-@@ -554,6 +556,6 @@ DEFAULT_CONFIG = {
+@@ -554,6 +556,8 @@ DEFAULT_CONFIG = {
      "mcp": {  # MCP runtime behavior (distinct from mcp_servers: definitions and auxiliary.mcp).
 -        # Auto-reload MCP connections when config.yaml's mcp_servers changes (CLI watcher). Every
 -        # reload rebuilds the tool surface and INVALIDATES the provider prompt cache (next message
@@ -35474,10 +35474,12 @@ index 63ff490ee732eca4f4d604c29d221f4704b5969c..e07555fb608be27f05cc3dc53d659bc8
 -        # detects the change and prints /reload-mcp guidance.
 +        # Defer cached stdio startup; explicit server/HTTP/events policy and idle limits remain.
 +        "memory_saving": False,
++        # Opt in only when restarting stdio servers may discard their state.
++        "idle_timeout_seconds": 0.0,
 +        # Auto-reload after config changes invalidates the provider prompt cache.
 +        # When false, the watcher only prints /reload-mcp guidance.
          "auto_reload_on_config_change": True,
-@@ -832,2 +834,10 @@ DEFAULT_CONFIG = {
+@@ -832,2 +836,10 @@ DEFAULT_CONFIG = {
      "display": {
 +        "prompt_suggestions": {
 +            "enabled": True,
@@ -35488,7 +35490,7 @@ index 63ff490ee732eca4f4d604c29d221f4704b5969c..e07555fb608be27f05cc3dc53d659bc8
 +            "daily_calls": 60,
 +        },
          "compact": False,
-@@ -1416,2 +1426,11 @@ DEFAULT_CONFIG = {
+@@ -1416,2 +1428,11 @@ DEFAULT_CONFIG = {
      "goals": {
 +        # Allow a bound agent's CLI to create its own goal under the existing turn cap.
 +        "allow_self_management": False,
@@ -35500,7 +35502,7 @@ index 63ff490ee732eca4f4d604c29d221f4704b5969c..e07555fb608be27f05cc3dc53d659bc8
 +        # still pause.
 +        "delegated_decisions": False,
          # Max continuation turns before auto-pause (/goal resume) — guards against judge false
-@@ -1900,5 +1919,5 @@ DEFAULT_CONFIG = {
+@@ -1900,5 +1921,5 @@ DEFAULT_CONFIG = {
      "kanban": {
 -        # Auto-subscribe the originating gateway/TUI session to completion + block events when
 -        # kanban_create is called from a session with a persistent delivery channel. Disable for
@@ -35509,12 +35511,12 @@ index 63ff490ee732eca4f4d604c29d221f4704b5969c..e07555fb608be27f05cc3dc53d659bc8
 +        "blocked_task_markers": [],
 +        # Subscribe the originating persistent session to completion/block events; False requires explicit subscriptions.
          "auto_subscribe_on_create": True,
-@@ -1918,2 +1937,4 @@ DEFAULT_CONFIG = {
+@@ -1918,2 +1939,4 @@ DEFAULT_CONFIG = {
          "failure_limit": 2,
 +        # In-place retries after a failed worker turn; legacy HERMES_KANBAN_TURN_RECOVERY overrides this.
 +        "turn_recovery_attempts": 3,
          # Worker stdout/stderr log rotation at spawn time (2 MiB + one backup). Raise to keep more
-@@ -1928,5 +1949,2 @@ DEFAULT_CONFIG = {
+@@ -1928,5 +1951,2 @@ DEFAULT_CONFIG = {
          "default_assignee": "",
 -        # Global cap: positive int = the HOST never has more than N tasks 'running' across all
 -        # boards and both dispatch lanes. None = ~MemTotal / 512 MiB clamped to [2, 8]; where
@@ -77958,10 +77960,10 @@ index 0000000000000000000000000000000000000000..21503b41148859027f4abb8777503684
 +    assert ansi_strip.strip_ansi('\x1b]x'*1000)=='x'*1000
 diff --git a/tests/tools/test_mcp_memory_saving.py b/tests/tools/test_mcp_memory_saving.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..f4a47147c22d782a975361b8c0081b8e8ce078c2
+index 0000000000000000000000000000000000000000..72dda1a2f2ae7a02f00f3b4766f0fd6fcbd4a034
 --- /dev/null
 +++ b/tests/tools/test_mcp_memory_saving.py
-@@ -0,0 +1,307 @@
+@@ -0,0 +1,368 @@
 +"""Profile-level on-demand MCP policy preserves server overrides and stateful sessions."""
 +import asyncio
 +import concurrent.futures
@@ -78065,6 +78067,67 @@ index 0000000000000000000000000000000000000000..f4a47147c22d782a975361b8c0081b8e
 +        finally:
 +            reset_hermes_home_override(token)
 +
++
++    def test_profile_idle_default_reaches_stdio_with_or_without_lazy_policy(self):
++        for lazy in [False, True]:
++            for value in [5, 2.5, "5"]:
++                with self.subTest(lazy=lazy, value=value):
++                    cfg = self.load({"memory_saving": lazy, "idle_timeout_seconds": value})["echo"]
++                    self.assertEqual(cfg.get("idle_timeout_seconds"), float(value))
++                    self.assertEqual(cfg.get("lazy", False), lazy)
++
++    def test_disabled_or_invalid_profile_idle_keeps_servers_and_lazy_policy(self):
++        for value in [None, 0, -1, False, True, "invalid", {}, [],
++                      float("nan"), float("inf"), -float("inf"), 10 ** 400]:
++            with self.subTest(value=value):
++                cfg = self.load({"memory_saving": True, "idle_timeout_seconds": value})["echo"]
++                self.assertIs(cfg.get("lazy"), True)
++                self.assertNotIn("idle_timeout_seconds", cfg)
++
++    def test_present_server_idle_keys_prevent_profile_inheritance(self):
++        for value in [0, None, "invalid", False, 12]:
++            for policy in [{"idle_timeout_seconds": value},
++                           {"lifecycle": {"idle_timeout_seconds": value}},
++                           {"idle_timeout_seconds": None, "lifecycle": {"idle_timeout_seconds": 3}}]:
++                with self.subTest(policy=policy):
++                    cfg = {"command": "python3", **policy}
++                    self.assertEqual(self.load({"idle_timeout_seconds": 5}, {"echo": cfg})["echo"], cfg)
++
++    def test_unrelated_or_malformed_lifecycle_does_not_hide_idle_default(self):
++        for lifecycle in [{"keepalive_interval": 10}, None, "invalid"]:
++            with self.subTest(lifecycle=lifecycle):
++                cfg = {"command": "python3", "lifecycle": lifecycle}
++                self.assertEqual(self.load({"idle_timeout_seconds": 5}, {"echo": cfg})["echo"],
++                                 {**cfg, "idle_timeout_seconds": 5.0})
++
++    def test_http_and_events_do_not_inherit_profile_idle(self):
++        servers = {"http": {"url": "https://example.invalid/mcp"},
++                   "both": {"url": "https://example.invalid/mcp", "command": "python3"},
++                   "events": {"command": "python3", "events": "true"},
++                   "stdio": {"command": "python3", "events": False}}
++        got = self.load({"idle_timeout_seconds": 5}, servers)
++        for name in ["http", "both", "events"]:
++            self.assertEqual(got[name], servers[name])
++        self.assertEqual(got["stdio"].get("idle_timeout_seconds"), 5.0)
++
++    def test_portable_entries_inherit_idle_without_overwriting_their_policy(self):
++        portable = {"plugin_echo": {"command": "python3"},
++                    "stateful": {"command": "python3", "idle_timeout_seconds": 0}}
++        got = self.load({"memory_saving": True, "idle_timeout_seconds": 5}, portable=portable)
++        self.assertEqual(got["plugin_echo"], {"command": "python3", "lazy": True, "idle_timeout_seconds": 5.0})
++        self.assertEqual(got["stateful"], {**portable["stateful"], "lazy": True})
++
++    def test_idle_default_is_scoped_to_owning_profile(self):
++        self.assertEqual(self.load({"idle_timeout_seconds": 5})["echo"].get("idle_timeout_seconds"), 5.0)
++        other = self.home / "profiles" / "idle-other"
++        other.mkdir(parents=True)
++        token = set_hermes_home_override(other)
++        try:
++            (other / "config.yaml").write_text(json.dumps({"mcp_servers": {"echo": {"command": "python3"}}}))
++            with patch("tools.mcp_tool_config._portable_mcp_servers"):
++                self.assertNotIn("idle_timeout_seconds", _load_mcp_config()["echo"])
++        finally:
++            reset_hermes_home_override(token)
 +
 +    def test_absent_wire_cache_hints_do_not_disable_legacy_schema_reuse(self):
 +        from mcp.types import ListToolsResult
@@ -86518,28 +86581,57 @@ index e74f1510b57f110aa7069409398fb4a15677730d..9220075364eda16e55ad78352d38b461
 +        with _agent_tool_lock(agent):
              agent.tools = merged
 diff --git a/tools/mcp_tool_config.py b/tools/mcp_tool_config.py
-index 0d5947682a1a62007c1f516f70aa244a47191704..cd72b2803764fd52206d4618554eaef39f5cee45 100644
+index 0d5947682a1a62007c1f516f70aa244a47191704..4ef489d06c3cbc211b14c9cfdbb6107a8373acb3 100644
 --- a/tools/mcp_tool_config.py
 +++ b/tools/mcp_tool_config.py
-@@ -17,3 +17,3 @@ from typing import Any, Dict, List, Optional, Set, Tuple
+@@ -8,2 +8,3 @@ import json
+ import logging
++import math
+ import os
+@@ -17,3 +18,3 @@ from typing import Any, Dict, List, Optional, Set, Tuple
  from hermes_cli.stderr_timestamp import stamp_line, timestamp
 -from tools.mcp_tool_common import _env_ref_name, _prepend_path
 +from tools.mcp_tool_common import _env_ref_name, _parse_boolish, _prepend_path
 
-@@ -699,3 +699,4 @@ def _load_mcp_config() -> dict[str, dict]:
+@@ -689,2 +690,29 @@ def _portable_mcp_servers(safe_servers: dict[str, dict], rejected: frozenset[str
+
++def _apply_profile_memory_policy(servers: dict[str, dict], policy: Any) -> None:
++    """Apply opt-in defaults without replacing explicit server lifecycle policy."""
++    if not isinstance(policy, dict):
++        return
++    lazy = _parse_boolish(policy.get("memory_saving"), default=False)
++    value = policy.get("idle_timeout_seconds")
++    try:
++        idle = float(value) if not isinstance(value, bool) else 0.0
++    except (TypeError, ValueError, OverflowError):
++        idle = 0.0
++    if not math.isfinite(idle) or idle <= 0:
++        idle = 0.0
++    if not lazy and not idle:
++        return
++    from tools.mcp_tool_events import events_enabled
++    for cfg in servers.values():
++        if "url" in cfg or events_enabled(cfg):
++            continue
++        if lazy:
++            cfg.setdefault("lazy", True)
++        lifecycle = cfg.get("lifecycle")
++        if idle and "idle_timeout_seconds" not in cfg and not (
++            isinstance(lifecycle, dict) and "idle_timeout_seconds" in lifecycle
++        ):
++            cfg["idle_timeout_seconds"] = idle
++
++
+ def _load_mcp_config() -> dict[str, dict]:
+@@ -699,3 +727,4 @@ def _load_mcp_config() -> dict[str, dict]:
              return {}
 -        servers = load_config().get("mcp_servers")
 +        config = load_config()
 +        servers = config.get("mcp_servers")
          try:  # ensure .env vars are available for interpolation
-@@ -717,2 +718,8 @@ def _load_mcp_config() -> dict[str, dict]:
+@@ -717,2 +746,3 @@ def _load_mcp_config() -> dict[str, dict]:
          _portable_mcp_servers(safe_servers, rejected)
-+        policy = config.get("mcp")
-+        if isinstance(policy, dict) and _parse_boolish(policy.get("memory_saving"), default=False):
-+            from tools.mcp_tool_events import events_enabled
-+            for cfg in safe_servers.values():
-+                if "url" not in cfg and not events_enabled(cfg):
-+                    cfg.setdefault("lazy", True)
++        _apply_profile_memory_policy(safe_servers, config.get("mcp"))
          return safe_servers
 diff --git a/tools/mcp_tool_discovery.py b/tools/mcp_tool_discovery.py
 index 3eb3657d9979c84eb4aa261c2e9d8239b8fc8066..bdea18b6ae27cff4103a44842293f18280f6f40d 100644
@@ -89906,10 +89998,10 @@ index 893a18d96d75c22ee0167123abe7e10532e3d756..93b3c29961c35377169a48c0939ffbe8
 +The ordinary single-account command and JSON schema below remain unchanged.
  
 diff --git a/website/docs/reference/mcp-config-reference.md b/website/docs/reference/mcp-config-reference.md
-index 44d25bc19bae30f9665f7c418a2dcf102e6fbccb..5da0d8f166ceea8d8f39f533e026aecc71df0c93 100644
+index 44d25bc19bae30f9665f7c418a2dcf102e6fbccb..ade136286e3e6511ce2962243555153e6871dbe0 100644
 --- a/website/docs/reference/mcp-config-reference.md
 +++ b/website/docs/reference/mcp-config-reference.md
-@@ -43,2 +43,25 @@ mcp_servers:
+@@ -43,2 +43,45 @@ mcp_servers:
 
 +## Profile memory policy
 +
@@ -89929,13 +90021,33 @@ index 44d25bc19bae30f9665f7c418a2dcf102e6fbccb..5da0d8f166ceea8d8f39f533e026aecc
 +definitions are unaffected. The setting applies on subsequent discovery/startup;
 +it does not stop already-connected servers or rewrite their configuration.
 +
-+The switch does not set an idle timeout. Stateful servers can retain browser or
-+session state after a call; use their existing `idle_timeout_seconds` only when
-+restarting that state is acceptable. `0` disables teardown, including under the
-+existing `lifecycle:` mapping. See [Lazy start](../user-guide/features/mcp.md#lazy-start).
++`memory_saving` alone does not set an idle timeout. To also retire restart-safe
++stdio servers after use, opt in separately:
++
++```yaml
++mcp:
++  memory_saving: true
++  idle_timeout_seconds: 5
++```
++
++`mcp.idle_timeout_seconds` defaults to `0.0` (disabled). Positive finite seconds
++(including numeric strings) supply a default to stdio servers without events;
++HTTP and event-enabled servers receive no inherited timeout. Invalid, boolean,
++nonfinite, zero and negative global values leave server policies unchanged.
++The idle option works independently of `memory_saving` and applies after portable
++definitions merge. Neither setting rewrites the configuration file.
++
++The presence of a server `idle_timeout_seconds` key, either at the top level or
++inside `lifecycle:`, prevents inheritance, even for `0`, `null` or invalid values.
++Native lifecycle semantics remain: top-level `0` disables teardown; top-level
++`null` can still fall through to a nested timeout. Stateful servers must opt out
++with per-server `idle_timeout_seconds: 0` when their browser or session state must
++survive. Global opt-in cannot identify restart safety. Retirement discards server
++memory; the next call pays restart latency. Active RPCs retain their existing
++lifecycle protection. See [Lazy start](../user-guide/features/mcp.md#lazy-start).
 +
  ## Server keys
-@@ -63,3 +86,3 @@ mcp_servers:
+@@ -63,3 +106,3 @@ mcp_servers:
  | `keepalive_interval` | number | both | Liveness ping cadence in seconds (floored at 5s). HTTP defaults to `180`; set it below the server's session TTL when the server GC's idle sessions quickly. Stdio disables keepalive when omitted; set a value to opt in explicitly |
 -| `lazy` | bool | both | Register the server's tools from the on-disk schema cache at startup and only spawn/connect it on the first tool call (default: `false`). Needs one prior live connect to fill the cache; a missing or stale entry falls back to the normal eager connect. Status surfaces show the server as `lazy` with its cached tool count until first use |
 +| `lazy` | bool | both | Register the server's tools from the on-disk schema cache at startup and only spawn/connect it on the first tool call (default: `false`, or `true` for eligible stdio servers under `mcp.memory_saving`). Needs one prior live connect to fill the cache; a missing or stale entry falls back to the normal eager connect. Status surfaces show the server as `lazy` with its cached tool count until first use |
@@ -90121,10 +90233,10 @@ index 7d8751f1747c559ccdf7898877a6d37fec7f1002..ad849d65c5ba02bfc580a3027248d19b
 +
  `--delivery-mode` controls **how** the notifier reacts to a terminal event. Every subscription is in one of three modes (`notify` is the default and the original behavior):
 diff --git a/website/docs/user-guide/features/mcp.md b/website/docs/user-guide/features/mcp.md
-index b8a03dc55f5a437b296fada6e6fe38bc8b05602d..1a4d91d7bf94c7483a161d2d51369cdca43ca0f5 100644
+index b8a03dc55f5a437b296fada6e6fe38bc8b05602d..a85d019b671460dc5ccc34e795b9a57737d49977 100644
 --- a/website/docs/user-guide/features/mcp.md
 +++ b/website/docs/user-guide/features/mcp.md
-@@ -769,2 +769,42 @@ A server with `lazy: true` is registered from the on-disk schema cache instead:
+@@ -769,2 +769,59 @@ A server with `lazy: true` is registered from the on-disk schema cache instead:
 
 +#### On-demand startup for a profile
 +
@@ -90146,8 +90258,25 @@ index b8a03dc55f5a437b296fada6e6fe38bc8b05602d..1a4d91d7bf94c7483a161d2d51369cdc
 +already-connected server. Portable stdio entries loaded into the profile share
 +the policy, while direct session-owned MCP definitions do not inherit it.
 +
-+No idle timeout is added. A server that you use stays alive unless you explicitly
-+configure its existing lifecycle limits. For a server whose state may be discarded:
++`memory_saving` alone adds no idle timeout. To also release idle stdio processes,
++set a profile default only when restarting those servers may discard their state:
++
++```yaml
++mcp:
++  memory_saving: true
++  idle_timeout_seconds: 5
++```
++
++The idle default is disabled (`0.0`) unless explicitly set to positive finite
++seconds. It also works without `memory_saving`. HTTP and event-enabled servers
++do not inherit it; portable stdio entries do. Invalid global values are ignored.
++Any explicit server idle key, top-level or under `lifecycle:`, prevents inheritance
++including `0`, `null` and invalid values. Existing native interpretation remains;
++top-level `null` can fall through to a nested timeout.
++
++Global opt-in cannot determine restart safety. Opt out stateful servers with
++per-server `idle_timeout_seconds: 0`. For a server whose state may be discarded,
++a different server-specific limit still wins:
 +
 +```yaml
 +mcp_servers:
