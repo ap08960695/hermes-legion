@@ -73,3 +73,43 @@ From v0.6.8, title and lineage identity also use
 The bounded message window above remains unchanged. Exact title-to-ID resolution
 preserves canonical Bot Chat and numbered-continuation behavior without resolving
 the full prompt or tool context merely to select the session.
+
+
+## Nonfinite session start times (v0.8.60)
+
+A saved SQLite REAL infinity in `sessions.started_at` previously escaped the
+shared timestamp conversion as `OverflowError`. Title lookup, explicit
+session-plus-query search and message paging could all fail even without a date
+filter. The helper already promises None for an unusable timestamp; it now catches
+failed numeric conversion and overflowing numeric text consistently.
+
+These metadata checks retain their existing policy: an unknown start passes when
+no date bound is requested and fails when a bound is requested. Finite matching
+dates still work. Exact integer values, including large integers, finite float
+truncation, numeric strings, ISO dates/datetimes and boolean/empty handling remain.
+This does not repair or rewrite stored timestamps, change the global FTS query,
+ranking, profile or visibility policy, or add a model call or retry.
+
+Actual native Mac Python 3.14.9 stores signed infinity in a synthetic database and
+reproduces failure in all three modes. Twenty direct conversion cases and 36
+registered-handler cases cover signed infinity plus finite controls, writer and
+actual read-only handles, and unbounded/matching-bound requests. After correcting
+a test-only attribute typo before the production edit, original source gives 31
+conversion failures and 33 passing controls; repaired and reapplied focused files
+pass all 64. Numeric NaN is covered directly; SQLite converts it to NULL, so it is
+not claimed as persisted numeric-NaN evidence.
+
+The native read-only handles reject UPDATE with SQLITE_READONLY and close on
+success/error. Main/WAL bytes and a separate observer's data_version stay unchanged
+across calls; reader closure precedes byte comparison. The seed writer remains
+open during observation, so its final close/checkpoint is outside that comparison.
+Derived shared-memory sidecars are not claimed byte-immutable. Tests use synthetic
+history only; no owner conversation or inference request is used.
+
+A seven-file admitted search selection passes 214, zero failures/skips/retries,
+with one exact mixed-case symlink fixture deselected. Initial baseline records
+54 passes/one FileExistsError: this filesystem cannot create `WoRk` beside `work`.
+That case fails before its behavior assertion and remains unchanged/unverified,
+not a green full-native-suite result. See the [verification record](verification.md)
+for exact selection, export and release gates. Original-session continuation,
+owner-process adoption, UI, Linux parity and workload gains remain separate.

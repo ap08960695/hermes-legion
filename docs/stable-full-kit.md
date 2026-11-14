@@ -10,6 +10,15 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Nonfinite recall timestamps (v0.8.60)
+
+The existing session-start conversion helper returns its None sentinel when a
+nonfinite numeric value cannot become an integer. Title/scoped/message-page
+recall can recover unfiltered history; existing metadata date bounds still reject
+unknown starts. See [native persistence and filter checks](session-recall.md#nonfinite-session-start-times-v0860).
+Only existing search runtime/title-regression after hashes change. All 998 targets,
+before hashes, pinned base and native test-selection bytes remain.
+
 ## Boolean judge wait targets (v0.8.59)
 
 The shared wait-target parser skips JSON booleans before integer conversion. Valid

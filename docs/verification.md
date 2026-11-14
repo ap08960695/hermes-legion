@@ -1,3 +1,60 @@
+# v0.8.60 — Keep recall usable with nonfinite start timestamps
+
+The existing `_coerce_started_ts` helper returns None for numeric conversion
+ValueError/OverflowError and for overflowing numeric text. It preserves exact
+integers, finite floats, numeric strings, ISO parsing and boolean/empty handling.
+Title, scoped-query and message-page metadata checks keep their existing policy
+for unknown start times. No database rewrite/schema, query/rank/profile/visibility, provider,
+retry, control or timer change. See [behavior and preservation limits](session-recall.md#nonfinite-session-start-times-v0860).
+
+Actual native Mac Python 3.14.9 persists REAL infinity and reproduces all three
+failures with no date bound. Four-file baseline: 54 pass/one unrelated fixture
+setup failure. New tests initially assert a nonexistent `_read_only` attribute;
+that test-only typo is corrected to `read_only` before source edit. Corrected red: 31 conversion
+failures/33 passes; fixed and reapplied focused file: 64 passes each, overlapping.
+Twenty direct cases and 36 registered-handler cases cover persisted signed
+infinity/finite controls, writer/read-only handles and unbounded/matching-bound
+behavior. Bounds require explicit exclusion or the exact scope error; unbounded
+responses require actual title/message IDs and content. Numeric NaN is direct-only.
+Main/WAL byte and data_version checks pass; real read-only UPDATE fails with SQLITE_READONLY (8),
+readers close, seed writer remains open until fixture teardown. No owner data/model.
+
+Seven admitted native files pass 214, zero failures/skips/retries, 35.8 s, one worker:
+
+```sh
+bash scripts/run_tests.sh -j 1 \
+  tests/tools/test_session_search_title_bounds.py \
+  tests/tools/test_session_search_scoped_query.py \
+  tests/tools/test_session_search_link_scope.py \
+  tests/tools/test_session_search_readonly.py \
+  tests/tools/test_session_search.py \
+  tests/tools/test_session_search_safe_window.py \
+  tests/tools/test_session_search_fleet_scope.py \
+  -k 'not test_context_profile_symlink_uses_a_canonical_link_name'
+```
+
+The single deselected case attempts a distinct WoRk symlink beside existing work
+on this case-insensitive filesystem and raises FileExistsError before its behavior
+assertion. Original 54/1 baseline is retained. Fixture and related runtime stay
+unchanged; canonical-profile symlink behavior remains unverified here. Prior two
+HTTP/four PID cases are not selected or newly validated. No full-suite-green claim.
+
+Committed runtime/dependencies are borrowed read-only. Separate native PM tools
+use locked pytest 9.1.1 and pytest-asyncio 1.3.0. The existing scoped Python audit
+guard, verified null sink, private scratch and wrapper flag/probe handling remain.
+Fresh negative checks and exit status 7 propagation pass; one CPU/worker, no retries.
+OS/native-extension containment remains unproven. No UI/service/model/fleet work,
+owner state/control/quota/stop/timer change or new workload-saving claim.
+
+Export retains v0.22.5 base, all 998 paths/before hashes and native selection bytes;
+only existing search runtime/title-regression after hashes change. Installed,
+reverse-to-base and reapply checks pass for all 998 targets; reapplied focused
+checks pass 64 cases. Companion suite: 124 run, 122 pass, two Linux-only skips,
+3.767 s. Native changed-source and raw root whitespace checks pass. The tracked-
+only 222-file release inventory passes. Exact Gitleaks directory/history scans
+exit zero with no leaks; history covers 190 commits. Final refresh follows owned
+cleanup before driver handoff.
+
 # v0.8.59 — Reject boolean goal-judge wait targets
 
 The shared integer-alias helper now skips booleans before conversion. Previously,

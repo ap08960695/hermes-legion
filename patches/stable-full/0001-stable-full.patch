@@ -75516,10 +75516,10 @@ index 0000000000000000000000000000000000000000..e4065ebef030882bfa2217a016a71316
 +            db.close()
 diff --git a/tests/tools/test_session_search_title_bounds.py b/tests/tools/test_session_search_title_bounds.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..33dc47e1fd8f1805347b7412dce187f8ddc4f692
+index 0000000000000000000000000000000000000000..dbbc8021d39680f528d16bb921cb76f3c8ff2d2b
 --- /dev/null
 +++ b/tests/tools/test_session_search_title_bounds.py
-@@ -0,0 +1,117 @@
+@@ -0,0 +1,193 @@
 +"""Title recall must not hydrate a long transcript or an explicitly filtered-out match."""
 +import json
 +import pytest
@@ -75637,6 +75637,82 @@ index 0000000000000000000000000000000000000000..33dc47e1fd8f1805347b7412dce187f8
 +    assert entry["session_id"] == "empty" and entry["detail"] == "full"
 +    assert not entry["messages"] and entry["messages_before"] == entry["messages_after"] == 0
 +    assert "warning" not in entry
++
++
++@pytest.mark.parametrize("value, expected", [
++    (float("inf"), None), (float("-inf"), None), (float("nan"), None),
++    ("1e999", None), ("-1e999", None), ("inf", None), ("-inf", None),
++    ("NaN", None), (None, None), ("", None), (True, None), (False, None),
++    (0, 0), (1700000000, 1700000000), (1700000000.9, 1700000000),
++    ("1700000000.9", 1700000000), ("2023-11-14T22:13:20Z", 1700000000),
++    ("2023-11-14", 1699920000), (2**60 + 1, 2**60 + 1), (10**400, 10**400),
++])
++def test_started_timestamp_coercion_tolerates_nonfinite_values(value, expected):
++    from tools.session_search_tool import _coerce_started_ts
++
++    assert _coerce_started_ts(value) == expected
++
++
++@pytest.mark.parametrize("started_at", [float("inf"), float("-inf"), 1700000000])
++@pytest.mark.parametrize("read_only", [False, True])
++@pytest.mark.parametrize("mode", ["title", "scoped", "page"])
++@pytest.mark.parametrize("bounded", [False, True])
++def test_persisted_start_time_preserves_recall_and_date_scope(archive, started_at, read_only, mode, bounded):
++    from contextlib import closing, nullcontext
++    from pathlib import Path
++    import math
++    import sqlite3
++    from tools.registry import registry
++
++    owner, ids = archive
++    owner._conn.execute("UPDATE sessions SET started_at=? WHERE id='archive'", (started_at,))
++    owner._conn.commit()
++    paths = [owner.db_path, Path(str(owner.db_path) + "-wal")]
++    before = {path: path.read_bytes() for path in paths if path.exists()}
++    reader = owner
++    try:
++        with (SessionDB(owner.db_path, read_only=True) if read_only else nullcontext(owner)) as reader:
++            assert reader.read_only is read_only
++            assert reader.get_session_metadata("archive")["started_at"] == started_at
++            if read_only:
++                with pytest.raises(sqlite3.OperationalError) as refused:
++                    reader._conn.execute("UPDATE sessions SET title='must not change' WHERE id='archive'")
++                assert refused.value.sqlite_errorcode == sqlite3.SQLITE_READONLY
++            args = {"query": "Quarterly archive review"} if mode == "title" else {"session_id": "archive"}
++            if mode == "scoped":
++                args.update(query="entry 0", sort="oldest", limit=1)
++            elif mode == "page":
++                args.update(around_message_id=ids[0], content_offset=0, content_limit=16)
++            if bounded:
++                args.update(after="2020-01-01", before="2030-01-01")
++            with closing(sqlite3.connect(f"file:{owner.db_path}?mode=ro", uri=True)) as observer:
++                version = observer.execute("PRAGMA data_version").fetchone()[0]
++                try:
++                    result = json.loads(registry.get_entry("session_search").handler(args, db=reader))
++                    if bounded and not math.isfinite(started_at):
++                        if mode == "page":
++                            assert result["success"] is False
++                            assert result["error"] == "message is outside the requested session scope"
++                        else:
++                            assert result["success"] is True and result["results"] == []
++                    else:
++                        assert result["success"] is True
++                        if mode == "title":
++                            entry = next(r for r in result["results"] if r.get("matched_role") == "session_title")
++                            assert entry["session_id"] == "archive" and entry["match_message_id"] == ids[0]
++                            assert entry["title"] == "Quarterly archive review"
++                        elif mode == "scoped":
++                            assert [r["match_message_id"] for r in result["results"]] == [ids[0]]
++                            assert result["results"][0]["snippet"].startswith("entry 0 ")
++                        else:
++                            assert result["message_id"] == ids[0]
++                            assert result["content"].startswith("entry 0 ") and len(result["content"]) == 16
++                finally:
++                    assert observer.execute("PRAGMA data_version").fetchone()[0] == version
++    finally:
++        if read_only and reader is not owner:
++            assert reader._conn is None and reader._read_conns_closed
++        assert {path: path.read_bytes() for path in paths if path.exists()} == before
 diff --git a/tests/tools/test_session_search_unicode_work.py b/tests/tools/test_session_search_unicode_work.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..1c7a911887188944457ee5fdf989d0c24d2aef73
@@ -81607,7 +81683,7 @@ index c6f442809329b97ad43019e5451a3fe807c56187..e3c6777a565fc3113367ceb52e600880
 +    omitted = total - _MAX_OUTPUT_CHARS
      return joined[:_MAX_OUTPUT_CHARS] + f"\n… [{omitted:,} output chars truncated{hint}]"
 diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
-index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..849035d3f4affb1cba7ddf69c001d6891e6466c9 100644
+index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..ac4cdd9856b96581b30446e7c4b3e88a7db41319 100644
 --- a/tools/session_search_tool.py
 +++ b/tools/session_search_tool.py
 @@ -10,5 +10,8 @@ No LLM calls — every shape returns actual DB messages.
@@ -81646,7 +81722,20 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..849035d3f4affb1cba7ddf69c001d689
 -    return bool(content) and content.lstrip().startswith(_COMPACTION_PREFIXES)
 +    return isinstance(content, str) and bool(content) and content.lstrip().startswith(_COMPACTION_PREFIXES)
  
-@@ -236,2 +244,18 @@ def _is_compacted_message(db, message_id) -> bool:
+@@ -157,3 +165,6 @@ def _coerce_started_ts(value: Any) -> Optional[int]:
+     if isinstance(value, (int, float)):
+-        return int(value)
++        try:
++            return int(value)
++        except (ValueError, OverflowError):
++            return None
+     text = str(value).strip()
+@@ -161,3 +172,3 @@ def _coerce_started_ts(value: Any) -> Optional[int]:
+         return int(float(text))
+-    except (TypeError, ValueError):
++    except (TypeError, ValueError, OverflowError):
+         pass
+@@ -236,2 +247,18 @@ def _is_compacted_message(db, message_id) -> bool:
  
 +def _has_unpaired_surrogate(value: Any) -> bool:
 +    """Keep malformed legacy Unicode out of UTF-8 payloads; original bytes remain pageable."""
@@ -81665,7 +81754,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..849035d3f4affb1cba7ddf69c001d689
 +
 +
  def _shape_message(m: dict[str, Any], anchor_id: Optional[int] = None,
-@@ -245,7 +269,16 @@ def _shape_message(m: dict[str, Any], anchor_id: Optional[int] = None,
+@@ -245,7 +272,16 @@ def _shape_message(m: dict[str, Any], anchor_id: Optional[int] = None,
      entry.update({k: m.get(k) for k in ("tool_name", "tool_calls", "tool_call_id") if m.get(k)})
 +    entry.update({k: m[k] for k in ("content_truncated", "original_content_chars", "original_content_bytes",
 +                                    "content_encoding", "tool_calls_truncated", "original_tool_calls_bytes") if k in m})
@@ -81685,7 +81774,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..849035d3f4affb1cba7ddf69c001d689
 +        entry.update(content=displayed[:max_content_len] + "…", content_truncated=True,
 +                     original_content_chars=m.get("original_content_chars", len(displayed)))
      return {k: v for k, v in entry.items() if v is not None or k == "content"}
-@@ -256,7 +289,25 @@ def _session_link(session_id: str, profile: str | None = None) -> str:
+@@ -256,7 +292,25 @@ def _session_link(session_id: str, profile: str | None = None) -> str:
      emits, so it renders as a titled link. The profile segment is omitted when it
 -    can't be named confidently (a bare id still resolves, just not across profiles)."""
 +    can't be named confidently (a bare id still resolves, just not across profiles).
@@ -81714,7 +81803,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..849035d3f4affb1cba7ddf69c001d689
 +            return candidate
 +        return ""
      name = (profile or "").strip() or _quiet(_active, "", "get_active_profile_name failed for session link")
-@@ -275,3 +326,13 @@ def _discovery_entry(lineage_root: Optional[str], **fields) -> dict[str, Any]:
+@@ -275,3 +329,13 @@ def _discovery_entry(lineage_root: Optional[str], **fields) -> dict[str, Any]:
  
 -def _title_match_result(db, query: str, current_lineage_root: Optional[str]) -> Optional[dict[str, Any]]:
 +def _title_message_sample(db, session_id: str) -> tuple[list[dict[str, Any]], int]:
@@ -81729,7 +81818,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..849035d3f4affb1cba7ddf69c001d689
 +                        after_ts: Optional[int] = None, before_ts: Optional[int] = None,
 +                        excluded_roots: Optional[set[str]] = None) -> Optional[dict[str, Any]]:
      """Discovery-shaped result when the query matches a session title, else None."""
-@@ -287,11 +348,26 @@ def _title_match_result(db, query: str, current_lineage_root: Optional[str]) ->
+@@ -287,11 +351,26 @@ def _title_match_result(db, query: str, current_lineage_root: Optional[str]) ->
          return None
 -    session_meta = _quiet(lambda: db.get_session(lineage_root) or db.get_session(session_id), None,
 -                          "get_session failed for title match %s", session_id) or {}
@@ -81761,14 +81850,14 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..849035d3f4affb1cba7ddf69c001d689
 +        anchor_id = messages[0].get("id") if messages else None
 +        view = {}
      title = session_meta.get("title") or title_query
-@@ -300,4 +376,4 @@ def _title_match_result(db, query: str, current_lineage_root: Optional[str]) ->
+@@ -300,4 +379,4 @@ def _title_match_result(db, query: str, current_lineage_root: Optional[str]) ->
          return [_shape_message(m, anchor_id=anchor, max_content_len=max_content_len)
 -                for m in (view.get(key) or fallback)]
 -    return {**_discovery_entry(
 +                for m in (view.get(key, []) if view_available else fallback)]
 +    entry = {**_discovery_entry(
          lineage_root, session_id=session_id, when=_format_timestamp(session_meta.get("started_at")),
-@@ -309,4 +385,8 @@ def _title_match_result(db, query: str, current_lineage_root: Optional[str]) ->
+@@ -309,4 +388,8 @@ def _title_match_result(db, query: str, current_lineage_root: Optional[str]) ->
          bookend_end=shape("bookend_end", messages[-3:]), messages_before=view.get("messages_before", 0),
 -        messages_after=view.get("messages_after", max(len(messages) - 5, 0)), detail="full"),
 +        messages_after=view.get("messages_after", max(total - 5, 0)), detail="full"),
@@ -81778,7 +81867,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..849035d3f4affb1cba7ddf69c001d689
 +                     warning="Session title matched, but loading its messages failed. History is unavailable, not empty.")
 +    return entry
  
-@@ -333,8 +413,11 @@ def _hydrate_hit(db, lineage_root: str, match_info: dict[str, Any], result_detai
+@@ -333,8 +416,11 @@ def _hydrate_hit(db, lineage_root: str, match_info: dict[str, Any], result_detai
      try:
 -        view = db.get_anchored_view(hit_sid, msg_id, window=5, bookend=3)
 +        view = db.get_recall_anchored_view(
@@ -81793,7 +81882,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..849035d3f4affb1cba7ddf69c001d689
 -    return _discovery_entry(
 +    entry = _discovery_entry(
          lineage_root, session_id=hit_sid,
-@@ -351,2 +434,87 @@ def _hydrate_hit(db, lineage_root: str, match_info: dict[str, Any], result_detai
+@@ -351,2 +437,87 @@ def _hydrate_hit(db, lineage_root: str, match_info: dict[str, Any], result_detai
          detail=result_detail)
 +    entry.update({key: match_info[key] for key in ('snippet_field', 'snippet_offset', 'snippet_encoding', 'offset_unit')
 +                  if key in match_info})
@@ -81881,7 +81970,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..849035d3f4affb1cba7ddf69c001d689
 +            if root is not None:
 +                selected.setdefault(root, {**row, "_lineage_root": root})
  
-@@ -360,22 +528,16 @@ def _discover(db, query: str, role_filter: Optional[list[str]], limit: int, sort
+@@ -360,22 +531,16 @@ def _discover(db, query: str, role_filter: Optional[list[str]], limit: int, sort
      excluded_roots = _excluded_lineage_roots(db, exclude_session_ids or [])
 -    title_result = _title_match_result(db, query, current_lineage_root)
 -    # FTS rows are time-bounded in SQL (_search_filter_clauses); the title match bypasses that
@@ -81916,7 +82005,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..849035d3f4affb1cba7ddf69c001d689
 -    if not raw_results and not title_result:
 +    if not seen_sessions:
          return _discover_payload(db, query, detail, [], message=(
-@@ -384,34 +546,2 @@ def _discover(db, query: str, role_filter: Optional[list[str]], limit: int, sort
+@@ -384,34 +549,2 @@ def _discover(db, query: str, role_filter: Optional[list[str]], limit: int, sort
              "phrases, exclude with NOT, or prefix-match with `deploy*`."))
 -    seen_sessions: dict[str, dict[str, Any]] = {}
 -    results = [title_result] if title_result else []
@@ -81951,11 +82040,11 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..849035d3f4affb1cba7ddf69c001d689
 -            continue
 -        seen_sessions.setdefault(resolved_sid, {**r, "_lineage_root": resolved_sid})
      for lineage_root, match_info in seen_sessions.items():
-@@ -437,2 +567,3 @@ def _resolve_profile_db(profile: str):
+@@ -437,2 +570,3 @@ def _resolve_profile_db(profile: str):
          return None
 +    from hermes_constants import get_hermes_home
      from hermes_cli import profiles as profiles_mod
-@@ -441,5 +572,18 @@ def _resolve_profile_db(profile: str):
+@@ -441,5 +575,18 @@ def _resolve_profile_db(profile: str):
      profiles_mod.validate_profile_name(canon)
 -    if not profiles_mod.profile_exists(canon):
 +    home = get_hermes_home()
@@ -81976,7 +82065,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..849035d3f4affb1cba7ddf69c001d689
 +    except (OSError, TypeError, ValueError):
 +        return False
  
-@@ -451,11 +595,17 @@ def _read_session(db, session_id: str, head: int = 20, tail: int = 10, link_prof
+@@ -451,11 +598,17 @@ def _read_session(db, session_id: str, head: int = 20, tail: int = 10, link_prof
          return tool_error(f"session_id not found: {session_id}", success=False)
 -    rows, err = _loud(lambda: db.get_messages(session_id), "get_messages failed for %s: %s", "failed to load session",
 -                      session_id)
@@ -81999,13 +82088,13 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..849035d3f4affb1cba7ddf69c001d689
 -               messages=shaped[:head] + shaped[-tail:] if truncated else shaped,
 +               messages=shaped,
                 **({"message": (f"Session has {total} messages; showing first {head} + last {tail}. "
-@@ -473,3 +623,4 @@ def _read_scoped(db, sid: str, profile: Optional[str]) -> str:
+@@ -473,3 +626,4 @@ def _read_scoped(db, sid: str, profile: Optional[str]) -> str:
      result = _read_session(db, sid, link_profile=profile)
 -    if json.loads(result).get("success") is not False or profile:
 +    payload = json.loads(result)
 +    if profile or payload.get("error") != f"session_id not found: {sid}":
          return result
-@@ -479,2 +630,36 @@ def _read_scoped(db, sid: str, profile: Optional[str]) -> str:
+@@ -479,2 +633,36 @@ def _read_scoped(db, sid: str, profile: Optional[str]) -> str:
  
 +def _search_one_session(db, sid: str, query: str, profile: Optional[str], role_filter: Optional[str],
 +                        limit: int, sort: Optional[str], detail: str, after_ts: Optional[int], before_ts: Optional[int],
@@ -82042,23 +82131,23 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..849035d3f4affb1cba7ddf69c001d689
 +
 +
  def _list_recent_sessions(db, limit: int, current_session_id: str | None = None, link_profile: str | None = None) -> str:
-@@ -546,3 +731,3 @@ def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
+@@ -546,3 +734,3 @@ def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
          return tool_error(f"session_id not found: {session_id}", success=False)
 -    view, err = _loud(lambda: db.get_messages_around(session_id, around_message_id, window=window),
 +    view, err = _loud(lambda: db.get_recall_window(session_id, around_message_id, window=window),
                        "get_messages_around failed: %s", "failed to load messages")
-@@ -556,3 +741,3 @@ def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
+@@ -556,3 +744,3 @@ def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
          rebind_view = _same_lineage(db, session_id, owning) and _quiet(
 -            lambda: db.get_messages_around(owning, around_message_id, window=window),
 +            lambda: db.get_recall_window(owning, around_message_id, window=window),
              None, "rebind get_messages_around failed: %s", with_exc=True)
-@@ -565,2 +750,5 @@ def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
+@@ -565,2 +753,5 @@ def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
          return tool_error(f"around_message_id {around_message_id} not in session_id {session_id}", success=False)
 +    actual_anchor = next((m for m in messages if m.get("id") == around_message_id), None)
 +    if current_session_id and _anchor_in_live_context(db, actual_anchor, session_id, current_session_id):
 +        return tool_error("scroll rejected: anchor lives in the current session lineage (already in your active context)", success=False)
      return _ok(
-@@ -573,3 +761,55 @@ def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
+@@ -573,3 +764,55 @@ def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
                "as an orientation marker). messages_before/messages_after < window "
 -              "means you've hit that end of the session."), **extra)
 +              "means you've hit that end of the session. For truncated content, use the message id "
@@ -82115,7 +82204,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..849035d3f4affb1cba7ddf69c001d689
 +    return _ok(mode="message_page", session_id=session_id, link=_session_link(session_id, profile),
 +               message_id=message_id, content_field=field, **page)
  
-@@ -577,8 +817,29 @@ def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
+@@ -577,8 +820,29 @@ def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
  def _dispatch(query, role_filter, limit, db, current_session_id, session_id,
 -              around_message_id, window, sort, profile, detail,
 -              after=None, before=None, exclude_session_ids=None) -> str:
@@ -82148,7 +82237,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..849035d3f4affb1cba7ddf69c001d689
 +                "full" if isinstance(detail, str) and detail.strip().lower() == "full" else "adaptive", after_ts, before_ts,
 +                exclude_session_ids)
          return _read_scoped(db, session_id.strip(), profile)
-@@ -600,2 +861,51 @@ def _dispatch(query, role_filter, limit, db, current_session_id, session_id,
+@@ -600,2 +864,51 @@ def _dispatch(query, role_filter, limit, db, current_session_id, session_id,
  
 +_FLEET_BUDGET_S = 10.0
 +
@@ -82200,7 +82289,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..849035d3f4affb1cba7ddf69c001d689
 +
 +
  def session_search(query: str = "", role_filter: str | None = None, limit: int = 3, db=None,
-@@ -603,5 +913,14 @@ def session_search(query: str = "", role_filter: str | None = None, limit: int =
+@@ -603,5 +916,14 @@ def session_search(query: str = "", role_filter: str | None = None, limit: int =
                     window: int = 5, sort: str | None = None, profile: str | None = None, detail: str = "adaptive",
 -                   after: str | None = None, before: str | None = None, exclude_session_ids: Optional[list[str]] = None) -> str:
 +                   after: str | None = None, before: str | None = None, exclude_session_ids: Optional[list[str]] = None,
@@ -82216,7 +82305,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..849035d3f4affb1cba7ddf69c001d689
 +        return _fleet_discover(query.strip(), role_filter, limit, db, current_session_id, sort, detail,
 +                               after, before, exclude_session_ids)
      from hermes_constants import get_hermes_home
-@@ -610,20 +929,23 @@ def session_search(query: str = "", role_filter: str | None = None, limit: int =
+@@ -610,20 +932,23 @@ def session_search(query: str = "", role_filter: str | None = None, limit: int =
      owned_dbs: list[Any] = []
 -    # A raw `@session:<profile>/<id>` link as session_id: ids never contain "/", so
 -    # split on it and adopt the embedded profile only when none was passed.
@@ -82258,7 +82347,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..849035d3f4affb1cba7ddf69c001d689
 +                return tool_error("session link profile conflicts with profile argument", success=False)
 +            profile, session_id = embedded, emb_id.strip()
      # A managed worker's handle is a RuntimeSessionStore: it mirrors the owner's write and lineage
-@@ -635,2 +957,14 @@ def session_search(query: str = "", role_filter: str | None = None, limit: int =
+@@ -635,2 +960,14 @@ def session_search(query: str = "", role_filter: str | None = None, limit: int =
          db = None
 +    # Named stores are opened read-only. Only an actual same-store identity
 +    # retains the live-session exclusion; session IDs can collide across stores.
@@ -82273,7 +82362,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..849035d3f4affb1cba7ddf69c001d689
 +        db = profile_db
 +        owned_dbs.append(profile_db)
      if db is None:
-@@ -645,4 +979,5 @@ def session_search(query: str = "", role_filter: str | None = None, limit: int =
+@@ -645,4 +982,5 @@ def session_search(query: str = "", role_filter: str | None = None, limit: int =
          return _dispatch(query, role_filter, limit, db, current_session_id, session_id,
 -                         around_message_id, window, sort, profile, detail,
 -                         after=after, before=before, exclude_session_ids=exclude_session_ids)
@@ -82281,7 +82370,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..849035d3f4affb1cba7ddf69c001d689
 +                         after=after, before=before, exclude_session_ids=exclude_session_ids,
 +                         content_offset=content_offset, content_limit=content_limit, content_field=content_field)
      finally:
-@@ -665,5 +1000,7 @@ SESSION_SEARCH_SCHEMA = {
+@@ -665,5 +1003,7 @@ SESSION_SEARCH_SCHEMA = {
          "Recall past conversations: search or read old Hermes sessions (FTS5), or "
 -        "scroll inside one. Four shapes, picked by args: `query` = discovery "
 +        "scroll inside one. Shapes are picked by args: `query` = discovery "
@@ -82291,46 +82380,46 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..849035d3f4affb1cba7ddf69c001d689
 +        "`session_id` + `around_message_id` = scroll (window around an anchor); "
 +        "add `content_offset` to page one bounded message body; "
          "`session_id` alone = read a whole session — how you resolve an "
-@@ -685,3 +1022,4 @@ SESSION_SEARCH_SCHEMA = {
+@@ -685,3 +1025,4 @@ SESSION_SEARCH_SCHEMA = {
                      "Search query (discovery shape). Keywords, phrases, or boolean "
 -                    "expressions to find in past sessions. Omit to browse recent "
 +                    "expressions to find in past sessions. With session_id, search "
 +                    "only that session and return bounded substring excerpts. Omit to browse recent "
                      "sessions. Ignored when session_id + around_message_id are set "
-@@ -693,3 +1031,4 @@ SESSION_SEARCH_SCHEMA = {
+@@ -693,3 +1034,4 @@ SESSION_SEARCH_SCHEMA = {
                  "description": (
 -                    "Discovery shape only. Max sessions to return (default 3, max 10). "
 +                    "Maximum sessions in discovery or matching messages in a scoped "
 +                    "search (default 3, max 10). "
                      "Bump to 5–10 when the topic likely spans several sessions and you "
-@@ -703,3 +1042,4 @@ SESSION_SEARCH_SCHEMA = {
+@@ -703,3 +1045,4 @@ SESSION_SEARCH_SCHEMA = {
                  "description": (
 -                    "Discovery shape only. Temporal bias on top of FTS5 ranking: omit "
 +                    "Temporal bias for discovery; scoped search orders matching "
 +                    "messages newest first by default. For discovery omit "
                      "for relevance-only (exploratory recall), 'newest' for "
-@@ -712,3 +1052,4 @@ SESSION_SEARCH_SCHEMA = {
+@@ -712,3 +1055,4 @@ SESSION_SEARCH_SCHEMA = {
                  "description": (
 -                    "Discovery shape only. 'adaptive' (default) fully hydrates the "
 +                    "In scoped search, 'adaptive' (default) returns up to 512 characters "
 +                    "per excerpt; 'full' returns up to 4000. In discovery, 'adaptive' fully hydrates the "
                      "top-ranked result and returns only the exact anchor message for "
-@@ -722,3 +1063,3 @@ SESSION_SEARCH_SCHEMA = {
+@@ -722,3 +1066,3 @@ SESSION_SEARCH_SCHEMA = {
                  "description": (
 -                    "Discovery shape only. Inclusive lower bound on session start "
 +                    "Inclusive lower bound on session start "
                      "time. ISO date/datetime (e.g. 2026-06-01) or relative duration "
-@@ -731,3 +1072,3 @@ SESSION_SEARCH_SCHEMA = {
+@@ -731,3 +1075,3 @@ SESSION_SEARCH_SCHEMA = {
                  "description": (
 -                    "Discovery shape only. Exclusive upper bound on session start "
 +                    "Exclusive upper bound on session start "
                      "time. ISO date/datetime (a date-only value is midnight UTC that "
-@@ -741,3 +1082,3 @@ SESSION_SEARCH_SCHEMA = {
+@@ -741,3 +1085,3 @@ SESSION_SEARCH_SCHEMA = {
                  "description": (
 -                    "Discovery shape only. Session ids already inspected this task. "
 +                    "Session ids already inspected this task. "
                      "Those sessions and their lineage are omitted so a later query "
-@@ -749,5 +1090,4 @@ SESSION_SEARCH_SCHEMA = {
+@@ -749,5 +1093,4 @@ SESSION_SEARCH_SCHEMA = {
                  "description": (
 -                    "Scroll shape. Session to read inside. Use the session_id returned "
 -                    "from a prior discovery call. Must be paired with "
@@ -82338,7 +82427,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..849035d3f4affb1cba7ddf69c001d689
 +                    "Session to read or search inside. Pair with query to search "
 +                    "only this session, or around_message_id to scroll."
                  ),
-@@ -762,2 +1102,17 @@ SESSION_SEARCH_SCHEMA = {
+@@ -762,2 +1105,17 @@ SESSION_SEARCH_SCHEMA = {
              },
 +            "content_offset": {
 +                "type": "integer", "minimum": 0,
@@ -82356,13 +82445,13 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..849035d3f4affb1cba7ddf69c001d689
 +                                "text pages only textual parts, excluding image and attachment payloads."),
 +            },
              "window": {
-@@ -774,3 +1129,4 @@ SESSION_SEARCH_SCHEMA = {
+@@ -774,3 +1132,4 @@ SESSION_SEARCH_SCHEMA = {
                      "Optional. Comma-separated roles to include. Discovery defaults to "
 -                    "'user,assistant' (tool output is usually noise). Pass "
 +                    "'user,assistant' (tool output is usually noise); session-scoped "
 +                    "search defaults to 'user,assistant,tool' for recovery. Pass "
                      "'user,assistant,tool' to include tool output (debugging tool "
-@@ -788,2 +1144,11 @@ SESSION_SEARCH_SCHEMA = {
+@@ -788,2 +1147,11 @@ SESSION_SEARCH_SCHEMA = {
              },
 +            "scope": {
 +                "type": "string",
@@ -82374,7 +82463,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..849035d3f4affb1cba7ddf69c001d689
 +                ),
 +            },
          },
-@@ -804,3 +1169,4 @@ registry.register(
+@@ -804,3 +1172,4 @@ registry.register(
          **{k: args.get(k) for k in ("role_filter", "session_id", "around_message_id", "sort", "profile",
 -                                    "after", "before", "exclude_session_ids")}),
 +                                    "after", "before", "exclude_session_ids", "content_offset", "content_limit",
