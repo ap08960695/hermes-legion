@@ -320,3 +320,38 @@ guide nor a successful release authorizes a blanket age sweep of user data.
 ## Verified maintenance retirement (v0.8.26)
 
 A later explicitly selected cleanup retired duplicate exports/readbacks and completed test snapshot copies on Linux and Mac. It retained canonical archives and byte-verified compressed snapshot evidence, reducing selected allocation by 240.2 MiB net. See [the measured scope and process-observation safeguards](native-maintenance-continuation.md#retired-maintenance-copies). This was an operator-selected maintenance action; scheduled cleanup rules and permissions remain unchanged.
+
+
+## Revalidate snapshot paths during compaction (v0.8.62)
+
+The companion snapshot compactor already refuses linked backup roots and paths at
+admission. It now repeats that rule using `lstat` on the unresolved file path and
+parents before creating restoration metadata, publishing final outputs and removing
+the original. The separate root refusal before resolution remains; an explicitly
+selected home alias still resolves to its supported physical backup location.
+
+Previously a parent could be moved outside the selected home and replaced with a
+symlink after admission. The child file retained its identity, so the compactor
+could remove the relocated original and report success. Its verified gzip survived;
+this was an unwanted original removal, not proof of irrecoverable data loss.
+
+Detected changes now refuse through the existing error path. Before publication,
+no final archive/metadata is published. If publication already happened, the exact
+original and verified archive/restoration metadata remain. Owned temporary files
+are cleaned; unrelated/live files remain. Existing age, ownership, hard-link,
+SQLite-header/sidecar, free-space, digest, identity, fsync and no-overwrite gates
+remain. No automatic selection/deletion, SQL, model call or timer change is added.
+
+Fifteen existing storage tests pass baseline. One new test exercises six subcases:
+root/inner-parent relocation during compression, metadata writing and after
+publication. All six fail before repair on Python 3.12.10 and Hermes' selected Mac
+Python 3.14.9. After repair all 16 storage tests pass on both interpreters, including
+actual SQLite creation, compression/readback, metadata hashes, supported home aliases
+and CLI preflight/refusal. These are overlapping test selections, not 32 distinct
+cases. No owner backup or live Hermes service is used.
+
+Repeated path checks are not an atomic directory transaction: check-to-use races
+remain. Keep selected snapshots closed and backup directories stable during apply.
+This release detects the tested linked-parent windows; it does not claim arbitrary
+concurrent namespace mutation is safe. Upstream source patch/manifest/test selection
+remain byte-identical; this change belongs to the companion maintenance helper.

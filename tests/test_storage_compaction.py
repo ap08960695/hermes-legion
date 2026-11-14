@@ -1,5 +1,6 @@
 """Storage maintenance preserves exact backup bytes and leaves live state alone."""
 import gzip
+import hashlib
 import importlib.util
 import json
 import os
@@ -202,6 +203,72 @@ class BackupCompactionTests(unittest.TestCase):
         self.assertTrue(self.path.read_bytes().startswith(self.before))
         self.assertFalse(self.path.with_name("snapshot.db.gz").exists())
         self.assertEqual(list(self.path.parent.glob(".legion-compact-*")), [])
+
+    def test_retargeted_backup_parents_are_refused_during_apply(self):
+        for location in ("root", "inner"):
+            for stage in ("compression", "metadata", "published"):
+                with self.subTest(location=location, stage=stage), tempfile.TemporaryDirectory() as tmp:
+                    base = Path(tmp).resolve()
+                    home = base / "home"
+                    source = home / "backups/old/snapshot.db"
+                    source.parent.mkdir(parents=True)
+                    source.write_bytes(self.before)
+                    os.utime(source, (time.time() - 48 * 3600,) * 2)
+                    live = home / "state.db"
+                    live.write_bytes(b"synthetic live state")
+                    unrelated = base / "unrelated.txt"
+                    unrelated.write_bytes(b"synthetic unrelated data")
+                    selected = home / "backups" if location == "root" else source.parent
+                    relocated = base / "relocated"
+                    moved_source = relocated / ("old/snapshot.db" if location == "root" else "snapshot.db")
+                    swapped = False
+
+                    def retarget():
+                        nonlocal swapped
+                        if not swapped:
+                            selected.rename(relocated)
+                            selected.symlink_to(relocated, target_is_directory=True)
+                            swapped = True
+
+                    native_gzip, native_dump = storage.gzip.GzipFile, storage.json.dump
+                    native_sync = storage._sync_directory
+
+                    class RetargetingGzip(native_gzip):
+                        def write(self, data):
+                            if stage == "compression":
+                                retarget()
+                            return super().write(data)
+
+                    def dump(*args, **kwargs):
+                        result = native_dump(*args, **kwargs)
+                        if stage == "metadata":
+                            retarget()
+                        return result
+
+                    def sync(parent):
+                        if stage == "published":
+                            retarget()
+                        native_sync(parent)
+
+                    with patch.object(storage.gzip, "GzipFile", RetargetingGzip), \
+                            patch.object(storage.json, "dump", dump), \
+                            patch.object(storage, "_sync_directory", sync):
+                        with self.assertRaisesRegex(ValueError, "symlink backup paths are refused"):
+                            storage.compact_backup(home, "old/snapshot.db", apply=True)
+                    self.assertTrue(swapped and selected.is_symlink())
+                    self.assertEqual(moved_source.read_bytes(), self.before)
+                    self.assertEqual(live.read_bytes(), b"synthetic live state")
+                    self.assertEqual(unrelated.read_bytes(), b"synthetic unrelated data")
+                    archive = moved_source.with_name("snapshot.db.gz")
+                    metadata = moved_source.with_name("snapshot.db.gz.metadata.json")
+                    if stage == "published":
+                        self.assertEqual(gzip.decompress(archive.read_bytes()), self.before)
+                        restore = json.loads(metadata.read_text())
+                        self.assertEqual(restore["source_bytes"], len(self.before))
+                        self.assertEqual(restore["sha256"], hashlib.sha256(self.before).hexdigest())
+                    else:
+                        self.assertFalse(archive.exists() or metadata.exists())
+                    self.assertEqual(list(relocated.rglob(".legion-compact-*")), [])
 
     def test_sync_failure_retains_both_original_and_verified_archive(self):
         with patch.object(storage, "_sync_directory", side_effect=OSError("sync failed")):

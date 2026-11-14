@@ -1,3 +1,35 @@
+# v0.8.62 — Recheck backup paths at compaction mutation boundaries
+
+The companion snapshot helper shares its unresolved-path `lstat` symlink check
+between admission, metadata creation, exclusive publication and original removal.
+Pre-resolve backup-root refusal and supported physical home aliases remain. This
+preserves the original when a parent changes to a link after initial inspection.
+No SQL, automatic selection, model, timer or owner-state action is added.
+
+A real Mac fixture moves HOME/backups outside HOME after archive publication and
+inserts a link to the relocated directory. Original code reports compacted and
+removes the relocated source; verified gzip remains. Fifteen existing tests pass
+baseline. Six added root/inner-parent subcases fail before repair on required
+Python 3.12.10 and committed Hermes Python 3.14.9. They inject at compression,
+metadata writing and after publication. Fixed storage selection passes 16 tests
+on each interpreter, overlapping counts. Exact original/live/unrelated bytes,
+expected final-output presence, gzip readback/metadata hashes and owned-temp cleanup
+are asserted. Native execution uses stdlib companion tests under private HOME/
+HERMES_HOME/TMPDIR, not a Hermes service or a bypass of process-observation guards.
+
+The repeated guard detects tested windows; it cannot make check-to-use operations
+atomic. Keep backup namespace stable. See [operator limits](storage-and-backups.md#revalidate-snapshot-paths-during-compaction-v0862).
+
+All upstream patches/manifests/native selection stay byte-identical. Only existing
+companion helper/test, README, storage guide, verification and release inventory
+change; no new public file/dependency/lock. Required companion suite: 125 run,
+123 pass, two Linux-only skips, 3.794 s. Storage cases also pass under committed
+Hermes Python 3.14.9. Raw whitespace and unchanged-patch checks pass; tracked-only
+inventory passes for 222 release files. Exact Gitleaks directory/history scans
+exit zero with no leaks; history covers 192 commits. Final refresh follows owned
+cleanup. No production backup purge,
+owner config/service/control/quota/stop/timer change or disk-saving claim.
+
 # v0.8.61 — Preserve named-profile links through native case aliases
 
 The shared recall link helper replaces one validated candidate's resolved-string

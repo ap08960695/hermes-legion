@@ -31,6 +31,12 @@ def _check_sidecars(path):
         raise ValueError("SQLite sidecar present; only closed backup snapshots are eligible")
 
 
+def _check_backup_symlinks(path):
+    # shortcut: checks are not atomic, require a directory ownership protocol before supporting concurrent renames.
+    if any(stat.S_ISLNK(p.lstat().st_mode) for p in (path, *path.parents)):
+        raise ValueError("symlink backup paths are refused")
+
+
 def _candidate(home, relative, min_age_hours):
     if (isinstance(min_age_hours, bool) or not isinstance(min_age_hours, (float, int))
             or not math.isfinite(min_age_hours) or min_age_hours < 1):
@@ -43,8 +49,7 @@ def _candidate(home, relative, min_age_hours):
     if rel.is_absolute() or ".." in rel.parts or not rel.parts:
         raise ValueError("select a relative file inside the backup directory")
     path = root / rel
-    if any(p.is_symlink() for p in (path, *path.parents) if p != root and root in p.parents):
-        raise ValueError("symlink backup paths are refused")
+    _check_backup_symlinks(path)
     if not path.resolve(strict=True).is_relative_to(root):
         raise ValueError("backup path escapes the selected root")
     info = path.lstat()
@@ -123,6 +128,7 @@ def compact_backup(home, relative, *, apply=False, min_age_hours=24):
                    "source_bytes": info.st_size, "sha256": digest.hexdigest(),
                    "mode": stat.S_IMODE(info.st_mode), "uid": info.st_uid, "gid": info.st_gid,
                    "mtime_ns": info.st_mtime_ns}
+        _check_backup_symlinks(path)
         _require_space(path.parent)
         meta_fd, meta_name = tempfile.mkstemp(prefix=".legion-compact-", dir=path.parent)
         metadata_temp = Path(meta_name)
@@ -132,9 +138,11 @@ def compact_backup(home, relative, *, apply=False, min_age_hours=24):
             stream.flush()
             os.fsync(stream.fileno())
         # Exclusive publication never overwrites a raced or pre-existing output.
+        _check_backup_symlinks(path)
         os.link(temp, archive)
         os.link(metadata_temp, metadata)
         _sync_directory(path.parent)
+        _check_backup_symlinks(path)
         _check_sidecars(path)
         if _identity(path.lstat()) != _identity(info):
             raise ValueError("backup changed before removal; original and verified archive retained")
