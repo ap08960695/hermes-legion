@@ -197,6 +197,73 @@ class PlannerTests(unittest.TestCase):
             self.assertNotIn("synthetic-private-canary", result.stdout + result.stderr)
 
 
+    def test_cli_overflowing_snapshot_times_use_generic_read_only_refusal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "synthetic-private-path-canary"
+            root.mkdir()
+            team, snapshot, tasks, pins = (root / name for name in (
+                "team.json", "snapshot.json", "tasks.json", "pins.json"))
+            team.write_text(json.dumps(self.team))
+            tasks.write_text(json.dumps([task("synthetic-private-input-canary")]))
+            pins.write_text(json.dumps({"session-a": {"profile": "build-native", "account": "account-a"}}))
+            for field in ("captured_at", "expires_at"):
+                for sign in (-1, 1):
+                    for explain in (False, True):
+                        with self.subTest(field=field, sign=sign, explain=explain):
+                            state = copy.deepcopy(self.state)
+                            state[field] = sign * 10**400
+                            snapshot.write_text(json.dumps(state))
+                            before = {p.relative_to(root): p.read_bytes() for p in root.rglob("*")}
+                            with self.assertRaises((ValueError, OverflowError)):
+                                self.mod.plan(self.team, state, [task()], now=150)
+                            doctor = subprocess.run([
+                                sys.executable, str(ROOT / "scripts/legion_doctor.py"),
+                                "--team", str(team), "--snapshot", str(snapshot), "--now", "150"],
+                                capture_output=True, text=True, cwd=tmp)
+                            self.assertEqual(doctor.returncode, 1)
+                            self.assertEqual(doctor.stderr, "")
+                            report = json.loads(doctor.stdout)
+                            self.assertFalse(report["offline_ready"])
+                            self.assertEqual(report["runtime_ready"], "unknown")
+                            self.assertIn({"code": "invalid-team-or-snapshot", "status": "fail"}, report["checks"])
+                            result = subprocess.run([
+                                sys.executable, str(ROOT / "scripts/legion_plan.py"), "--team", str(team),
+                                "--snapshot", str(snapshot), "--tasks", str(tasks), "--pins", str(pins),
+                                "--now", "150", *(["--explain"] if explain else [])],
+                                capture_output=True, text=True, cwd=tmp)
+                            self.assertEqual(result.returncode, 1)
+                            self.assertEqual(result.stdout, "")
+                            self.assertEqual(before, {p.relative_to(root): p.read_bytes() for p in root.rglob("*")})
+                            self.assertEqual(result.stderr,
+                                "REFUSED: invalid team, snapshot, task or policy; input values omitted\n")
+
+    def test_cli_finite_snapshot_keeps_selected_and_expired_decisions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            team, snapshot, tasks = (root / name for name in ("team.json", "snapshot.json", "tasks.json"))
+            team.write_text(json.dumps(self.team))
+            tasks.write_text(json.dumps([task()]))
+            for expires, status, reason in ((200, "selected", "eligible-role-route"),
+                                            (149, "hold", "snapshot-expired")):
+                for explain in (False, True):
+                    with self.subTest(expires=expires, explain=explain):
+                        state = copy.deepcopy(self.state)
+                        state["expires_at"] = expires
+                        snapshot.write_text(json.dumps(state))
+                        before = {p.name: p.read_bytes() for p in root.iterdir()}
+                        result = subprocess.run([
+                            sys.executable, str(ROOT / "scripts/legion_plan.py"), "--team", str(team),
+                            "--snapshot", str(snapshot), "--tasks", str(tasks), "--now", "150",
+                            *(["--explain"] if explain else [])], capture_output=True, text=True, cwd=tmp)
+                        self.assertEqual(result.returncode, 0)
+                        self.assertEqual(result.stderr, "")
+                        report = json.loads(result.stdout)
+                        self.assertFalse(report["executed"])
+                        self.assertEqual((report["decisions"][0]["status"], report["decisions"][0]["reason"]),
+                                         (status, reason))
+                        self.assertEqual(before, {p.name: p.read_bytes() for p in root.iterdir()})
+
+
 class PublishedExamplesTests(unittest.TestCase):
     def run_example(self, scenario, snapshot="synthetic-ready", pins=None):
         command = [sys.executable, str(ROOT / "scripts/legion_plan.py"), "--team",

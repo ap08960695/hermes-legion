@@ -1,3 +1,40 @@
+# v0.8.65 — Keep planner numeric overflow inside the CLI refusal boundary
+
+A valid JSON snapshot with an oversized integer in captured_at/expires_at raises
+OverflowError from the existing finite-number check. The CLI previously emitted
+a traceback instead of its value-free REFUSED message. Add only OverflowError to
+the existing main exception tuple. Validation/API rejection, timestamp policy,
+pins, quotas, choices, explanation mode and side-effect-free planning remain.
+The doctor already handles this exception; setup has no snapshot numeric path.
+
+Original planner baseline: 27 pass. Eight added field/sign/ordinary-explain
+subcases fail at the intended exact-stderr assertion before repair on both
+Python 3.12.10 and committed Hermes Python 3.14.9. Each uses an actual 401-digit
+JSON integer and a valid other timestamp, avoiding parser digit limits. API and
+doctor refusals and input preservation pass before the CLI assertion. Fixed
+planner selection: 29 pass on each interpreter, overlapping counts. Four finite
+CLI controls assert selected/eligible-role-route and hold/snapshot-expired results
+in ordinary/explain modes, exact unchanged inputs and no execution.
+
+Native interpreter is resolved read-only through PM committed selection. Stdlib
+companion tests run from a private temporary working directory with isolated
+HOME/HERMES_HOME/TMPDIR and -I/-B/-S parent. No source/dependency clone, test-tool
+install, Hermes service/model/fleet/UI launch or process-observer override.
+No OS/native-extension containment or native Hermes full-suite claim.
+
+All upstream patches/manifests/native verification/selection stay byte-identical;
+unchanged 999-target kit is not re-exported or rerun here. Six existing public
+files change: helper/test, README, offline guide, verification and release
+inventory. No new public file/dependency/lock/adoption target. Raw whitespace
+passes for this change; v0.8.64 patch-context disposition remains historical.
+Required full companion: 129 run, 127 pass/two Linux-only skips, 4.500 s.
+Tracked-only 222-file inventory and exact directory/all-history Gitleaks scans
+pass, no leaks, 195 commits. Advisor 61 accepts bounded handoff. Owned 16 KiB
+fixture/log/home tree and pointer removed; absence verified, borrowed runtime
+retained. No attributed disk saving. Final hash/inventory/scan refresh precedes
+driver signal. No owner configuration/data/control changes or new live-service,
+workload or adoption evidence. [Operator/API boundary](offline-setup-tools.md#oversized-planner-timestamps-v0865).
+
 # v0.8.64 — Avoid unused context reads in compression parent checks
 
 The shared compression-child gate selects the existing metadata reader when

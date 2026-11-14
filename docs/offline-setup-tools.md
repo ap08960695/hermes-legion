@@ -17,6 +17,31 @@ A report has two separate outcomes:
 
 A valid, explicitly supplied snapshot can be checked with `--team`, `--snapshot` and optionally `--now`. Stale/non-finite observations fail; the doctor does not refresh them. This checks schema and freshness, not actual provider balances or credential selection. Real dispatch must still use native readiness and quota gates. Never use the synthetic observation clock for real data.
 
+### Oversized planner timestamps (v0.8.65)
+
+The companion planner CLI now handles `OverflowError` alongside its existing
+invalid-input errors. A valid JSON integer such as the value of `10**400` in
+`captured_at` or `expires_at` can overflow Python's finite-number check. It remains
+refused, with exit 1, empty stdout and the existing generic stderr message:
+
+```text
+REFUSED: invalid team, snapshot, task or policy; input values omitted
+```
+
+Ordinary and `--explain` modes no longer expose a traceback or internal paths for
+this failure. There is no new timestamp limit, coercion, accepted input or retry.
+Programmatic validation keeps its existing exceptions; the offline doctor already
+handles numeric overflow. Callers of the Python API must still handle invalid
+input errors. Finite selected and expired-hold decisions retain their behavior.
+No input file, pin, quota observation or owner configuration is changed.
+
+Native Mac Python 3.14.9 and the required Python 3.12.10 each reproduce eight
+stderr failures before repair: two fields, both signs, ordinary/explain modes,
+with the other field kept valid. All 29 planner tests pass afterward on each
+interpreter. Real CLI cases verify exact refusal, API/doctor rejection, unchanged
+input bytes/directory contents and finite selected/expired decisions. These are
+companion stdlib checks, not a Hermes service, dispatch or model-usage result.
+
 ## 2. Preview the five-profile starter team
 
 The model names in `examples/models.small.synthetic.json` are fabricated for offline demonstration. They deliberately have no real account, provider entitlement or live-model acceptance claim. `CHOOSE` / `PLACEHOLDER` values are refused by the exporter; the synthetic `example-*` names demonstrate file formatting only.

@@ -244,7 +244,7 @@ def main():
                       read_json(args.tasks) if args.tasks else [],
                       now=args.now if args.now is not None else time.time(),
                       pins=read_json(args.pins) if args.pins else None, explain=args.explain)
-    except (ValueError, OSError, TypeError, KeyError, AttributeError):
+    except (ValueError, OSError, TypeError, KeyError, AttributeError, OverflowError):
         print("REFUSED: invalid team, snapshot, task or policy; input values omitted", file=sys.stderr)
         return 1
     print(json.dumps(result, indent=2))
