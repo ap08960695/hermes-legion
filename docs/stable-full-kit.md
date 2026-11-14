@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1019-path** Legion source, interface and optimization alternative
+This is the complete **1024-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,15 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Memory-aware Desktop checks (v0.13.0)
+
+POSIX guarded commands wait for at least 512 MiB of observed execution-host
+memory before starting a helper. Unknown observations wait within the existing
+deadline; cancellation prevents a late launch. The prior one-slot fan-out and
+transport policies stay intact. [Behavior, measured modeled-pressure case and
+limits](release-notes-v0.13.0.md). Five existing source/test targets change; no
+new runtime target, setting, dependency or installed-app change is included.
 
 ## On-demand MCP startup (v0.10.0)
 

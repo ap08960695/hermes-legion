@@ -4,6 +4,32 @@ Desktop now shares compatible SSH transports across profiles and queues startup
 checks. The [release notes](release-notes-v0.9.0.md) describe the memory/latency
 tradeoff and consolidate v0.8.46–.73.
 
+## Execution-host memory admission (v0.13.0)
+
+After reading the framed payload, the existing guard observes execution-host
+memory before starting heavy work. Linux accepts explicit `MemAvailable`,
+including zero; Darwin uses a bounded `vm_stat` free-plus-inactive estimate with
+the reported page size. Below 512 MiB or unknown, the command waits while holding
+the existing kernel slot. This threshold is fixed and is not a reservation.
+Waiting shares the existing finite command deadline; expiry has a distinct
+`memory-admission` outcome, without transport cooldown or automatic retry.
+EOF/signals prevent a late spawn. Observer children are reaped before helper
+launch and cannot set the helper-completed signal flag. Cancellation can wait
+for the current observer's bounded 200 ms execution budget.
+
+One guard-owned first stdout header separates admission expiry from child
+output, then is stripped by `SshConnection`. Child exit125 or marker-like output
+cannot masquerade as expiry. Managed detached serves retain their existing
+lifetime policy. Head-of-line waiting is intentional. Configurable concurrency,
+other update helpers and OS-wide admission remain separate work.
+
+The [new release notes](release-notes-v0.13.0.md) report one modeled-pressure native
+Mac case (160.3 to 100.8 MiB peak summed RSS, 0.797 to 2.233 seconds). Its local
+session-pipe mocks and held native fixture are not real remote or physical
+low-memory proof; a separate run exercises the real Darwin observer. The older
+v0.9.0 four-request measurements below remain historical, with a different case.
+Do not add percentages across those cases.
+
 ## Ownership and admission
 
 A process-lifetime namespace binds each socket to the Electron main process that

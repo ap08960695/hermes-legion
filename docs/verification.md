@@ -1,3 +1,65 @@
+# v0.13.0 — POSIX Desktop memory admission
+
+[Plain-language notes and modeled-pressure Mac measurements](release-notes-v0.13.0.md).
+Two production paths and three colocated test files change. The existing guard
+observes execution-host memory after framing and before heavy spawn, retaining
+the one-slot P0 limit. Linux explicit `MemAvailable` and Darwin bounded `vm_stat`
+free-plus-inactive estimates admit at 512 MiB; low/unknown waits within the
+existing deadline. EOF/cancellation prevents late work. Expiry has a distinct
+guard-owned first stdout status plus exit125; the consumer strips admitted
+status once. Child output/exit125 cannot impersonate expiry. No new setting,
+dependency, pool, transport retry or wider concurrency policy is added.
+
+Three new production-path tests fail on old source: premature heavy launch,
+missing admission expiry and absent observation. New-source lifetime tests then
+pass. Parser fixtures include zero, units, malformed/missing/duplicate fields,
+page size and non-double-counting. Further actual local-session cases cover
+recovery/exact Thai-NUL stdin exactly once, expiry without retry or connection
+poisoning, cancellation, hung-observer reaping and cross-session slot exclusion.
+Observer SIGCHLD is isolated from heavy-helper completion; existing TERM-resistant
+child, retained pipes, detached serve, shared transport and cooldown cases remain.
+
+Final post-export native selection: **228 passed, three documented skips**, six
+files, 24.60 seconds, exit0. Skips retain the known upstream Mac installer-wrapper
+ownership failure, deep-HOME case requiring outside-root writes, and platform
+skip. An initial unrestricted selection inadvertently ran that deep-HOME fixture
+and reproduced the known ownership failure; it is not acceptance. Its transient
+socket was closed by fixture cleanup; the shared short directory was not deleted.
+A mock missing the new owned status was updated. TypeScript whole-Electron
+no-emit check passes; scoped five-file ESLint has zero errors/warnings. All three
+Electron development bundles compile; no application was launched or packaged.
+Companion: **133 run, 131 passed, two Linux-only skips**, 4.554 seconds, exit0,
+task TMPDIR and bytecode disabled. Full native-suite acceptance is not claimed.
+
+Same native `serve --help` case with a held native CLI-import fixture and modeled
+OS pressure: peak summed RSS160.3125 ->100.8125MiB (**37.1% lower**), request
+797.27 ->2232.56ms. Baseline overlaps; patched execution waits until the fixture
+exits. Exact output matches. Separate real Darwin observation passes. At most
+three processes sampled/<4GiB and no runtime survivors; known fixture topology
+is bounded to four. One pair/15ms samples/shared pages, not actual low-memory
+stress, a reservation, update-helper/gateway/app/remote/Linux/Windows/model proof.
+Availability can change after observation; slot head-of-line waiting is intentional.
+
+Full cumulative export remains1,024targets on unchanged pinned upstream. Actual
+reverse/base/reapply, all hashes and strict installed-checkout compatibility pass;
+unrelated prior bytes and patch sections stay exact. Incremental/root whitespace
+clean;13 inherited cumulative diagnostics unchanged. Minor release inventory and
+exact directory/all-history Gitleaks scans gate handoff. Private evidence lives
+under the isolated admission trial; owner app/home/control state stays protected.
+Configurable concurrency and broader Add4/Add5/UI acceptance remain open.
+
+Intended-tracked-only release verification passes228inventory files/229paths;
+the disposable copy and private index are removed, real index unchanged. Both
+exact Gitleaks directory/all-history commands exit0/no leaks,211history commits;
+neutral history identities verified. Nine audit negative controls pass, and the
+native-case audit functions match the exercised adapter AST; not OS containment.
+Final advisor review accepts the supplied source/results with no concrete blocker.
+Own COW dependencies, compiler outputs, caches, pilot homes and export objects
+are removed (1,231,474,573 logical bytes, no physical-space claim). Original app
+three protected hashes, trial config/backup and1,024source hashes match. Fifteen
+recorded benchmark PID/birthtime identities have no survivor. Reports and final
+zero-SSH/rescan receipts gate the driver-owned commit; no owner app adoption.
+
 # v0.12.0 — Keep saved-message metadata independent of the turn engine
 
 [Plain-language notes and matched Mac measurements](release-notes-v0.12.0.md).
