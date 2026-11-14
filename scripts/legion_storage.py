@@ -170,6 +170,8 @@ def main():
     if len(set(args.backup_files)) != len(args.backup_files):
         parser.error("duplicate backup selection")
     try:
+        # Keep every selection bound to the physical home inspected at startup.
+        args.home = args.home.resolve(strict=True)
         # Inspect every selection before the first mutation. Each apply rechecks it.
         selected = [_candidate(args.home, name, args.min_age_hours)[0] for name in args.backup_files]
         if len(set(selected)) != len(selected):

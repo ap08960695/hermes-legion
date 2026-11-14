@@ -2,6 +2,7 @@
 import gzip
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
+from contextlib import redirect_stderr, redirect_stdout
 
 SPEC = importlib.util.spec_from_file_location(
     "legion_storage", Path(__file__).resolve().parents[1] / "scripts/legion_storage.py")
@@ -165,6 +167,96 @@ class BackupCompactionTests(unittest.TestCase):
         self.assertFalse(self.path.exists())
         with gzip.open(self.path.with_name("snapshot.db.gz"), "rb") as stream:
             self.assertEqual(stream.read(), self.before)
+
+    def test_cli_home_alias_retarget_keeps_initial_physical_selection(self):
+        for apply in (False, True):
+            for stage in ("preflight", "between_files"):
+                with self.subTest(apply=apply, stage=stage), tempfile.TemporaryDirectory() as tmp:
+                    base = Path(tmp).resolve()
+                    home, other = base / "inspected", base / "other"
+                    expected = {"first.db": self.before, "second.db": self.before + b"\0" * 4096}
+                    for root in (home, other):
+                        (root / "backups").mkdir(parents=True)
+                        (root / "state.db").write_bytes(b"synthetic live state")
+                        for name, data in expected.items():
+                            source = root / "backups" / name
+                            source.write_bytes(data if root == home else data + b"\0" * 8192)
+                            os.utime(source, (time.time() - 48 * 3600,) * 2)
+                    unrelated = base / "unrelated.txt"
+                    unrelated.write_bytes(b"synthetic unrelated data")
+                    other_before = {p.relative_to(other): p.read_bytes()
+                                    for p in other.rglob("*") if p.is_file()}
+                    alias = base / "selected"
+                    alias.symlink_to(home, target_is_directory=True)
+                    native_candidate, native_compact = storage._candidate, storage.compact_backup
+                    inspections = 0
+
+                    def retarget():
+                        alias.unlink()
+                        alias.symlink_to(other, target_is_directory=True)
+
+                    def candidate(*args, **kwargs):
+                        nonlocal inspections
+                        result = native_candidate(*args, **kwargs)
+                        inspections += 1
+                        if stage == "preflight" and inspections == 2:
+                            retarget()
+                        return result
+
+                    def compact(root, name, **kwargs):
+                        result = native_compact(root, name, **kwargs)
+                        if stage == "between_files" and name == "first.db":
+                            retarget()
+                        return result
+
+                    command = ["legion_storage", "--home", str(alias), *expected,
+                               *(["--apply"] if apply else [])]
+                    stdout, stderr = io.StringIO(), io.StringIO()
+                    with patch.object(sys, "argv", command), \
+                            patch.object(storage, "_candidate", candidate), \
+                            patch.object(storage, "compact_backup", compact), \
+                            redirect_stdout(stdout), redirect_stderr(stderr):
+                        self.assertEqual(storage.main(), 0)
+                    self.assertEqual(alias.resolve(), other)
+                    results = json.loads(stdout.getvalue())["files"]
+                    self.assertEqual([r["source_bytes"] for r in results],
+                                     [len(data) for data in expected.values()])
+                    self.assertEqual([r["status"] for r in results],
+                                     ["compacted" if apply else "planned"] * 2)
+                    for name, data in expected.items():
+                        source = home / "backups" / name
+                        if apply:
+                            self.assertFalse(source.exists())
+                            self.assertEqual(gzip.decompress(source.with_name(name + ".gz").read_bytes()), data)
+                            restore = json.loads(source.with_name(name + ".gz.metadata.json").read_text())
+                            self.assertEqual(restore["source_bytes"], len(data))
+                            self.assertEqual(restore["sha256"], hashlib.sha256(data).hexdigest())
+                        else:
+                            self.assertEqual(source.read_bytes(), data)
+                            self.assertFalse(source.with_name(name + ".gz").exists())
+                            self.assertFalse(source.with_name(name + ".gz.metadata.json").exists())
+                    self.assertEqual(other_before, {p.relative_to(other): p.read_bytes()
+                                                   for p in other.rglob("*") if p.is_file()})
+                    self.assertEqual((home / "state.db").read_bytes(), b"synthetic live state")
+                    self.assertEqual(unrelated.read_bytes(), b"synthetic unrelated data")
+                    self.assertEqual(list(base.rglob(".legion-compact-*")), [])
+
+    def test_cli_unavailable_home_refuses_before_mutation(self):
+        missing, dangling = self.home / "missing", self.home / "dangling"
+        dangling.symlink_to(missing, target_is_directory=True)
+        before = sorted(p.relative_to(self.home) for p in self.home.rglob("*"))
+        for home in (missing, dangling):
+            for apply in (False, True):
+                with self.subTest(home=home.name, apply=apply):
+                    result = subprocess.run([
+                        sys.executable, str(Path(storage.__file__)), "--home", str(home),
+                        "old/snapshot.db", *(["--apply"] if apply else [])], capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn("REFUSED:", result.stderr)
+                    self.assertNotIn("Traceback", result.stderr)
+                    self.assertEqual(result.stdout, "")
+                    self.assertEqual(self.path.read_bytes(), self.before)
+                    self.assertEqual(before, sorted(p.relative_to(self.home) for p in self.home.rglob("*")))
 
     def test_hard_links_and_non_sqlite_files_are_refused(self):
         link = self.path.parent / "other.db"

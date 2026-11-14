@@ -355,3 +355,30 @@ remain. Keep selected snapshots closed and backup directories stable during appl
 This release detects the tested linked-parent windows; it does not claim arbitrary
 concurrent namespace mutation is safe. Upstream source patch/manifest/test selection
 remain byte-identical; this change belongs to the companion maintenance helper.
+
+
+## Bind CLI selection to one physical home (v0.8.63)
+
+The snapshot CLI resolves `--home` once, before inspecting any selection, and
+uses that physical home for all preflight and per-file plan/apply calls. Supported
+home aliases still work. Changing the alias during an invocation no longer
+redirects later work to a different home whose snapshots were not inspected.
+
+Previously, retargeting the explicit alias after preflight or between files could
+make plan report another home's sizes, or make apply compact that home's snapshots.
+The gzip archives survived, but the CLI mutated a different selection. Existing
+backup-root/parent link refusal and every per-file validation remain; unavailable
+homes still produce the controlled `REFUSED` error before mutation.
+
+Sixteen existing storage tests pass baseline. A new multi-selection test has four
+plan/apply × after-preflight/between-files subcases. Real symlink retargets fail
+before repair on Python 3.12.10 and Hermes' selected Mac Python 3.14.9; all 18 tests
+pass after repair on each. Assertions verify initial-home sizes, exact planned
+originals or gzip/metadata readback, unchanged other-home/live/unrelated bytes and
+owned-temp cleanup. Missing/dangling-home CLI controls also preserve files.
+
+This binds one CLI invocation to a path, not an immutable directory identity.
+Keep the physical home, its ancestors and backup namespace stable; existing
+check-to-use races remain. No batch rollback, automatic selection, SQL, provider,
+timer or retention-policy behavior is added. No production backup is exercised,
+and the unchanged upstream source kit needs no new export or adoption target.

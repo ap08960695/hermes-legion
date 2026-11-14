@@ -1,3 +1,34 @@
+# v0.8.63 — Bind snapshot CLI selection to one physical home
+
+The CLI resolves its selected home once inside controlled error handling, then
+reuses it for all preflight and per-file plan/apply calls. A supported home alias
+can no longer redirect the invocation to another home after inspection. Existing
+helper gates and APIs remain; this is a companion-only change.
+
+Baseline storage16 passes. Actual isolated Mac probe retargets a home alias after
+preflight; old code compacts the other home's two snapshots and reports success,
+leaving inspected originals untouched. Verified archives survive; this is wrong
+selection, not demonstrated irrecoverable loss. Four regression subcases fail
+before repair on required Python3.12.10 and committed Hermes Python3.14.9: plan/
+apply after preflight and between files. Fixed storage18 passes on each, overlapping
+counts, including exact initial-home bytes/archives/metadata, untouched other-home/
+live/unrelated data, temp cleanup and missing/dangling-home refusal. Native runs
+use stdlib tests and private HOME/HERMES_HOME/TMPDIR, with no Hermes service/model
+startup or process-observation override. No source/dependency clone is required.
+
+Physical namespace races remain; selected home/ancestors/backups must stay stable.
+No batch atomicity or production cleanup is claimed. See [operator scope](storage-and-backups.md#bind-cli-selection-to-one-physical-home-v0863).
+
+All upstream patches/manifests/native selection remain byte-identical. Six existing
+public files change; no public file/dependency/lock is added. Required companion
+suite: 127 run, 125 pass/two Linux-only skips, 3.669 s. Storage18 also passes under
+committed Hermes Python3.14.9, including from a temporary working directory.
+Whitespace, unchanged-patch and tracked-only222-file inventory checks pass.
+Exact Gitleaks directory/all-history scans exit0/no leaks, history193 commits.
+Owned empty fixture directories/pointer removed and absence verified; borrowed
+runtime/source retained. Final refresh precedes driver signal. No owner backup,
+production maintenance or attributed disk saving.
+
 # v0.8.62 — Recheck backup paths at compaction mutation boundaries
 
 The companion snapshot helper shares its unresolved-path `lstat` symlink check
