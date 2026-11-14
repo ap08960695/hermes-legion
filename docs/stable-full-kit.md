@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1004-path** Legion source, interface and optimization alternative
+This is the complete **1013-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,21 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Bounded Desktop SSH checks (v0.9.0)
+
+Compatible profiles now share one process-owned transport. Programmatic probes
+and payloads queue, remote kernel admission survives client loss until cleanup,
+and missing mux sockets cannot silently dial another connection. POSIX helper
+groups are reaped; detached serves keep a separate session on Darwin as well.
+[Behavior, measured memory/latency and platform boundaries](desktop-ssh-resources.md).
+[Plain-language release notes and grouped v0.8.46–.73 changes](release-notes-v0.9.0.md).
+
+Nine targets join the previous 1,004: five existing upstream files and four new
+runtime/test files. The existing Desktop main target also changes. No dependency
+or lockfile changes. This is a source kit, not an installed/rebuilt Mac app.
+Gateway idle memory, MCP lifecycle, Windows remote cleanup and the UI walkthrough
+remain separate acceptance work.
 
 ## Web-cache TTL conversion recovery (v0.8.76)
 

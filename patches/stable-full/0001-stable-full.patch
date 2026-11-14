@@ -5756,11 +5756,11 @@ index 0000000000000000000000000000000000000000..4455992455b9a0f634f3013dc282c1b3
 +  assert.deepEqual(previous, { empty: {}, section: { enabled: true }, scalar: 'old', list: ['old'] })
 +})
 diff --git a/apps/desktop/electron/main.ts b/apps/desktop/electron/main.ts
-index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..bc6cb9f28865f2a60ea7106643e6ffff6f5b5e46 100644
+index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..2d82c1fd870a366481d11ad0bb8f1146f3e11327 100644
 --- a/apps/desktop/electron/main.ts
 +++ b/apps/desktop/electron/main.ts
 @@ -2,2 +2,4 @@ import { type ChildProcess, execFileSync, spawn } from 'node:child_process'
- 
+
 +import { formatApiRequestFailure, isNotFoundApiError } from './api-request-log'
 +import { createConfigQuitGate } from './config-autosave-quit'
  import type { GatewayEndpoint } from './local-gateway'
@@ -5774,17 +5774,32 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..bc6cb9f28865f2a60ea7106643e6ffff
 -  backendOwnedByApp,
 +  backendMayStopOnQuit,
    mergeActiveWork,
-@@ -12435,6 +12439,4 @@ function spawnSecondaryWindow({
- 
+@@ -570,2 +574,3 @@ import { createSshIsolatedKeepaliveRegistry } from './ssh-isolated-keepalive'
+ import { createSshTeardownTracker } from './ssh-teardown'
++import { markSshTransportHealthy, recordSshFailure } from './ssh-transport'
+ import { createStreamThrottle } from './stream-throttle'
+@@ -9855,2 +9860,6 @@ async function bootstrapSshConnectionInner(profile, sshConfig, reuseToken, sourc
+   } catch (error: any) {
++    if (error.kind !== 'superseded' && ssh.controlPath) {
++      recordSshFailure(ssh.controlPath)
++    }
++
+     if (created) {
+@@ -9930,2 +9939,3 @@ async function bootstrapSshConnectionInner(profile, sshConfig, reuseToken, sourc
+       })
++      markSshTransportHealthy(ssh.controlPath)
+       sshIsolatedKeepalives.start(scope, { baseUrl: result.baseUrl, token: result.token })
+@@ -12435,6 +12445,4 @@ function spawnSecondaryWindow({
+
 -// Open (or focus) a standalone window for a single chat session.
 -function createSessionWindow(sessionId, { connectionId = null, profile = null, watch = false } = {}) {
 -  return sessionWindows.openOrFocus(sessionId, () => spawnSecondaryWindow({ connectionId, sessionId, profile, watch }))
 -}
 +const createSessionWindow = (sessionId, opts = {}) =>
 +  sessionWindows.openOrFocus(sessionId, () => spawnSecondaryWindow({ ...opts, sessionId }), opts)
- 
-@@ -16134,9 +16136,2 @@ async function teardownConnectionScopedProfileBackend(connectionId, profile) {
- 
+
+@@ -16134,9 +16142,2 @@ async function teardownConnectionScopedProfileBackend(connectionId, profile) {
+
 -// A 404 raised by `fetchJson` — the shape is `404: <body>` (see fetchJson).
 -// Session lookups are a probe ladder: "not on this profile" is a normal rung
 -// outcome, not a failure.
@@ -5793,8 +5808,8 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..bc6cb9f28865f2a60ea7106643e6ffff
 -}
 -
  async function handleHermesApiRequest(request) {
-@@ -16249,15 +16244,31 @@ async function handleHermesApiRequest(request) {
- 
+@@ -16249,15 +16250,31 @@ async function handleHermesApiRequest(request) {
+
 -// Format an api-request failure for desktop.log. The renderer only ever sees
 -// the invoke rejection; the real stack lives here in main, so persist it
 -// before rethrowing. Clamp: paths and error detail must not bloat the log.
@@ -5822,7 +5837,7 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..bc6cb9f28865f2a60ea7106643e6ffff
 +      method: request.method, body: request.body, upload: request.upload,
 +      timeoutMs: resolveTimeoutMs(request.timeoutMs, DEFAULT_FETCH_TIMEOUT_MS)
 +    })
- 
+
 -  return `[hermes:api ${method} ${path}] ${detail}`.slice(0, 6000)
 -}
 +    return connection.gatewayEndpoint && reconnect ? redialLocalGateway({ ...reconnect, use: sendRequest }) : sendRequest(connection)
@@ -5836,8 +5851,8 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..bc6cb9f28865f2a60ea7106643e6ffff
 +  requestQuit: () => app.quit(), log: rememberLog,
 +  notify: payload => nativeNotifications.show(payload)
 +})
- 
-@@ -16272,22 +16283,24 @@ ipcMain.handle('hermes:api', async (_event, request) => {
+
+@@ -16272,22 +16289,24 @@ ipcMain.handle('hermes:api', async (_event, request) => {
    try {
 -    if (deletingProfile && registryConnectionId) {
 -      return await dispatchConnectionScopedProfileDelete(request, {
@@ -5871,16 +5886,16 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..bc6cb9f28865f2a60ea7106643e6ffff
 +          teardownConnection: (connectionId, profile) => teardownConnectionScopedProfileBackend(connectionId, profile)
 +        })
 +      }
- 
+
 -    const releaseProfileDeletion = profileDeletionGate.acquire(mutatingProfile)
 +      const releaseProfileDeletion = profileDeletionGate.acquire(mutatingProfile)
- 
+
 -    return await handleHermesApiRequest(request).finally(releaseProfileDeletion)
 +      return handleHermesApiRequest(request).finally(releaseProfileDeletion)
 +    })
    } catch (error) {
-@@ -18058,33 +18071,8 @@ function configureSpellChecker() {
- 
+@@ -18058,33 +18077,8 @@ function configureSpellChecker() {
+
 -// Does quitting take the agent down with the app? Reads the primary profile's
 -// route through the same resolver resolveRemoteBackend uses, plus every backend
 -// the quit teardown below will stop (SSH-managed servers; the local gateway is
@@ -5918,8 +5933,8 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..bc6cb9f28865f2a60ea7106643e6ffff
 +  env: { token: process.env.HERMES_DESKTOP_REMOTE_TOKEN, url: process.env.HERMES_DESKTOP_REMOTE_URL }
 +}), () => (backendConnectionState.getProcess() ? 1 : 0) +
 +  [...backendPool.values()].filter(entry => entry?.process).length + sshConnections.size)
- 
-@@ -18163,2 +18151,8 @@ function heldQuitForActiveWork(event: Electron.Event): boolean {
+
+@@ -18163,2 +18157,8 @@ function heldQuitForActiveWork(event: Electron.Event): boolean {
  function registerChatWindow(window: BrowserWindow) {
 +  const deferClose = createConfigQuitGate({
 +    queue: configAutosaves, holdForActiveWork: () => false,
@@ -5928,17 +5943,17 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..bc6cb9f28865f2a60ea7106643e6ffff
 +  })
 +
    chatWindows.add(window)
-@@ -18174,3 +18168,3 @@ function registerChatWindow(window: BrowserWindow) {
- 
+@@ -18174,3 +18174,3 @@ function registerChatWindow(window: BrowserWindow) {
+
 -    if (!shouldGuardWindowClose(work, isQuittingForHandoff, IS_MAC, hasOtherChatWindows(window))) {
 +    if (shouldGuardWindowClose(work, isQuittingForHandoff, IS_MAC, hasOtherChatWindows(window)) && heldQuitForActiveWork(event)) {
        return
-@@ -18178,3 +18172,3 @@ function registerChatWindow(window: BrowserWindow) {
- 
+@@ -18178,3 +18178,3 @@ function registerChatWindow(window: BrowserWindow) {
+
 -    heldQuitForActiveWork(event)
 +    deferClose(event)
    })
-@@ -18206,3 +18200,3 @@ app.on('before-quit', event => {
+@@ -18206,3 +18206,3 @@ app.on('before-quit', event => {
    // overlay-suppression latch must not leak into the next close (#130810).
 -  if (heldQuitForActiveWork(event)) {
 +  if (deferConfigQuit(event)) {
@@ -5992,6 +6007,94 @@ index d88d2c65dc964e200a7a0fb4f1fff3a898f0fe5d..1eaf248e1c44b3545b2bb9817c1488e4
 +    return true
 +  }
 +}
+diff --git a/apps/desktop/electron/remote-lifecycle-spawn.test.ts b/apps/desktop/electron/remote-lifecycle-spawn.test.ts
+index 14f7c628ce37a853c7ffe82003948fba55d454e9..09063e3661a0babf3d932ac4ac5a6dea43c1f595 100644
+--- a/apps/desktop/electron/remote-lifecycle-spawn.test.ts
++++ b/apps/desktop/electron/remote-lifecycle-spawn.test.ts
+@@ -117,4 +117,3 @@ async function spawnFixture(launcher: 'setsid' | 'nohup', owned: boolean): Promi
+
+-  // Restrict capability discovery, not the reported host OS. The fallback runs
+-  // real nohup with no setsid executable anywhere on the child's PATH.
++  // Vary utility availability: stdlib detachment must also work without setsid.
+   for (const tool of [
+@@ -213,3 +212,4 @@ test.skipIf(process.platform === 'win32').each(variants)(
+
+-    const foreign: ChildProcess = spawn('python3', ['-c', 'import time;time.sleep(30)'], {
++    // Keep the two racing marker gates plus detachment within four Python processes.
++    const foreign: ChildProcess = spawn('sleep', ['30'], {
+       env: fixture.env,
+@@ -249,9 +249,5 @@ test.skipIf(process.platform === 'win32').each(variants)(
+
+-      if (launcher === 'setsid') {
+-        assert.notEqual(report.sessionId, parentSession)
+-      } else {
+-        assert.equal(report.sessionId, parentSession)
+-        assert.equal(report.hupIgnored, true)
+-        process.kill(report.pid, 'SIGHUP')
+-      }
++      assert.notEqual(report.sessionId, parentSession)
++      assert.equal(report.hupIgnored, true)
++      process.kill(report.pid, 'SIGHUP')
+
+diff --git a/apps/desktop/electron/remote-lifecycle.test.ts b/apps/desktop/electron/remote-lifecycle.test.ts
+index bdd76274b0e89b3a527c55781dfb4c81738bdd26..853c090184960d3b53686ab2a843a5f47272c7ca 100644
+--- a/apps/desktop/electron/remote-lifecycle.test.ts
++++ b/apps/desktop/electron/remote-lifecycle.test.ts
+@@ -1974,3 +1974,3 @@ test.skipIf(process.platform === 'win32')(
+
+-test('probes run under the remote watchdog so a hung CLI cannot orphan (#110478)', async () => {
++test('probes use the centrally supervised exec without creating escaping watchdog groups', async () => {
+   let versionProbe = ''
+@@ -1989,3 +1989,3 @@ test('probes run under the remote watchdog so a hung CLI cannot orphan (#110478)
+   assert.equal(await probeHermesVersion(versionSsh, '/x/hermes'), 'Hermes Agent v0.18.2 (abc123)')
+-  assert.ok(versionProbe.includes('kill -9'), 'version probe wrapped in the remote watchdog')
++  assert.ok(!versionProbe.includes('set -m'), 'exec lifetime owns the process group')
+
+@@ -2005,7 +2005,3 @@ test('probes run under the remote watchdog so a hung CLI cannot orphan (#110478)
+   assert.equal(await remoteSupportsSshOwnership(helpSsh, '/x/hermes'), true)
+-  assert.ok(helpProbe.includes('kill -9'), 'ownership probe wrapped in the remote watchdog')
+-  assert.ok(
+-    /\$\(.*\(.*serve --help.*\) <\/dev\/null &/.test(helpProbe),
+-    'watchdog nested around the inner serve --help'
+-  )
++  assert.ok(!helpProbe.includes('set -m'), 'capability probe must stay in the supervised group')
+ })
+diff --git a/apps/desktop/electron/remote-lifecycle.ts b/apps/desktop/electron/remote-lifecycle.ts
+index 5ec95d2ad476bbf08534f6d08a025301a7c4af55..bc39482d4d701337f15161649bf3c68f5473cebe 100644
+--- a/apps/desktop/electron/remote-lifecycle.ts
++++ b/apps/desktop/electron/remote-lifecycle.ts
+@@ -33,3 +33,3 @@ import { backendProfileArg } from './profile-id-guard'
+ import { REMOTE_MARKER_GATE_PY } from './remote-update-marker-programs'
+-import { assertBootstrapNotSuperseded, withRemoteTimeout } from './ssh-connection'
++import { assertBootstrapNotSuperseded } from './ssh-connection'
+
+@@ -279,5 +279,3 @@ async function probeHermesVersion(ssh, hermesPath) {
+   try {
+-    // Watchdogged: a hung remote CLI must die remotely instead of orphaning
+-    // when the local ssh child is SIGKILLed (#110478).
+-    const out = (await ssh.exec(withRemoteTimeout(`${expandRemotePath(hermesPath)} --version 2>&1`))).trim()
++    const out = (await ssh.exec(`${expandRemotePath(hermesPath)} --version 2>&1`)).trim()
+
+@@ -1146,5 +1144,9 @@ function buildSpawnCommand(hermesPath, profile, opts: any = {}) {
+   const detachedShell: string = `eval "exec $1>&-"; ${dashCmd} </dev/null >> ${logPath} 2>&1 & echo $!`
++
+   // The inner shell backgrounds Hermes and reports its PID; backgrounding the
+   // launcher too adds its unrelated PID to the value published in the lock.
+-  const detachedSpawn: string = `child=$("$(command -v setsid || echo nohup)" sh -c ${shq(detachedShell)} hermes-update-child "$1")`
++  const detach =
++    'import os,signal,sys; signal.signal(signal.SIGHUP,signal.SIG_IGN); os.setsid(); os.execvp("sh",sys.argv[1:])'
++
++  const detachedSpawn: string = `child=$(python3 -I -S -c ${shq(detach)} sh -c ${shq(detachedShell)} hermes-update-child "$1")`
+
+@@ -1205,7 +1207,4 @@ async function remoteSupportsSshOwnership(ssh, hermesPath) {
+
+-  // The watchdog wraps the inner `serve --help` so the hung CLI is its direct
+-  // child and dies remotely instead of orphaning (#110478). The `$( (` space
+-  // is load-bearing: without it the shell parses `$((` as arithmetic expansion.
+   const out = await ssh.exec(
+-    `help="$( ${withRemoteTimeout(`${hermes} serve --help 2>&1`)} )"; ` +
++    `help="$( ${hermes} serve --help 2>&1 )"; ` +
+       `printf '%s' "$help" | grep -q ssh-session-token-file && ` +
 diff --git a/apps/desktop/electron/session-windows.test.ts b/apps/desktop/electron/session-windows.test.ts
 index 2d57a5039b1a56bf6b32ff07f2b7f550bda0e19d..51e73b0b43b67ef2374e1174e1ea35590451ac73 100644
 --- a/apps/desktop/electron/session-windows.test.ts
@@ -6058,6 +6161,1759 @@ index 36b6aabe25068b9faf5d606062abc3daef602f15..411a3ea3cb361b3518df099601140905
 +      : id
 +
      const existing = windows.get(key)
+diff --git a/apps/desktop/electron/ssh-connection.test.ts b/apps/desktop/electron/ssh-connection.test.ts
+index 9ccec9b66efc4d4ff815af295322348c0dc25fc4..8b0a2ebad847923b8c08d6d7d43c51bb1b557d2d 100644
+--- a/apps/desktop/electron/ssh-connection.test.ts
++++ b/apps/desktop/electron/ssh-connection.test.ts
+@@ -8,3 +8,3 @@ import { promisify } from 'node:util'
+
+-import { test, vi } from 'vitest'
++import { afterEach, beforeEach, test, vi } from 'vitest'
+
+@@ -23,2 +23,3 @@ import {
+   hostArgs,
++  SshConnection as NativeSshConnection,
+   redactSecrets,
+@@ -27,3 +28,2 @@ import {
+   SSH_ERROR,
+-  SshConnection,
+   stopTunnelChild,
+@@ -36,2 +36,26 @@ import { createControlMasterHolders } from './ssh-control-master-holders'
+ const execFileAsync = promisify(execFile)
++let controlDir: string
++let connections: NativeSshConnection[]
++
++beforeEach(() => {
++  controlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ssh-controls-'))
++  connections = []
++})
++
++afterEach(async () => {
++  for (const connection of connections) {
++    // Mock masters own no processes; cancel local work and release each test's holders.
++    connection._opened = false
++    await connection.close()
++  }
++
++  fs.rmSync(controlDir, { recursive: true, force: true })
++})
++
++class SshConnection extends NativeSshConnection {
++  constructor(config, options: any = {}) {
++    super(config, { controlDir, ...options })
++    connections.push(this)
++  }
++}
+
+@@ -124,3 +148,3 @@ test.runIf(process.platform !== 'win32')(
+       const spawnFn = scriptedSpawn(args => (args.includes('check') ? { code: 255 } : { code: 0 }))
+-      const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, mux: true })
++      const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, mux: true, controlDir: undefined })
+       assert.equal(conn.controlPath, controlSocketPath('me', 'box', 22))
+@@ -263,4 +287,7 @@ function fakeChild({ code = 0, signal = null, stdout = '', stderr = '', errorEve
+
+-  child.kill = () => {
++  child.kill = (signal = 'SIGTERM') => {
+     child._killed = true
++    process.nextTick(() => child.emit('close', null, signal))
++
++    return true
+   }
+@@ -345,3 +372,3 @@ test('open() establishes the master when not already alive', async () => {
+
+-  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, mux: true, controlDir: '/tmp/d' })
++  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, mux: true, controlDir })
+   await conn.open()
+@@ -355,3 +382,3 @@ test('open() abort kills an in-flight SSH child instead of waiting for timeout',
+     { host: 'box', user: 'me' },
+-    { spawnFn: () => child, controlDir: '/tmp/d', connectTimeoutMs: 1000 }
++    { spawnFn: () => child, controlDir, connectTimeoutMs: 1000 }
+   )
+@@ -377,3 +404,3 @@ test('open() is a no-op when the master is already alive and execs verify', asyn
+
+-  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, mux: true, controlDir: '/tmp/d' })
++  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, mux: true, controlDir })
+   await conn.open()
+@@ -412,6 +439,3 @@ test('open() evicts a wedged master (check passes, exec hangs) and dials fresh',
+
+-  const conn = new SshConnection(
+-    { host: 'box', user: 'me' },
+-    { spawnFn, mux: true, controlDir: '/tmp/d', connectTimeoutMs: 50 }
+-  )
++  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, mux: true, controlDir, connectTimeoutMs: 50 })
+
+@@ -476,3 +500,3 @@ test('open() surfaces a classified auth error', async () => {
+
+-  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir: '/tmp/d' })
++  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir })
+   await assert.rejects(
+@@ -502,3 +526,3 @@ test('open() turns a Tailscale browser-check timeout into safe interactive-auth
+
+-  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir: '/tmp/d', connectTimeoutMs: 20 })
++  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir, connectTimeoutMs: 20 })
+
+@@ -519,3 +543,3 @@ test('exec() returns stdout on success and rejects (classified) on failure', asy
+   const okSpawn = scriptedSpawn([{ code: 0, stdout: 'Linux\n' }])
+-  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn: okSpawn, controlDir: '/tmp/d' })
++  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn: okSpawn, controlDir })
+   assert.equal((await conn.exec('uname -s')).trim(), 'Linux')
+@@ -523,3 +547,3 @@ test('exec() returns stdout on success and rejects (classified) on failure', asy
+   const failSpawn = scriptedSpawn([{ code: 1, stderr: 'ssh: Could not resolve hostname box' }])
+-  const conn2 = new SshConnection({ host: 'box', user: 'me' }, { spawnFn: failSpawn, controlDir: '/tmp/d' })
++  const conn2 = new SshConnection({ host: 'box', user: 'me' }, { spawnFn: failSpawn, controlDir })
+   await assert.rejects(
+@@ -536,3 +560,3 @@ test('exec() treats a hung ssh as a timeout (half-open connection)', async () =>
+   const spawnFn = scriptedSpawn([{ hang: true }])
+-  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir: '/tmp/d' })
++  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir })
+   await assert.rejects(
+@@ -549,3 +573,3 @@ test('forward() issues -O forward with a loopback-bound -L spec', async () => {
+   const spawnFn = scriptedSpawn([{ code: 0 }])
+-  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, mux: true, controlDir: '/tmp/d' })
++  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, mux: true, controlDir })
+   await conn.forward(5000, 6000)
+@@ -564,3 +588,3 @@ test('mux forward keeps the ControlPersist master alive until the final forward
+
+-    const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir: '/tmp/d' })
++    const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir })
+
+@@ -592,3 +616,3 @@ test('lifecycle logging passes through redaction', async () => {
+     { host: 'box', user: 'me' },
+-    { spawnFn, mux: true, controlDir: '/tmp/d', rememberLog: l => logs.push(l) }
++    { spawnFn, mux: true, controlDir, rememberLog: l => logs.push(l) }
+   )
+@@ -712,3 +736,3 @@ test('mux open() does not classify a signal-killed master with empty stderr as u
+
+-  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir: '/tmp/d' })
++  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir })
+
+@@ -722,3 +746,3 @@ test('exec() does not classify a signal death with empty stderr as unreachable',
+   const spawnFn = scriptedSpawn([{ signal: 'SIGKILL', stderr: '' }])
+-  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir: '/tmp/d' })
++  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir })
+
+@@ -732,3 +756,3 @@ test('forward() does not classify a signal death with empty stderr as unreachabl
+   const spawnFn = scriptedSpawn([{ signal: 'SIGPIPE', stderr: '' }])
+-  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir: '/tmp/d' })
++  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir })
+
+@@ -759,3 +783,3 @@ test('close() does not report a signal-killed -O exit with empty stderr as unrea
+       spawnFn,
+-      controlDir: '/tmp/d',
++      controlDir,
+       controlMasterHolders: createControlMasterHolders(),
+@@ -1241,3 +1265,3 @@ test('open() enforces 0700 on an existing control dir with lax permissions', asy
+
+-test('control socket identity separates installation scope and key identity', () => {
++test('control socket identity shares profiles and retains SSH key/configuration boundaries', () => {
+   const base = controlSocketPath('me', 'box', 22, '/tmp/d', {
+@@ -1256,3 +1280,3 @@ test('control socket identity separates installation scope and key identity', ()
+   )
+-  assert.notEqual(
++  assert.equal(
+     base,
+@@ -1264,3 +1288,3 @@ test('control socket identity separates installation scope and key identity', ()
+   )
+-  assert.notEqual(
++  assert.equal(
+     base,
+@@ -1291,3 +1315,3 @@ test('control socket identity separates installation scope and key identity', ()
+
+-test('closing one scope addresses only that scope control master', async () => {
++test('closing one scope preserves the shared master until the last scope closes', async () => {
+   const firstSpawn = scriptedSpawn({ code: 0 })
+@@ -1300,3 +1324,3 @@ test('closing one scope addresses only that scope control master', async () => {
+       mux: true,
+-      controlDir: '/tmp/d',
++      controlDir,
+       ownershipId: 'installation',
+@@ -1311,3 +1335,3 @@ test('closing one scope addresses only that scope control master', async () => {
+       mux: true,
+-      controlDir: '/tmp/d',
++      controlDir,
+       ownershipId: 'installation',
+@@ -1317,9 +1341,10 @@ test('closing one scope addresses only that scope control master', async () => {
+
+-  first._opened = true
+-  second._opened = true
++  await first.open()
++  await second.open()
+   await first.close()
+-  assert.notEqual(first.controlPath, second.controlPath)
+-  assert.ok(firstSpawn.calls[0].includes(`ControlPath=${first.controlPath}`))
+-  assert.ok(!firstSpawn.calls[0].includes(`ControlPath=${second.controlPath}`))
++  assert.equal(first.controlPath, second.controlPath)
++  assert.ok(!firstSpawn.calls.some(args => args.includes('exit')))
+   assert.equal(second._opened, true)
++  await second.close()
++  assert.equal(secondSpawn.calls.filter(args => args.includes('exit')).length, 1)
+ })
+@@ -1335,3 +1360,3 @@ test('failed ControlMaster close disowns the master instead of retrying it', asy
+     { host: 'box', user: 'me' },
+-    { spawnFn, mux: true, controlDir: '/tmp/d', controlMasterHolders: createControlMasterHolders() }
++    { spawnFn, mux: true, controlDir, controlMasterHolders: createControlMasterHolders() }
+   )
+@@ -1466,3 +1491,3 @@ test('exec wraps POSIX payloads in sh -c so a fish login shell never parses them
+
+-  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir: '/tmp/d' })
++  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir })
+   await conn.exec('help="$(true)"; echo "${X:-y}"')
+@@ -1478,3 +1503,3 @@ test('exec leaves Windows PowerShell payloads unwrapped', async () => {
+
+-  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir: '/tmp/d' })
++  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir })
+   await conn.exec('powershell.exe -NoProfile -Command "echo hi"')
+@@ -1517,3 +1542,3 @@ test('a stale attempt closing late leaves the master its successor attached to (
+   const controlMasterHolders = createControlMasterHolders()
+-  const opts = { spawnFn, mux: true, controlDir: '/tmp/d', controlMasterHolders }
++  const opts = { spawnFn, mux: true, controlDir, controlMasterHolders }
+
+@@ -1538,3 +1563,3 @@ test('a failed newer attempt does not kill the master an older live connection h
+   const controlMasterHolders = createControlMasterHolders()
+-  const opts = { spawnFn, mux: true, controlDir: '/tmp/d', controlMasterHolders }
++  const opts = { spawnFn, mux: true, controlDir, controlMasterHolders }
+
+@@ -1575,3 +1600,3 @@ test('a stale close while a successor is still dialing does not exit the master
+
+-  const opts = { spawnFn, mux: true, controlDir: '/tmp/d', controlMasterHolders, connectTimeoutMs: 5000 }
++  const opts = { spawnFn, mux: true, controlDir, controlMasterHolders, connectTimeoutMs: 5000 }
+   const staleSpawn = scriptedSpawn(args => (args.includes('check') ? { code: 255 } : { code: 0 }))
+@@ -1580,3 +1605,3 @@ test('a stale close while a successor is still dialing does not exit the master
+     { host: 'box', user: 'me' },
+-    { spawnFn: staleSpawn, mux: true, controlDir: '/tmp/d', controlMasterHolders }
++    { spawnFn: staleSpawn, mux: true, controlDir, controlMasterHolders }
+   )
+@@ -1604,6 +1629,3 @@ test('a failed open releases its claim so the remaining holder can still close t
+
+-  const live = new SshConnection(
+-    { host: 'box', user: 'me' },
+-    { spawnFn, mux: true, controlDir: '/tmp/d', controlMasterHolders }
+-  )
++  const live = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, mux: true, controlDir, controlMasterHolders })
+
+@@ -1617,3 +1639,3 @@ test('a failed open releases its claim so the remaining holder can still close t
+     { host: 'box', user: 'me' },
+-    { spawnFn: authFail, mux: true, controlDir: '/tmp/d', controlMasterHolders }
++    { spawnFn: authFail, mux: true, controlDir, controlMasterHolders }
+   )
+diff --git a/apps/desktop/electron/ssh-connection.ts b/apps/desktop/electron/ssh-connection.ts
+index f758908f576e5be3f00a18918375cb144c8c7e6d..090638a9432777fd4274c8f5c5f25e0995ae2d49 100644
+--- a/apps/desktop/electron/ssh-connection.ts
++++ b/apps/desktop/electron/ssh-connection.ts
+@@ -40,2 +40,4 @@ import { platformDefaultHermesHome } from './data-paths'
+ import { type ControlMasterHolders, sharedControlMasterHolders } from './ssh-control-master-holders'
++import { leasedSshExec } from './ssh-exec-lifetime'
++import { closeSshTransport, openSshTransport, queueSshExec, waitForSshTransport } from './ssh-transport'
+
+@@ -44,2 +46,4 @@ const DEFAULT_EXEC_TIMEOUT_MS = 20_000
+ const DEFAULT_FORWARD_TIMEOUT_MS = 15_000
++// Socket ownership and holder accounting must have the same process lifetime.
++const TRANSPORT_NAMESPACE = crypto.randomBytes(16).toString('hex')
+
+@@ -185,4 +189,3 @@ function controlSocketPath(user, host, port, baseDir?, identity: any = {}) {
+   const parts = [
+-    identity.ownershipId || '',
+-    identity.scope || '',
++    identity.transportNamespace || TRANSPORT_NAMESPACE,
+     user || '',
+@@ -237,3 +240,3 @@ function checkShortControlParent(): void {
+ // per-invocation options — each ssh call authenticates on its own.
+-function baseSshOptions(controlPath, connectTimeoutMs?) {
++function baseSshOptions(controlPath, connectTimeoutMs?, master = 'auto') {
+   const connectSecs = Math.max(1, Math.round((connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS) / 1000))
+@@ -245,3 +248,3 @@ function baseSshOptions(controlPath, connectTimeoutMs?) {
+         '-o',
+-        'ControlMaster=auto',
++        `ControlMaster=${master}`,
+         '-o',
+@@ -300,3 +303,5 @@ function buildExecArgs(conn, remoteCommand, connectTimeoutMs?) {
+   return [
+-    ...baseSshOptions(conn.controlPath, connectTimeoutMs),
++    // A missing mux must fail, never silently create another TCP/auth connection.
++    ...(conn.controlPath ? ['-o', 'ProxyCommand=false'] : []),
++    ...baseSshOptions(conn.controlPath, connectTimeoutMs, 'no'),
+     ...hostArgs(conn),
+@@ -344,3 +349,4 @@ function buildInteractiveSshArgs(conn, remoteCwd, connectTimeoutMs?, remoteComma
+     '-tt',
+-    ...baseSshOptions(conn.controlPath, connectTimeoutMs),
++    ...(conn.controlPath ? ['-o', 'ProxyCommand=false'] : []),
++    ...baseSshOptions(conn.controlPath, connectTimeoutMs, 'no'),
+     ...hostArgs(conn),
+@@ -504,3 +510,15 @@ function sshErrorMessage(kind, conn, stderr?) {
+ // is the ssh client binary (resolveSshBinary; bare `ssh` by default).
+-function runSsh(args, { timeoutMs, spawnFn = spawn, command = 'ssh', stdin = 'ignore', stdinData, signal }: any = {}) {
++function runSsh(
++  args,
++  {
++    timeoutMs,
++    spawnFn = spawn,
++    command = 'ssh',
++    stdin = 'ignore',
++    stdinData,
++    signal,
++    keepStdinOpen = false,
++    waitForClose = false
++  }: any = {}
++) {
+   return new Promise((resolve, reject) => {
+@@ -514,3 +532,3 @@ function runSsh(args, { timeoutMs, spawnFn = spawn, command = 'ssh', stdin = 'ig
+
+-    const useStdinPipe = stdinData != null || stdin !== 'ignore'
++    const useStdinPipe = keepStdinOpen || stdinData != null || stdin !== 'ignore'
+     let child
+@@ -525,6 +543,2 @@ function runSsh(args, { timeoutMs, spawnFn = spawn, command = 'ssh', stdin = 'ig
+
+-    if (stdinData != null && child.stdin) {
+-      child.stdin.end(stdinData)
+-    }
+-
+     let stdout = ''
+@@ -532,5 +546,6 @@ function runSsh(args, { timeoutMs, spawnFn = spawn, command = 'ssh', stdin = 'ig
+     let settled = false
++    let pendingError: any
+
+-    const timer: any = setTimeout(() => {
+-      if (settled) {
++    const stop = error => {
++      if (settled || pendingError) {
+         return
+@@ -538,3 +553,5 @@ function runSsh(args, { timeoutMs, spawnFn = spawn, command = 'ssh', stdin = 'ig
+
+-      settled = true
++      pendingError = error
++      clearTimeout(timer)
++      signal?.removeEventListener('abort', onAbort)
+
+@@ -543,3 +560,14 @@ function runSsh(args, { timeoutMs, spawnFn = spawn, command = 'ssh', stdin = 'ig
+       } catch {
+-        // already gone
++        /* already gone */
++      }
++
++      if (!waitForClose) {
++        settled = true
++        reject(error)
++      }
++    }
++
++    const timer: any = setTimeout(() => {
++      if (settled) {
++        return
+       }
+@@ -552,4 +580,3 @@ function runSsh(args, { timeoutMs, spawnFn = spawn, command = 'ssh', stdin = 'ig
+       err.stderrKind = classifySshError(stderr)
+-      signal?.removeEventListener('abort', onAbort)
+-      reject(err)
++      stop(err)
+     }, timeoutMs)
+@@ -561,20 +588,5 @@ function runSsh(args, { timeoutMs, spawnFn = spawn, command = 'ssh', stdin = 'ig
+
+-      settled = true
+-      clearTimeout(timer)
+-
+-      try {
+-        child.kill('SIGKILL')
+-      } catch {
+-        // already gone
+-      }
+-
+       const error: any = new Error('SSH operation was cancelled.')
+       error.kind = 'superseded'
+-      reject(error)
+-    }
+-
+-    signal?.addEventListener('abort', onAbort, { once: true })
+-
+-    if (signal?.aborted) {
+-      onAbort()
++      stop(error)
+     }
+@@ -587,2 +599,3 @@ function runSsh(args, { timeoutMs, spawnFn = spawn, command = 'ssh', stdin = 'ig
+     })
++    child.stdin?.on?.('error', error => stop(error))
+     child.on('error', error => {
+@@ -605,4 +618,22 @@ function runSsh(args, { timeoutMs, spawnFn = spawn, command = 'ssh', stdin = 'ig
+       signal?.removeEventListener('abort', onAbort)
+-      resolve({ code, signal: closeSignal || null, stdout, stderr })
++
++      if (pendingError) {
++        reject(pendingError)
++      } else {
++        resolve({ code, signal: closeSignal || null, stdout, stderr })
++      }
+     })
++    signal?.addEventListener('abort', onAbort, { once: true })
++
++    if (signal?.aborted) {
++      onAbort()
++    }
++
++    if (!pendingError && stdinData != null && child.stdin) {
++      if (keepStdinOpen) {
++        child.stdin.write(stdinData)
++      } else {
++        child.stdin.end(stdinData)
++      }
++    }
+   })
+@@ -696,2 +727,6 @@ class SshConnection {
+   _controlKeepaliveTimer: ReturnType<typeof setInterval> | null
++  _lifetime = new AbortController()
++  _activeExecs = new Set<Promise<any>>()
++  _opening = false
++  _platformProbe: Promise<void> | null = null
+
+@@ -723,3 +758,4 @@ class SshConnection {
+           scope: opts.scope,
+-          effectiveConfigFingerprint: opts.effectiveConfigFingerprint
++          effectiveConfigFingerprint: opts.effectiveConfigFingerprint,
++          transportNamespace: opts.transportNamespace
+         })
+@@ -813,4 +849,20 @@ class SshConnection {
+   async open({ signal }: any = {}) {
++    if (this._lifetime.signal.aborted) {
++      this._lifetime = new AbortController()
++    }
++
+     if (!this._mux) {
+-      return this._open({ signal })
++      const opening = this._open({
++        signal: signal ? AbortSignal.any([signal, this._lifetime.signal]) : this._lifetime.signal
++      })
++
++      this._activeExecs.add(opening)
++
++      try {
++        await opening
++      } finally {
++        this._activeExecs.delete(opening)
++      }
++
++      return
+     }
+@@ -820,8 +872,23 @@ class SshConnection {
+     this._controlMasters.acquire(this.controlPath, this)
++    this._opening = true
+
+     try {
+-      await this._open({ signal })
++      const flight = openSshTransport(this.controlPath, sharedSignal => this._open({ signal: sharedSignal }))
++      await waitForSshTransport(
++        flight,
++        signal ? AbortSignal.any([signal, this._lifetime.signal]) : this._lifetime.signal
++      )
++      this._opened = true
+     } catch (error) {
+-      this._controlMasters.release(this.controlPath, this)
++      const action = this._controlMasters.release(this.controlPath, this)
++
++      if (action === 'exit-master') {
++        await closeSshTransport(this.controlPath, async () => {
++          await this._closeMaster()
++        })
++      }
++
+       throw error
++    } finally {
++      this._opening = false
+     }
+@@ -858,3 +925,5 @@ class SshConnection {
+       if (!this._mux || (await this._verifyMuxChannel({ signal }))) {
+-        this._opened = true
++        if (!this._mux) {
++          this._opened = true
++        }
+
+@@ -872,8 +941,11 @@ class SshConnection {
+       try {
+-        result = await runSsh(buildExecArgs(this, 'exit 0', this._connectTimeoutMs), {
+-          timeoutMs: this._connectTimeoutMs,
+-          spawnFn: this._spawnFn,
+-          command: this.sshBinary,
+-          signal
+-        })
++        result = await queueSshExec(this.host.toLowerCase(), signal || this._lifetime.signal, () =>
++          runSsh(buildExecArgs(this, 'exit 0', this._connectTimeoutMs), {
++            timeoutMs: this._connectTimeoutMs,
++            spawnFn: this._spawnFn,
++            command: this.sshBinary,
++            signal,
++            waitForClose: true
++          })
++        )
+       } catch (error) {
+@@ -901,3 +973,4 @@ class SshConnection {
+         command: this.sshBinary,
+-        signal
++        signal,
++        waitForClose: true
+       })
+@@ -911,3 +984,2 @@ class SshConnection {
+
+-    this._opened = true
+     this._logLine('control master established')
+@@ -927,8 +999,14 @@ class SshConnection {
+     try {
+-      const result: any = await runSsh(args, {
+-        timeoutMs: this._connectTimeoutMs,
+-        spawnFn: this._spawnFn,
+-        command: this.sshBinary,
+-        signal
+-      })
++      const lease = signal || this._lifetime.signal
++
++      const run = () =>
++        runSsh(args, {
++          timeoutMs: this._connectTimeoutMs,
++          spawnFn: this._spawnFn,
++          command: this.sshBinary,
++          signal: this._mux ? signal : lease,
++          waitForClose: !this._mux
++        })
++
++      const result: any = this._mux ? await run() : await queueSshExec(this.host.toLowerCase(), lease, run)
+
+@@ -974,8 +1052,11 @@ class SshConnection {
+     try {
+-      const result: any = await runSsh(buildExecArgs(this, 'exit 0', this._connectTimeoutMs), {
+-        timeoutMs: this._connectTimeoutMs,
+-        spawnFn: this._spawnFn,
+-        command: this.sshBinary,
+-        signal
+-      })
++      const result: any = await queueSshExec(this.host.toLowerCase(), signal || this._lifetime.signal, () =>
++        runSsh(buildExecArgs(this, 'exit 0', this._connectTimeoutMs), {
++          timeoutMs: this._connectTimeoutMs,
++          spawnFn: this._spawnFn,
++          command: this.sshBinary,
++          signal,
++          waitForClose: true
++        })
++      )
+
+@@ -1020,20 +1101,49 @@ class SshConnection {
+   // fish rejects `help="$(…)"`. On Linux/Darwin wrap in `sh -c`; Windows stays raw.
+-  async exec(remoteCommand, { timeoutMs, stdinData }: any = {}) {
+-    if (this._posixRemote === null) {
+-      try {
+-        const probe: any = await runSsh(buildExecArgs(this, 'uname -s', this._connectTimeoutMs), {
+-          timeoutMs: timeoutMs ?? this._execTimeoutMs,
+-          spawnFn: this._spawnFn,
+-          command: this.sshBinary
+-        })
++  exec(remoteCommand, options: any = {}) {
++    const signal = this._lifetime.signal
++    const call = queueSshExec(this.host.toLowerCase(), signal, () => this._exec(remoteCommand, options, signal))
++    this._activeExecs.add(call)
++    void call.then(
++      () => this._activeExecs.delete(call),
++      () => this._activeExecs.delete(call)
++    )
++
++    return call
++  }
+
+-        if (probe.code !== 255) {
+-          this._posixRemote = probe.code === 0 && /^(Linux|Darwin)$/.test(String(probe.stdout || '').trim())
++  async _exec(remoteCommand, { timeoutMs, stdinData }: any, signal: AbortSignal) {
++    if (this._posixRemote === null) {
++      this._platformProbe ||= (async () => {
++        try {
++          const probe: any = await runSsh(buildExecArgs(this, 'uname -s', this._connectTimeoutMs), {
++            timeoutMs: timeoutMs ?? this._execTimeoutMs,
++            spawnFn: this._spawnFn,
++            command: this.sshBinary,
++            signal,
++            waitForClose: true
++          })
++
++          if (probe.code === 255) {
++            throw this._fail(probe)
++          }
++
++          if (probe.code !== 255) {
++            this._posixRemote = probe.code === 0 && /^(Linux|Darwin)$/.test(String(probe.stdout || '').trim())
++          }
++        } catch (error: any) {
++          if (error?.kind === 'superseded') {
++            throw error
++          }
++
++          throw this._fail(error)
+         }
+-      } catch {
+-        // transport failure: leave uncached, send this payload raw
+-      }
++      })().finally(() => {
++        this._platformProbe = null
++      })
++      await this._platformProbe
+     }
+
+-    const command = this._posixRemote ? `sh -c ${loginShellQuote(remoteCommand)}` : remoteCommand
++    const budget = timeoutMs ?? this._execTimeoutMs
++    const leased = this._posixRemote ? leasedSshExec(remoteCommand, stdinData, budget) : null
++    const command = leased ? `sh -c ${loginShellQuote(leased.command)}` : remoteCommand
+     const args = buildExecArgs(this, command, this._connectTimeoutMs)
+@@ -1043,6 +1153,8 @@ class SshConnection {
+       result = await runSsh(args, {
+-        timeoutMs: timeoutMs ?? this._execTimeoutMs,
++        timeoutMs: budget,
+         spawnFn: this._spawnFn,
+         command: this.sshBinary,
+-        ...(stdinData != null ? { stdinData } : {})
++        signal,
++        waitForClose: true,
++        ...(leased ? { stdinData: leased.stdinData, keepStdinOpen: true } : stdinData != null ? { stdinData } : {})
+       })
+@@ -1053,2 +1165,6 @@ class SshConnection {
+     if (!sshCloseOk(result)) {
++      if (leased && result.code === 124) {
++        throw this._fail({ kind: SSH_ERROR.TIMEOUT })
++      }
++
+       throw this._fail(result)
+@@ -1304,2 +1420,4 @@ class SshConnection {
+   async close() {
++    this._lifetime.abort()
++    await Promise.allSettled([...this._activeExecs])
+     this._stopControlKeepalive()
+@@ -1308,3 +1426,3 @@ class SshConnection {
+
+-    if (!this._opened) {
++    if (!this._opened && !this._opening) {
+       return
+@@ -1341,2 +1459,6 @@ class SshConnection {
+
++    await closeSshTransport(this.controlPath, () => this._closeMaster())
++  }
++
++  async _closeMaster() {
+     const args = buildControlArgs(this, 'exit', [], this._connectTimeoutMs)
+diff --git a/apps/desktop/electron/ssh-exec-lifetime.test.ts b/apps/desktop/electron/ssh-exec-lifetime.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..1cf1990112d8cde6e0dac82c4554d087212e73cc
+--- /dev/null
++++ b/apps/desktop/electron/ssh-exec-lifetime.test.ts
+@@ -0,0 +1,306 @@
++import assert from 'node:assert/strict'
++import { execFileSync, spawn } from 'node:child_process'
++import { EventEmitter } from 'node:events'
++import fs from 'node:fs'
++import os from 'node:os'
++import path from 'node:path'
++
++import { test } from 'vitest'
++
++import { buildSpawnCommand } from './remote-lifecycle'
++import { SshConnection } from './ssh-connection'
++import { leasedSshExec } from './ssh-exec-lifetime'
++
++const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
++const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
++
++async function until(check: () => boolean, message: string, ms = 3000) {
++  const deadline = Date.now() + ms
++
++  while (Date.now() < deadline) {
++    if (check()) {
++      return
++    }
++
++    await pause(20)
++  }
++
++  assert.fail(message)
++}
++
++function running(pid: number) {
++  try {
++    process.kill(pid, 0)
++
++    return true
++  } catch {
++    return false
++  }
++}
++
++function localSession() {
++  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ssh-local-session-'))
++  const clients: ReturnType<typeof spawn>[] = []
++  const helpers: number[] = []
++
++  const connection = new SshConnection(
++    { host: 'mock.invalid', user: 'synthetic' },
++    {
++      mux: true,
++      controlDir: path.join(root, 'control'),
++      spawnFn(_binary, args, options) {
++        // A local shell models ONLY a remote session's pipes. Never invoke SSH.
++        const command = args.includes('-O') ? 'exit 0' : args.at(-1)
++
++        const proc = spawn('/bin/sh', ['-c', command], {
++          ...options,
++          cwd: root,
++          env: { HOME: root, PATH: `${root}/bin:/opt/homebrew/bin:/usr/bin:/bin` }
++        })
++
++        clients.push(proc)
++        const client: any = new EventEmitter()
++        client.stdin = proc.stdin
++        client.stdout = proc.stdout
++        client.stderr = proc.stderr
++
++        client.kill = () => {
++          // Losing a local mux client closes the remote channel input, not its PID.
++          proc.stdin?.end()
++          queueMicrotask(() => client.emit('close', null, 'SIGKILL'))
++
++          return true
++        }
++
++        proc.on('error', error => client.emit('error', error))
++        proc.on('close', (code, signal) => client.emit('close', code, signal))
++
++        return client
++      }
++    }
++  )
++
++  connection._opened = true
++  connection._posixRemote = true
++
++  return {
++    root,
++    connection,
++    clients,
++    helpers,
++    async cleanup() {
++      await connection.close()
++
++      for (const proc of clients) {
++        if (proc.exitCode === null && proc.signalCode === null) {
++          proc.kill('SIGKILL')
++        }
++      }
++
++      for (const pid of helpers) {
++        if (running(pid)) {
++          try {
++            process.kill(pid, 'SIGKILL')
++          } catch {
++            /* already reaped */
++          }
++        }
++      }
++
++      await pause(50)
++      fs.rmSync(root, { recursive: true, force: true })
++    }
++  }
++}
++
++test('closing the session kills a TERM-resistant helper and its child', async () => {
++  const f = localSession()
++  const receipt = path.join(f.root, 'pids')
++
++  const code = [
++    'import os, signal, subprocess, sys, time',
++    'signal.signal(signal.SIGTERM, signal.SIG_IGN)',
++    'p = subprocess.Popen([sys.executable, "-I", "-S", "-c", "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)"])',
++    `open(${JSON.stringify(receipt)}, 'w').write(str(os.getpid()) + ' ' + str(p.pid))`,
++    'time.sleep(30)'
++  ].join('; ')
++
++  const call = f.connection.exec(`exec python3 -I -S -c ${quote(code)}`).catch(error => error)
++
++  try {
++    await until(() => fs.existsSync(receipt), 'helper never started')
++    f.helpers.push(...fs.readFileSync(receipt, 'utf8').split(' ').map(Number))
++    assert.equal(f.helpers.length, 2)
++    assert.ok(f.helpers.every(running))
++    await f.connection.close()
++    await until(() => f.helpers.every(pid => !running(pid)), 'disconnected helper or child survived', 4000)
++    assert.equal((await call).kind, 'superseded')
++  } finally {
++    await f.cleanup()
++    await call
++  }
++})
++
++test('stdin bytes reach the helper exactly once, followed by EOF', async () => {
++  const f = localSession()
++  const input = 'synthetic-token\nไทย\u0000tail\n'
++
++  try {
++    const code = 'import sys; sys.stdout.write(sys.stdin.buffer.read().hex())'
++
++    for (let i = 0; i < 3; i++) {
++      const output = await f.connection.exec(`exec python3 -I -S -c ${quote(code)}`, { stdinData: input })
++      assert.equal(output, Buffer.from(input).toString('hex'))
++    }
++
++    const slots = path.join(f.root, '.hermes/desktop-ssh/helper-slots-v1')
++    assert.ok(fs.readdirSync(slots).length <= 2)
++    assert.ok(fs.readdirSync(slots).every(name => fs.statSync(path.join(slots, name)).size === 0))
++  } finally {
++    await f.cleanup()
++  }
++})
++
++test('truncated, malformed and oversized input frames never launch a payload', async () => {
++  const f = localSession()
++  const sentinel = path.join(f.root, 'must-not-exist')
++
++  try {
++    for (const frame of ['4\nab', 'invalid\n', '33554433\n', '']) {
++      const leased = leasedSshExec(`touch ${quote(sentinel)}`, undefined, 2000)
++
++      const client = f.connection._spawnFn('mock-only', ['--', 'mock.invalid', leased.command], {
++        stdio: ['pipe', 'pipe', 'pipe']
++      })
++
++      const done = new Promise<number>(resolve => client.once('close', resolve))
++      client.stdin.end(frame)
++      assert.equal(await done, 125)
++      assert.equal(fs.existsSync(sentinel), false)
++    }
++  } finally {
++    await f.cleanup()
++  }
++})
++
++test('timeout stays responsive while a helper refuses to read a large stdin payload', async () => {
++  const f = localSession()
++  const receipt = path.join(f.root, 'blocked-stdin-pid')
++  const code = `import os,signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); open(${JSON.stringify(receipt)},'w').write(str(os.getpid())); time.sleep(30)`
++
++  const call = f.connection
++    .exec(`exec python3 -I -S -c ${quote(code)}`, {
++      stdinData: 'x'.repeat(2 * 1024 * 1024),
++      timeoutMs: 1500
++    })
++    .catch(error => error)
++
++  try {
++    await until(() => fs.existsSync(receipt), 'blocked-stdin helper never started')
++    f.helpers.push(Number(fs.readFileSync(receipt, 'utf8')))
++    assert.equal((await call).kind, 'timeout')
++    await until(() => f.helpers.every(pid => !running(pid)), 'timed-out helper survived', 3000)
++  } finally {
++    await f.cleanup()
++    await call
++  }
++})
++
++test('normal parent exit reaps a child retaining the session output pipes', async () => {
++  const f = localSession()
++  const receipt = path.join(f.root, 'retained-output-pid')
++  const code = `import subprocess; p=subprocess.Popen(['sleep','30']); open(${JSON.stringify(receipt)},'w').write(str(p.pid)); print('complete')`
++
++  try {
++    assert.equal((await f.connection.exec(`exec python3 -I -S -c ${quote(code)}`)).trim(), 'complete')
++    f.helpers.push(Number(fs.readFileSync(receipt, 'utf8')))
++    await until(() => f.helpers.every(pid => !running(pid)), 'output-holding child survived')
++  } finally {
++    await f.cleanup()
++  }
++})
++
++test('remote kernel admission holds the next guard until actual cleanup', async () => {
++  const f = localSession()
++  const locker = process.platform === 'darwin' ? 'lockf' : 'flock'
++  const realLocker = `/usr/bin/${locker}`
++  assert.ok(fs.existsSync(realLocker), 'local admission test needs the platform lock utility')
++  const attempts = path.join(f.root, 'lock-attempts')
++  const sentinel = path.join(f.root, 'second-payload')
++  fs.mkdirSync(path.join(f.root, 'bin'))
++  fs.writeFileSync(
++    path.join(f.root, 'bin', locker),
++    `#!/bin/sh\nprintf '%s\\n' "$PPID" >> ${quote(attempts)}\nexec ${quote(realLocker)} "$@"\n`,
++    { mode: 0o700 }
++  )
++
++  const start = (frame: string, command = 'true') => {
++    const leased = leasedSshExec(command, undefined, 5000)
++
++    const client = f.connection._spawnFn('mock-only', ['--', 'mock.invalid', leased.command], {
++      stdio: ['pipe', 'pipe', 'pipe']
++    })
++
++    const done = new Promise<number>(resolve => client.once('close', resolve))
++    client.stdin.write(frame)
++
++    return { client, done, pid: f.clients.at(-1)!.pid! }
++  }
++
++  const first = start('1\n')
++  let second
++
++  try {
++    await until(() => {
++      try {
++        return /python/i.test(execFileSync('/bin/ps', ['-p', String(first.pid), '-o', 'comm='], { encoding: 'utf8' }))
++      } catch {
++        return false
++      }
++    }, 'first guard never acquired its remote slot')
++    second = start('0\n', `touch ${quote(sentinel)}`)
++    await until(
++      () => fs.readFileSync(attempts, 'utf8').split('\n').includes(String(second.pid)),
++      'second session never attempted remote admission'
++    )
++    assert.equal(fs.existsSync(sentinel), false, 'next session must not start its guard/payload yet')
++    first.client.stdin.end()
++    assert.equal(await first.done, 125)
++    assert.equal(await second.done, 0)
++    assert.equal(fs.existsSync(sentinel), true)
++  } finally {
++    first.client.stdin.end()
++    second?.client.stdin.end()
++    await Promise.allSettled([first.done, second?.done])
++    await f.cleanup()
++  }
++})
++
++test('a marker-gated detached serve survives successful helper-group cleanup without setsid utility', async () => {
++  const f = localSession()
++  const receipt = path.join(f.root, 'detached-serve.json')
++  const hermes = path.join(f.root, 'fake-hermes')
++  fs.writeFileSync(
++    hermes,
++    `#!/usr/bin/env python3\nimport json,os,signal,time\nopen(${JSON.stringify(receipt)},'w').write(json.dumps({'pid':os.getpid(),'sid':os.getsid(0),'hup':signal.getsignal(signal.SIGHUP)==signal.SIG_IGN}))\ntime.sleep(30)\n`,
++    { mode: 0o700 }
++  )
++
++  try {
++    const command = buildSpawnCommand(hermes, '', {
++      hermesHome: path.join(f.root, '.hermes'),
++      logPath: path.join(f.root, 'serve.log')
++    })
++
++    const pid = Number((await f.connection.exec(command)).trim())
++    assert.ok(Number.isInteger(pid) && pid > 1)
++    f.helpers.push(pid)
++    await until(() => fs.existsSync(receipt), 'detached serve was killed before it became ready')
++    const report = JSON.parse(fs.readFileSync(receipt, 'utf8'))
++    assert.equal(report.pid, pid)
++    assert.ok(running(pid), 'successful helper cleanup must preserve its detached serve')
++    assert.equal(report.hup, true)
++  } finally {
++    await f.cleanup()
++  }
++})
+diff --git a/apps/desktop/electron/ssh-exec-lifetime.ts b/apps/desktop/electron/ssh-exec-lifetime.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..2e1e549a1f4cb5713e21966dd90b20c7905659f1
+--- /dev/null
++++ b/apps/desktop/electron/ssh-exec-lifetime.ts
+@@ -0,0 +1,119 @@
++const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
++
++// stdin carries a length-framed payload, then stays open as the session lease.
++// A stopped child remains unreaped until group cleanup, so its PID/PGID cannot be reused.
++const GUARD = String.raw`
++import fcntl, os, select, signal, stat, subprocess, sys, threading, time
++
++slot, seconds, command = sys.argv[1:]
++deadline = time.monotonic() + float(seconds)
++stopped = False
++exited = False
++def stop_handler(*_):
++ global stopped
++ stopped = True
++def exit_handler(*_):
++ global exited
++ exited = True
++for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT):
++ signal.signal(sig, stop_handler)
++signal.signal(signal.SIGCHLD, exit_handler)
++proc = None
++code = 125
++
++def read_bytes(size):
++ data = bytearray()
++ while len(data) < size:
++  if stopped or time.monotonic() >= deadline:
++   raise TimeoutError('SSH helper input lease expired')
++  if not select.select([0], [], [], .05)[0]: continue
++  chunk = os.read(0, min(size-len(data), 65536))
++  if not chunk: raise EOFError('SSH helper input lease closed')
++  data.extend(chunk)
++ return bytes(data)
++
++try:
++ expected = os.path.join(os.path.expanduser('~'), '.hermes', 'desktop-ssh', 'helper-slots-v1')
++ if os.path.dirname(slot) != expected or os.path.basename(slot) != '0.lock':
++  raise ValueError('Invalid SSH helper slot')
++ for name in (os.path.dirname(os.path.dirname(expected)), os.path.dirname(expected), expected):
++  st = os.lstat(name)
++  if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid() or st.st_mode & 0o022:
++   raise ValueError('Unsafe SSH helper slot directory')
++ live, held = os.lstat(slot), os.fstat(9)
++ if not stat.S_ISREG(live.st_mode) or (live.st_dev, live.st_ino) != (held.st_dev, held.st_ino) or held.st_uid != os.geteuid() or held.st_mode & 0o077:
++  raise ValueError('Unsafe SSH helper slot')
++ fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)
++ os.set_inheritable(9, False)
++ header = bytearray()
++ while len(header) < 32:
++  byte = read_bytes(1)
++  if byte == b'\n': break
++  header.extend(byte)
++ else: raise ValueError('SSH helper input header is too long')
++ if not header.isdigit(): raise ValueError('Invalid SSH helper input length')
++ size = int(header)
++ if size > 32*1024*1024: raise ValueError('SSH helper input is too large')
++ payload = read_bytes(size)
++ if stopped or (select.select([0], [], [], 0)[0] and not os.read(0, 1)):
++  raise EOFError('SSH helper input lease closed')
++ proc = subprocess.Popen(['sh', '-c', command], stdin=subprocess.PIPE, start_new_session=True)
++ def feed():
++  try:
++   proc.stdin.write(payload)
++   proc.stdin.close()
++  except (BrokenPipeError, OSError): pass
++ threading.Thread(target=feed, daemon=True).start()
++ while not exited and not stopped and time.monotonic() < deadline:
++  if select.select([0], [], [], .05)[0]:
++   os.read(0, 1)
++   stopped = True
++ code = 0 if exited else 124
++except (OSError, ValueError, EOFError, TimeoutError) as error:
++ print(str(error), file=sys.stderr)
++finally:
++ if proc is not None:
++  if not exited:
++   try: os.killpg(proc.pid, signal.SIGTERM)
++   except ProcessLookupError: pass
++   grace = time.monotonic() + 1
++   while not exited and time.monotonic() < grace: time.sleep(.01)
++  # The unreaped direct child anchors the process group through the final signal.
++  try: os.killpg(proc.pid, signal.SIGKILL)
++  except ProcessLookupError: pass
++  except PermissionError:
++   # XNU reports EPERM when its remaining group members are all zombies.
++   if sys.platform != 'darwin' or not exited: raise
++  result = proc.wait()
++  if code == 0: code = result if 0 <= result < 255 else 1
++ os.close(9)
++sys.exit(code)
++`.trim()
++
++export function leasedSshExec(command: string, stdinData: string | Buffer | undefined, timeoutMs: number) {
++  const payload = stdinData == null ? Buffer.alloc(0) : Buffer.from(stdinData)
++
++  if (payload.length > 32 * 1024 * 1024) {
++    throw new Error('SSH helper input is too large.')
++  }
++
++  const seconds = Math.max(0.05, (timeoutMs - 1000) / 1000)
++
++  // Acquire on a shell FD before starting Python. The guard inherits that same kernel
++  // lock through cleanup, so reconnects cannot overlap it; empty slot files stay reusable.
++  const remoteCommand =
++    `umask 077; __hs_base="$HOME/.hermes/desktop-ssh/helper-slots-v1"; ` +
++    `for __hs_dir in "$HOME/.hermes" "$HOME/.hermes/desktop-ssh" "$__hs_base"; do ` +
++    `[ ! -L "$__hs_dir" ] || exit 126; mkdir -p "$__hs_dir" || exit 126; done; ` +
++    `if command -v flock >/dev/null 2>&1; then __hs_locker=flock; ` +
++    `elif command -v lockf >/dev/null 2>&1; then __hs_locker=lockf; ` +
++    `else echo 'Remote SSH helpers require flock or lockf.' >&2; exit 126; fi; ` +
++    `while :; do __hs_slot="$__hs_base/0.lock"; ` +
++    `[ ! -L "$__hs_slot" ] || exit 126; exec 9>>"$__hs_slot" || exit 126; ` +
++    `if [ "$__hs_locker" = flock ]; then flock -n -E 75 9; else lockf -s -t 0 9; fi; __hs_rc=$?; ` +
++    `if [ "$__hs_rc" = 0 ]; then ` +
++    `exec python3 -I -S -c ${quote(GUARD)} "$__hs_slot" ${seconds} ${quote(command)}; ` +
++    `fi; [ "$__hs_rc" = 75 ] || exit "$__hs_rc"; sleep .1; done`
++
++  return { command: remoteCommand, stdinData: Buffer.concat([Buffer.from(`${payload.length}\n`), payload]) }
++}
+diff --git a/apps/desktop/electron/ssh-fanout.test.ts b/apps/desktop/electron/ssh-fanout.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..668bac6ac86a5027cda13cc9f5127a691d1f9d72
+--- /dev/null
++++ b/apps/desktop/electron/ssh-fanout.test.ts
+@@ -0,0 +1,491 @@
++import assert from 'node:assert/strict'
++import { execFile } from 'node:child_process'
++import { EventEmitter } from 'node:events'
++import fs from 'node:fs'
++import net from 'node:net'
++import os from 'node:os'
++import path from 'node:path'
++import { promisify } from 'node:util'
++
++import { test, vi } from 'vitest'
++
++import { buildExecArgs, controlSocketPath, SshConnection } from './ssh-connection'
++import { createControlMasterHolders } from './ssh-control-master-holders'
++
++function child(result?: { code?: number; stdout?: string; stderr?: string }) {
++  const proc: any = new EventEmitter()
++  proc.stdout = new EventEmitter()
++  proc.stderr = new EventEmitter()
++  proc.stdin = { write: () => true, end: () => {} }
++
++  proc.finish = (code = 0, stdout = '', stderr = '') => {
++    proc.stdout.emit('data', stdout)
++    proc.stderr.emit('data', stderr)
++    proc.emit('close', code, null)
++  }
++
++  proc.kill = vi.fn(() => {
++    queueMicrotask(() => proc.emit('close', null, 'SIGKILL'))
++
++    return true
++  })
++
++  if (result) {
++    queueMicrotask(() => proc.finish(result.code, result.stdout, result.stderr))
++  }
++
++  return proc
++}
++
++function fixture(spawnFn) {
++  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ssh-fanout-'))
++  const holders = createControlMasterHolders()
++  const connections: SshConnection[] = []
++
++  return {
++    connection(profile: string, keyPath = '') {
++      const connection = new SshConnection(
++        { host: 'mock-host.invalid', user: 'synthetic', keyPath },
++        { spawnFn, mux: true, controlDir: dir, controlMasterHolders: holders, scope: profile, ownershipId: profile }
++      )
++
++      connections.push(connection)
++
++      return connection
++    },
++    async cleanup() {
++      await Promise.all(connections.map(connection => connection.close()))
++      fs.rmSync(dir, { recursive: true, force: true })
++    }
++  }
++}
++
++test('profiles share a transport while SSH authentication/configuration identities stay separate', () => {
++  const identity = { keyPath: '/synthetic/key', effectiveConfigFingerprint: 'effective-config' }
++
++  const first = controlSocketPath('user', 'mock.invalid', 22, '/synthetic/control', {
++    ...identity,
++    ownershipId: 'owner-a',
++    scope: 'profile-a'
++  })
++
++  assert.equal(
++    first,
++    controlSocketPath('user', 'mock.invalid', 22, '/synthetic/control', {
++      ...identity,
++      ownershipId: 'owner-b',
++      scope: 'profile-b'
++    })
++  )
++
++  for (const changed of [{ keyPath: '/synthetic/other' }, { effectiveConfigFingerprint: 'changed-config' }]) {
++    assert.notEqual(
++      first,
++      controlSocketPath('user', 'mock.invalid', 22, '/synthetic/control', {
++        ...identity,
++        ...changed
++      })
++    )
++  }
++
++  assert.notEqual(first, controlSocketPath('other', 'mock.invalid', 22, '/synthetic/control', identity))
++  assert.notEqual(first, controlSocketPath('user', 'mock.invalid', 2222, '/synthetic/control', identity))
++})
++
++test('concurrent profile opens establish exactly one compatible master', async () => {
++  let masters = 0
++
++  const f = fixture((_binary, args) => {
++    if (args.includes('-M')) {
++      masters++
++    }
++
++    return child({ code: args.includes('check') ? 255 : 0 })
++  })
++
++  try {
++    await Promise.all(Array.from({ length: 24 }, (_, i) => f.connection(`profile-${i}`).open()))
++    assert.equal(masters, 1)
++  } finally {
++    await f.cleanup()
++  }
++})
++
++test('payload mux clients refuse direct fallback when the master is missing', () => {
++  const args = buildExecArgs({ user: 'user', host: 'mock.invalid', port: 22, controlPath: '/missing/socket' }, 'true')
++  assert.ok(args.includes('ControlMaster=no'))
++  assert.ok(args.includes('ProxyCommand=false'))
++  assert.ok(!args.includes('ControlMaster=auto'))
++})
++
++test('real OpenSSH with a missing mux never dials localhost or runs configured proxies', async () => {
++  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ssh-no-fallback-'))
++  const config = path.join(dir, 'config')
++  const sentinel = path.join(dir, 'proxy-must-not-run')
++
++  const server = net.createServer(socket => {
++    connections++
++    socket.destroy()
++  })
++
++  let connections = 0
++  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
++
++  try {
++    fs.writeFileSync(
++      config,
++      `Host *\n  IdentityFile none\n  IdentityAgent none\n  GlobalKnownHostsFile none\n  UserKnownHostsFile ${dir}/known_hosts\n  ProxyCommand touch ${sentinel}\n  ProxyJump 127.0.0.1\n`
++    )
++
++    const args = buildExecArgs(
++      {
++        host: '127.0.0.1',
++        user: 'synthetic',
++        port: (server.address() as net.AddressInfo).port,
++        controlPath: path.join(dir, 'missing.sock')
++      },
++      'true'
++    )
++
++    await assert.rejects(
++      promisify(execFile)('/usr/bin/ssh', ['-F', config, ...args], {
++        timeout: 2000,
++        env: { HOME: dir, PATH: '/usr/bin:/bin' }
++      }),
++      (error: any) => error.code === 255
++    )
++    assert.equal(connections, 0)
++    assert.equal(fs.existsSync(sentinel), false)
++  } finally {
++    await new Promise<void>(resolve => server.close(() => resolve()))
++    fs.rmSync(dir, { recursive: true, force: true })
++  }
++})
++
++test('one host shares a one-command helper budget across profiles and key identities', async () => {
++  const jobs: any[] = []
++  let active = 0
++  let peak = 0
++
++  const f = fixture((_binary, args) => {
++    if (args.includes('-O')) {
++      return child({ code: 0 })
++    }
++
++    const proc = child()
++    active++
++    peak = Math.max(peak, active)
++    proc.once('close', () => active--)
++    jobs.push(proc)
++
++    return proc
++  })
++
++  const connections = Array.from({ length: 12 }, (_, i) => {
++    const connection = f.connection(`profile-${i}`, `/synthetic/key-${i % 2}`)
++    connection._posixRemote = true
++    connection._opened = true
++
++    return connection
++  })
++
++  const calls = connections.map((connection, i) =>
++    connection.exec(`echo job-${i}`).then(
++      value => ({ value }),
++      error => ({ error })
++    )
++  )
++
++  try {
++    await new Promise(resolve => setImmediate(resolve))
++    assert.equal(jobs.length, 1, 'queued commands must not spawn clients or guards')
++
++    while (jobs.length || active) {
++      const pending = jobs.splice(0)
++
++      for (const proc of pending) {
++        proc.finish(0, 'done')
++      }
++
++      await new Promise(resolve => setImmediate(resolve))
++    }
++
++    assert.ok((await Promise.all(calls)).every(result => 'value' in result))
++    assert.equal(peak, 1)
++  } finally {
++    await f.cleanup()
++
++    for (const proc of jobs) {
++      proc.finish(0)
++    }
++
++    await Promise.all(calls)
++  }
++})
++
++test('closing a connection cancels its running and queued commands', async () => {
++  const jobs: any[] = []
++
++  const f = fixture((_binary, args) => {
++    if (args.includes('-O')) {
++      return child({ code: 0 })
++    }
++
++    const proc = child()
++    jobs.push(proc)
++
++    return proc
++  })
++
++  const connection = f.connection('closing')
++  connection._posixRemote = true
++  connection._opened = true
++
++  const calls = Array.from({ length: 5 }, () =>
++    connection.exec('echo pending').then(
++      () => 'success',
++      error => error.kind
++    )
++  )
++
++  try {
++    await new Promise(resolve => setImmediate(resolve))
++    await connection.close()
++    assert.ok(
++      jobs.some(proc => proc.kill.mock.calls.length),
++      'close must stop active SSH clients'
++    )
++    assert.deepEqual(await Promise.all(calls), Array(5).fill('superseded'))
++    assert.equal(jobs.length, 1, 'cancelled queued commands must never spawn')
++  } finally {
++    for (const proc of jobs) {
++      proc.finish(0)
++    }
++
++    await Promise.all(calls)
++    await f.cleanup()
++  }
++})
++
++test('failed profile dials share a transport cooldown before one later retry', async () => {
++  let masters = 0
++
++  const f = fixture((_binary, args) => {
++    if (args.includes('-M')) {
++      masters++
++
++      return child({ code: masters === 1 ? 255 : 0, stderr: masters === 1 ? 'Connection refused' : '' })
++    }
++
++    return child({ code: args.includes('check') ? 255 : 0 })
++  })
++
++  vi.useFakeTimers()
++
++  try {
++    await assert.rejects(f.connection('first').open())
++    await assert.rejects(f.connection('second').open(), (error: any) => error.kind === 'reconnect-backoff')
++    assert.equal(masters, 1)
++    await vi.advanceTimersByTimeAsync(1000)
++    await f.connection('third').open()
++    assert.equal(masters, 2)
++  } finally {
++    await f.cleanup()
++    vi.useRealTimers()
++  }
++})
++
++test('cancelling one opening profile preserves the master needed by another', async () => {
++  let master
++  let exits = 0
++
++  const f = fixture((_binary, args) => {
++    if (args.includes('-M')) {
++      return (master = child())
++    }
++
++    if (args.includes('exit')) {
++      exits++
++    }
++
++    return child({ code: args.includes('check') ? 255 : 0 })
++  })
++
++  const abort = new AbortController()
++  const first = f.connection('cancelled')
++  const second = f.connection('survivor')
++  const one = first.open({ signal: abort.signal }).catch(error => error)
++  const two = second.open()
++
++  try {
++    await new Promise(resolve => setImmediate(resolve))
++    assert.ok(master)
++    abort.abort()
++    assert.equal((await one).kind, 'superseded')
++    assert.equal(master.kill.mock.calls.length, 0)
++    master.finish(0)
++    await two
++    await first.close()
++    assert.equal(exits, 0)
++    assert.equal(second._opened, true)
++    await second.close()
++    assert.equal(exits, 1)
++  } finally {
++    master?.finish(0)
++    await Promise.allSettled([one, two])
++    await f.cleanup()
++  }
++})
++
++test('new profile opening waits for final-holder teardown before starting a new master', async () => {
++  const events: string[] = []
++  let teardown
++
++  const f = fixture((_binary, args) => {
++    if (args.includes('exit')) {
++      events.push('close')
++
++      return (teardown = child())
++    }
++
++    if (args.includes('-M')) {
++      events.push('master')
++    }
++
++    return child({ code: args.includes('check') ? 255 : 0 })
++  })
++
++  const first = f.connection('old')
++  const second = f.connection('new')
++  await first.open()
++  const closing = first.close()
++  await new Promise(resolve => setImmediate(resolve))
++  const opening = second.open()
++
++  try {
++    await new Promise(resolve => setImmediate(resolve))
++    assert.deepEqual(events, ['master', 'close'])
++    teardown.finish(0)
++    await Promise.all([closing, opening])
++    assert.deepEqual(events, ['master', 'close', 'master'])
++  } finally {
++    teardown?.finish(0)
++    await Promise.allSettled([closing, opening])
++    // Further closes complete immediately, unlike the deliberately blocked first one.
++    const cleanup = f.cleanup()
++    await new Promise(resolve => setImmediate(resolve))
++    teardown?.finish(0)
++    await cleanup
++  }
++})
++
++test('a new opener replaces an aborted flight while its old client is still closing', async () => {
++  const masters: any[] = []
++
++  const f = fixture((_binary, args) => {
++    if (args.includes('-M')) {
++      const proc = child(masters.length ? { code: 0 } : undefined)
++
++      if (!masters.length) {
++        proc.kill = vi.fn(() => true)
++      }
++
++      masters.push(proc)
++
++      return proc
++    }
++
++    return child({ code: args.includes('check') ? 255 : 0 })
++  })
++
++  const old = f.connection('old-opening')
++  const first = old.open().catch(error => error)
++  await new Promise(resolve => setImmediate(resolve))
++  const closing = old.close()
++  await new Promise(resolve => setImmediate(resolve))
++  const replacement = f.connection('replacement')
++  const next = replacement.open().catch(error => error)
++
++  try {
++    assert.equal(masters[0].kill.mock.calls.length, 1)
++    assert.equal(masters.length, 1)
++    masters[0].emit('close', null, 'SIGKILL')
++    assert.equal((await first).kind, 'superseded')
++    await closing
++    assert.equal(await next, undefined)
++    assert.equal(masters.length, 2)
++    assert.equal(replacement._opened, true)
++  } finally {
++    masters[0]?.emit('close', null, 'SIGKILL')
++    await Promise.allSettled([first, closing, next])
++    await f.cleanup()
++  }
++})
++
++test('independent main-process namespaces never share a master or its close ownership', () => {
++  const cfg = { host: 'mock.invalid', user: 'synthetic' }
++
++  const a = new SshConnection(cfg, {
++    controlDir: '/synthetic/control',
++    transportNamespace: 'main-process-a',
++    controlMasterHolders: createControlMasterHolders()
++  })
++
++  const b = new SshConnection(cfg, {
++    controlDir: '/synthetic/control',
++    transportNamespace: 'main-process-b',
++    controlMasterHolders: createControlMasterHolders()
++  })
++
++  assert.notEqual(a.controlPath, b.controlPath)
++})
++
++test('mux verification and no-mux probes wait behind the host command budget', async () => {
++  const jobs: any[] = []
++  let active = 0
++  let peak = 0
++
++  const f = fixture((_binary, args) => {
++    if (args.includes('-O')) {
++      return child({ code: 0 })
++    }
++
++    const proc = child()
++    active++
++    peak = Math.max(peak, active)
++    proc.once('close', () => active--)
++    jobs.push(proc)
++
++    return proc
++  })
++
++  const loaded = f.connection('busy')
++  loaded._posixRemote = true
++  const calls = [loaded.exec('heavy-one'), loaded.exec('heavy-two')].map(call => call.catch(error => error))
++  await new Promise(resolve => setImmediate(resolve))
++
++  const opening = f
++    .connection('verifying')
++    .open()
++    .catch(error => error)
++
++  const probe = f.connection('no-mux-probe')
++  probe._mux = false
++  const checking = probe.isAlive()
++
++  try {
++    await new Promise(resolve => setImmediate(resolve))
++    assert.ok(peak <= 1, `probe clients bypassed admission: ${peak}`)
++  } finally {
++    while (jobs.length || active) {
++      for (const proc of jobs.splice(0)) {
++        proc.finish(0)
++      }
++
++      await new Promise(resolve => setImmediate(resolve))
++    }
++
++    await Promise.allSettled([...calls, opening, checking])
++    await f.cleanup()
++  }
++})
+diff --git a/apps/desktop/electron/ssh-transport.ts b/apps/desktop/electron/ssh-transport.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..8e676340c5b6c9c7e29f2715f1fc38b8ab944c2b
+--- /dev/null
++++ b/apps/desktop/electron/ssh-transport.ts
+@@ -0,0 +1,184 @@
++// Electron main owns all profile/window SSH transports. Backend ownership stays profile scoped.
++type Flight = { controller: AbortController; promise: Promise<void> }
++type Transport = { flight?: Flight; closing?: Promise<void>; failures: number; retryAt: number }
++
++const transports = new Map<string, Transport>()
++const queues = new Map<string, { active: number; pending: any[] }>()
++const EXEC_LIMIT = 1
++const PENDING_LIMIT = 256
++
++export function cancelledSshOperation(): Error & { kind: string } {
++  return Object.assign(new Error('SSH operation was cancelled.'), { kind: 'superseded' })
++}
++
++function state(key: string): Transport {
++  let value = transports.get(key)
++
++  if (!value) {
++    value = { failures: 0, retryAt: 0 }
++    transports.set(key, value)
++  }
++
++  return value
++}
++
++export function recordSshFailure(key: string): void {
++  const value = state(key)
++  value.failures = Math.min(value.failures + 1, 6)
++  value.retryAt = Date.now() + Math.min(1000 * 2 ** (value.failures - 1), 30_000)
++}
++
++export function markSshTransportHealthy(key: string): void {
++  const value = transports.get(key)
++
++  if (value) {
++    value.failures = 0
++    value.retryAt = 0
++  }
++}
++
++export function openSshTransport(key: string, run: (signal: AbortSignal) => Promise<void>): Promise<void> {
++  const value = state(key)
++
++  if (value.flight && !value.flight.controller.signal.aborted) {
++    return value.flight.promise
++  }
++
++  if (Date.now() < value.retryAt) {
++    return Promise.reject(
++      Object.assign(new Error('SSH reconnect is cooling down; retry shortly.'), {
++        kind: 'reconnect-backoff',
++        retryAfterMs: value.retryAt - Date.now()
++      })
++    )
++  }
++
++  const controller = new AbortController()
++  const predecessor = Promise.allSettled([value.closing, value.flight?.promise])
++  const flight: Flight = { controller, promise: null! }
++  flight.promise = predecessor
++    .then(() => {
++      if (controller.signal.aborted) {
++        throw cancelledSshOperation()
++      }
++
++      return run(controller.signal)
++    })
++    .catch(error => {
++      if (error?.kind !== 'superseded') {
++        recordSshFailure(key)
++      }
++
++      throw error
++    })
++    .finally(() => {
++      if (value.flight === flight) {
++        value.flight = undefined
++      }
++    })
++  value.flight = flight
++
++  return flight.promise
++}
++
++export function closeSshTransport(key: string, run: () => Promise<void>): Promise<void> {
++  const value = state(key)
++  const flight = value.flight
++  flight?.controller.abort()
++
++  const closing = Promise.allSettled([value.closing, flight?.promise])
++    .then(run)
++    .finally(() => {
++      if (value.closing === closing) {
++        value.closing = undefined
++      }
++
++      if (!value.flight && !value.closing && !value.failures) {
++        transports.delete(key)
++      }
++    })
++
++  value.closing = closing
++
++  return closing
++}
++
++export function waitForSshTransport(promise: Promise<void>, signal?: AbortSignal): Promise<void> {
++  if (!signal) {
++    return promise
++  }
++
++  if (signal.aborted) {
++    return Promise.reject(cancelledSshOperation())
++  }
++
++  return new Promise((resolve, reject) => {
++    const abort = () => reject(cancelledSshOperation())
++    signal.addEventListener('abort', abort, { once: true })
++    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort))
++  })
++}
++
++export function queueSshExec<T>(host: string, signal: AbortSignal, run: () => Promise<T>): Promise<T> {
++  if (signal.aborted) {
++    return Promise.reject(cancelledSshOperation())
++  }
++
++  let queue = queues.get(host)
++
++  if (!queue) {
++    queue = { active: 0, pending: [] }
++    queues.set(host, queue)
++  }
++
++  if (queue.pending.length >= PENDING_LIMIT) {
++    return Promise.reject(new Error('Too many SSH commands are waiting; let the current work finish.'))
++  }
++
++  const own = queue
++
++  return new Promise<T>((resolve, reject) => {
++    const drain = () => {
++      while (own.active < EXEC_LIMIT && own.pending.length) {
++        const next = own.pending.shift()
++        next.signal.removeEventListener('abort', next.abort)
++
++        if (next.signal.aborted) {
++          next.reject(cancelledSshOperation())
++
++          continue
++        }
++
++        own.active++
++        Promise.resolve()
++          .then(next.run)
++          .then(next.resolve, next.reject)
++          .finally(() => {
++            own.active--
++            drain()
++          })
++      }
++
++      if (!own.active && !own.pending.length && queues.get(host) === own) {
++        queues.delete(host)
++      }
++    }
++
++    const entry = { signal, run, resolve, reject, abort: () => {} }
++
++    entry.abort = () => {
++      const index = own.pending.indexOf(entry)
++
++      if (index >= 0) {
++        own.pending.splice(index, 1)
++      }
++
++      reject(cancelledSshOperation())
++      drain()
++    }
++
++    signal.addEventListener('abort', entry.abort, { once: true })
++    own.pending.push(entry)
++    drain()
++  })
++}
 diff --git a/apps/desktop/src/api/client.ts b/apps/desktop/src/api/client.ts
 index 68c5a3e1b74856ec19591084e20c681d92984ba5..0ae229939f6a02d078660078690cf24a19abb351 100644
 --- a/apps/desktop/src/api/client.ts

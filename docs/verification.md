@@ -1,3 +1,48 @@
+# v0.9.0 — Bound Desktop SSH helper fan-out
+
+[Plain-language release notes](release-notes-v0.9.0.md) consolidate v0.8.46–.73.
+[Implementation and validation](desktop-ssh-resources.md) define process-owned
+master sharing, host/remote admission, helper lifetime and platform boundaries.
+The P0 change is a ten-path native source/test delta: nine additional targets
+join the existing 1,004-path full kit, now 1,013, without dependency/lock changes.
+All unrelated prior hashes and patch sections remain exact.
+
+Initial regression: seven failures and one passing preservation control; four additional advisor-found cases
+failed before their fixes. The scoped native six-file run passes 220 cases,
+with three explicit exclusions/skips: restricted external-tmp binding, a proven
+pre-existing upstream Mac installer-wrapper ownership failure, and a platform
+skip. This is not a complete native-suite pass. Actual marker-gated detachment
+survives the guard cleanup without the setsid utility; no production ownership
+predicate or stale backend record policy was relaxed.
+
+Whole Electron TypeScript and the three Electron main/preload bundles compile;
+the application was not launched or installed. Only a fresh-config OpenSSH
+missing-mux test uses the real SSH executable, with literal loopback target,
+zero TCP connections and no configured-proxy sentinel. No other host was used.
+
+A paired four-request real native `serve --help` check burst over session-pipe
+mocks measured 340.5 → 100.7 MiB peak summed RSS (70.4% lower), 1.192 → 3.031 s wall time,
+identical outputs, four → two peak sampled Python processes and zero survivors.
+Native PM Python 3.14.9 and Apple guard Python 3.9.6; nine audit negative controls
+pass. Samples target 15 ms, include shared RSS pages, and are not a hard memory
+quota, statistical benchmark, gateway idle, model-usage or real SSH measurement.
+The earlier two-command pilot is not the released admission policy or benchmark.
+
+Full export installed hashes, reverse/base checks, reapplication and all 1,013
+before/after hashes pass. The P0 incremental/native and repository diffs have no
+whitespace errors. Strict cumulative checking retains exactly the same 13 legacy
+whitespace diagnostics as the previous patch; no unrelated cleanup was folded in.
+
+Final companion checks: 133 run, 131 passed, two Linux-only skips, 4.418 s,
+exit 0. Post-export native scoped run: 220 passed, three documented skips,
+19.00 s. Intended tracked-only release copy passes all 224 inventory files
+(225 paths including the manifest); private-index intent-to-add includes only
+the two new public docs. Disposable copy removed; real index unchanged.
+Both exact Gitleaks directory/all-history scans exit 0 with no leaks; 207 history
+commits scanned. Owner app/home/controls and stopped timers remain untouched.
+This source release does not establish installed-app adoption, other-machine
+runtime validation, gateway idle reduction or completion of the standing goal.
+
 # v0.8.76 — Recover overflowing web-cache TTL configuration
 
 The shared TTL float-conversion handler now includes `OverflowError` in its
