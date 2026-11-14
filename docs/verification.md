@@ -1,3 +1,51 @@
+# v0.8.69 — Keep overflowing web-cache timestamps inside the miss boundary
+
+A signed `10**400` timestamp in disposable disk search-cache metadata raises
+OverflowError during float subtraction. Native disk/fresh-memo reads raise, and
+registered search returns an error before reaching its provider. Add only
+OverflowError to the existing disk lookup exception tuple. Miss bytes stay exact;
+the normal selected-provider/store path can recover a requested query. Keys, TTL,
+numeric policy, migration, deletion, retries and fallback policy remain unchanged.
+
+Actual Mac Python 3.14.9 baseline: 47 native cases across two files. The original
+disk-sharing selection has six intentional failures and 14 passes. Sixteen cases
+are added: two signed direct failures, four registered success/error failures,
+and ten controls. Fresh, exact TTL boundary, expired, future, missing/null/malformed
+and nonfinite metadata retain behavior. An exploratory probe initially targets an
+absent old memo seam; reading the actual current-kit late import corrects it before
+successful registered reproduction, without product or guard changes.
+
+Final native selection: 89 pass across six files, no failures/skips/retries, 5.7 s,
+including actual final exported reapplication. Tests retain real private JSON/cache
+paths and fresh memos, exact poisoned/unrelated bytes, four-process sharing,
+profile/caller-copy/flight/busy/store-contention/storage-pressure controls. Registered
+success invokes the selected fixed provider once with bucket 10, returns three
+results, stores all ten with a finite time, and serves five through a fresh memo
+without another invocation. Rescue-disabled fixture configuration preserves provider
+errors and bad cache bytes, with no keyless request or managed paid fallback.
+[Detailed scope and limits](search-cache-memory.md#oversized-disk-timestamps-v0869).
+
+Borrowed PM-selected Python 3.14.9/dependencies, isolated PM-locked pytest 9.1.1/
+asyncio 1.3.0, private HOME/HERMES_HOME/TMPDIR and unchanged self-tested Python audit/
+null/scratch/leading-flag/per-PID guards/exit7. One CPU compile/worker, no retries.
+No full native suite, live provider/model/MCP/fleet/service/UI, OS/native-extension
+containment, new HTTP2/PID4, workload hit-rate/RSS/latency/billed saving or owner
+adoption claim. Required companion: 131 run, 129 pass/two Linux skips, 4.525 s, exit 0.
+
+Same 1002 targets and pinned base bf0203a (v0.22.5), all before/unrelated after hashes
+and selection unchanged. Exactly two existing sections/after hashes change. Filtered
+bytes, temporary index/full-index binary-U1/installed-reverse-base-reapply pass.
+Imported runtime path/hash matches exported manifest; final package reruns 89.
+Final test import ordering preserves the module docstring before package regeneration.
+No new public file/dependency/lock/selection. Read-only owner comparison: 977/1002
+match, 25 paths await normal adoption. Native/raw root whitespace clean. Tracked-only
+222-file inventory/current hashes and exact directory/all-history Gitleaks scans
+pass, no leaks, 199 commits. Advisor 71 accepts bounded handoff. Exact owned trial/
+source/tools/fixtures/log/home/cache tree, pointer and setup removed; absence
+verified, borrowed source/runtime/dependencies/objects retained. Pre-cleanup
+705680 KiB is not attributed saving. Final hash/inventory/whitespace/secret refresh
+precedes driver signal.
+
 # v0.8.68 — Recheck report activity after archive publication
 
 The shared companion packer reuses its optional activity callback after exclusive

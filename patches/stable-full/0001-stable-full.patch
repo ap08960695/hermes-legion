@@ -77559,11 +77559,13 @@ index 0000000000000000000000000000000000000000..ebde5deada5d2020f7299c29ae29bd53
 +    assert cache.extract_cache_get(bad, provider=provider.name)["content"] == "fresh bad"
 diff --git a/tests/tools/test_web_search_disk_sharing.py b/tests/tools/test_web_search_disk_sharing.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..7bce5422b108d24edb04ac4b6902c2846eea7b21
+index 0000000000000000000000000000000000000000..557348eeb975c1498cfe556c6bb0b03d29309637
 --- /dev/null
 +++ b/tests/tools/test_web_search_disk_sharing.py
-@@ -0,0 +1,78 @@
+@@ -0,0 +1,175 @@
 +"""Persistent memo keeps the existing search semantics across processes/profiles."""
++import pytest
++
 +from tools import web_result_cache as cache
 +from hermes_constants import set_hermes_home_override, reset_hermes_home_override
 +
@@ -77641,6 +77643,101 @@ index 0000000000000000000000000000000000000000..7bce5422b108d24edb04ac4b6902c284
 +    with pytest.raises(CacheLockBusy):
 +        web_tools._memoized_search(provider,'new search',5)
 +    provider.search.assert_not_called()
++
++
++@pytest.mark.parametrize('at,hit', [
++    (10**400, False), (-10**400, False), (1999999999.0, True),
++    (1999998800.0, False), (1999998799.0, False), (2000000001.0, False),
++    (float('inf'), False), (-float('inf'), False), (float('nan'), False),
++    (None, False), ('invalid', False), ('missing', False),
++], ids=['overflow-positive', 'overflow-negative', 'fresh', 'ttl-boundary', 'expired',
++        'future', 'infinity', 'negative-infinity', 'nan', 'null', 'invalid', 'missing'])
++def test_disk_timestamp_miss_keeps_cache_bytes_and_healthy_keys(monkeypatch, at, hit):
++    import json
++    import os
++    from tools import web_search_disk_cache as disk
++
++    clock = 2000000000.0
++    monkeypatch.setattr(cache, '_web_config', dict)
++    monkeypatch.setattr(disk.time, 'time', lambda: clock)
++    root = disk._root()
++    key = cache.SearchMemo._key('offline-fixture', 'timestamp fixture', 5)
++    other = cache.SearchMemo._key('offline-fixture', 'healthy fixture', 5)
++    response = {'success': True, 'data': {'web': [{'title': 'synthetic cached result'}]}}
++    for identity, timestamp in ((key, at), (other, clock - 1)):
++        path = root / (disk._key(identity) + '.txt')
++        value = {'response': response}
++        if timestamp != 'missing':
++            value['at'] = timestamp
++        path.write_text(json.dumps(value))
++        path.chmod(0o600)
++        os.utime(path, (clock, clock))
++    before = {p.name: p.read_bytes() for p in root.glob('*.txt')}
++    assert disk.lookup(key, 1200) == (response if hit else None)
++    assert cache.SearchMemo().lookup_slice('offline-fixture', 'timestamp fixture', 5) == (response if hit else None)
++    assert cache.SearchMemo().lookup('offline-fixture', 'healthy fixture', 5) == response
++    assert {p.name: p.read_bytes() for p in root.glob('*.txt')} == before
++
++
++@pytest.mark.parametrize('sign', [1, -1], ids=['positive', 'negative'])
++@pytest.mark.parametrize('provider_error', [False, True], ids=['success', 'provider-error'])
++def test_registered_search_preserves_provider_path_after_bad_disk_timestamp(monkeypatch, sign, provider_error):
++    import json
++    import math
++    from types import SimpleNamespace
++    from unittest.mock import Mock
++    from agent import web_search_registry
++    from tools import web_search_disk_cache as disk, web_tools
++    from tools.registry import registry
++
++    config = {'keyless_rescue': False}
++    monkeypatch.setattr(cache, '_web_config', lambda: config)
++    monkeypatch.setattr(web_tools, '_load_web_config', lambda: config)
++    monkeypatch.setattr(cache, 'search_memo', cache.SearchMemo())
++    query = 'synthetic timestamp recovery'
++    value = {'success': True, 'data': {'web': [
++        {'title': 'synthetic result ' + str(i), 'url': 'https://example.test/' + str(i)} for i in range(10)
++    ]}}
++    cache.SearchMemo().store('offline-fixture', query, 5, value)
++    key = cache.SearchMemo._key('offline-fixture', query, 5)
++    path = disk._root() / (disk._key(key) + '.txt')
++    payload = json.loads(path.read_text())
++    payload['at'] = sign * 10**400
++    path.write_text(json.dumps(payload))
++    before = path.read_bytes()
++    cache.SearchMemo().store('offline-fixture', 'unrelated query', 5, value)
++    other_key = cache.SearchMemo._key('offline-fixture', 'unrelated query', 5)
++    other = disk._root() / (disk._key(other_key) + '.txt')
++    other_bytes = other.read_bytes()
++    response = {'success': False, 'error': 'synthetic provider failure'} if provider_error else value
++    provider = SimpleNamespace(name='offline-fixture', supports_search=lambda: True,
++                               search=Mock(return_value=response))
++    monkeypatch.setattr(web_tools, '_ensure_web_plugins_loaded', lambda: None)
++    monkeypatch.setattr(web_tools, '_get_search_backend', lambda: provider.name)
++    monkeypatch.setattr(web_search_registry, 'get_provider', lambda name: provider)
++    managed = Mock(wraps=web_tools._managed_search_fallback)
++    rescue = Mock(side_effect=AssertionError('Fixture policy disables keyless rescue'))
++    monkeypatch.setattr(web_tools, '_managed_search_fallback', managed)
++    monkeypatch.setattr(web_tools, '_rescue_search', rescue)
++    result = json.loads(registry.dispatch('web_search', {'query': query, 'limit': 3}))
++    assert result == (response if provider_error else {'success': True, 'data': {'web': value['data']['web'][:3]}})
++    provider.search.assert_called_once_with(query, 10)
++    rescue.assert_not_called()
++    assert config == {'keyless_rescue': False} and other.read_bytes() == other_bytes
++    if provider_error:
++        managed.assert_called_once()
++        assert path.read_bytes() == before
++        assert cache.SearchMemo().lookup('offline-fixture', query, 5) is None
++    else:
++        managed.assert_not_called()
++        repaired = json.loads(path.read_text())
++        assert type(repaired['at']) in (int, float) and math.isfinite(repaired['at'])
++        assert repaired['response'] == value
++        monkeypatch.setattr(cache, 'search_memo', cache.SearchMemo())
++        again = json.loads(registry.dispatch('web_search', {'query': ' SYNTHETIC  TIMESTAMP RECOVERY ', 'limit': 5}))
++        assert again == {'success': True, 'data': {'web': value['data']['web'][:5]}}
++        provider.search.assert_called_once_with(query, 10)
++        assert other.read_bytes() == other_bytes
 diff --git a/tests/tools/test_web_search_flight_lifetime.py b/tests/tools/test_web_search_flight_lifetime.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..e4856071ec7d0bc5c899e94416a74f39589240d2
@@ -83775,7 +83872,7 @@ index c747f3f30947fd5ef4eb13d5c51e2bb85156e951..1f73a007536b56c527a2fd5881aabf3d
 +            logger.debug("Failed to publish web extract cache: %s", exc)
 diff --git a/tools/web_search_disk_cache.py b/tools/web_search_disk_cache.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..57aa8c717ceac8afe210f3dc73733ab11d49d847
+index 0000000000000000000000000000000000000000..c7b1d052ba31435569cc5a5e09e95c00222d2d2c
 --- /dev/null
 +++ b/tools/web_search_disk_cache.py
 @@ -0,0 +1,85 @@
@@ -83826,7 +83923,7 @@ index 0000000000000000000000000000000000000000..57aa8c717ceac8afe210f3dc73733ab1
 +        if 0<=time.time()-value.get('at',0)<ttl and value.get('response',{}).get('success'):
 +            logger.info('SHARED_WEB_SEARCH_CACHE hit')
 +            return value['response']
-+    except (OSError, ValueError, TypeError, AttributeError):
++    except (OSError, ValueError, TypeError, AttributeError, OverflowError):
 +        pass
 +    return None
 +

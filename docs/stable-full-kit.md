@@ -10,6 +10,15 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Oversized web-cache timestamps (v0.8.69)
+
+Disposable search-cache metadata with an overflowing integer timestamp now causes
+an ordinary miss, preserving the normal selected-provider path. Good entries,
+keys, profile boundaries, TTL, flight locks and fallback policy remain. See
+[registered search and disk-reuse proof](search-cache-memory.md#oversized-disk-timestamps-v0869).
+The same 1002 targets remain: only the existing runtime and disk-sharing regression
+after hashes change; every before hash, unrelated after hash and selection stays.
+
 ## Declared cache-scope identity (v0.8.67)
 
 The shared identity read selects source, parent ID and marker configuration without
