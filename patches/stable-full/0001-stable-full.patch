@@ -34111,7 +34111,7 @@ index cc90cbb213f6fe92a64679b37395b39b7da85c26..6255d1886094e705b1e5761d8bf07b65
 +
  def load_newest_good_backup(config_path: Path) -> Optional[dict]:
 diff --git a/hermes_cli/config_defaults.py b/hermes_cli/config_defaults.py
-index 63ff490ee732eca4f4d604c29d221f4704b5969c..5bb67f5f7a8aa442c01e613b3c68c26131e72127 100644
+index 63ff490ee732eca4f4d604c29d221f4704b5969c..e07555fb608be27f05cc3dc53d659bc863a8c3f9 100644
 --- a/hermes_cli/config_defaults.py
 +++ b/hermes_cli/config_defaults.py
 @@ -34,2 +34,3 @@ DEFAULT_CONFIG = {
@@ -34152,6 +34152,17 @@ index 63ff490ee732eca4f4d604c29d221f4704b5969c..5bb67f5f7a8aa442c01e613b3c68c261
 +        # Optional owner ceiling per model; bounds explicit session/task choices on supported wires.
 +        "reasoning_effort_limits": {},
          # Stored reasoning is replayed to every provider that can read it by default. This flag
+@@ -554,6 +556,6 @@ DEFAULT_CONFIG = {
+     "mcp": {  # MCP runtime behavior (distinct from mcp_servers: definitions and auxiliary.mcp).
+-        # Auto-reload MCP connections when config.yaml's mcp_servers changes (CLI watcher). Every
+-        # reload rebuilds the tool surface and INVALIDATES the provider prompt cache (next message
+-        # re-sends the full prefix) — costly on long-context models. When false the watcher still
+-        # detects the change and prints /reload-mcp guidance.
++        # Defer cached stdio startup; explicit server/HTTP/events policy and idle limits remain.
++        "memory_saving": False,
++        # Auto-reload after config changes invalidates the provider prompt cache.
++        # When false, the watcher only prints /reload-mcp guidance.
+         "auto_reload_on_config_change": True,
 @@ -832,2 +834,10 @@ DEFAULT_CONFIG = {
      "display": {
 +        "prompt_suggestions": {
@@ -76503,6 +76514,319 @@ index 0000000000000000000000000000000000000000..21503b41148859027f4abb8777503684
 +            return original.sub(replacement,text)
 +    monkeypatch.setattr(ansi_strip,'_ANSI_ESCAPE_RE',Guard())
 +    assert ansi_strip.strip_ansi('\x1b]x'*1000)=='x'*1000
+diff --git a/tests/tools/test_mcp_memory_saving.py b/tests/tools/test_mcp_memory_saving.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..f4a47147c22d782a975361b8c0081b8e8ce078c2
+--- /dev/null
++++ b/tests/tools/test_mcp_memory_saving.py
+@@ -0,0 +1,307 @@
++"""Profile-level on-demand MCP policy preserves server overrides and stateful sessions."""
++import asyncio
++import concurrent.futures
++import contextvars
++import copy
++import json
++import os
++from pathlib import Path
++import tempfile
++import sys
++import threading
++import unittest
++from unittest.mock import patch
++
++from hermes_constants import set_hermes_home_override, reset_hermes_home_override
++from tools.mcp_tool_config import _load_mcp_config
++
++
++class McpMemorySavingTests(unittest.TestCase):
++    def setUp(self):
++        self.temp = tempfile.TemporaryDirectory()
++        self.home = Path(self.temp.name)
++        self.token = set_hermes_home_override(self.home)
++        self.addCleanup(reset_hermes_home_override, self.token)
++        self.addCleanup(self.temp.cleanup)
++
++    def load(self, settings=None, servers=None, portable=None):
++        config = {"mcp_servers": servers or {"echo": {"command": "python3", "args": ["echo.py"]}}}
++        if settings is not None:
++            config["mcp"] = settings
++        path = self.home / "config.yaml"
++        data = json.dumps(config).encode()
++        path.write_bytes(data)
++        def packages(merged, rejected):
++            merged.update(copy.deepcopy(portable or {}))
++        with patch("tools.mcp_tool_config._portable_mcp_servers", side_effect=packages):
++            result = _load_mcp_config()
++        self.assertEqual(path.read_bytes(), data)
++        return result
++
++    def test_enabled_profile_defers_stdio_without_adding_idle_teardown(self):
++        cfg = self.load({"memory_saving": True})["echo"]
++        self.assertIs(cfg.get("lazy"), True)
++        self.assertNotIn("idle_timeout_seconds", cfg)
++        self.assertNotIn("lifecycle", cfg)
++
++    def test_existing_profiles_keep_eager_startup(self):
++        for settings in [None, {}, {"memory_saving": False}, {"memory_saving": "false"},
++                         {"memory_saving": None}, {"memory_saving": "invalid"}]:
++            with self.subTest(settings=settings):
++                self.assertNotIn("lazy", self.load(settings)["echo"])
++
++    def test_boolish_profile_option_uses_existing_parser(self):
++        for value in [True, "true", "yes", 1]:
++            with self.subTest(value=value):
++                self.assertIs(self.load({"memory_saving": value})["echo"].get("lazy"), True)
++
++    def test_explicit_server_lazy_values_win(self):
++        for value in [False, "false", None, 0, True]:
++            with self.subTest(value=value):
++                cfg = {"echo": {"command": "python3", "lazy": value}}
++                self.assertEqual(self.load({"memory_saving": True}, cfg)["echo"]["lazy"], value)
++
++    def test_http_and_event_servers_remain_persistent_by_default(self):
++        servers = {"remote": {"url": "https://example.invalid/mcp"},
++                   "both": {"url": "https://example.invalid/mcp", "command": "python3"},
++                   "events": {"command": "python3", "events": "true"},
++                   "ordinary": {"command": "python3", "events": False}}
++        got = self.load({"memory_saving": True}, servers)
++        for name in ["remote", "both", "events"]:
++            self.assertNotIn("lazy", got[name])
++        self.assertIs(got["ordinary"].get("lazy"), True)
++
++    def test_explicit_event_lazy_and_idle_policy_remains_authoritative(self):
++        servers = {"events": {"command": "python3", "events": True, "lazy": True,
++                              "idle_timeout_seconds": 12}}
++        self.assertEqual(self.load({"memory_saving": True}, servers), servers)
++
++    def test_nested_idle_zero_and_positive_timeouts_are_not_rewritten(self):
++        for policy in [{"idle_timeout_seconds": 0}, {"idle_timeout_seconds": 12},
++                       {"lifecycle": {"idle_timeout_seconds": 0}},
++                       {"lifecycle": {"idle_timeout_seconds": 3.5}}]:
++            with self.subTest(policy=policy):
++                cfg = {"command": "python3", **policy}
++                got = self.load({"memory_saving": True}, {"echo": cfg})["echo"]
++                self.assertEqual(got, {**cfg, "lazy": True})
++
++    def test_portable_stdio_entries_receive_the_same_profile_policy(self):
++        got = self.load({"memory_saving": True}, portable={"plugin_echo": {"command": "python3"}})
++        self.assertIs(got["plugin_echo"].get("lazy"), True)
++
++    def test_profile_policy_does_not_leak_into_another_home(self):
++        self.assertIs(self.load({"memory_saving": True})["echo"].get("lazy"), True)
++        other = self.home / "profiles" / "other"
++        other.mkdir(parents=True)
++        token = set_hermes_home_override(other)
++        try:
++            (other / "config.yaml").write_text(json.dumps({"mcp_servers": {"echo": {"command": "python3"}}}))
++            with patch("tools.mcp_tool_config._portable_mcp_servers"):
++                self.assertNotIn("lazy", _load_mcp_config()["echo"])
++        finally:
++            reset_hermes_home_override(token)
++
++
++    def test_absent_wire_cache_hints_do_not_disable_legacy_schema_reuse(self):
++        from mcp.types import ListToolsResult
++        from tools.mcp_tool import _paginate_full_list
++        from tools.mcp_schema_cache import get_cached_entry, write_cache_entry
++
++        async def listing():
++            return ListToolsResult.model_validate({"tools": []})
++        hints = {}
++        asyncio.run(_paginate_full_list(listing, "tools", "echo", cache_meta_out=hints))
++        self.assertEqual(hints, {})
++        write_cache_entry("echo", "fixture-fingerprint", tools=[], **hints)
++        self.assertIsNotNone(get_cached_entry("echo", "fixture-fingerprint"))
++
++    def test_explicit_zero_and_positive_wire_ttl_keep_cache_policy(self):
++        from mcp.types import ListToolsResult
++        from tools.mcp_tool import _paginate_full_list
++        from tools.mcp_schema_cache import get_cached_entry, write_cache_entry
++
++        for ttl, reusable in [(0, False), (600000, True)]:
++            with self.subTest(ttl=ttl):
++                async def listing():
++                    return ListToolsResult.model_validate({"tools": [], "ttlMs": ttl, "cacheScope": "private"})
++                hints = {}
++                asyncio.run(_paginate_full_list(listing, "tools", "echo", cache_meta_out=hints))
++                self.assertEqual(hints, {"ttl_ms": ttl, "cache_scope": "private"})
++                write_cache_entry("echo", "fixture-fingerprint", tools=[], **hints)
++                self.assertEqual(get_cached_entry("echo", "fixture-fingerprint") is not None, reusable)
++
++    def test_each_wire_hint_requires_its_own_presence(self):
++        from mcp.types import ListToolsResult
++        from tools.mcp_tool import _paginate_full_list
++        for raw, expected in [({"ttlMs": 0}, {"ttl_ms": 0}),
++                              ({"ttlMs": 600000}, {"ttl_ms": 600000}),
++                              ({"cacheScope": "private"}, {"cache_scope": "private"})]:
++            with self.subTest(raw=raw):
++                async def listing():
++                    return ListToolsResult.model_validate({"tools": [], **raw})
++                hints = {}
++                asyncio.run(_paginate_full_list(listing, "tools", "echo", cache_meta_out=hints))
++                self.assertEqual(hints, expected)
++
++    def test_empty_first_page_keeps_its_cache_policy_on_later_pages(self):
++        from mcp.types import ListToolsResult
++        from tools.mcp_tool import _paginate_full_list
++        cases = [({}, {}), ({"ttlMs": 0, "cacheScope": "private"}, {"ttl_ms": 0, "cache_scope": "private"})]
++        for first_hints, expected in cases:
++            with self.subTest(first_hints=first_hints):
++                pages = iter([
++                    {"tools": [], "nextCursor": "second-page", **first_hints},
++                    {"tools": [{"name": "echo", "inputSchema": {"type": "object"}}],
++                     "ttlMs": 600000, "cacheScope": "public"},
++                ])
++                async def listing(params=None):
++                    if params is not None:
++                        self.assertEqual(params.cursor, "second-page")
++                    return ListToolsResult.model_validate(next(pages))
++                hints = {}
++                tools = asyncio.run(_paginate_full_list(listing, "tools", "echo", cache_meta_out=hints))
++                self.assertEqual([tool.name for tool in tools], ["echo"])
++                self.assertEqual(hints, expected)
++
++    def test_non_model_hint_objects_keep_alias_attribute_behavior(self):
++        from types import SimpleNamespace
++        from tools.mcp_tool import _paginate_full_list
++        async def listing():
++            return SimpleNamespace(tools=[], ttlMs=0, cacheScope="private", nextCursor=None)
++        hints = {}
++        asyncio.run(_paginate_full_list(listing, "tools", "echo", cache_meta_out=hints))
++        self.assertEqual(hints, {"ttl_ms": 0, "cache_scope": "private"})
++
++    def test_absent_cache_scope_keeps_cache_within_owning_profile(self):
++        from tools.mcp_schema_cache import get_cached_entry, write_cache_entry
++        write_cache_entry("echo", "fixture-fingerprint", tools=[{"name": "owner-only"}])
++        cache = self.home / "cache" / "mcp_schema_cache.json"
++        if os.name == "posix":
++            self.assertEqual(cache.stat().st_mode & 0o777, 0o600)
++        other = self.home / "profiles" / "cache-other"
++        other.mkdir(parents=True)
++        token = set_hermes_home_override(other)
++        try:
++            self.assertIsNone(get_cached_entry("echo", "fixture-fingerprint"))
++        finally:
++            reset_hermes_home_override(token)
++        self.assertEqual(get_cached_entry("echo", "fixture-fingerprint")["tools"], [{"name": "owner-only"}])
++
++    def _peer_servers(self):
++        peer = self.home / "peer.py"
++        peer.write_text("""import json, sys
++for line in sys.stdin:
++ r=json.loads(line); method=r.get('method'); ident=r.get('id')
++ if ident is None: continue
++ if method=='initialize': result={'protocolVersion':r['params']['protocolVersion'],'capabilities':{'tools':{}},'serverInfo':{'name':'memory-peer','version':'1'}}
++ elif method=='tools/list': result={'ttlMs':600000,'tools':[{'name':'echo','description':'Echo','inputSchema':{'type':'object','properties':{'value':{'type':'string'}}}}]}
++ elif method=='tools/call': result={'content':[{'type':'text','text':r['params']['arguments'].get('value','')}]}
++ else: result={}
++ print(json.dumps({'jsonrpc':'2.0','id':ident,'result':result}),flush=True)
++""")
++        servers = {"memory_echo": {"command": sys.executable, "args": ["-I", "-S", str(peer)],
++                                   "connect_timeout": 5, "sampling": {"enabled": False}}}
++        return servers
++
++    def test_opted_in_warm_cache_registers_tools_without_starting_a_server(self):
++        from tools import mcp_tool as core
++        from tools.mcp_tool_discovery import register_mcp_servers
++        from tools.mcp_tool_lifecycle import shutdown_mcp_servers
++        from tools.registry import registry
++
++        servers = self._peer_servers()
++        try:
++            cold = register_mcp_servers(self.load({"memory_saving": True}, servers))
++            name = next(n for n in cold if n.endswith("echo"))
++            self.assertIn("seed", registry.dispatch(name, {"value": "seed"}))
++            schema = copy.deepcopy(registry.get_entry(name).schema)
++            shutdown_mcp_servers()
++            self.assertFalse(core._servers)
++            from tools.mcp_schema_cache import config_fingerprint, get_cached_entry
++            config = self.load({"memory_saving": True}, servers)
++            self.assertIsNotNone(get_cached_entry("memory_echo", config_fingerprint(config["memory_echo"])))
++            warm = register_mcp_servers(config)
++            self.assertIn(name, warm)
++            self.assertEqual(registry.get_entry(name).schema, schema)
++            self.assertFalse(core._servers, "valid cached stdio tools must not start a server")
++            self.assertIsNone(core._death_supervisor)
++        finally:
++            shutdown_mcp_servers()
++
++    def test_concurrent_first_use_waits_for_the_shared_connection(self):
++        from tools import mcp_tool_discovery as discovery
++        from tools.mcp_tool_lifecycle import shutdown_mcp_servers
++        from tools.registry import registry
++
++        servers = self._peer_servers()
++        servers["memory_echo"]["connect_timeout"] = 15
++        config = self.load({"memory_saving": True}, servers)
++        allow_connect, connecting = threading.Event(), threading.Event()
++        original = discovery._discover_and_register_server
++
++        async def delayed_connect(name, cfg):
++            connecting.set()
++            await asyncio.to_thread(allow_connect.wait, 15)
++            return await original(name, cfg)
++
++        try:
++            cold = discovery.register_mcp_servers(config)
++            name = next(n for n in cold if n.endswith("echo"))
++            shutdown_mcp_servers()
++            discovery.register_mcp_servers(config)
++            with patch.object(discovery, "_discover_and_register_server", new=delayed_connect):
++                with concurrent.futures.ThreadPoolExecutor(2) as pool:
++                    first = pool.submit(contextvars.copy_context().run, registry.dispatch, name, {"value": "first"})
++                    self.assertTrue(connecting.wait(5))
++                    second = pool.submit(contextvars.copy_context().run, registry.dispatch, name, {"value": "second"})
++                    try:
++                        second.result(timeout=2)
++                    except concurrent.futures.TimeoutError:
++                        pass
++                    finally:
++                        allow_connect.set()
++                    self.assertIn("first", first.result(timeout=15))
++                    self.assertIn("second", second.result(timeout=15))
++        finally:
++            allow_connect.set()
++            shutdown_mcp_servers()
++
++    def test_failed_first_use_releases_waiters_with_one_connection_failure(self):
++        from tools import mcp_tool as core
++        from tools import mcp_tool_discovery as discovery
++        from tools.mcp_tool_lifecycle import shutdown_mcp_servers
++        from tools.mcp_tool_scope import _resolve_server_key
++        from tools.registry import registry
++
++        servers = self._peer_servers()
++        config = self.load({"memory_saving": True}, servers)
++        allow_failure, connecting = threading.Event(), threading.Event()
++
++        async def failed_connect(name, cfg):
++            connecting.set()
++            await asyncio.to_thread(allow_failure.wait, 15)
++            raise ValueError("fixture connection refused")
++
++        try:
++            cold = discovery.register_mcp_servers(config)
++            name = next(n for n in cold if n.endswith("echo"))
++            shutdown_mcp_servers()
++            discovery.register_mcp_servers(config)
++            key = _resolve_server_key("memory_echo")
++            with patch.object(discovery, "_discover_and_register_server", new=failed_connect):
++                with concurrent.futures.ThreadPoolExecutor(2) as pool:
++                    first = pool.submit(contextvars.copy_context().run, registry.dispatch, name, {"value": "first"})
++                    self.assertTrue(connecting.wait(5))
++                    second = pool.submit(contextvars.copy_context().run, registry.dispatch, name, {"value": "second"})
++                    allow_failure.set()
++                    self.assertIn("error", json.loads(first.result(timeout=15)))
++                    self.assertIn("error", json.loads(second.result(timeout=15)))
++            self.assertNotIn(key, core._server_connecting)
++            self.assertEqual(core._server_connect_failures.get(key), 1)
++            self.assertIsNone(core._death_supervisor)
++        finally:
++            allow_failure.set()
++            shutdown_mcp_servers()
++
++if __name__ == "__main__":
++    unittest.main()
 diff --git a/tests/tools/test_mcp_schema_cache.py b/tests/tools/test_mcp_schema_cache.py
 index a25eb2b6899b61a41520953ee1487fefb758adbb..faf7955215253d3454f5df27d5b6801f5670fd07 100644
 --- a/tests/tools/test_mcp_schema_cache.py
@@ -84546,6 +84870,25 @@ index c78542c9b5a48613c765e4cd55df8521e022ac60..500e8165aa2104ffefd87488d4343d31
 +    with _manifest_write_lock(_cache_path()), _cache_lock:
 +        data = dict(_load_all())
          # Write-through fires on every registration (reconnects, list_changed); skip the
+diff --git a/tools/mcp_tool.py b/tools/mcp_tool.py
+index bd29e0f88dda93c35725323d228c1005aeefd89c..570a3106d145fe726576ba074d18ad9d1b430bff 100644
+--- a/tools/mcp_tool.py
++++ b/tools/mcp_tool.py
+@@ -266,3 +266,3 @@ async def _paginate_full_list(list_method, items_attr: str, server_name: str,
+     cursor = None
+-    for _ in range(_MCP_LIST_MAX_PAGES):
++    for page_index in range(_MCP_LIST_MAX_PAGES):
+         if not cursor:
+@@ -293,4 +293,8 @@ async def _paginate_full_list(list_method, items_attr: str, server_name: str,
+                 result = await list_method(cursor=cursor)
+-        if cache_meta_out is not None and not items:
++        if cache_meta_out is not None and page_index == 0:
++            provided = getattr(result, "model_fields_set", None)
+             for key, snake, camel in (("ttl_ms", "ttl_ms", "ttlMs"), ("cache_scope", "cache_scope", "cacheScope")):
++                # SDK defaults are not peer cache hints, notably the default zero TTL.
++                if isinstance(provided, set) and snake not in provided and camel not in provided:
++                    continue
+                 hint = mcp_field(result, snake, camel)
 diff --git a/tools/mcp_tool_agent.py b/tools/mcp_tool_agent.py
 index e74f1510b57f110aa7069409398fb4a15677730d..9220075364eda16e55ad78352d38b46150844ffc 100644
 --- a/tools/mcp_tool_agent.py
@@ -84633,6 +84976,74 @@ index e74f1510b57f110aa7069409398fb4a15677730d..9220075364eda16e55ad78352d38b461
 -        with _agent_tools_lock:
 +        with _agent_tool_lock(agent):
              agent.tools = merged
+diff --git a/tools/mcp_tool_config.py b/tools/mcp_tool_config.py
+index 0d5947682a1a62007c1f516f70aa244a47191704..cd72b2803764fd52206d4618554eaef39f5cee45 100644
+--- a/tools/mcp_tool_config.py
++++ b/tools/mcp_tool_config.py
+@@ -17,3 +17,3 @@ from typing import Any, Dict, List, Optional, Set, Tuple
+ from hermes_cli.stderr_timestamp import stamp_line, timestamp
+-from tools.mcp_tool_common import _env_ref_name, _prepend_path
++from tools.mcp_tool_common import _env_ref_name, _parse_boolish, _prepend_path
+
+@@ -699,3 +699,4 @@ def _load_mcp_config() -> dict[str, dict]:
+             return {}
+-        servers = load_config().get("mcp_servers")
++        config = load_config()
++        servers = config.get("mcp_servers")
+         try:  # ensure .env vars are available for interpolation
+@@ -717,2 +718,8 @@ def _load_mcp_config() -> dict[str, dict]:
+         _portable_mcp_servers(safe_servers, rejected)
++        policy = config.get("mcp")
++        if isinstance(policy, dict) and _parse_boolish(policy.get("memory_saving"), default=False):
++            from tools.mcp_tool_events import events_enabled
++            for cfg in safe_servers.values():
++                if "url" not in cfg and not events_enabled(cfg):
++                    cfg.setdefault("lazy", True)
+         return safe_servers
+diff --git a/tools/mcp_tool_discovery.py b/tools/mcp_tool_discovery.py
+index 3eb3657d9979c84eb4aa261c2e9d8239b8fc8066..9bf00fea0bfb203a8c16deeafd4ecbde894d30cb 100644
+--- a/tools/mcp_tool_discovery.py
++++ b/tools/mcp_tool_discovery.py
+@@ -260,2 +260,12 @@ def _adopt_server(name: str, server: _core.MCPServerTask) -> None:
+
++async def _wait_for_lazy_connect(key) -> bool:
++    """Join the first caller's handshake without spawning or charging another failure."""
++    while True:
++        with _core._lock:
++            if key not in _core._server_connecting:
++                server = _core._servers.get(key)
++                return server is not None and server.session is not None
++        await asyncio.sleep(0.05)
++
++
+ def _ensure_lazy_server_connected(server_name: str) -> bool:
+@@ -273,8 +283,8 @@ def _ensure_lazy_server_connected(server_name: str) -> bool:
+         config = _core._lazy_server_configs.get(key)
+-        if (not config or _connect_cooldown_active(server_name)
+-                or key in _core._server_connecting):
++        if not config or _connect_cooldown_active(server_name):
+             return False
+-        _core._server_connecting.add(key)
+-        _core._server_connect_errors.pop(key, None)
+-    logger.info("MCP server '%s': lazy start on first use", server_name)
++        joining = key in _core._server_connecting
++        if not joining:
++            _core._server_connecting.add(key)
++            _core._server_connect_errors.pop(key, None)
+     _loop._ensure_mcp_loop()
+@@ -282,2 +292,6 @@ def _ensure_lazy_server_connected(server_name: str) -> bool:
+     try:
++        if joining:
++            return bool(_loop._run_on_mcp_loop(lambda: _wait_for_lazy_connect(key),
++                                             timeout=float(connect_timeout) + 30.0))
++        logger.info("MCP server '%s': lazy start on first use", server_name)
+         _loop._run_on_mcp_loop(lambda: _discover_and_register_server(server_name, config),
+@@ -285,2 +299,5 @@ def _ensure_lazy_server_connected(server_name: str) -> bool:
+     except BaseException as exc:
++        if joining:
++            logger.debug("Waiting for lazy MCP connection '%s' failed: %s", server_name, exc)
++            return False
+         logger.warning("Lazy MCP connect failed for '%s': %s%s",
 diff --git a/tools/process_registry.py b/tools/process_registry.py
 index f1884286ffd778417a5f749b64282a329864112e..ac97e0080a50266490282b3019e7ff4d5e1357d2 100644
 --- a/tools/process_registry.py
@@ -87935,6 +88346,41 @@ index 893a18d96d75c22ee0167123abe7e10532e3d756..93b3c29961c35377169a48c0939ffbe8
 +`state/account-usage/external.json`. Observations older than 15 minutes lose their live gauges.
 +The ordinary single-account command and JSON schema below remain unchanged.
  
+diff --git a/website/docs/reference/mcp-config-reference.md b/website/docs/reference/mcp-config-reference.md
+index 44d25bc19bae30f9665f7c418a2dcf102e6fbccb..5da0d8f166ceea8d8f39f533e026aecc71df0c93 100644
+--- a/website/docs/reference/mcp-config-reference.md
++++ b/website/docs/reference/mcp-config-reference.md
+@@ -43,2 +43,25 @@ mcp_servers:
+
++## Profile memory policy
++
++```yaml
++mcp:
++  memory_saving: true
++```
++
++`mcp.memory_saving` defaults to `false`. When enabled, configured stdio servers
++with a valid schema cache default to lazy startup: tool schemas are available
++before their processes start. The first tool call opens the server. New, changed
++or expired cache entries still require live discovery.
++
++Explicit per-server `lazy` values win, including `false`. HTTP servers and servers
++with `events: true` keep their existing policy. Portable stdio definitions merged
++into the profile use the same default. Direct session-owned/programmatic server
++definitions are unaffected. The setting applies on subsequent discovery/startup;
++it does not stop already-connected servers or rewrite their configuration.
++
++The switch does not set an idle timeout. Stateful servers can retain browser or
++session state after a call; use their existing `idle_timeout_seconds` only when
++restarting that state is acceptable. `0` disables teardown, including under the
++existing `lifecycle:` mapping. See [Lazy start](../user-guide/features/mcp.md#lazy-start).
++
+ ## Server keys
+@@ -63,3 +86,3 @@ mcp_servers:
+ | `keepalive_interval` | number | both | Liveness ping cadence in seconds (floored at 5s). HTTP defaults to `180`; set it below the server's session TTL when the server GC's idle sessions quickly. Stdio disables keepalive when omitted; set a value to opt in explicitly |
+-| `lazy` | bool | both | Register the server's tools from the on-disk schema cache at startup and only spawn/connect it on the first tool call (default: `false`). Needs one prior live connect to fill the cache; a missing or stale entry falls back to the normal eager connect. Status surfaces show the server as `lazy` with its cached tool count until first use |
++| `lazy` | bool | both | Register the server's tools from the on-disk schema cache at startup and only spawn/connect it on the first tool call (default: `false`, or `true` for eligible stdio servers under `mcp.memory_saving`). Needs one prior live connect to fill the cache; a missing or stale entry falls back to the normal eager connect. Status surfaces show the server as `lazy` with its cached tool count until first use |
+ | `idle_timeout_seconds` | number | stdio | Optional stdio server recycle after idle time (`0` disables). May also live under a `lifecycle:` mapping |
 diff --git a/website/docs/user-guide/features/cron.md b/website/docs/user-guide/features/cron.md
 index 6e315619f22387697b0aaad59cd4afb60ee54435..35153492989e4b6d11bad6a0d81042ac6cca8782 100644
 --- a/website/docs/user-guide/features/cron.md
@@ -88067,3 +88513,50 @@ index 7d8751f1747c559ccdf7898877a6d37fec7f1002..ad849d65c5ba02bfc580a3027248d19b
 +independent review/apply gates are separate from installing this command.
 +
  `--delivery-mode` controls **how** the notifier reacts to a terminal event. Every subscription is in one of three modes (`notify` is the default and the original behavior):
+diff --git a/website/docs/user-guide/features/mcp.md b/website/docs/user-guide/features/mcp.md
+index b8a03dc55f5a437b296fada6e6fe38bc8b05602d..1a4d91d7bf94c7483a161d2d51369cdca43ca0f5 100644
+--- a/website/docs/user-guide/features/mcp.md
++++ b/website/docs/user-guide/features/mcp.md
+@@ -769,2 +769,42 @@ A server with `lazy: true` is registered from the on-disk schema cache instead:
+
++#### On-demand startup for a profile
++
++To avoid starting unused stdio servers after their schemas have been cached:
++
++```yaml
++mcp:
++  memory_saving: true
++```
++
++This opt-in supplies `lazy: true` for configured stdio servers that omit the key.
++Explicit server settings win. HTTP and event-enabled servers keep their existing
++policy. The first discovery still connects to learn schemas; missing, changed
++or expired caches also connect normally. Simultaneous first calls join the same
++connection attempt rather than reporting a transient "not connected" error.
++
++The default is `false`, so existing profiles retain their startup behavior.
++Enable the switch before the next discovery/startup; it does not shut down an
++already-connected server. Portable stdio entries loaded into the profile share
++the policy, while direct session-owned MCP definitions do not inherit it.
++
++No idle timeout is added. A server that you use stays alive unless you explicitly
++configure its existing lifecycle limits. For a server whose state may be discarded:
++
++```yaml
++mcp_servers:
++  disposable_worker:
++    command: "my-installed-mcp-server"
++    idle_timeout_seconds: 60
++```
++
++Keep `idle_timeout_seconds: 0` for stateful servers that must retain their browser
++or session state. Active RPCs are protected by the existing lifecycle lock; tools
++remain registered while an explicitly recycled server waits for its next call.
++The first call after deferred startup or recycling pays connection latency.
++
++SDK model defaults are not treated as peer cache hints: omitted legacy TTLs keep
++the existing cache behavior, while an explicit zero TTL still prevents reuse.
++Cache files remain private to the owning profile; no credentials or connection
++identity are borrowed from another profile by this policy.
++
+ ### Dynamic Tool Discovery

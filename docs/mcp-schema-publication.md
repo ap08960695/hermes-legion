@@ -139,3 +139,17 @@ without registration prewarming or a permission exception. This is fresh-process
 populated-cache, unregistered-server proof, not whole-startup zero-attempt behavior.
 No running MCP service, owner-app adoption, Linux parity, provider-cache gain or
 model-usage/latency/RAM saving is claimed.
+
+## Profile on-demand startup and SDK wire hints (v0.10.0)
+
+The opt-in `mcp.memory_saving` policy supplies lazy startup to configured stdio
+servers after native and portable definitions merge. Explicit overrides and
+HTTP/event-server policy are retained; no idle timeout is inferred for stateful
+servers. Concurrent first calls join the initiating connection attempt.
+
+The native SDK's absent TTL/scope model defaults were being persisted as peer
+hints, making a legacy schema entry expire immediately. Optional hint collection
+now requires that each field was actually supplied when the model exposes field
+presence. Explicit zero/positive TTLs and private scope remain meaningful;
+non-model alias objects keep their existing behavior. The cache path, permissions,
+fingerprint and profile isolation remain intact. [Release notes and Mac evidence](release-notes-v0.10.0.md).

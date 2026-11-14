@@ -1,3 +1,50 @@
+# v0.10.0 — On-demand MCP startup for a profile
+
+[Plain-language notes, configuration and Mac measurements](release-notes-v0.10.0.md).
+This is an opt-in profile policy, not automatic teardown of arbitrary stateful
+servers. The shared loader preserves explicit values and HTTP/event behavior.
+Existing idle recycling is exercised only with explicit per-server configuration.
+
+Test-first config regressions produced 12 failing subcases against the old loader.
+Actual SDK absence tests produced one missing-hints failure and three independent
+field-presence failures; explicit zero/positive TTL and profile privacy controls
+pass. A native no-spawn case with a verified valid schema cache failed with the
+pre-policy loader, then passed. An initial case without that cache precondition
+was invalid and is not credited as the feature red. A separate deterministic
+native first-use join case failed before its coordination change. Advisor review
+added two failing empty-first-page cases; hints now remain from page zero even
+when it has no tools, retaining explicit no-cache/private policy.
+
+Native stdlib unittest and actual SDK/stdio acceptance run with isolated homes,
+no external network, no app/SSH/model/provider operations. Broader native pytest,
+pinned Ruff and installed-app adoption are not claimed. Cold discovery still
+peaks at four processes; repeated discovery before first use measured
+223.25 -> 154.61 MiB summed RSS (30.7% lower), four -> one processes,
+60.36 -> 1.10 ms; first call 3.97 -> 43.44 ms. Same config and fixture/bootstrap;
+20 ms samples include shared pages. Whole-case peaks223.78/223.11 MiB do not
+establish a peak-memory reduction. All test runtime is stopped after each case.
+
+Final post-export native stdlib run: 18 passed, 2.888 s, exit 0. Companion:
+133 run, 131 passed, two Linux-only skips, 4.608 s, exit 0. Actual native
+SDK/stdio lifecycle acceptance passes, including concurrent first use/revival,
+active-call protection and explicit idle cleanup; maximum three processes there.
+The paired measurement's cold phase uses at most four processes and under 4 GB.
+
+Export reverse/base/reapply checks pass all 1,019 before/after target hashes;
+installed-phase compatibility passes with no unrelated source changes. One old
+task-only P0 baseline runner config was moved to private evidence after the
+strict checkout checker correctly refused it. Prior unrelated target bytes and
+patch sections remain exact. Native incremental/root diffs are whitespace-clean;
+strict cumulative patch checking retains the same 13 inherited diagnostics.
+
+Intended-tracked-only disposable release copy passes 225 inventory files
+(226 paths including the manifest). Only the new release notes are added through
+a private intent-to-add index; copy/index removed and real index unchanged.
+Both exact Gitleaks working-directory/all-history scans exit 0 with no leaks;
+208 history commits scanned. Public relative file links, Python AST and exact
+final benchmark code hashes pass. This is source/native-component acceptance;
+canonical native pytest, pinned Ruff and installed-app adoption remain unverified.
+
 # v0.9.0 — Bound Desktop SSH helper fan-out
 
 [Plain-language release notes](release-notes-v0.9.0.md) consolidate v0.8.46–.73.

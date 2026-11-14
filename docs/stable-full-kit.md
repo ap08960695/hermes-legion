@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1013-path** Legion source, interface and optimization alternative
+This is the complete **1019-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,18 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## On-demand MCP startup (v0.10.0)
+
+`mcp.memory_saving: true` defaults configured stdio servers to lazy startup when
+valid schemas are cached. Explicit server settings, HTTP/events and stateful
+sessions retain their policy; idle teardown remains a per-server opt-in.
+Concurrent first calls join one handshake. SDK model defaults no longer create
+an invented zero cache TTL. [Configuration, measured phases and limits](release-notes-v0.10.0.md).
+
+Six targets join the previous 1,013; the existing config-defaults target also
+changes. No dependency/lockfile or installed-app change is included. Broader
+MCP scale-to-zero and gateway idle-memory acceptance remain open.
 
 ## Bounded Desktop SSH checks (v0.9.0)
 

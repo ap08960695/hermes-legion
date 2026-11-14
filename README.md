@@ -10,6 +10,8 @@ Historical source comments and release payloads received [privacy maintenance](d
 
 ## What is included
 
+- [v0.10.0: on-demand MCP startup](docs/release-notes-v0.10.0.md), a profile opt-in that leaves unused cached stdio servers stopped; one Mac component case used 30.7% less RSS before first use, with connection latency moved to that call.
+
 - [v0.9.0: bounded Desktop SSH checks](docs/release-notes-v0.9.0.md), sharing compatible transports and queueing helpers; one measured Mac check burst used 70.4% less peak RSS, with longer completion time.
 
 - [Overflowing web-cache TTL recovery](docs/search-cache-memory.md#overflowing-ttl-configuration-v0876), keeping the normal search/cache path usable when a configured integer cannot convert to float.
