@@ -1,3 +1,50 @@
+# v0.8.66 — Normalize MCP filter names before cache fingerprint sorting
+
+Registration already stringifies include/exclude entries. Fingerprinting sorted
+raw values and raised TypeError for mixed names such as lookup/7, interrupting
+lazy discovery before a healthy later cached server. Two shared expressions now
+stringify before sorting. String keys, duplicates, legacy bare-string behavior,
+fields/JSON/hash, filters, trust and discovery policy remain. Old numeric-only
+keys may become ordinary misses; no migration or automatic recovery claim.
+
+Native baseline cache/TTL: 29 pass/one Linux skip. New fingerprint and actual
+loader/cache/ToolRegistry cases give 14 targeted failures/15 controls/one skip.
+Initial repaired run passes behavior but one transport assertion includes a
+loader-setup urllib3 IPv6 capability probe. Stack/phase tracing identifies it;
+whole-process audit denial remains. Advisor 63 accepts measuring registration
+after actual loader/cache setup, with both servers still unregistered. Corrected
+fixture on exact original source repeats all 14 failures before reapplying fix.
+No registration prewarming, bind allowance, platform change or audit relaxation.
+
+Final native cache/TTL/publication selection passes 53/one Linux skip, including
+actual two-process writes and after patch reapplication. Six literal old string
+fingerprints, mixed permutations/ties and two old numeric-key misses are checked.
+Actual include/exclude discovery registers both servers with correct names and
+required parameters; include wins, config/cache bytes stay exact, registration
+spawn/connect/bind counters stay zero. [Compatibility and measured scope](mcp-schema-publication.md#mixed-name-filter-fingerprints-v0866).
+
+Borrowed PM-selected Mac Python 3.14.9/dependencies, isolated PM-locked test tools,
+private HOME/HERMES_HOME/TMPDIR, unchanged self-tested Python audit/null/scratch/
+leading-flag guards, one-worker canonical runs and zero file retries. Setup may
+attempt a denied SDK capability probe; no whole-startup zero-attempt, OS/native-
+extension containment, running MCP/model/fleet/UI or full native-suite claim.
+Live stdio/HTTP shared-identity tests were screened out before execution; prior
+HTTP2/PID4, live/UI/Linux/original-session/workload gaps remain unverified.
+
+Export grows 999 to 1000 targets on the same v0.22.5 base: one existing runtime
+after hash and one existing upstream regression file newly patched with pinned
+nonnull before hash. Previous 999 before/other-after hashes and test selection
+are unchanged. Filtered checkout hashes/exact changed patch sections and installed/
+reverse/base/reapply checks pass. No new public file/dependency/lock. Read-only
+owner comparison: 979/1000 match, 21 pending normal source/test adoption.
+Native and raw root whitespace pass. Required companion: 129 run, 127 pass/two
+Linux-only skips, 4.443 s. Tracked-only 222-file release inventory and exact
+Gitleaks directory/all-history scans pass, no leaks, 196 commits. Advisor64 accepts
+bounded handoff on supplied evidence. Owned trial/source/tools/fixtures/logs,
+pointer and setup removed; absence verified, borrowed runtime/dependencies/object
+store retained. Pre-cleanup705688KiB is not attributed disk saving. Final current
+hash/inventory/whitespace/secret-scan refresh precedes the driver signal.
+
 # v0.8.65 — Keep planner numeric overflow inside the CLI refusal boundary
 
 A valid JSON snapshot with an oversized integer in captured_at/expires_at raises

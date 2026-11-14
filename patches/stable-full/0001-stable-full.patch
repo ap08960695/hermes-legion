@@ -73977,6 +73977,112 @@ index 0000000000000000000000000000000000000000..21503b41148859027f4abb8777503684
 +            return original.sub(replacement,text)
 +    monkeypatch.setattr(ansi_strip,'_ANSI_ESCAPE_RE',Guard())
 +    assert ansi_strip.strip_ansi('\x1b]x'*1000)=='x'*1000
+diff --git a/tests/tools/test_mcp_schema_cache.py b/tests/tools/test_mcp_schema_cache.py
+index a25eb2b6899b61a41520953ee1487fefb758adbb..faf7955215253d3454f5df27d5b6801f5670fd07 100644
+--- a/tests/tools/test_mcp_schema_cache.py
++++ b/tests/tools/test_mcp_schema_cache.py
+@@ -164 +164,101 @@ class TestWriteThroughPreservesSchema:
+         assert schema["parameters"].get("required") == ["query", "model"]
++
++
++@pytest.mark.parametrize("field, unique, duplicate", [
++    ("include", "af0d3e04dda67493", "111c49caadf7d23a"),
++    ("exclude", "18de41c65b3d6f36", "f1f3558aceaa6b7d"),
++])
++@pytest.mark.parametrize("values", [
++    ["lookup", 7], (7, "lookup"), {7, "lookup"}, [7, "7", "lookup"], ["7", "lookup", 7],
++])
++def test_filter_fingerprint_matches_registered_names(field, unique, duplicate, values):
++    from tools.mcp_tool_schema import _normalize_name_filter
++
++    assert _normalize_name_filter(values, "fixture") == {"lookup", "7"}
++    cfg = {"command": "synthetic-fingerprint", "args": ["--stdio"], "tools": {field: values}}
++    assert msc.config_fingerprint(cfg) == (duplicate if len(values) == 3 else unique)
++
++
++@pytest.mark.parametrize("field, values, expected", [
++    ("include", ["lookup", "other"], "20d8076b26f3074b"),
++    ("exclude", ["lookup", "other"], "16b65f2b4567f540"),
++    ("include", "lookup", "a862e5a373d18a93"),
++    ("exclude", "lookup", "7dd38fca38f11bf8"),
++    ("include", ["lookup", "lookup"], "6afdb98a920a9687"),
++    ("exclude", ["lookup", "lookup"], "236dbb3665929384"),
++])
++def test_string_filter_fingerprints_keep_existing_cache_keys(field, values, expected):
++    assert msc.config_fingerprint({
++        "command": "synthetic-fingerprint", "args": ["--stdio"], "tools": {field: values},
++    }) == expected
++
++
++@pytest.mark.parametrize("field, old_key", [("include", "814d8e6aaf04723a"), ("exclude", "8434acb4caa12678")])
++def test_old_numeric_filter_fingerprint_remains_a_readonly_cache_miss(field, old_key, monkeypatch, tmp_path):
++    monkeypatch.setattr(msc, "_cache_path", lambda: tmp_path / "cache.json")
++    msc.write_cache_entry("previous", old_key, tools=[{"name": "7"}])
++    before = msc._cache_path().read_bytes()
++    cfg = {"command": "synthetic-fingerprint", "args": ["--stdio"], "tools": {field: [7]}}
++    assert msc.get_cached_entry("previous", msc.config_fingerprint(cfg)) is None
++    assert msc._cache_path().read_bytes() == before
++
++
++@pytest.mark.parametrize("field", ["include", "exclude"])
++def test_mixed_filters_do_not_abort_later_lazy_servers(field, monkeypatch):
++    import socket
++    import subprocess
++    from unittest.mock import Mock
++    import yaml
++    from hermes_constants import get_hermes_home
++    from tools import mcp_tool as mt, mcp_tool_config as config, mcp_tool_discovery as discovery
++    from tools.registry import ToolRegistry
++
++    for attr in ("_lazy_server_tool_names", "_lazy_server_configs", "_lazy_server_fingerprints",
++                 "_mcp_tool_server_names", "_server_trust_levels", "_tool_read_only_hints",
++                 "_server_cost_policies", "_server_tool_scopes"):
++        monkeypatch.setattr(mt, attr, {})
++    monkeypatch.setattr(mt, "_server_connecting", set())
++    registry = ToolRegistry()
++    monkeypatch.setattr("tools.registry.registry", registry)
++    filters = {field: ["lookup", 7]}
++    if field == "include":
++        filters["exclude"] = ["lookup"]  # The native include whitelist wins.
++    configs = {"mixed": {"command": "synthetic-mixed", "lazy": True, "tools": filters},
++               "healthy": {"command": "synthetic-healthy", "lazy": True}}
++    home = get_hermes_home()
++    home.mkdir(parents=True, exist_ok=True)
++    config_path = home / "config.yaml"
++    config_path.write_text(yaml.safe_dump({"mcp_servers": configs}, sort_keys=False))
++    loaded = config._load_mcp_config()
++    assert list(loaded) == ["mixed", "healthy"]
++    assert loaded["mixed"]["tools"][field] == ["lookup", 7]
++    schema = {"type": "object", "properties": {"value": {"type": "string"}}, "required": ["value"]}
++    canonical = {**configs["mixed"], "tools": {**filters, field: ["lookup", "7"]}}
++    for name, cfg, names in (("mixed", canonical, ("lookup", "7", "other")),
++                              ("healthy", configs["healthy"], ("kept",))):
++        msc.write_cache_entry(name, msc.config_fingerprint(cfg),
++                             tools=[{"name": tool, "inputSchema": schema} for tool in names])
++    cache_path = msc._cache_path()
++    before = (cache_path.read_bytes(), config_path.read_bytes())
++    assert registry.get_tool_names_for_toolset("mcp-mixed") == []
++    assert registry.get_tool_names_for_toolset("mcp-healthy") == []
++    # Measure registration after loader setup, which may probe local IPv6 support.
++    transport = Mock(side_effect=AssertionError("cache-only discovery must not connect"))
++    monkeypatch.setattr(subprocess, "Popen", transport)
++    monkeypatch.setattr(socket.socket, "connect", transport)
++    monkeypatch.setattr(socket.socket, "bind", transport)
++    try:
++        eager, _, server_count = discovery._register_lazy_from_cache(loaded)
++    except TypeError:
++        assert registry.get_tool_names_for_toolset("mcp-healthy") == []
++        assert (cache_path.read_bytes(), config_path.read_bytes()) == before
++        transport.assert_not_called()
++        raise
++    assert eager == {} and server_count == 2
++    expected = {"mcp__mixed__lookup", "mcp__mixed__7"} if field == "include" else {"mcp__mixed__other"}
++    assert set(registry.get_tool_names_for_toolset("mcp-mixed")) == expected
++    assert registry.get_tool_names_for_toolset("mcp-healthy") == ["mcp__healthy__kept"]
++    for name in expected | {"mcp__healthy__kept"}:
++        assert registry.get_schema(name)["parameters"] == schema
++    assert (cache_path.read_bytes(), config_path.read_bytes()) == before
++    transport.assert_not_called()
 diff --git a/tests/tools/test_mcp_schema_cache_publication.py b/tests/tools/test_mcp_schema_cache_publication.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..2b40f304ff87882eda1df718e51743a821f0f01e
@@ -81396,7 +81502,7 @@ index ec5a72610e075f300d5493c9e1f71d18f21d83de..d38195358a49647edcc75530f62aef3d
 +    ["from_task_id", "remaining"],
 +)
 diff --git a/tools/mcp_schema_cache.py b/tools/mcp_schema_cache.py
-index c78542c9b5a48613c765e4cd55df8521e022ac60..765374525a9ca0b054e112508701d69539809171 100644
+index c78542c9b5a48613c765e4cd55df8521e022ac60..500e8165aa2104ffefd87488d4343d310444e758 100644
 --- a/tools/mcp_schema_cache.py
 +++ b/tools/mcp_schema_cache.py
 @@ -7,2 +7,6 @@ from __future__ import annotations
@@ -81412,6 +81518,13 @@ index c78542c9b5a48613c765e4cd55df8521e022ac60..765374525a9ca0b054e112508701d695
 +from hermes_platform.host.identity import current_user_id
 +import stat
  import threading
+@@ -34,4 +41,4 @@ def config_fingerprint(config: dict) -> str:
+         "transport": config.get("transport"),
+-        "tools_include": sorted(tools_filter.get("include") or []),
+-        "tools_exclude": sorted(tools_filter.get("exclude") or [])}
++        "tools_include": sorted(str(item) for item in (tools_filter.get("include") or [])),
++        "tools_exclude": sorted(str(item) for item in (tools_filter.get("exclude") or []))}
+     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
 @@ -40,9 +47,18 @@ def config_fingerprint(config: dict) -> str:
  
 +@functools.lru_cache(maxsize=8)

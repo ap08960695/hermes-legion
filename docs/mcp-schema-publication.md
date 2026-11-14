@@ -98,3 +98,44 @@ application-scoped; OS/native-extension containment is not established.
 Reapplied export passes twenty focused cases again. This proves synthetic native
 cache/discovery behavior, not a running MCP server, owner-app adoption, Linux parity,
 cache-hit-rate improvement, startup timing, reduced RAM or fewer model requests.
+
+
+## Mixed-name filter fingerprints (v0.8.66)
+
+Native registration accepts include/exclude lists and converts each entry to a
+string. A filter such as `["lookup", 7]` therefore selects the names `lookup` and
+`7`. Cache fingerprinting previously sorted the raw entries, raising TypeError
+when numeric and string values were mixed. The lazy-discovery caller computes
+that fingerprint before its per-server registration guard, so a first mixed
+server could prevent a later healthy cached server from registering.
+
+The shared fingerprint now converts entries with `str` before sorting, for both
+include and exclude. No schema/filter acceptance, fingerprint field, JSON/hash,
+trust, credential binding, retry or eager-discovery policy changes. All-string
+lists, duplicate entries and legacy bare-string fingerprints keep their exact
+keys. Mixed list/tuple/set permutations and equal-text numeric/string values are
+deterministic. Registration's existing include-over-exclude behavior remains.
+
+A prior numeric-only cache key can differ from its normalized key and return an
+ordinary miss. Existing eager discovery may refresh it later; this release does
+not rewrite entries, migrate old keys or prove transport recovery. A populated
+entry with the equivalent string-filter fingerprint can be used without a new
+connection. Cache bytes remain unchanged during measured reads/discovery.
+
+Actual native Mac Python 3.14.9 baseline passes 29 cache/TTL cases with one Linux
+skip. New tests produce 14 targeted failures with 15 controls/one skip before
+repair: mixed fingerprints, old-key transitions and both real lazy-discovery
+callers. Corrected fixture red reproduces the same failures. Final three-file
+selection passes 53 cases/one Linux skip, including after export/reapply. It
+retains native SDK schema roundtrip, TTL behavior and two-process publication.
+
+Discovery uses actual YAML loading, disk cache and ToolRegistry. Both servers
+are unregistered before the call; mixed is first, healthy second. Include and
+exclude paths retain exact tool names and required parameters, config/cache bytes,
+and zero spawn/connect/bind attempts during measured lazy registration. Loader
+setup may import urllib3's local IPv6 capability probe; the unchanged native audit
+guard denies that setup bind. Transport counting starts after setup/cache seeding,
+without registration prewarming or a permission exception. This is fresh-process,
+populated-cache, unregistered-server proof, not whole-startup zero-attempt behavior.
+No running MCP service, owner-app adoption, Linux parity, provider-cache gain or
+model-usage/latency/RAM saving is claimed.

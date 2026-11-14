@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **999-path** Legion source, interface and optimization alternative
+This is the complete **1000-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,16 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Mixed-name MCP filter fingerprints (v0.8.66)
+
+Cache fingerprints stringify include/exclude entries before sorting, matching
+registration's existing name conversion. Mixed string/numeric filters no longer
+interrupt lazy discovery. Existing all-string keys remain; older nonstring-only
+keys can incur one ordinary cache miss. See [compatibility and native proof](mcp-schema-publication.md#mixed-name-filter-fingerprints-v0866).
+One existing runtime after hash changes and an existing upstream regression file
+becomes a patch target, giving 1000. All previous 999 before hashes and other
+after hashes remain; pinned base and native test-selection bytes stay unchanged.
 
 ## Compression parent metadata (v0.8.64)
 
