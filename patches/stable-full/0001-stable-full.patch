@@ -71485,10 +71485,10 @@ index 0000000000000000000000000000000000000000..95a2aebe06a446ca205dee853f991b35
 +    assert mc.get_cached_entry('s','same') is None
 diff --git a/tests/tools/test_derived_cache_disk_pressure.py b/tests/tools/test_derived_cache_disk_pressure.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..47b219249f91040d2442fa70079f1fc46da92957
+index 0000000000000000000000000000000000000000..7d65c42d594bee66ba2e91db9abb4e239815f9ae
 --- /dev/null
 +++ b/tests/tools/test_derived_cache_disk_pressure.py
-@@ -0,0 +1,271 @@
+@@ -0,0 +1,430 @@
 +"""Optional cache writes preserve useful results under storage pressure/failure."""
 +
 +import errno
@@ -71615,7 +71615,9 @@ index 0000000000000000000000000000000000000000..47b219249f91040d2442fa70079f1fc4
 +
 +    url = "https://example.com/boundary"
 +    usage = shutil.disk_usage(web_cache_root)
-+    monkeypatch.setattr(shutil, "disk_usage", lambda parent: usage._replace(free=1024**3 + extra))
++    # The payload boundary is independent of the subsequent index admission.
++    capacities = iter([1024**3 + extra, 10 * 1024**3])
++    monkeypatch.setattr(shutil, "disk_usage", lambda parent: usage._replace(free=next(capacities)))
 +    if kind == "cache":
 +        cache.extract_cache_put(url, content, provider="offline-fixture")
 +        hit = cache.extract_cache_get(url, provider="offline-fixture")
@@ -71665,7 +71667,7 @@ index 0000000000000000000000000000000000000000..47b219249f91040d2442fa70079f1fc4
 +    unrelated = web_cache_root / "unrelated.md"
 +    unrelated.write_bytes(b"durable fixture")
 +    usage = shutil.disk_usage(web_cache_root)
-+    pressures = iter([0, None, 10 * 1024**3, 10 * 1024**3])
++    pressures = iter([0, None, 10 * 1024**3, 10 * 1024**3, 10 * 1024**3])
 +
 +    def space(parent):
 +        assert parent == web_cache_root
@@ -71760,6 +71762,163 @@ index 0000000000000000000000000000000000000000..47b219249f91040d2442fa70079f1fc4
 +    assert checked == [good, fresh, good, fresh]
 +    assert good in policy and fresh in policy
 +    assert "Failed to cache web extract" in caplog.text and "Failed to store full web_extract text" in caplog.text
++
++
++@pytest.mark.parametrize("title, expected, bound", [
++    ("abc", b'{"new": {"title": "abc"}}', b'{"new": {"title": "abc"}}'),
++    ("ก", b'{"new": {"title": "\xe0\xb8\x81"}}', b'{"new": {"title": "\\u0e01"}}'),
++    (chr(0xDCFF), b'{"new": {"title": "\\udcff"}}', b'{"new": {"title": "\\udcff"}}'),
++], ids=["ascii", "thai", "surrogate"])
++@pytest.mark.parametrize("capacity", ["full", "unknown", "below", "equal"])
++def test_web_index_admission_preserves_native_serialization(
++    web_cache_root, monkeypatch, caplog, title, expected, bound, capacity,
++):
++    import logging
++    import stat
++    import utils
++    from tools import web_result_cache as cache
++
++    index = web_cache_root / cache._INDEX_FILENAME
++    previous = b'{"previous": {"title": "kept"}}'
++    index.write_bytes(previous)
++    index.chmod(0o640)
++    before = index.stat()
++    usage = shutil.disk_usage(web_cache_root)
++    created = []
++    real_mkstemp = utils.tempfile.mkstemp
++
++    def mkstemp(*args, **kwargs):
++        result = real_mkstemp(*args, **kwargs)
++        created.append(result[1])
++        return result
++
++    def space(parent):
++        assert parent == web_cache_root
++        if capacity == "unknown":
++            raise OSError("synthetic volume observation unavailable")
++        free = 0 if capacity == "full" else 1024**3 + len(bound) - (capacity == "below")
++        return usage._replace(free=free)
++
++    monkeypatch.setattr(utils.tempfile, "mkstemp", mkstemp)
++    monkeypatch.setattr(shutil, "disk_usage", space)
++    with caplog.at_level(logging.DEBUG):
++        cache._save_index({"new": {"title": title}})
++    assert sorted(p.name for p in web_cache_root.iterdir()) == [cache._INDEX_FILENAME]
++    assert stat.S_IMODE(index.stat().st_mode) == stat.S_IMODE(before.st_mode)
++    if capacity == "equal":
++        assert index.read_bytes() == expected
++        assert cache._load_index() == {"new": {"title": title}}
++        assert len(created) == 1  # Real atomic temp/write/replace remains in use.
++    else:
++        assert index.read_bytes() == previous
++        assert (index.stat().st_ino, index.stat().st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
++        assert not created, "Refused index admission must precede temporary allocation"
++        assert "Failed to save web extract cache index" in caplog.text
++
++
++def test_web_index_admission_counts_trimmed_payload(web_cache_root, monkeypatch):
++    from tools import web_result_cache as cache
++
++    monkeypatch.setattr(cache, "_INDEX_MAX_ENTRIES", 1)
++    expected = b'{"new": {"fetched_at": 2, "title": "kept"}}'
++    usage = shutil.disk_usage(web_cache_root)
++    monkeypatch.setattr(shutil, "disk_usage", lambda parent: usage._replace(free=1024**3 + len(expected)))
++    cache._save_index({
++        "old": {"fetched_at": 1, "title": "x" * 1024},
++        "new": {"fetched_at": 2, "title": "kept"},
++    })
++    assert (web_cache_root / cache._INDEX_FILENAME).read_bytes() == expected
++    assert not list(web_cache_root.glob(".extract-index_*"))
++
++
++def test_web_index_publication_failure_keeps_prior_bytes(web_cache_root, monkeypatch, caplog):
++    import logging
++    import utils
++    from tools import web_result_cache as cache
++
++    index = web_cache_root / cache._INDEX_FILENAME
++    previous = b'{"previous": {"title": "kept"}}'
++    index.write_bytes(previous)
++
++    def failed(source, target):
++        assert Path(target) == index
++        raise OSError("synthetic index replace failure")
++
++    monkeypatch.setattr(utils.os, "replace", failed)
++    with caplog.at_level(logging.DEBUG):
++        cache._save_index({"new": {"title": "fresh"}})
++    assert index.read_bytes() == previous
++    assert sorted(p.name for p in web_cache_root.iterdir()) == [cache._INDEX_FILENAME]
++    assert "synthetic index replace failure" in caplog.text
++
++
++@pytest.mark.parametrize("measurement", ["full", "unknown"])
++def test_registered_extract_survives_index_admission_failure(web_cache_root, monkeypatch, measurement):
++    import json
++    import time
++    from types import SimpleNamespace
++    from agent import web_search_registry
++    from tools import web_result_cache as cache, web_tools, web_tools_extract, web_tools_truncate as truncate, website_policy
++
++    good, fresh = "https://example.com/good", "https://example.com/new-index"
++    provider_name = "offline-fixture"
++    cache.extract_cache_put_many([(good, "cached good", ""), (fresh, "previous cached page", "")], provider=provider_name)
++    paging = Path(truncate._store_full_text(fresh, "previous paging copy"))
++    payload = cache._entry_file_path(fresh, None, provider_name)
++    index_path = web_cache_root / cache._INDEX_FILENAME
++    index = json.loads(index_path.read_text(encoding="utf-8"))
++    index[cache._url_digest(fresh, None, provider_name)]["fetched_at"] = time.time() - cache.ttl_seconds() - 1
++    index_path.write_text(json.dumps(index), encoding="utf-8")
++    before = {p.name: p.read_bytes() for p in web_cache_root.iterdir() if p.is_file()}
++    body = "FRESH HEAD\n" + "กขคงจ\n" * 1000 + "FRESH TAIL"
++    calls, checked = [], []
++
++    async def extract(urls, **kwargs):
++        calls.append(list(urls))
++        return [{"url": url, "content": body, "title": "Fresh"} for url in urls]
++
++    async def safe(url):
++        checked.append(url)
++        return True
++
++    def forbidden(*args, **kwargs):
++        pytest.fail("No fallback or provider switch allowed")
++
++    provider = SimpleNamespace(name=provider_name, supports_extract=lambda: True, extract=extract)
++    monkeypatch.setattr(web_tools, "_ensure_web_plugins_loaded", lambda: None)
++    monkeypatch.setattr(web_tools, "_get_extract_backend", lambda: provider_name)
++    monkeypatch.setattr(web_tools, "_load_web_config", lambda: {"keyless_rescue": False})
++    monkeypatch.setattr(web_search_registry, "get_provider", lambda name: provider)
++    monkeypatch.setattr(web_search_registry, "get_active_extract_provider", forbidden)
++    monkeypatch.setattr(web_tools, "async_is_safe_url", safe)
++    monkeypatch.setattr(website_policy, "check_website_access", lambda url: None)
++    monkeypatch.setattr(web_tools_extract, "_rescue_extract", forbidden)
++    monkeypatch.setattr(cache, "_INDEX_MAX_ENTRIES", 1)
++    usage = shutil.disk_usage(web_cache_root)
++
++    def space(parent):
++        assert parent == web_cache_root
++        # Pressure begins only after the real payload writer has closed its file.
++        if payload.read_bytes() == body.encode("utf-8"):
++            if measurement == "unknown":
++                raise OSError("synthetic index volume observation unavailable")
++            return usage._replace(free=0)
++        return usage
++
++    monkeypatch.setattr(shutil, "disk_usage", space)
++    for _ in range(2):
++        result = json.loads(web_tools.registry.dispatch("web_extract", {"urls": [good, fresh], "char_limit": 2000}))
++        assert "error" not in result, result
++        rows = result["results"]
++        assert rows[0]["content"] == "cached good"
++        assert "FRESH HEAD" in rows[1]["content"] and "FRESH TAIL" in rows[1]["content"]
++        expected_files = {**before, payload.name: body.encode("utf-8")}
++        assert {p.name: p.read_bytes() for p in web_cache_root.iterdir() if p.is_file()} == expected_files
++        assert paging.read_bytes() == b"previous paging copy"
++        assert "Full text saved to:" not in rows[1]["content"]
++        assert "Full text could not be stored" in rows[1]["content"]
++    assert calls == [[fresh], [fresh]]  # Failed index publication must not refresh the old TTL.
++    assert checked == [good, fresh, good, fresh]
 diff --git a/tests/tools/test_document_read_dedup.py b/tests/tools/test_document_read_dedup.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..1f237a96d262f09f8bd0ff49ac3ece15ceac6c61
@@ -83716,7 +83875,7 @@ index c244fd4fa1ea32757b751592b593243b101ef0e2..a1e59122697c1a371925970f93881028
 +async def _handle_vision_analyze_uncached(image_url: str, question: str, region: Any, task_id: Any):
      # No concurrency gate around the whole analysis — the CPU burst is bounded inside the
 diff --git a/tools/web_result_cache.py b/tools/web_result_cache.py
-index c747f3f30947fd5ef4eb13d5c51e2bb85156e951..1cd6302448a39161eeefa2c39c3e723dc63be147 100644
+index c747f3f30947fd5ef4eb13d5c51e2bb85156e951..fb2271fb8bd3b98f45b61c45eda2b020d5f1e1e9 100644
 --- a/tools/web_result_cache.py
 +++ b/tools/web_result_cache.py
 @@ -9,2 +9,4 @@ Lives here, not in tool dispatch, so hits sit *after* every safety check and ski
@@ -83952,17 +84111,23 @@ index c747f3f30947fd5ef4eb13d5c51e2bb85156e951..1cd6302448a39161eeefa2c39c3e723d
 +
 +
  def _save_index(index: dict) -> None:
-@@ -183,6 +317,6 @@ def _save_index(index: dict) -> None:
+@@ -183,6 +317,12 @@ def _save_index(index: dict) -> None:
          if len(index) > _INDEX_MAX_ENTRIES:
 -            newest = sorted(index.items(), key=lambda kv: kv[1].get("fetched_at", 0), reverse=True)
 +            newest = sorted(index.items(), key=lambda kv: _entry_timestamp(kv[1]), reverse=True)
              index = dict(newest[:_INDEX_MAX_ENTRIES])
 -        # CLI, gateway, cron, and subagents all write this index; the replace is atomic, so the worst case
 -        # under concurrent writers is a lost insert, never a truncated index.
++        import shutil
++        # Escaped ASCII bounds both native UTF-8 and its lone-surrogate fallback.
++        encoded_bound = len(json.dumps(index, indent=None, ensure_ascii=True))
++        # shortcut: allocation can change after observation; use filesystem quotas for a hard limit.
++        if shutil.disk_usage(d).free - encoded_bound < 1024**3:
++            raise OSError("insufficient free space to preserve the 1 GiB web index reserve")
 +        # Publish while holding the cross-process merge lock; atomic replacement also
 +        # keeps lock-free readers from observing truncated JSON.
          atomic_json_write(path, index, indent=None)
-@@ -262,7 +396,24 @@ def extract_cache_get(url: str, format: Optional[str] = None, provider: str = ""
+@@ -262,7 +402,24 @@ def extract_cache_get(url: str, format: Optional[str] = None, provider: str = ""
      """Return {'url','title','content'} for a fresh cached page, else None."""
 -    if not _cacheable(url):
 -        return None
@@ -83991,12 +84156,12 @@ index c747f3f30947fd5ef4eb13d5c51e2bb85156e951..1cd6302448a39161eeefa2c39c3e723d
 +    # must not turn the TTL comparison into an immortal cache hit.
 +    if not math.isfinite(fetched_at) or (time.time() - fetched_at) >= ttl_seconds():
          return None
-@@ -274,3 +425,3 @@ def extract_cache_get(url: str, format: Optional[str] = None, provider: str = ""
+@@ -274,3 +431,3 @@ def extract_cache_get(url: str, format: Optional[str] = None, provider: str = ""
          content = file_path.read_text(encoding="utf-8-sig")
 -    except Exception:
 +    except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError):
          return None
-@@ -285,18 +436,29 @@ def extract_cache_put(
+@@ -285,18 +442,29 @@ def extract_cache_put(
      ceiling are not cached (serving a capped copy back as if whole would silently lose the tail)."""
 -    if not content or not _cacheable(url):
 -        return

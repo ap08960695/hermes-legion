@@ -1,3 +1,53 @@
+# v0.8.72 — Admit optional web index publication before allocation
+
+Six lines in the native extraction-index writer add a destination-volume check
+after existing trimming and before the unchanged atomic JSON writer. Escaped-JSON
+ASCII length bounds native UTF-8 and lone-surrogate fallback bytes. Free space
+minus that bound must remain >=1GiB; equality succeeds. Low/unknown capacity keeps
+the prior index through existing optional handling. [Behavior and tradeoffs](storage-and-backups.md#web-index-write-admission-v0872).
+
+Original isolated native full/unknown probes observe zero volume checks, create
+one atomic temp and replace prior bytes/inode. Reapplied probes observe once,
+create no temp and retain exact prior bytes/inode. No actual disk pressure/loss
+claim. Baseline124 passes/eight files. Sixteen cases added before product edit:
+original pressure selection11 meaningful failures/26 passes, no setup failures.
+All previous21 cases retained with separate payload/metadata capacity fixtures.
+Final eight files140 pass, zero failures/skips/retries/exclusions,8.9s after true
+exported reverse/base/reapplication. Actual imported module path/hash matches
+export. Exact ASCII/Thai/surrogate serialized bytes and readback, bound equality,
+post-trim counting, prior inode/mode, no pre-admission temp, atomic failure cleanup,
+mixed batches and repeated actual registry dispatch/fresh result/footer are covered.
+
+Existing atomic writer/locks/500-entry limit/payload checks, keys/TTL/routes/profile/
+provider/safety/fallback policy remain. Unicode can be refused conservatively near
+the margin; extra serialization/check cost unmeasured. A payload admitted before an
+index refusal can remain unindexed/under old metadata. No two-file transaction,
+quota/whole-cache bound/prune/global disk guarantee or production saving claim.
+
+Borrowed PM-selected native Python3.14.9/deps read-only, separate PM-locked pytest
+9.1.1/asyncio1.3.0, private HOME/HERMES_HOME/TMPDIR and unchanged self-tested scoped
+Python audit/null/process/leading-flag/per-PID negatives/exit7; one CPU/worker.
+No native full suite/pinned Ruff/whole-source health, OS/native containment,
+live provider/model/API/UI/service/fleet, terminal-goal/original-session/workload proof.
+Current read-only ancestry probe: own parent-ID succeeds, but own parents()/recursive
+children raise PermissionError errno1 with no audit denial; /bin/ps remains EPERM.
+No sleeper or signal; prior PID4 gap remains. Do not weaken guards to close it.
+Owner source/control/data/quotas/ESTOP/pauses/timers untouched. Read-only public
+source comparison974/1002 match;28 paths await normal lead adoption/Linux validation.
+
+Same1002 targets/basebf0203a(v0.22.5), every before/unrelated after hash/selection
+unchanged. Exactly existing cache runtime/pressure-test after hashes and sections
+change. Temporary-index full-index binary-U1 export and installed/reverse/base/
+reapply pass. Generic writer and v0.8.71 payload-helper bytes unchanged. No public
+file/dependency/lock/selection added. Native/root raw whitespace clean. Required
+companion: 133 run, 131 pass/two Linux skips, 4.516 s, exit 0. Tracked-only 222-file
+inventory/current hashes and both exact secret scans pass (202 commits, no leaks).
+Advisor77 accepts bounded handoff. Exact owned trial/source/test-tools/fixtures/
+log/home/cache/temp-index/probe tree, pointer/setup removed; absence verified.
+Owner runtime/source/dependencies/object store retained. Pre-cleanup 722672 KiB
+is not attributed saving. Final records/hash/inventory/scans refresh before
+subject-only driver signal. Broad goal stays active.
+
 # v0.8.71 — Admit optional web full-text writes before overwrite
 
 One web-specific helper now checks the destination volume against the final UTF-8

@@ -503,3 +503,50 @@ other writers can consume space after observation; a hard limit requires a quota
 Extra encoding/volume checks add unmeasured cost. No total-disk guarantee, production
 cleanup, disk/RAM/model-usage saving, live provider request or full-Hermes-suite
 result is claimed. Owner data, ESTOP/pauses and stopped timers remain intact.
+
+
+## Web index write admission (v0.8.72)
+
+This extends v0.8.71's payload checks to optional extraction-index publication.
+Previously `_save_index` could create an atomic temporary file and replace the old
+index without observing volume space. Actual isolated Mac probes under modeled
+full/unknown space do both with zero observations. This demonstrates missing
+admission, not actual disk pressure or data loss.
+
+After the existing 500-entry trimming, the writer computes the character length
+of compact JSON with ASCII escaping. That is an ASCII-byte upper bound for the
+native writer's raw UTF-8 output and its existing lone-surrogate escape fallback.
+Observed free space minus that bound must remain at least 1 GiB; equality succeeds.
+Low or unavailable space follows existing optional-error handling before any
+atomic temp is created, retaining the previous index. The original atomic JSON
+writer still owns serialization, temporary files, permissions/owner, fsync, replace
+and cleanup. No generic writer option or duplicate fallback policy is introduced.
+
+A Unicode index that would fit as raw UTF-8 can be conservatively refused near the
+reserve because escaped JSON is larger. Extra serialization and volume checks add
+unmeasured cost. Existing cache keys, TTL/eviction, profile/provider scope, merge
+lock, payload admission, fallback and request policy remain. The current provider
+result stays usable and its paging footer remains accurate. If payload writing
+succeeds before index admission is refused, that payload can remain unindexed or
+under its previous metadata. No two-file transaction, rollback or deletion is added;
+a retained expired index entry remains expired, so a later request may fetch again.
+
+Sixteen cases join the existing native pressure file. Original: 11 meaningful
+failures/26 passes; all 21 prior cases retain their outcomes. Payload-boundary
+fixtures now give subsequent metadata its own capacity, and the prior mixed-batch
+fixture admits its final index separately. New ASCII/Thai/lone-surrogate cases
+cover full/unknown/below-bound/exact-bound capacity, real prior bytes/inode/mode,
+no temporary allocation on denial, exact native serialized bytes and readback.
+A post-trim budget admits the retained row but could not admit the original large
+input; publication failure preserves the prior index and cleans the real temp.
+Repeated registered extraction covers pressure beginning after actual payload
+close: fresh content returns, prior index/good hit/paging copy stay intact and no
+false saved path appears. Controlled provider/policy seams and fallback traps
+make no external request. Final eight-file selection passes 140 native cases after
+exported reapplication on Mac Python3.14.9, with no failures/skips/retries/exclusions.
+
+This remains best-effort per-write admission. Filesystem metadata/allocation and
+concurrent writers can consume space after observation; there is no hard quota,
+total cache-file bound, automatic pruning or global disk-full guarantee. No owner
+cache was changed, production cleanup performed, or disk/RAM/model/billing saving
+measured. Keep owner data, ESTOP/pauses and stopped timers intact.

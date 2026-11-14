@@ -10,6 +10,17 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Web index write admission (v0.8.72)
+
+The optional extraction index now checks volume space after its existing trimming
+and before the original atomic writer creates a temporary file. Escaped JSON ASCII
+length conservatively budgets both native UTF-8 and lone-surrogate fallback, with
+an observed 1 GiB reserve. Denial keeps prior index bytes and normal fresh results.
+[Native boundary, serialization and caller checks](storage-and-backups.md#web-index-write-admission-v0872).
+Same 1002 targets/base/selection; only the existing cache runtime and pressure-test
+after hashes/sections change. Native atomic serialization/mode/fsync/replace, locks,
+payload guards and cache policy remain. No hard quota, total-cache bound or prune.
+
 ## Web full-text write admission (v0.8.71)
 
 Both extraction-cache payloads and full-text paging copies now check the containing
