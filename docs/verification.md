@@ -1,3 +1,50 @@
+# v0.18.0 — Optional on-demand gateway preset
+
+[Application, native consumer contracts and measured tradeoff](on-demand-gateway.md).
+The companion packages three existing native settings; it introduces no runtime
+code, mode or default. The native patch/manifest are byte-exact to v0.17.0 and all
+1,030 source hashes, including P0 SSH protection, remain unchanged. Actual native
+reverse/base/reapply hashes and strict installed compatibility pass.
+
+The pre-preset no-preload control fails because existing default warmup schedules
+work. This is a before-preset behavior control, not an old-code bug or new runtime
+fix. The executable native fixture passes **five tests**, 2.965 seconds: per-key
+parser/readback and unrelated settings, unselected profile isolation, actual MCP
+loader/discovery consumers, real warmup start/await and actual first-turn assembly.
+The fixture re-enters the native boot bridge between temporary homes because
+unittest reuses the module import; matched measurements use fresh processes and
+the actual module-boot bridge. Native queued logging cleanup follows its existing
+test pattern before removing a home. No logging-error or ResourceWarning in the
+accepted fixture run. Existing MCP selection: **25 passed**, 3.040 seconds.
+
+One fresh paired initialized-runner case starts from identical synthetic config
+backups, then uses canonical parser writes for only the three preset keys. An
+ambient warmup777 is overridden at actual boot to baseline20/preset0. Both sides
+construct real GatewayRunner instances and invoke actual warmup start/await;
+the preset leaves run_agent/model_tools unloaded at the idle checkpoint. RSS
+**178.234375 → 144.000 MiB**, 19.2075% lower; one native process/zero children both.
+First turn **528.332 → 1165.846 ms**, including test-interception class import
+inside that timed first-use window. Lifecycle peak **222.578125 → 220.515625 MiB**;
+similar, not a general peak-saving result. The actual gateway turn path constructs
+the agent and assembles SOUL, AGENTS, Thai input and byte-equivalent canonical
+wire tool definitions; only inference methods return a synthetic completion.
+One boundary call on each side, no provider request, config bytes unchanged during
+measurement, canonical shutdown with no children. Initial probes and fixture
+corrections are recorded privately, not credited as product bugs or repeat evidence.
+
+Twenty-millisecond recursive samples include the native runner and its sampling
+allocations, exclude one outer orchestrator and observe at most one native process
+in the pair. Known topology stays within four processes/<4 GiB. Shared pages,
+brief peaks, one pair, synthetic context and disabled environment probing limit
+generalization. Private audit guards deny network, unapproved subprocesses and
+owner-path access; they are not OS containment. Full startup/adapters/gateway idle,
+app adoption, other platforms and model usage remain unverified. Canonical native
+pytest and pinned Ruff are absent; no dependency provisioning was attempted.
+
+Companion: **133 run, 131 passed, two Linux-only skips**, 4.402 seconds. Release
+inventory/disposable-copy verification, exact directory/history secret scans,
+advisor review, source/app/config preservation and zero-SSH checks gate handoff.
+
 # v0.17.0 — Profile MCP idle defaults
 
 [Plain-language behavior and native Mac component evidence](release-notes-v0.17.0.md).

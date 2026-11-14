@@ -10,6 +10,15 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## On-demand gateway preset (v0.18.0)
+
+The companion adds an [optional native preset and application recipe](on-demand-gateway.md)
+for existing warmup, cached MCP lazy startup and bounded discovery controls, with
+an executable native consumer/first-turn fixture. [Measured behavior and limits](release-notes-v0.18.0.md).
+No native runtime payload changes: the patch and 1,030 target hashes remain exact,
+including P0. This does not automatically change installed profiles or enable
+idle retirement for stateful servers.
+
 ## Profile MCP idle defaults (v0.17.0)
 
 An opt-in profile timeout supplies existing idle retirement to eligible stdio
