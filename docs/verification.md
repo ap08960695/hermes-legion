@@ -1,3 +1,44 @@
+# v0.8.68 — Recheck report activity after archive publication
+
+The shared companion packer reuses its optional activity callback after exclusive
+archive publication/directory fsync and before the final source stamp/removal.
+Busy/unknown activity retains source and verified archive through existing failure
+report/exit 1; later eligible reports still proceed. Source mutation during the new
+observation also reaches the final stamp before deletion. No observer, retention,
+archive, reserve, selection or owner-control policy changes; callback-free behavior
+remains. [Preservation evidence and race limit](storage-and-backups.md#report-activity-after-publication-v0868).
+
+Actual original Mac probe opens a synthetic source FD at successful postpublication
+directory fsync. Original removes pathname, FD link count zero, bytes still readable and
+verified archive retained. Baseline retention26 run24 pass/two Linux skips. Two new
+test methods exercise held/unknown subcases and mutation-during-second-observer;
+original 28-test runs show three source-preservation failures on both required
+Python 3.12.10 and PM-selected Hermes 3.14.9. No fixture/import error. One harness
+log-counter initially double-counts source/trace lines; corrected parsing verifies
+saved required-red output, then native red independently confirms the same failures.
+Fixed retention: 28 run, 26 pass/two Linux skips on each interpreter, 0.178 s/0.158 s.
+These counts overlap full companion: 131 run, 129 pass/two Linux skips, 4.459 s, exit 0.
+
+Positive inode/device/linkcount/bytes, verified earlier archive and changed source,
+post-sync observation, final-stamp ordering, main failure/exit 1, later report success,
+unrelated-byte preservation and temp cleanup asserted. Observer boundary injects
+fixture-only held/unknown results; real source descriptors are used. This is not
+OS-wide observer/production purge/whole-disk or atomic race-freedom evidence.
+
+Native interpreter runs stdlib companion tests only, from a temp cwd with private
+HOME/HERMES_HOME/TMPDIR and -I/-B/-S parent. No source/dependency clone, Hermes native
+suite, application/model/MCP/fleet/UI/service launch or observer bypass. All native
+patches/manifests/selection and verification scripts remain byte-identical to HEAD;
+unchanged 1002-target kit is not re-exported or re-applied. No new adoption target.
+Six existing public files only; raw whitespace clean for this round. Prior v0.8.67
+patch-context disposition belongs to the committed artifact. Tracked-only 222-file
+release inventory/current hashes and exact directory/all-history Gitleaks scans
+pass, no leaks, 198 commits. Advisor 69 accepts bounded handoff. Owned small trial/
+probe/source-copy/log/home tree and pointer removed, absence verified; borrowed
+interpreter/source retained. Pre-cleanup 76 KiB is not attributed saving. Final
+hash/inventory/whitespace/secret refresh precedes driver signal. No owner data/
+control/quota/ESTOP/pause/timer action; residual check-to-delete activity race remains.
+
 # v0.8.67 — Avoid unused context in declared cache-scope identity
 
 The shared identity lookup selects source, parent ID and model configuration,

@@ -382,3 +382,44 @@ Keep the physical home, its ancestors and backup namespace stable; existing
 check-to-use races remain. No batch rollback, automatic selection, SQL, provider,
 timer or retention-policy behavior is added. No production backup is exercised,
 and the unchanged upstream source kit needs no new export or adoption target.
+
+
+## Report activity after publication (v0.8.68)
+
+Report packing already checked process activity before publishing its verified
+archive. A report opened during the following directory sync could still have
+its original pathname removed: its bytes and source stamp had not changed.
+The shared packer now calls the same optional activity guard after publication
+and directory sync, before the final source stamp and removal. Busy or unknown
+observations refuse removal and retain both source and verified archive. The
+existing apply failure report/exit 1 and later-entry processing remain.
+
+The final source stamp stays after the potentially slow observation. A source
+changed during an observation that returns idle is retained alongside the archive
+of its earlier bytes. Preview/admission, retention ages, process-visibility rules,
+protected paths, archive format, verification, reserve, exclusive publication and
+temporary cleanup remain. Direct callers without an activity callback retain that
+existing contract; this does not create a new observer or automatic cleanup job.
+
+Original Mac behavior is reproduced with a real read-only descriptor opened only
+after archive publication and successful directory fsync: the pathname disappears
+and descriptor link count becomes zero, while the verified archive remains.
+There is no irreversible-data-loss claim. New held/unknown cases fail at source
+preservation on the original, as does a second-observer mutation control. The
+fixed cases check exact archive bytes, source/FD inode and device, positive link
+count, retained content, observable refusal/exit 1, later valid report removal and
+archive, unchanged unrelated data and no task temp leaks. Observation is injected
+at the existing boundary for synthetic fixture paths; it does not prove OS-wide
+visibility or an operational production cleanup.
+
+Retention selection: 28 tests run, 26 pass/two Linux-only skips on Python 3.12.10 and
+Hermes' PM-selected Python 3.14.9, overlapping counts. Both interpreters reproduce
+all three original preservation failures first. Full companion: 131 run, 129 pass/
+two Linux skips. Native Python runs stdlib companion tests from a temporary cwd
+with private HOME/HERMES_HOME/TMPDIR and -I/-B/-S, without importing or launching
+Hermes services. No source/dependency clone or native application full-suite claim.
+
+Activity checks remain non-atomic. Activation after the last check can still race
+with deletion; atomic concurrency needs shared writer/retention ownership. This
+release neither clears process-observation refusals nor changes owner controls,
+ESTOP/pauses or stopped timers. No production data was purged or saving attributed.

@@ -295,6 +295,107 @@ class RetentionTests(unittest.TestCase):
                 with tarfile.open(home / "reports/z-valid.tar.gz") as tar:
                     self.assertEqual(tar.extractfile("z-valid/report.txt").read(), b"later evidence")
 
+    def test_report_activated_after_publication_keeps_both_copies(self):
+        import stat
+        for mode in ("held", "unknown"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                home = Path(tmp).resolve()
+                source = make(home / "reports/a-active/report.txt", 5, "active synthetic report")
+                later = make(home / "reports/z-later/report.txt", 5, "later synthetic report")
+                live = make(home / "state.db", 100, "unrelated durable data")
+                for directory in (source.parent, later.parent):
+                    age_dir(directory, 5)
+                original, unrelated = source.read_bytes(), live.read_bytes()
+                archive = source.parent.with_name("a-active.tar.gz")
+                holder, observed = [], []
+                synced, unknown_sent = False, False
+                real_sync = retention.os.fsync
+
+                def sync(fd):
+                    nonlocal synced
+                    real_sync(fd)
+                    if stat.S_ISDIR(os.fstat(fd).st_mode) and archive.exists() and not holder:
+                        holder.append(source.open("rb"))
+                        synced = True
+
+                def observe():
+                    nonlocal unknown_sent
+                    if holder:
+                        if source.exists():
+                            self.assertTrue(synced and archive.exists())
+                            observed.append("after-publication")
+                            if mode == "unknown" and not unknown_sent:
+                                unknown_sent = True
+                                return None
+                        return {str(source)}
+                    return set()
+
+                out = io.StringIO()
+                try:
+                    with patch.object(retention.os, "fsync", sync), patch.object(
+                            retention, "held_paths", observe), redirect_stdout(out):
+                        code = retention.main(["--home", str(home), "--now", str(NOW), "--apply"])
+                    for packed, member, expected in (
+                        (archive, "a-active/report.txt", original),
+                        (home / "reports/z-later.tar.gz", "z-later/report.txt", b"later synthetic report"),
+                    ):
+                        with tarfile.open(packed) as tar:
+                            self.assertEqual(tar.extractfile(member).read(), expected)
+                    self.assertFalse(later.parent.exists())
+                    self.assertEqual(live.read_bytes(), unrelated)
+                    self.assertTrue(source.exists(), "active report was removed after archive publication")
+                    self.assertEqual(source.read_bytes(), original)
+                    self.assertEqual(source.stat().st_ino, os.fstat(holder[0].fileno()).st_ino)
+                    self.assertEqual(source.stat().st_dev, os.fstat(holder[0].fileno()).st_dev)
+                    self.assertGreater(os.fstat(holder[0].fileno()).st_nlink, 0)
+                    self.assertEqual(holder[0].read(), original)
+                    self.assertTrue(observed)
+                    self.assertEqual(unknown_sent, mode == "unknown")
+                    self.assertEqual(code, 1)
+                    self.assertIn("failed reports/a-active  (source is no longer idle after archive publication; both copies retained)", out.getvalue())
+                    self.assertNotIn("failed reports/z-later", out.getvalue())
+                    self.assertEqual(list(archive.parent.glob(".legion-pack-*")), [])
+                finally:
+                    for stream in holder:
+                        stream.close()
+
+    def test_postpublication_observer_mutation_keeps_changed_source(self):
+        import stat
+        entry = self.home / "reports/run1"
+        source = entry / "report.txt"
+        original = source.read_bytes()
+        archive = entry.with_name("run1.tar.gz")
+        phases = []
+        synced = False
+        real_sync = retention.os.fsync
+
+        def sync(fd):
+            nonlocal synced
+            real_sync(fd)
+            if stat.S_ISDIR(os.fstat(fd).st_mode) and archive.exists():
+                synced = True
+
+        def can_remove():
+            phases.append((archive.exists(), synced))
+            if archive.exists():
+                self.assertTrue(synced)
+                source.write_bytes(b"changed during postpublication observation")
+            return True
+
+        failure = None
+        with patch.object(retention.os, "fsync", sync):
+            try:
+                retention.pack(entry, can_remove)
+            except ValueError as exc:
+                failure = str(exc)
+        with tarfile.open(archive) as tar:
+            self.assertEqual(tar.extractfile("run1/report.txt").read(), original)
+        self.assertTrue(source.exists(), "source was removed without postpublication observation")
+        self.assertEqual(source.read_bytes(), b"changed during postpublication observation")
+        self.assertEqual(phases, [(False, False), (True, True)])
+        self.assertEqual(failure, "source changed after archive publication; both copies retained")
+        self.assertEqual(list(entry.parent.glob(".legion-pack-*")), [])
+
     def test_another_users_tree_is_retained(self):
         foreign = os.getuid() + 1
         real_lstat = Path.lstat

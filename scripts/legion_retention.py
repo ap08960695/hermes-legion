@@ -311,6 +311,9 @@ def pack(entry, can_remove=None):
             os.fsync(dir_fd)
         finally:
             os.close(dir_fd)
+        # shortcut: activity checks are not atomic; use shared writer/retention ownership for concurrent activation.
+        if can_remove is not None and not can_remove():
+            raise ValueError("source is no longer idle after archive publication; both copies retained")
         if source_stamp(entry) != before:
             raise ValueError("source changed after archive publication; both copies retained")
         shutil.rmtree(entry)
