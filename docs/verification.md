@@ -1,3 +1,37 @@
+# v0.22.0 — Runtime lookups share Desktop helper admission
+
+[User-visible behavior and controlled native Mac measurements](release-notes-v0.22.0.md).
+An old-code reset regression spawned two lookup children before the old child
+closed; the updated module waits. Eighteen actual-TypeScript assert contracts,
+46 canonical Vitest cases, full Electron type checking and scoped ESLint pass.
+Native metadata and native ticket-client functions execute under task-local audit
+checks; six ticket-guard and eight metadata-guard negatives pass, not OS containment.
+
+Four fresh Node cases old/current/current/old reproduce a slow lookup with a
+finite file gate after native CLI import. The same native ticket program reaches
+an owned Unix socket returning a synthetic fresh grant. Healthy host memory is
+observed directly. Lookup overlap is 2 → 1; peak runtime processes including Node
+3 → 2. Median combined peak is 170.296875 → 131.640625 MiB (22.7% lower), request
+completion 841.325 → 911.354 ms. The preselected >=5% and >=10 MiB gate passes.
+All cases reject the stale request, mint one fresh ticket, preserve config bytes
+and leave zero helpers. Recursive 20 ms RSS sampling includes Node/children and
+excludes one ps observer; at most four known processes and <4 GiB extra RSS.
+File gates, synthetic grant, shared RSS, loader/allocator noise, sampling gaps and
+four cases limit the result; no general app or normal-launch saving is claimed.
+
+Default capacity one/configurable two and 256 waiting jobs now cover runtime
+lookups and ticket helpers together. Lookup queue waiting consumes its existing
+30-second budget; ticket requests retain ten seconds. Active failures settle
+without freeing a slot before close. Generation travels through delayed backend
+selection, and memory observers are followed by queue/generation/deadline/capacity
+rechecks. Existing ticket program/argv, interpreter validation and profile scope
+are preserved. Backend installation/selection and other entrypoints remain outside
+the bound. No app, real gateway owner, other OS or provider acceptance is claimed.
+Five existing native files change: three prior targets and two upstream tests
+newly included in the 1,046-path kit. All 1,041 unrelated prior targets and P0 are exact.
+Companion, inventory, patch roundtrip, scans, preservation and advisor review gate
+handoff; owner controls remain untouched and no other machine was contacted.
+
 # v0.21.0 — One native idle-cleanup job per runner
 
 [User-visible behavior and controlled Mac measurements](release-notes-v0.21.0.md).

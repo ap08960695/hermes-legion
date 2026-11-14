@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1044-path** Legion source, interface and optimization alternative
+This is the complete **1046-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,15 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Shared Desktop runtime-lookup admission (v0.22.0)
+
+Installation-launcher lookups share the existing ticket-helper slots, FIFO and
+memory gate. Reset stops obsolete lookups; capacity returns only on actual close.
+[Behavior, controlled native measurements and limits](release-notes-v0.22.0.md).
+Three prior targets change and two existing upstream test files join the kit;
+all 1,041 unrelated prior targets and P0 remain exact.
+No new setting or dependency; installed Desktop adoption requires rebuilding.
 
 ## Bounded idle cache cleanup (v0.21.0)
 

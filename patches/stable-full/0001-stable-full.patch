@@ -5784,10 +5784,10 @@ index 0000000000000000000000000000000000000000..4455992455b9a0f634f3013dc282c1b3
 +})
 diff --git a/apps/desktop/electron/local-gateway-python-admission.test.ts b/apps/desktop/electron/local-gateway-python-admission.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..2e7b0cc41e90cd813a7d801b885e90ef04ce0fb8
+index 0000000000000000000000000000000000000000..85dee11611fbb95709eb187b57ae6e89029a3f1d
 --- /dev/null
 +++ b/apps/desktop/electron/local-gateway-python-admission.test.ts
-@@ -0,0 +1,381 @@
+@@ -0,0 +1,513 @@
 +import { EventEmitter } from 'node:events'
 +import { PassThrough } from 'node:stream'
 +
@@ -6169,15 +6169,180 @@ index 0000000000000000000000000000000000000000..2e7b0cc41e90cd813a7d801b885e90ef
 +  expect(helpers[1].frames[0].endpoint.profile_id).toBe('/private/b')
 +  helpers[1].reply('b'); await expect(b).resolves.toBe('b')
 +})
++
++
++const lookupBackend = { command: '/launcher', kind: 'command', shell: false, root: '/cwd' }
++
++const flushRuntime = async () => { for (let i = 0; i < 8; i++) { await Promise.resolve() } }
++
++const lookup = () => {
++  const result = api.ticketRuntimeFor(lookupBackend)
++  void result.catch(() => {})
++
++  return result
++}
++
++const reportRuntime = (helper: Helper) => {
++  helper.stdout.write(JSON.stringify([process.execPath, '-I', '-c', 'synthetic']))
++  helper.emit('close', 0)
++}
++
++it('resets a lookup through the same resolver and holds its slot until actual close', async () => {
++  const resolver = api.createGatewayTicketResolver(async () => lookupBackend, () => '/cwd')
++  const first = resolver(endpoint(), 'interactive'); void first.catch(() => {})
++  await flushRuntime()
++  api.closeGatewayTicketBridges()
++  const second = resolver(endpoint(), 'interactive'); void second.catch(() => {})
++  await flushRuntime()
++  expect(helpers).toHaveLength(1)
++  expect(helpers[0].kill).toHaveBeenCalledOnce()
++  await expect(first).rejects.toThrow('runtime changed')
++  helpers[0].emit('close', 0)
++  await flushRuntime()
++  expect(helpers).toHaveLength(2)
++  helpers[1].stdout.write(JSON.stringify([process.execPath]))
++  await flushRuntime()
++  expect(helpers).toHaveLength(2)
++  helpers[1].emit('close', 0)
++  await flushRuntime()
++  expect(helpers).toHaveLength(3)
++  helpers[2].reply('fresh-after-lookup')
++  await expect(second).resolves.toBe('fresh-after-lookup')
++})
++
++it('never enrolls an old backend-resolution flight into the new generation', async () => {
++  let resolveBackend!: (value: typeof lookupBackend) => void
++  const resolver = api.createGatewayTicketResolver(() => new Promise(resolve => { resolveBackend = resolve }), () => '/cwd')
++  const pending = resolver(endpoint(), 'interactive'); void pending.catch(() => {})
++  api.closeGatewayTicketBridges()
++  resolveBackend(lookupBackend)
++  await expect(pending).rejects.toThrow('runtime changed')
++  expect(helpers).toHaveLength(0)
++})
++
++it('shares configured helper capacity across lookups and ticket clients', async () => {
++  api.configureGatewayTicketHelpers({ gatewayTicketHelperLimit: 2 })
++  const a = lookup(); const b = mint(); const c = lookup()
++  expect(helpers).toHaveLength(2)
++  reportRuntime(helpers[0]); await a
++  expect(helpers).toHaveLength(3)
++  helpers[1].reply('ticket'); await b
++  reportRuntime(helpers[2]); await c
++})
++
++it('retires an idle ticket helper before admitting a runtime lookup', async () => {
++  const a = mint(); helpers[0].reply('ticket'); await a
++  const pending = lookup()
++  expect(helpers[0].kill).toHaveBeenCalledOnce()
++  expect(helpers).toHaveLength(1)
++  helpers[0].emit('close', 0)
++  expect(helpers).toHaveLength(2)
++  reportRuntime(helpers[1]); await pending
++})
++
++it('charges queue waiting against the runtime lookup deadline', async () => {
++  const ticket = mint(); const pending = lookup()
++  await vi.advanceTimersByTimeAsync(30000)
++  await expect(ticket).rejects.toThrow('Gateway ticket')
++  await expect(pending).rejects.toThrow('runtime lookup timed out')
++  expect(helpers).toHaveLength(1)
++})
++
++it('waits for memory before starting a runtime lookup', async () => {
++  vi.mocked(process.availableMemory).mockReturnValue(0)
++  const pending = lookup()
++  await vi.advanceTimersByTimeAsync(100)
++  expect(helpers).toHaveLength(0)
++  vi.mocked(process.availableMemory).mockReturnValue(536870912)
++  await vi.advanceTimersByTimeAsync(100)
++  expect(helpers).toHaveLength(1)
++  reportRuntime(helpers[0]); await pending
++})
++
++it('holds a failed lookup reservation through error until the one close event', async () => {
++  const a = lookup(); const b = lookup()
++  helpers[0].emit('error', new Error('synthetic launch failure'))
++  await expect(a).rejects.toThrow('synthetic launch failure')
++  expect(helpers).toHaveLength(1)
++  helpers[0].emit('close', 1)
++  expect(helpers).toHaveLength(2)
++  helpers[0].emit('close', 1)
++  const c = lookup()
++  expect(helpers).toHaveLength(2)
++  reportRuntime(helpers[1]); await b
++  expect(helpers).toHaveLength(3)
++  reportRuntime(helpers[2]); await c
++})
++
++it('restores a slot after synchronous lookup spawn failure', async () => {
++  spawn.mockImplementationOnce(() => { throw new Error('synthetic synchronous failure') })
++  await expect(lookup()).rejects.toThrow('synchronous failure')
++  const pending = lookup()
++  expect(helpers).toHaveLength(1)
++  reportRuntime(helpers[0]); await pending
++})
++
++it('keeps retiring lookup accounting across repeated reset', async () => {
++  const a = lookup()
++  api.closeGatewayTicketBridges(); api.closeGatewayTicketBridges()
++  const b = lookup()
++  expect(helpers).toHaveLength(1)
++  expect(helpers[0].kill).toHaveBeenCalledOnce()
++  await expect(a).rejects.toThrow('runtime changed')
++  helpers[0].emit('close', 0)
++  reportRuntime(helpers[1]); await b
++})
++
++it('counts runtime lookups against the existing waiting queue capacity', async () => {
++  const first = lookup()
++  const pending = Array.from({ length: 256 }, (_, i) => mint('queued-' + i))
++  await expect(lookup()).rejects.toThrow('queue is full')
++  api.closeGatewayTicketBridges()
++  helpers[0].emit('close', 0)
++  await Promise.allSettled([first, ...pending])
++})
+diff --git a/apps/desktop/electron/local-gateway-python-launcher-argv.test.ts b/apps/desktop/electron/local-gateway-python-launcher-argv.test.ts
+index b03f70fabfc95aa5d16d163075f463bfc8614e96..9f3f6a05a5299cefeefd6a228ebef69b99fcf7f8 100644
+--- a/apps/desktop/electron/local-gateway-python-launcher-argv.test.ts
++++ b/apps/desktop/electron/local-gateway-python-launcher-argv.test.ts
+@@ -4,3 +4,3 @@ import { PassThrough } from 'node:stream'
+
+-import { afterEach, expect, test, vi } from 'vitest'
++import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+
+@@ -25,2 +25,4 @@ const { ticketRuntimeFor } = await import('./local-gateway-python')
+
++beforeEach(() => { vi.spyOn(process, 'availableMemory').mockReturnValue(536870912) })
++
+ const realPlatform = process.platform
+@@ -30,2 +32,3 @@ afterEach(() => {
+   spawned.length = 0
++  vi.restoreAllMocks()
+ })
+diff --git a/apps/desktop/electron/local-gateway-python-runtime.test.ts b/apps/desktop/electron/local-gateway-python-runtime.test.ts
+index 5afdabe2d0606a3a1d515ce595825aff0f68b9cd..bf1d9bd5cecc5f30c6e119ff809c320809d351cf 100644
+--- a/apps/desktop/electron/local-gateway-python-runtime.test.ts
++++ b/apps/desktop/electron/local-gateway-python-runtime.test.ts
+@@ -4,3 +4,3 @@ import path from 'node:path'
+
+-import { afterEach, beforeEach, expect, test } from 'vitest'
++import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+
+@@ -10,2 +10,5 @@ let dir: string
+
++beforeEach(() => { vi.spyOn(process, 'availableMemory').mockReturnValue(536870912) })
++afterEach(() => { vi.restoreAllMocks() })
++
+ beforeEach(async () => { dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'ticket-runtime-'))) })
 diff --git a/apps/desktop/electron/local-gateway-python.ts b/apps/desktop/electron/local-gateway-python.ts
-index 25f6be5afdd223c7e4ce48c37075a1f034f19150..1e21ad12c96721ed20998c8e9654b2d393c35982 100644
+index 25f6be5afdd223c7e4ce48c37075a1f034f19150..231c5de6d490978cf3efc0e81178d9151e399341 100644
 --- a/apps/desktop/electron/local-gateway-python.ts
 +++ b/apps/desktop/electron/local-gateway-python.ts
 @@ -54,2 +54,3 @@ interface PendingTicket {
    timer: ReturnType<typeof setTimeout>
 +  deadline: number
  }
-@@ -57,3 +58,118 @@ interface PendingTicket {
+@@ -57,3 +58,141 @@ interface PendingTicket {
  const bridges = new Map<string, TicketBridge>()
 +const liveBridges = new Set<TicketBridge>()
  let bridgeGeneration = 0
@@ -6196,26 +6361,40 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..1e21ad12c96721ed20998c8e9654b2d3
 +  helperIdleMs = Number.isInteger(idle) && idle! >= 100 && idle! <= 30_000 ? idle! : 5000
 +}
 +
-+interface TicketAdmission {
++interface AdmissionBase {
++  generation: number
++  deadline: number
++  timer: ReturnType<typeof setTimeout>
++  reject: (error: Error) => void
++}
++
++interface TicketAdmission extends AdmissionBase {
++  kind: 'ticket'
 +  command: string
 +  cwd: string
 +  env: NodeJS.ProcessEnv
 +  key: string
 +  endpoint: TicketEndpoint
 +  purpose: GatewayTicketPurpose
-+  generation: number
-+  deadline: number
-+  timer: ReturnType<typeof setTimeout>
 +  resolve: (ticket: string | PromiseLike<string>) => void
-+  reject: (error: Error) => void
 +}
 +
-+const admissions: TicketAdmission[] = []
++interface RuntimeAdmission extends AdmissionBase {
++  kind: 'runtime'
++  backend: ResolvedTicketBackend & { root: string }
++  resolve: (python: string) => void
++}
 +
-+function admissionError(job: TicketAdmission): Error | undefined {
++type HelperAdmission = TicketAdmission | RuntimeAdmission
++const admissions: HelperAdmission[] = []
++const liveRuntimeLookups = new Set<{ stop: (error: Error) => void }>()
++
++function admissionError(job: HelperAdmission): Error | undefined {
 +  if (job.generation !== bridgeGeneration) { return new Error('Gateway ticket runtime changed; retry connection') }
 +
-+  if (performance.now() >= job.deadline) { return new Error('Gateway ticket helper admission timed out') }
++  if (performance.now() >= job.deadline) {
++    return new Error(job.kind === 'runtime' ? 'Gateway ticket runtime lookup timed out' : 'Gateway ticket helper admission timed out')
++  }
 +}
 +
 +function ticketHelperMemoryReady(): boolean {
@@ -6243,7 +6422,7 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..1e21ad12c96721ed20998c8e9654b2d3
 +        continue
 +      }
 +
-+      let bridge = bridges.get(job.key)
++      let bridge = job.kind === 'ticket' ? bridges.get(job.key) : undefined
 +
 +      if (!bridge && helperSlots >= helperLimit) {
 +        // Retiring children still consume a slot until the OS reports close.
@@ -6256,7 +6435,7 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..1e21ad12c96721ed20998c8e9654b2d3
 +      if (!bridge) {
 +        const ready = ticketHelperMemoryReady()
 +
-+        if (admissions[0] !== job || admissionError(job)) { continue }
++        if (admissions[0] !== job || admissionError(job) || helperSlots >= helperLimit) { continue }
 +
 +        if (!ready) {
 +          memoryPoll = setTimeout(pumpAdmissions, 100)
@@ -6267,6 +6446,15 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..1e21ad12c96721ed20998c8e9654b2d3
 +
 +      admissions.shift()
 +      clearTimeout(job.timer)
++
++      if (job.kind === 'runtime') {
++        helperSlots++
++
++        try { startRuntimeLookup(job) }
++        catch (error) { helperSlots--; job.reject(error as Error) }
++
++        continue
++      }
 +
 +      if (!bridge) {
 +        helperSlots++
@@ -6296,11 +6484,11 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..1e21ad12c96721ed20998c8e9654b2d3
 +  } finally { pumping = false }
 +}
 
-@@ -72,2 +188,3 @@ class TicketBridge {
+@@ -72,2 +211,3 @@ class TicketBridge {
      }))
 +    liveBridges.add(this)
      this.child.stderr.resume()
-@@ -77,8 +194,14 @@ class TicketBridge {
+@@ -77,8 +217,14 @@ class TicketBridge {
      this.child.stdin.on('error', () => this.dispose())
 -    this.child.on('close', () => this.dispose())
 +    this.child.once('close', () => {
@@ -6318,7 +6506,7 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..1e21ad12c96721ed20998c8e9654b2d3
 
 +  request(endpoint: TicketEndpoint, purpose: GatewayTicketPurpose, deadline: number): Promise<string> {
      return new Promise((resolve, reject) => {
-@@ -95,4 +218,11 @@ class TicketBridge {
+@@ -95,4 +241,11 @@ class TicketBridge {
 
 -      const timer = setTimeout(() => this.dispose(), 10_000)
 -      this.pending.set(id, { resolve, reject, timer })
@@ -6332,12 +6520,12 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..1e21ad12c96721ed20998c8e9654b2d3
 +      const timer = setTimeout(() => this.dispose(), remaining)
 +      this.pending.set(id, { resolve, reject, timer, deadline })
        // Private stdin carries identity as data. EOF also retires the helper if Desktop exits.
-@@ -119,3 +249,3 @@ class TicketBridge {
+@@ -119,3 +272,3 @@ class TicketBridge {
 
 -        if (!waiter) { this.dispose();
 +        if (!waiter || performance.now() >= waiter.deadline) { this.dispose();
 
-@@ -134,3 +264,7 @@ class TicketBridge {
+@@ -134,3 +287,7 @@ class TicketBridge {
 
 -    if (!this.pending.size) { this.idleTimer = setTimeout(() => this.dispose(), 30_000) }
 +    if (!this.pending.size) {
@@ -6346,7 +6534,7 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..1e21ad12c96721ed20998c8e9654b2d3
 +      pumpAdmissions()
 +    }
    }
-@@ -156,4 +290,11 @@ export function closeGatewayTicketBridges(): void {
+@@ -156,4 +313,13 @@ export function closeGatewayTicketBridges(): void {
    bridgeGeneration++
 +  clearTimeout(memoryPoll)
 +  memoryPoll = undefined
@@ -6358,13 +6546,155 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..1e21ad12c96721ed20998c8e9654b2d3
 +  }
 +
 +  for (const bridge of liveBridges) { bridge.dispose() }
++
++  for (const lookup of liveRuntimeLookups) { lookup.stop(new Error('Gateway ticket runtime changed; retry connection')) }
  }
-@@ -272,3 +413,3 @@ export function createGatewayTicketResolver(resolveBackend: () => Promise<Resolv
+@@ -174,45 +340,89 @@ const RUNTIME_COMMAND_TIMEOUT_MS = 30_000
+ /** Ask an installation launcher for its interpreter; it owns ABI and store selection. */
+-function launcherRuntimePython(backend: ResolvedTicketBackend & { root: string }): Promise<string> {
++function launcherRuntimePython(backend: ResolvedTicketBackend & { root: string }, generation: number): Promise<string> {
++  const selected = { ...backend, env: { ...process.env, ...backend.env } }
++  const deadline = performance.now() + RUNTIME_COMMAND_TIMEOUT_MS
++
++  if (generation !== bridgeGeneration) { return Promise.reject(new Error('Gateway ticket runtime changed; retry connection')) }
++
++  if (admissions.length >= 256) { return Promise.reject(new Error('Gateway ticket helper queue is full')) }
++
+   return new Promise((resolve, reject) => {
+-    const fail = (detail: string) => reject(new Error(`Gateway ticket bootstrap could not resolve the installed Hermes Python runtime: ${detail}`))
++    const job: RuntimeAdmission = {
++      kind: 'runtime', backend: selected, generation, deadline, resolve, reject,
++      timer: setTimeout(() => {
++        const index = admissions.indexOf(job)
++
++        if (index < 0) { return }
++        admissions.splice(index, 1)
++        reject(new Error('Gateway ticket runtime lookup timed out'))
++        pumpAdmissions()
++      }, Math.max(0, deadline - performance.now()))
++    }
+
+-    // A .cmd override is a shell backend: quote it as the backend spawn does, or cmd.exe
+-    // splits a launcher path with a space at the first one (#74064).
+-    const child = spawn(windowsShellCommand(backend.command, Boolean(backend.shell)), ['--print-runtime-command'], hiddenWindowsChildOptions({
+-      cwd: backend.root, env: { ...process.env, ...backend.env }, shell: Boolean(backend.shell), stdio: ['ignore', 'pipe', 'ignore']
+-    }))
++    admissions.push(job)
++    pumpAdmissions()
++  })
++}
+
+-    let output = ''
+-    const timer = setTimeout(() => child.kill('SIGKILL'), RUNTIME_COMMAND_TIMEOUT_MS)
+-    child.stdout!.setEncoding('utf8')
+-    child.stdout!.on('data', data => {
+-      output += String(data)
++function startRuntimeLookup(job: RuntimeAdmission): void {
++  const stale = admissionError(job)
+
+-      if (output.length > 65536) { child.kill('SIGKILL') }
+-    })
+-    child.on('error', error => { clearTimeout(timer); fail(error.message) })
+-    child.on('close', code => {
+-      clearTimeout(timer)
++  if (stale) { throw stale }
++  const { backend } = job
++  const fail = (detail: string) => new Error(`Gateway ticket bootstrap could not resolve the installed Hermes Python runtime: ${detail}`)
+
+-      if (code !== 0) { fail(`launcher exited ${code ?? 'without a code'}; refresh this installation's launcher`);
++  // A .cmd override is a shell backend: quote it as the backend spawn does, or cmd.exe
++  // splits a launcher path with a space at the first one (#74064).
++  const child = spawn(windowsShellCommand(backend.command, Boolean(backend.shell)), ['--print-runtime-command'], hiddenWindowsChildOptions({
++    cwd: backend.root, env: backend.env, shell: Boolean(backend.shell), stdio: ['ignore', 'pipe', 'ignore']
++  }))
+
+- return }
++  let output = ''
++  let stopping = false
++  const timer = setTimeout(() => lookup.stop(new Error('Gateway ticket runtime lookup timed out')), Math.max(0, job.deadline - performance.now()))
+
+-      let command: unknown
++  const lookup = {
++    stop(error: Error) {
++      if (stopping) { return }
++      stopping = true
++      clearTimeout(timer)
++      job.reject(error)
++      child.kill('SIGKILL')
++    }
++  }
+
+-      try { command = JSON.parse(output) } catch { fail('launcher did not report a runtime command');
++  liveRuntimeLookups.add(lookup)
++  child.stdout!.setEncoding('utf8')
++  child.stdout!.on('data', data => {
++    if (stopping) { return }
++    output += String(data)
+
+- return }
++    if (output.length > 65536) { lookup.stop(fail('launcher output exceeded its limit')) }
++  })
++  child.on('error', error => lookup.stop(fail(error.message)))
++  child.once('close', code => {
++    clearTimeout(timer)
++    liveRuntimeLookups.delete(lookup)
++    helperSlots--
++
++    if (!stopping) {
++      const error = admissionError(job)
++      let command: unknown
+
++      try { command = JSON.parse(output) } catch { /* Report the existing validation error below. */ }
+       const python = Array.isArray(command) ? command[0] : undefined
+
+-      if (typeof python !== 'string' || !path.isAbsolute(python) || python.includes('\0') || !isFile(python)) {
+-        fail('launcher reported an invalid runtime command');
+-
+- return
+-      }
++      if (error) { job.reject(error) }
++      else if (code !== 0) { job.reject(fail(`launcher exited ${code ?? 'without a code'}; refresh this installation's launcher`)) }
++      else if (command === undefined) { job.reject(fail('launcher did not report a runtime command')) }
++      else if (typeof python !== 'string' || !path.isAbsolute(python) || python.includes('\0') || !isFile(python)) {
++        job.reject(fail('launcher reported an invalid runtime command'))
++      } else { job.resolve(python) }
++    }
+
+-      resolve(python)
+-    })
++    pumpAdmissions()
+   })
++  const expired = admissionError(job)
++
++  if (expired) { lookup.stop(expired) }
+ }
+@@ -228,3 +438,5 @@ function isFile(candidate: string): boolean {
+  */
+-export async function ticketRuntimeFor(backend: ResolvedTicketBackend): Promise<{ command: string; env?: NodeJS.ProcessEnv }> {
++export async function ticketRuntimeFor(backend: ResolvedTicketBackend, generation = bridgeGeneration): Promise<{ command: string; env?: NodeJS.ProcessEnv }> {
++  if (generation !== bridgeGeneration) { throw new Error('Gateway ticket runtime changed; retry connection') }
++
+   if (backend.ticketCommand) {
+@@ -238,5 +450,6 @@ export async function ticketRuntimeFor(backend: ResolvedTicketBackend): Promise<
+   if (backend.kind === 'command' && backend.root) {
+-    const python = await launcherRuntimePython({ ...backend, root: backend.root })
++    const selected = { ...backend, root: backend.root, env: { ...backend.env } }
++    const python = await launcherRuntimePython(selected, generation)
+
+-    return { command: python, env: { ...backend.env, PYTHONPATH: backend.root } }
++    return { command: python, env: { ...selected.env, PYTHONPATH: selected.root } }
+   }
+@@ -256,3 +469,3 @@ export function createGatewayTicketResolver(resolveBackend: () => Promise<Resolv
+
+-      const flight = resolveBackend().then(ticketRuntimeFor).catch(error => {
++      const flight = resolveBackend().then(backend => ticketRuntimeFor(backend, generation)).catch(error => {
+         if (cached === flight) { cached = undefined }
+@@ -272,3 +485,3 @@ export function createGatewayTicketResolver(resolveBackend: () => Promise<Resolv
 
 -export function mintGatewayTicketWithPython(
 +export async function mintGatewayTicketWithPython(
    backend: { command: string; env?: NodeJS.ProcessEnv },
-@@ -278,2 +419,9 @@ export function mintGatewayTicketWithPython(
+@@ -278,2 +491,9 @@ export function mintGatewayTicketWithPython(
  ): Promise<string> {
 +  const deadline = performance.now() + 10_000
 +  endpoint = { ...endpoint }
@@ -6374,7 +6704,7 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..1e21ad12c96721ed20998c8e9654b2d3
 +  }
 +
    const env = { ...process.env, ...backend.env, HERMES_HOME: endpoint.profile_id,
-@@ -282,10 +430,25 @@ export function mintGatewayTicketWithPython(
+@@ -282,10 +502,25 @@ export function mintGatewayTicketWithPython(
    const key = JSON.stringify([backend.command, cwd, Object.entries(env).sort(([a], [b]) => a.localeCompare(b))])
 -  let bridge = bridges.get(key)
 +  const bridge = bridges.get(key)
@@ -6390,7 +6720,7 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..1e21ad12c96721ed20998c8e9654b2d3
 +
 +  return new Promise((resolve, reject) => {
 +    const job: TicketAdmission = {
-+      command: backend.command, cwd, env, key, endpoint, purpose,
++      kind: 'ticket', command: backend.command, cwd, env, key, endpoint, purpose,
 +      generation: bridgeGeneration, deadline, resolve, reject,
 +      timer: setTimeout(() => {
 +        const index = admissions.indexOf(job)
@@ -91048,15 +91378,16 @@ index 44d25bc19bae30f9665f7c418a2dcf102e6fbccb..ade136286e3e6511ce2962243555153e
 +| `lazy` | bool | both | Register the server's tools from the on-disk schema cache at startup and only spawn/connect it on the first tool call (default: `false`, or `true` for eligible stdio servers under `mcp.memory_saving`). Needs one prior live connect to fill the cache; a missing or stale entry falls back to the normal eager connect. Status surfaces show the server as `lazy` with its cached tool count until first use |
  | `idle_timeout_seconds` | number | stdio | Optional stdio server recycle after idle time (`0` disables). May also live under a `lifecycle:` mapping |
 diff --git a/website/docs/user-guide/desktop.md b/website/docs/user-guide/desktop.md
-index 2021ee43feb046d980a57b30d68a6e3e2c98d616..f9b44824ab7ae03ba6947cafa3fc98ee26ab5c69 100644
+index 2021ee43feb046d980a57b30d68a6e3e2c98d616..c92d202f40252e7983d4bc81f55d0570c022457b 100644
 --- a/website/docs/user-guide/desktop.md
 +++ b/website/docs/user-guide/desktop.md
-@@ -250,2 +250,43 @@ The pre-window reader is a small YAML subset, not the full parser the rest of He
+@@ -250,2 +250,52 @@ The pre-window reader is a small YAML subset, not the full parser the rest of He
 
 +#### On-demand gateway ticket helpers
 +
 +Desktop starts Python ticket helpers only when a connection needs a fresh ticket.
-+By default, one helper is allowed per Electron process and an unused helper exits
++Installation-launcher runtime lookups share the same process slots and memory gate.
++By default, one lookup or ticket helper is allowed per Electron process; an unused ticket helper exits
 +five seconds after its last reply. No helper pool is pre-started. To adjust these
 +limits, edit the launch profile's `config.yaml` and restart Desktop:
 +
@@ -91073,8 +91404,10 @@ index 2021ee43feb046d980a57b30d68a6e3e2c98d616..f9b44824ab7ae03ba6947cafa3fc98ee
 +Each helper stays bound to its interpreter, working directory, full environment
 +and profile. Every request obtains a new ticket from the native owner. A busy
 +helper finishes its requests before retirement. Other profiles wait for capacity,
-+including the retiring process's actual exit. Up to 256 requests can wait in
-+admission order within a ten-second total mint-helper budget. An existing eligible
++including the retiring process's actual exit. Up to 256 runtime lookups and ticket
++requests can wait together in admission order. Ticket requests have a ten-second
++total mint-helper budget; runtime lookups have a separate 30-second budget that
++includes queue waiting. An existing eligible
 +helper can still serve its profile while other admissions wait; sustained activity
 +can make a waiting request time out. Queue-full, admission timeout and runtime-reset
 +errors are distinct from native owner or credential refusal. Smaller limits reduce
@@ -91082,17 +91415,23 @@ index 2021ee43feb046d980a57b30d68a6e3e2c98d616..f9b44824ab7ae03ba6947cafa3fc98ee
 +
 +Before starting a new helper, Desktop requires at least 512 MiB from the
 +execution host's `process.availableMemory()` snapshot. Low, missing or invalid
-+observations (including an exception or unavailable API) wait within that same
-+ten-second mint budget. One 100 ms poll runs only while memory blocks an admission
++observations (including an exception or unavailable API) wait within the job's
++existing budget. One 100 ms poll runs only while memory blocks an admission
 +that has a free helper slot; idle, reset, queue drain and capacity waiting stop it.
 +Existing eligible helpers can still serve their own profile under pressure. A
 +waiting request can expire with the existing helper-admission timeout; no credential
 +retry is added. The observation is not a memory reservation or a global RAM limit.
 +
-+This limits ticket-helper processes per Electron process. It does not bound the
-+requests or stdin buffering already assigned to a helper, other helper entrypoints
-+or OS-wide memory. The separate runtime-command lookup keeps its existing
-+30-second timeout and is outside this mint-helper budget and process count.
++A runtime reset rejects queued work and stops active runtime lookups. A stopped
++lookup keeps its slot until the child actually closes, so repeated resets cannot
++start overlapping generations beyond the configured limit. A backend resolution
++started before reset cannot enqueue a lookup in the new generation. Successful
++lookups still share the existing resolver cache within their generation.
++
++This limits launcher runtime-lookups and ticket-helper processes per Electron
++process. It does not bound requests or stdin buffering already assigned to a
++helper, backend selection/installation before the lookup, other helper entrypoints
++or OS-wide memory. A child that has not closed continues to hold its slot.
 +
  ### Settings & onboarding
 diff --git a/website/docs/user-guide/features/cron.md b/website/docs/user-guide/features/cron.md

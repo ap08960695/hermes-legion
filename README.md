@@ -10,6 +10,8 @@ Historical source comments and release payloads received [privacy maintenance](d
 
 ## What is included
 
+- [v0.22.0: bounded Desktop runtime lookups](docs/release-notes-v0.22.0.md), sharing ticket-helper admission and stopping stale generations; four controlled native Mac cases used 22.7% less median peak RSS, with slower request completion.
+
 - [v0.21.0: bounded idle cache cleanup](docs/release-notes-v0.21.0.md), one idle-sweep cleanup job per runner using the existing executor; four native Mac cases reduced concurrent idle callbacks from four to one, with longer cleanup and essentially unchanged RSS.
 
 - [v0.20.0: on-demand local dashboard loading](docs/release-notes-v0.20.0.md), an opt-out from background dashboard warmup; four canonical Mac startup cases used 14.0% less median idle RSS, with a slower first dashboard request.
