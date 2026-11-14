@@ -1,3 +1,55 @@
+# v0.12.0 — Keep saved-message metadata independent of the turn engine
+
+[Plain-language notes and matched Mac measurements](release-notes-v0.12.0.md).
+The unchanged API-content extractor moves into existing `agent.message_metadata`;
+gateway transcript, gateway branch and CLI branch imports follow it. Its old
+internal definition is removed, with no re-export, wrapper, option or dependency.
+An unused typing import is removed with it. Five runtime paths and one behavior
+regression file change. Helper source and AST match the previous definition.
+
+The final fresh-process regression fails against the old five-file source at
+`gateway.session_transcript` requesting `agent.turn_context`. The changed source
+imports real `SessionStore` and builds identical transcript arguments while
+refusing turn/compression/auxiliary imports and external work. Other scoped tests
+cover empty/Thai/JSON/non-string sidecars, gateway branch rows and actual SQLite
+append/reopen/rewrite across two homes with colliding IDs and frozen prompts.
+Actual CLI branch-handler acceptance uses real SQLite with display output stubbed;
+parent/child sidecars and lineage survive. This is not full CLI UI acceptance.
+
+Initial fixture corrections preserve the existing distinction between raw empty
+sidecars and conversation projections that omit them, and close SessionStore's
+additional cached handles. An initial private assertion that SQLite would never
+load the turn engine was invalid: its separate compressor dependency still does.
+These are fixture corrections, not extra product fixes. The final matched pair
+uses separate clean homes and native cold-seeded caches on both sides.
+
+Cached readiness RSS116.9375 ->101.46875 MiB (13.2% less), one process both.
+After first SQLite/save/replay136.125/135.9375 MiB and whole-case peaks214.90625/
+214.671875 MiB show no meaningful later-memory or peak reduction. Configuration
+loading570.18 ->397.36ms; first history operation383.66 ->555.87ms: cost shifts,
+not a demonstrated workload speedup. Same config/case/bootstrap/peer/schema/raw
+sidecars; later append and actual concurrent first/warm calls retain behavior.
+Max3 processes/<4GiB,20ms sampling/shared pages. No app/gateway/remote/model/
+production-server proof or percentage addition to previous cases.
+
+Full cumulative export1024targets (four added targets), same pinned upstream;
+actual reverse/base/reapply hashes pass, prior unrelated bytes/sections exact.
+Native incremental whitespace clean; same13 inherited cumulative diagnostics.
+Canonical native pytest/pinned Ruff and installed-app/cross-platform acceptance
+remain unverified. Five Python audit negative controls pass; adapter containment
+is not an OS sandbox. Scoped test and closing release receipts follow.
+
+Post-export native stdlib: 27 passed, 4.080 s, exit 0, no ResourceWarnings;
+includes three new metadata/storage cases and prior 24 MCP cases. Companion:
+133 run, 131 passed, two Linux-only skips, 4.518 s, exit 0, task TMPDIR and
+bytecode disabled. Intended-tracked-only release copy passes 227 inventory files
+(228 paths); private copy/index removed, real index unchanged. Exact directory
+and all-history Gitleaks scans exit 0, no leaks, 210 history commits. Final report
+closure rescans gate the driver signal. Original app protected hashes/trial config
+backup and all 1,024 source hashes match. Own export scratch and obsolete pilot
+homes are removed; final matched homes, CLI proof and evidence remain. No physical
+disk-saving claim. Desktop SSH count and final process closure are recorded privately.
+
 # v0.11.0 — Defer MCP SDK until an actual connection
 
 [Plain-language notes and Mac measurements](release-notes-v0.11.0.md).

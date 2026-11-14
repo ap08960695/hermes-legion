@@ -10,6 +10,8 @@ Historical source comments and release payloads received [privacy maintenance](d
 
 ## What is included
 
+- [v0.12.0: lighter session metadata startup](docs/release-notes-v0.12.0.md), avoiding a turn-engine import for saved-message metadata; one cached-startup case used 13.2% less RSS before opening history, with storage and peak memory essentially unchanged.
+
 - [v0.11.0: lighter cached MCP startup](docs/release-notes-v0.11.0.md), leaving the SDK unloaded until a connection is needed; one fresh Mac client used 22.8% less RSS before first use, with that import cost deferred to the call.
 
 - [v0.10.0: on-demand MCP startup](docs/release-notes-v0.10.0.md), a profile opt-in that leaves unused cached stdio servers stopped; one Mac component case used 30.7% less RSS before first use, with connection latency moved to that call.
