@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1002-path** Legion source, interface and optimization alternative
+This is the complete **1004-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,17 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Gateway compression-tip liveness (v0.8.73)
+
+The transcript rerouter now uses the existing metadata reader for its tip-liveness
+check on the parent's proven owner handle. Resolution, closed-tip handling, token
+flush and error propagation remain. [SQL, ownership and component measurement](session-metadata-reads.md#gateway-compression-tip-liveness-v0873).
+Two existing upstream files join the patch with pinned before hashes: the runtime
+and its existing regression file. All previous 1002 rows/sections stay exact;
+three existing Gateway test files join the selection. No dependency, schema,
+configuration, context cache, fallback or public file is added. Normal idle loading
+and Linux adoption remain lead-owned; source hashes do not prove running adoption.
 
 ## Web index write admission (v0.8.72)
 

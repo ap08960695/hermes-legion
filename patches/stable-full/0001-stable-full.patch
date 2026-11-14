@@ -30711,6 +30711,15 @@ index ab3aace258bce8c74b151553153b2bb3d554bf1d..ffd77e68db65a54ca43054f612b26211
 +            with (editor_scope(policy), editor_mcp_scope(authority, policy), aux_scope, policy.client_env_scope()):
 +                yield
      finally:
+diff --git a/gateway/session_transcript.py b/gateway/session_transcript.py
+index efdf599d8fe8994cd76923ab566b1fe63706a690..07b7443df1269fb3887c56639ab6e2bf4e6a2e1f 100644
+--- a/gateway/session_transcript.py
++++ b/gateway/session_transcript.py
+@@ -235,3 +235,3 @@ class SessionTranscriptMixin:
+         if tip and tip != session_id:
+-            tip_row = owner_db.get_session(tip)
++            tip_row = owner_db.get_session_metadata(tip)
+             if tip_row is not None and tip_row.get("ended_at") is None:
 diff --git a/gateway/session_viewer_automation.py b/gateway/session_viewer_automation.py
 index d998b5e8d17fa0204950f3ffced63ab77f1a4cbf..8ff62c0c5d1fc5eaf05b066aaf3ddb6009c91ede 100644
 --- a/gateway/session_viewer_automation.py
@@ -55808,6 +55817,131 @@ index 0000000000000000000000000000000000000000..5fc23ec5193fa91c7ff9971057c01e01
 +    gateway_run._start_gateway_housekeeping(StopAfterHour(), runner=runner, interval=0)
 +    assert all(not path.exists() for path in files)
 +    assert all((directory / "logs" / "scratch-prune.log").is_file() for directory in homes)
+diff --git a/tests/gateway/test_session.py b/tests/gateway/test_session.py
+index 7e1b7eaf76d9ee69c2a85ea336280b8692e795d0..2caaa600ecf077328567cf4cda170019de120470 100644
+--- a/tests/gateway/test_session.py
++++ b/tests/gateway/test_session.py
+@@ -1302,3 +1302,3 @@ class TestGatewaySessionDbRecovery:
+ 
+-            def get_session(self, session_id):
++            def get_session_metadata(self, session_id):
+                 return {"id": session_id, "ended_at": None}
+@@ -1641 +1641,115 @@ class TestGatewayRoutingTable:
+ 
++
++
++@pytest.mark.parametrize("read_only", [False, True])
++@pytest.mark.parametrize("ended_at", [None, 0, 123])
++def test_live_compression_tip_does_not_hydrate_context(tmp_path, monkeypatch, read_only, ended_at):
++    """The liveness gate needs only metadata, including on a read-only store."""
++    import sqlite3
++
++    path = tmp_path / "tip.db"
++    with SessionDB(path) as setup:
++        setup.create_session("parent", source="telegram")
++        setup.end_session("parent", "compression")
++        setup.create_session("tip", source="telegram", parent_session_id="parent",
++                             system_prompt="Synthetic context. " * 32768)
++        setup.update_session_tool_names("tip", ["synthetic_tool_" + "x" * 1024])
++        setup.patch_session_model_config("tip", {"synthetic": "y" * 131072})
++        if ended_at is not None:
++            setup._write_sql("UPDATE sessions SET ended_at = ? WHERE id = ?", (ended_at, "tip"))
++    before = path.read_bytes()
++    with SessionDB(path, read_only=read_only) as db:
++        assert db.get_compression_tip("parent") == "tip"
++        # Lineage legitimately reads JSON configuration; isolate only that unchanged resolver.
++        monkeypatch.setattr(db, "get_compression_tip", lambda sid: "tip")
++        store = object.__new__(SessionStore)
++        store._db = db
++        store._entries = {}
++        denied = []
++
++        def authorize(action, table, column, *_):
++            if action == sqlite3.SQLITE_READ and (
++                table == "system_prompts" and column == "prompt"
++                or table == "sessions" and column in {"system_prompt", "tool_names", "model_config"}
++            ):
++                denied.append((table, column))
++                return sqlite3.SQLITE_DENY
++            return sqlite3.SQLITE_OK
++
++        with db._read_ctx() as connection:
++            connection.set_authorizer(authorize)
++        try:
++            assert store._live_compression_child("parent") == ("tip" if ended_at is None else "")
++            assert denied == []
++            # A control proves the real full reader is still blocked by the same authorizer.
++            with pytest.raises(sqlite3.DatabaseError):
++                db.get_session("tip")
++            assert denied
++        finally:
++            with db._read_ctx() as connection:
++                connection.set_authorizer(None)
++    assert path.read_bytes() == before
++
++
++def test_live_compression_tip_keeps_owner_flush_and_errors(tmp_path, monkeypatch):
++    """An unpublished child stays with its parent's store, even with colliding ambient IDs."""
++    import sqlite3
++    from types import SimpleNamespace
++
++    home = tmp_path / "ambient"
++    owner_home = tmp_path / "named"
++    home.mkdir()
++    owner_home.mkdir()
++    monkeypatch.setenv("HERMES_HOME", str(home))
++    store = SessionStore(home / "sessions", GatewayConfig(multiplex_profiles=True))
++    store._profile_home_cache["named"] = owner_home
++    key = "agent:named:telegram:dm:1"
++    store._entries[key] = SimpleNamespace(session_id="parent", session_key=key)
++    store._loaded = True
++    store._save = lambda: None
++    owner = store._db_for_session_id("parent")
++    ambient = store._db
++    assert owner is not ambient
++    try:
++        for db in (owner, ambient):
++            db.create_session("parent", source="telegram")
++            db.end_session("parent", "compression")
++            db.create_session("tip", source="telegram", parent_session_id="parent")
++        ambient.end_session("tip", "closed-ambient")
++        ambient_rows = ambient._read_all("SELECT * FROM sessions ORDER BY id")
++        assert store._owner_key_for_session_id("tip") is None
++        assert store._live_compression_child("parent") == "tip"
++        store.append_to_transcript("parent", {"role": "assistant", "content": "owner continuation"})
++        assert store._entries[key].session_id == "tip"
++        assert [m["content"] for m in owner.get_messages_as_conversation("tip")] == ["owner continuation"]
++        assert ambient.get_messages_as_conversation("tip") == []
++        assert [tuple(r) for r in ambient._read_all("SELECT * FROM sessions ORDER BY id")] == [
++            tuple(r) for r in ambient_rows]
++        assert not store._dirty_transcripts
++
++        # Hold the unchanged resolver seam so only the liveness read can drain the pending delta.
++        store._session_owner_hints["parent"] = key
++        monkeypatch.setattr(owner, "get_compression_tip", lambda sid: "tip")
++        with owner._token_queue_cond:
++            assert owner._token_writer_thread is None
++            owner._token_queue.append(("tip", {"input_tokens": 17, "output_tokens": 5}))
++        assert store._live_compression_child("parent") == "tip"
++        assert not owner._token_queue and not owner._token_writer_busy
++        row = owner._read_one("SELECT input_tokens, output_tokens FROM sessions WHERE id = ?", ("tip",))
++        assert tuple(row) == (17, 5)
++        for tip in ("parent", "missing", None):
++            monkeypatch.setattr(owner, "get_compression_tip", lambda sid, tip=tip: tip)
++            assert store._live_compression_child("parent") == ""
++        monkeypatch.setattr(owner, "get_compression_tip", lambda sid: "tip")
++        for method in ("flush_token_counts", "_read_one"):
++            with monkeypatch.context() as failure:
++                def fail(*args, **kwargs):
++                    raise sqlite3.OperationalError("synthetic metadata failure")
++                failure.setattr(owner, method, fail)
++                with pytest.raises(sqlite3.OperationalError, match="synthetic metadata failure"):
++                    store._live_compression_child("parent")
++        assert not store._dirty_transcripts
++    finally:
++        store.close_all_db_handles()
++    store._db = None
++    assert store._live_compression_child("parent") == ""
 diff --git a/tests/gateway/test_session_a2a.py b/tests/gateway/test_session_a2a.py
 index 2e086503978718b072b203f3366037fe4efef65b..6fb4071d63783a9d5b20a54c1ae61e5f51235056 100644
 --- a/tests/gateway/test_session_a2a.py

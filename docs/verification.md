@@ -1,3 +1,62 @@
+# v0.8.73 — Avoid context hydration in Gateway tip checks
+
+One native production line switches the transcript rerouter's liveness check to
+`get_session_metadata(tip)` on the same parent-owner handle. It uses only row
+existence and `ended_at is None`. Transitive resolution, owner isolation, epoch-zero
+closure, token flush, shared errors, queued order and actual history stay intact.
+Full readers and lineage configuration classification are unchanged. [Regression
+and component measurement](session-metadata-reads.md#gateway-compression-tip-liveness-v0873).
+
+Baseline59 passes. The first fixture setup used unsupported create keywords;
+corrected to existing native update methods before product edit. Meaningful red:
+six SQL hydration failures/60 passes. Two new invariant tests add seven cases,
+covering normal/read-only/live/closed/epoch-zero SQL denial with full-reader
+controls and byte preservation, native parent-owner reroute with unpublished child
+and conflicting ambient IDs, token drainage, missing/same/no tip/DB and shared
+errors. Existing multi-hop/closed-tip/backlog assertions remain. Exported actual
+reverse/base/reapplication: five complete files136 pass, zero failures/skips/
+retries/exclusions,13.4s. File counts: session66,profile24,lineage43,history2,resume1.
+
+Same native synthetic flushed database and real resolver, original AST method with
+original globals/binding versus imported candidate: seven alternating40-call time
+batches median1.111593->0.219958ms; three separate traced40-call batches median
+peak4,028,144->17,848bytes. Prompt1,835,008bytes plus1MiB config value. Equal outputs,
+empty token queues and identical DB/WAL hashes. These are component measurements,
+not whole-Hermes RSS/workload/response/billing savings. Actual imported runtime
+path/hash matches exported manifest.
+
+Borrowed PM-selected3.14.9/deps read-only, separate PM-locked pytest9.1.1/asyncio
+1.3.0, private HOME/HERMES_HOME/TMPDIR, unchanged self-tested scoped Python audit/
+null/process/leading-flag/per-PID negatives/exit7, one CPU/worker. No native full
+suite/pinned whole-source lint/health/OS containment, live provider/model/API/UI/
+service/fleet/original-session/terminal-goal proof. Older PID ancestry and UI
+containment gaps remain; no guard weakening, process retries or extra model call.
+Owner source/config/data/apps/control/quota/ESTOP/pauses/stopped timers untouched.
+
+Pinned basebf0203a(v0.22.5). Two existing upstream targets with nonnull before
+hashes join the kit: Gateway transcript runtime and its existing session tests,
+giving1004. All prior1002 rows/sections exact. Three existing Gateway test files
+join selection; no new public file/dependency/lock/schema/config. Temp-index full-
+index binary-U1 export and installed/reverse/check/base/reapply pass. Read-only
+owner974/1004 match,30 pending normal lead adoption/Linux validation. Driver commits;
+lead handles adoption and publication. Required companion133run131pass/two Linux
+skips,4.417s,exit0. Tracked-only222inventory/currenthashes/exact8paths/emptyrealindex/
+neutralhistoryidentity pass; copyremoved. Native rawwhitespaceclean. Rawrootexit2
+has exactlytwo necessary blank U1patchcontext lines; otherroot whitespaceclean.
+Both exactdirectory/history secret scans pass (203commits,no leaks). Advisor78/79
+accept boundedhandoff, suppliedevidenceonly. Actual exactmandatedCLI and exit0 are
+recorded privately; no independent advisor execution is claimed.
+
+All own native/benchmark/export/companion/release/scan/advisor handles terminal.
+Actual separate-argv Git common/objectspath checks establish ownedclonepaths and
+separate ownerobjectstore before cleanup. Exactowned trial/source/testtools/
+fixtures/home/log/cache/tempindex/benchmark/export tree,pointer/setup removed;
+absence and borrowed resources/protectedhashes verified. Pre-cleanup717380KiB
+is not attributed saving; no ownerbackup created or purged. Finalrecord/hash/
+inventory/scope/index/preservation/whitespace/exactscan refresh precedes driver
+subject-only handoff. Broader standinggoal stays active.
+
+
 # v0.8.72 — Admit optional web index publication before allocation
 
 Six lines in the native extraction-index writer add a destination-volume check

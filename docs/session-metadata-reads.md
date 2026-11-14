@@ -453,3 +453,57 @@ RSS or end-to-end latency. Marker configuration still contributes to allocation.
 No live model, MCP, fleet, service, UI or original owner-session work is performed.
 Owner controls, ESTOP/pauses and stopped timers remain unchanged; adoption and
 Linux/workload proof remain separate.
+
+
+## Gateway compression-tip liveness (v0.8.73)
+
+The Gateway transcript rerouter now calls `get_session_metadata(tip)` on the
+parent's proven owner database. It previously called the full reader and hydrated
+prompt/tool payloads and parsed configuration, although it inspected only whether
+the row exists and `ended_at is None`. The transitive compression resolver still
+runs first and legitimately reads configuration for lineage classification.
+
+This is one production-line change. It preserves the owner handle, resolver,
+return values, pending accounting flush and shared read/flush error propagation.
+An epoch-zero end time remains closed. There is no child-by-ID ambient lookup,
+new fallback or cache. Production registry handles are native `SessionDB` objects;
+the existing backlog fixture now implements the established metadata method.
+The full reader and other context-consuming paths remain unchanged.
+
+Two invariant tests add seven cases to the existing Gateway session file. Six
+cases use real native SQLite databases in normal/read-only modes with live,
+epoch-zero and later closed tips. After resolving the real lineage, only that
+unchanged resolver seam is held fixed while SQLite denies prompt, tool and model
+configuration reads. The original full reader fails at the liveness gate; the
+candidate succeeds and a full-reader control remains denied. Database bytes stay
+unchanged. The other case exercises actual owner routing/reroute with unpublished
+child IDs colliding with a closed ambient tip, preserving ambient rows/messages
+and ordered owner output. It also checks pending token drainage, absent/same/no
+tip, missing DB and shared error propagation. Existing multi-hop, closed-tip and
+backlog assertions remain.
+
+The native baseline passed 59 cases. Initial fixture setup used unsupported
+creation keywords; it was corrected to native tool/config update methods before
+product edit. The meaningful red run has six hydration failures and 60 passes.
+After actual exported reverse/base/reapplication, five complete files pass 136
+cases, zero failures/skips/retries/exclusions, with one worker in 13.4 s. This
+includes profile isolation, canonical history/resume and compression lineage.
+
+Seven alternating forty-call batches compare the original method, extracted with
+its original module globals and binding, with the imported candidate against the
+same flushed native database. Both include real compression-tip resolution. The
+fixture has a 1,835,008-byte prompt and a separate 1 MiB configuration value; three
+separate traced-allocation batches keep tracing overhead out of the latency runs.
+
+| Median component metric | Original | Metadata reader |
+|---|---:|---:|
+| Time per liveness lookup | 1.111593 ms | 0.219958 ms |
+| Peak traced allocations per forty-call batch | 4,028,144 bytes | 17,848 bytes |
+
+Outputs match, token queues remain empty and database/WAL hashes are unchanged.
+These are synthetic component latency and Python allocation measurements, not
+whole-process RSS, end-to-end response time, billed usage or workload savings.
+Tests use isolated Mac PM-selected Python 3.14.9 and synthetic homes; no Gateway,
+service, provider or model is launched. Existing processes need normal idle source
+loading; current read-only comparison finds 974/1004 kit targets matching and 30
+awaiting normal lead adoption/Linux validation. Owner state and controls remain.
