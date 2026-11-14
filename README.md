@@ -10,6 +10,8 @@ Historical source comments and release payloads received [privacy maintenance](d
 
 ## What is included
 
+- [v0.23.0: source-check memory admission](docs/release-notes-v0.23.0.md), waiting for low or unknown RAM within the existing active budget; four controlled native Mac overlap cases used 23.7% less median peak RSS, with longer completion.
+
 - [v0.22.0: bounded Desktop runtime lookups](docs/release-notes-v0.22.0.md), sharing ticket-helper admission and stopping stale generations; four controlled native Mac cases used 22.7% less median peak RSS, with slower request completion.
 
 - [v0.21.0: bounded idle cache cleanup](docs/release-notes-v0.21.0.md), one idle-sweep cleanup job per runner using the existing executor; four native Mac cases reduced concurrent idle callbacks from four to one, with longer cleanup and essentially unchanged RSS.

@@ -1,3 +1,45 @@
+# v0.23.0 — Source-check Python waits for available memory
+
+[User-visible behavior and controlled native evidence](release-notes-v0.23.0.md).
+Old canonical regression launched one child below the floor instead of zero;
+updated queue tests pass 27 cases. Canonical queue/source-channel/legacy selection
+runs 31 cases: 30 pass, one native Windows-only skip. Electron types and scoped
+ESLint pass. A first private-runner configuration blocked the fixture's LOCAL Git
+origin; permitting only the file Git protocol fixed that fixture run, while its
+publication HTTP remained redirected to loopback. No product repair or extra
+regression credit is attributed to this harness issue.
+
+One outstanding polling timer belongs only to the active admission; its delay is
+100 ms or the remaining budget, whichever is shorter. The monotonic
+360000 ms budget begins after its predecessor settles, covering observation,
+memory waiting and execution. Safe integer >=512 MiB admits; unknown/invalid/
+missing/throwing observations wait. Before/after observer checks reject expiry;
+remaining timeout is floored and must be >=1 ms before synchronous execute.
+Existing queue identity, force/channel barriers, errors, parsing and count release
+remain. Pending operations own no poller; success and expiry leave no timer.
+
+Native preflights include actual healthy availability and both overlap arms.
+Final fresh old/current/current/old uses the exact generated installation launcher,
+actual CLI import and cached native source check/Git. Only availability is modeled
+low while a native CLI process lives. A shared audit phase gate blocks Git Popen
+until Node confirms background close, preventing a fifth known process. Initial
+config/cache bytes, final bytes, output and native program/adapter hashes match.
+Source-check overlap yes -> no; median combined peak229.6015625 ->175.2109375MiB
+(-54.390625MiB/-23.6891%), preselected >=5% AND >=10MiB threshold passes.
+Completion including the gate1712.235562 ->1975.051979ms; process count including
+Node3 ->3, zero survivors. No production latency or real pressure claim.
+
+Recursive20ms samples, shared pages, loader/allocator noise, four cases, transient
+children, modeled observation and phase gate limit these results. Two Python+
+Node OR source-check Python+Git+Node plus one excluded ps observer <=4 measured
+known processes; outer orchestration excluded, total sampled RSS including it
+<4GiB. Native8 audit negatives/SQLite positive/base audit AST/generated program
+exact pass, not OS containment. No app launch, owner state/control mutation,
+other machine, inference, actual update/apply or other-OS acceptance.
+Three prior kit targets change plus two upstream tests;1048targets/1043unrelated
+prior rows/bytes/patchsections/P0 remain exact. Mandatory companion, release,
+roundtrip, scans, advisor, preservation and process cleanup gate handoff.
+
 # v0.22.0 — Runtime lookups share Desktop helper admission
 
 [User-visible behavior and controlled native Mac measurements](release-notes-v0.22.0.md).

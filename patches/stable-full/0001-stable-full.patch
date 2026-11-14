@@ -9224,12 +9224,27 @@ index 0000000000000000000000000000000000000000..8e676340c5b6c9c7e29f2715f1fc38b8
 +    drain()
 +  })
 +}
+diff --git a/apps/desktop/electron/updater/checkout-legacy.test.ts b/apps/desktop/electron/updater/checkout-legacy.test.ts
+index 55084b88e857678eb68471fdfa037eb7ac878f35..2586253a4fc53a3ed027c20a793dbdee83a8adac 100644
+--- a/apps/desktop/electron/updater/checkout-legacy.test.ts
++++ b/apps/desktop/electron/updater/checkout-legacy.test.ts
+@@ -4,3 +4,3 @@ import * as path from 'node:path'
+
+-import { expect, it, vi } from 'vitest'
++import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+
+@@ -9,2 +9,5 @@ import { readSourceUpdate, type SourceUpdate } from './checkout-source'
+
++beforeEach(() => { vi.spyOn(process, 'availableMemory').mockReturnValue(536_870_912) })
++afterEach(() => { vi.restoreAllMocks() })
++
+ it('moves a checkout without a source probe to main, but surfaces a broken probe', async (): Promise<void> => {
 diff --git a/apps/desktop/electron/updater/checkout-source-queue.test.ts b/apps/desktop/electron/updater/checkout-source-queue.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..c8523a21864b696ee3c9335d2d118a6668ce94c5
+index 0000000000000000000000000000000000000000..9c1c04bdbcc28f3868f152add72133fff8bf43e3
 --- /dev/null
 +++ b/apps/desktop/electron/updater/checkout-source-queue.test.ts
-@@ -0,0 +1,224 @@
+@@ -0,0 +1,451 @@
 +import assert from 'node:assert/strict'
 +import type * as ChildProcess from 'node:child_process'
 +import fs from 'node:fs'
@@ -9243,7 +9258,7 @@ index 0000000000000000000000000000000000000000..c8523a21864b696ee3c9335d2d118a66
 +interface Execution {
 +  command: string
 +  args: string[]
-+  options: { cwd: string; env: NodeJS.ProcessEnv }
++  options: { cwd: string; env: NodeJS.ProcessEnv; timeout: number; maxBuffer: number; windowsVerbatimArguments: boolean }
 +  resolve: (value: { stdout: string; stderr: string }) => void
 +  reject: (error: Error) => void
 +}
@@ -9265,6 +9280,7 @@ index 0000000000000000000000000000000000000000..c8523a21864b696ee3c9335d2d118a66
 +const response = (branch = 'main') => ({ stdout: JSON.stringify({ supported: true, behind: -1, branch, commits: [] }), stderr: '' })
 +
 +beforeEach(() => {
++  vi.spyOn(process, 'availableMemory').mockReturnValue(536_870_912)
 +  assert.equal(executions.length, 0)
 +  root = fs.mkdtempSync(path.join(os.tmpdir(), 'source-check-queue-'))
 +  probe = { python: 'synthetic-python', git: 'synthetic-git', updateRoot: root, hermesHome: path.join(root, 'profile') }
@@ -9280,6 +9296,7 @@ index 0000000000000000000000000000000000000000..c8523a21864b696ee3c9335d2d118a66
 +    for (const execution of executions.splice(0)) { execution.resolve(response()) }
 +  }
 +
++  vi.restoreAllMocks()
 +  vi.unstubAllEnvs()
 +  fs.rmSync(root, { recursive: true, force: true })
 +})
@@ -9306,6 +9323,13 @@ index 0000000000000000000000000000000000000000..c8523a21864b696ee3c9335d2d118a66
 +})
 +
 +async function settle(calls: Promise<unknown>[]) {
++  vi.mocked(process.availableMemory).mockReturnValue(536_870_912)
++
++  if (vi.isFakeTimers()) {
++    await vi.runOnlyPendingTimersAsync()
++    vi.useRealTimers()
++  }
++
 +  for (let i = 0; i < 300; i++) {
 +    await flush()
 +
@@ -9454,8 +9478,241 @@ index 0000000000000000000000000000000000000000..c8523a21864b696ee3c9335d2d118a66
 +    assert.equal(await legacy, null)
 +  } finally { await settle(calls) }
 +})
++
++
++test('low memory delays one shared check and deducts waiting from its execution budget', async () => {
++  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
++  vi.mocked(process.availableMemory).mockReturnValue(536_870_911)
++  const calls = [readSourceUpdate(probe), readSourceUpdate({ ...probe })]
++  calls.forEach(call => { void call.catch(() => {}) })
++
++  try {
++    await flush()
++    assert.equal(executions.length, 0, 'source-check Python must not start below the memory floor')
++    assert.equal(vi.getTimerCount(), 1, 'coalesced callers share one admission poll')
++    await vi.advanceTimersByTimeAsync(200)
++    assert.equal(executions.length, 0)
++    vi.mocked(process.availableMemory).mockReturnValue(536_870_912)
++    await vi.advanceTimersByTimeAsync(100)
++    assert.equal(executions.length, 1)
++    const execution = executions.shift()!
++    assert.equal(execution.options.timeout, 359_700)
++    assert.equal(execution.options.maxBuffer, 1024 * 1024)
++    assert.equal(execution.options.windowsVerbatimArguments, false)
++    execution.resolve(response('admitted'))
++    const [first, second] = await Promise.all(calls)
++    assert.equal(first.branch, 'admitted')
++    assert.equal(second.branch, 'admitted')
++    assert.notEqual(first, second)
++    assert.equal(vi.getTimerCount(), 0)
++  } finally {
++    vi.mocked(process.availableMemory).mockReturnValue(536_870_912)
++    await vi.runOnlyPendingTimersAsync()
++    vi.useRealTimers()
++    await settle(calls)
++  }
++})
++
++
++const keep = <T>(call: Promise<T>): Promise<T> => { void call.catch(() => {});
++
++ return call }
++
++test.each([undefined, Number.NaN, Number.POSITIVE_INFINITY, -1, 0, 1.5, Number.MAX_SAFE_INTEGER + 1, '536870912', true])(
++  'unknown or invalid memory %s waits without spawning and recovers',
++  async value => {
++    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
++    vi.mocked(process.availableMemory).mockReturnValue(value as number)
++    const calls = [keep(readSourceUpdate(probe))]
++
++    try {
++      await flush()
++      assert.equal(executions.length, 0)
++      assert.equal(vi.getTimerCount(), 1)
++      vi.mocked(process.availableMemory).mockReturnValue(536_870_912)
++      await vi.advanceTimersByTimeAsync(100)
++      assert.equal(executions.length, 1)
++      assert.equal(executions[0].options.timeout, 359_900)
++      executions.shift()!.resolve(response('recovered'))
++      assert.equal((await calls[0]).branch, 'recovered')
++      assert.equal(vi.getTimerCount(), 0)
++    } finally { await settle(calls) }
++  }
++)
++
++test('a throwing memory observer waits then recovers without a second execution', async () => {
++  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
++  vi.mocked(process.availableMemory).mockImplementation(() => { throw new Error('unavailable observation') })
++  const calls = [keep(readSourceUpdate(probe))]
++
++  try {
++    await flush()
++    assert.equal(executions.length, 0)
++    vi.mocked(process.availableMemory).mockReturnValue(536_870_912)
++    await vi.advanceTimersByTimeAsync(100)
++    assert.equal(executions.length, 1)
++    executions.shift()!.resolve(response())
++    await calls[0]
++    assert.equal(vi.getTimerCount(), 0)
++  } finally { await settle(calls) }
++})
++
++test('a missing memory API waits instead of launching Python', async () => {
++  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
++  const descriptor = Object.getOwnPropertyDescriptor(process, 'availableMemory')!
++  Object.defineProperty(process, 'availableMemory', { ...descriptor, value: undefined })
++  const calls = [keep(readSourceUpdate(probe))]
++
++  try {
++    await flush()
++    assert.equal(executions.length, 0)
++    assert.equal(vi.getTimerCount(), 1)
++    Object.defineProperty(process, 'availableMemory', descriptor)
++    await vi.advanceTimersByTimeAsync(100)
++    assert.equal(executions.length, 1)
++    executions.shift()!.resolve(response())
++    await calls[0]
++    assert.equal(vi.getTimerCount(), 0)
++  } finally {
++    Object.defineProperty(process, 'availableMemory', descriptor)
++    await settle(calls)
++  }
++})
++
++test.each([360_000, 360_001, 359_999.5])('a healthy observer returning too late at %s ms cannot start a child', async elapsed => {
++  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
++  let clock = 0
++  vi.spyOn(performance, 'now').mockImplementation(() => clock)
++  vi.mocked(process.availableMemory).mockImplementation(() => { clock = elapsed;
++
++ return 536_870_912 })
++  const calls = [keep(readSourceUpdate(probe))]
++
++  try {
++    await assert.rejects(calls[0], /timed out waiting for available memory/)
++    assert.equal(executions.length, 0)
++    assert.equal(vi.getTimerCount(), 0)
++  } finally { await settle(calls) }
++})
++
++test('the last full millisecond remains a positive bounded process timeout', async () => {
++  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
++  let clock = 0
++  vi.spyOn(performance, 'now').mockImplementation(() => clock)
++  vi.mocked(process.availableMemory).mockImplementation(() => { clock = 359_999;
++
++ return 536_870_912 })
++  const calls = [keep(readSourceUpdate(probe))]
++
++  try {
++    await flush()
++    assert.equal(executions.length, 1)
++    assert.equal(executions[0].options.timeout, 1, 'zero would disable the process timeout')
++    executions.shift()!.resolve(response())
++    await calls[0]
++    assert.equal(vi.getTimerCount(), 0)
++  } finally { await settle(calls) }
++})
++
++test.each([0, undefined])('persistent memory %s expires without another observation or spawn and releases the next check', async value => {
++  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
++  let clock = 0
++  vi.spyOn(performance, 'now').mockImplementation(() => clock)
++  vi.mocked(process.availableMemory).mockReturnValue(value as number)
++  const calls = [keep(readSourceUpdate(probe)), keep(readSourceUpdate({ ...probe, force: true }))]
++
++  try {
++    await flush()
++    assert.equal(executions.length, 0)
++    assert.equal(vi.getTimerCount(), 1, 'pending operations do not own admission pollers')
++    const observations = vi.mocked(process.availableMemory).mock.calls.length
++    clock = 360_000
++    vi.mocked(process.availableMemory).mockReturnValue(536_870_912)
++    await vi.advanceTimersByTimeAsync(100)
++    await assert.rejects(calls[0], /timed out waiting for available memory/)
++    assert.equal(vi.mocked(process.availableMemory).mock.calls.length, observations + 1, 'expired check must not observe again')
++    assert.equal(executions.length, 1)
++    const execution = executions.shift()!
++    assert.ok(execution.args.includes('--force'))
++    assert.equal(execution.options.timeout, 360_000)
++    execution.resolve(response('next'))
++    assert.equal((await calls[1]).branch, 'next')
++    assert.equal(vi.getTimerCount(), 0)
++  } finally { await settle(calls) }
++})
++
++test.each([false, true])('predecessor failure %s leaves the successor a fresh active budget after long queue waiting', async failed => {
++  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
++  const calls = [keep(readSourceUpdate(probe)), keep(readSourceUpdate({ ...probe, force: true }))]
++
++  try {
++    await flush()
++    assert.equal(executions.length, 1)
++    const first = executions.shift()!
++    vi.mocked(process.availableMemory).mockReturnValue(0)
++    await vi.advanceTimersByTimeAsync(400_000)
++    assert.equal(vi.getTimerCount(), 0, 'queued work must not start polling')
++
++    if (failed) { first.reject(new Error('predecessor execution failed')) }
++    else { first.resolve(response('first')) }
++
++    await flush()
++    assert.equal(executions.length, 0)
++    assert.equal(vi.getTimerCount(), 1)
++    vi.mocked(process.availableMemory).mockReturnValue(536_870_912)
++    await vi.advanceTimersByTimeAsync(100)
++    assert.equal(executions.length, 1)
++    const next = executions.shift()!
++    assert.equal(next.options.timeout, 359_900)
++    next.resolve(response('second'))
++    const results = await Promise.allSettled(calls)
++    assert.equal(results[0].status, failed ? 'rejected' : 'fulfilled')
++    assert.equal((await calls[1]).branch, 'second')
++    assert.equal(vi.getTimerCount(), 0)
++  } finally { await settle(calls) }
++})
++
++test('waiting admission retains captured arguments and environment', async () => {
++  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
++  vi.mocked(process.availableMemory).mockReturnValue(0)
++  vi.stubEnv('LEGION_SYNTHETIC_CHECK_IDENTITY', 'original')
++  const selected = { ...probe, branch: 'original-branch' }
++  const calls = [keep(readSourceUpdate(selected))]
++
++  try {
++    await flush()
++    selected.branch = 'changed-branch'
++    selected.updateRoot = '/changed-root'
++    vi.stubEnv('LEGION_SYNTHETIC_CHECK_IDENTITY', 'changed')
++    vi.mocked(process.availableMemory).mockReturnValue(536_870_912)
++    await vi.advanceTimersByTimeAsync(100)
++    const execution = executions.shift()!
++    assert.equal(execution.options.cwd, probe.updateRoot)
++    assert.equal(execution.options.env.LEGION_SYNTHETIC_CHECK_IDENTITY, 'original')
++    assert.ok(execution.args.includes('original-branch'))
++    assert.ok(!execution.args.includes('changed-branch'))
++    execution.resolve(response())
++    await calls[0]
++    assert.equal(vi.getTimerCount(), 0)
++  } finally { await settle(calls) }
++})
+diff --git a/apps/desktop/electron/updater/checkout-source.test.ts b/apps/desktop/electron/updater/checkout-source.test.ts
+index 1c06f6b11a57e5123cba6e837c8a8824d90b9e84..ecd4803a5a61e448f2b0c97c412b61d9e6272bb8 100644
+--- a/apps/desktop/electron/updater/checkout-source.test.ts
++++ b/apps/desktop/electron/updater/checkout-source.test.ts
+@@ -8,3 +8,3 @@ import { promisify } from 'node:util'
+
+-import { expect, it, vi } from 'vitest'
++import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+
+@@ -16,2 +16,5 @@ import { readSourceUpdate, type SourceUpdate } from './checkout-source'
+
++beforeEach(() => { vi.spyOn(process, 'availableMemory').mockReturnValue(536_870_912) })
++afterEach(() => { vi.restoreAllMocks() })
++
+ const execute: typeof execFile.__promisify__ = promisify(execFile)
 diff --git a/apps/desktop/electron/updater/checkout-source.ts b/apps/desktop/electron/updater/checkout-source.ts
-index c93a53e419252ff7d13d44cfd79abd9cdcee85a0..ce4d95fec6dd14b5fdfb6827fe38ae90ba5eec0b 100644
+index c93a53e419252ff7d13d44cfd79abd9cdcee85a0..ce47890fe4f37dae777ac122c82eadea7d804040 100644
 --- a/apps/desktop/electron/updater/checkout-source.ts
 +++ b/apps/desktop/electron/updater/checkout-source.ts
 @@ -29,2 +29,10 @@ const execute: typeof execFile.__promisify__ = promisify(execFile)
@@ -9469,7 +9726,7 @@ index c93a53e419252ff7d13d44cfd79abd9cdcee85a0..ce4d95fec6dd14b5fdfb6827fe38ae90
 +const MAX_PENDING_SOURCE_CHECKS = 256
 +
  /** The two channels a source checkout can select from Settings. */
-@@ -112,16 +120,50 @@ export async function readSourceUpdate(probe: SourceUpdateProbe): Promise<Source
+@@ -112,16 +120,69 @@ export async function readSourceUpdate(probe: SourceUpdateProbe): Promise<Source
 
 -  const result: { stdout: string; stderr: string } = await execute(
 -    viaCmd ? (process.env.ComSpec ?? 'cmd.exe') : command,
@@ -9483,8 +9740,6 @@ index c93a53e419252ff7d13d44cfd79abd9cdcee85a0..ce4d95fec6dd14b5fdfb6827fe38ae90
 -      timeout: 360000,
 -      maxBuffer: 1024 * 1024,
 -      windowsVerbatimArguments: viaCmd
--    })
--  )
 +  const file = viaCmd ? (process.env.ComSpec ?? 'cmd.exe') : command
 +
 +  const argv = viaCmd
@@ -9504,18 +9759,38 @@ index c93a53e419252ff7d13d44cfd79abd9cdcee85a0..ce4d95fec6dd14b5fdfb6827fe38ae90
 +    sourceCheckCount++
 +
 +    // Failed checks must not block later independent requests.
-+    const response = (flight?.response ?? Promise.resolve()).catch(() => {}).then(() => execute(
-+      file,
-+      argv,
-+      hiddenWindowsChildOptions({
-+        cwd,
-+        env,
-+        encoding: 'utf8',
-+        timeout: 360000,
-+        maxBuffer: 1024 * 1024,
-+        windowsVerbatimArguments: viaCmd
-+      })
-+    ))
++    const response = (flight?.response ?? Promise.resolve()).catch(() => {}).then(async () => {
++      const deadline = performance.now() + 360000
++
++      while (performance.now() < deadline) {
++        let available = 0
++
++        try { available = process.availableMemory() } catch { /* Unknown memory waits within the same budget. */ }
++        const remaining = Math.floor(deadline - performance.now())
++
++        if (remaining < 1) { break }
++
++        if (Number.isSafeInteger(available) && available >= 536_870_912) {
++          return execute(
++            file,
++            argv,
++            hiddenWindowsChildOptions({
++              cwd,
++              env,
++              encoding: 'utf8',
++              timeout: remaining,
++              maxBuffer: 1024 * 1024,
++              windowsVerbatimArguments: viaCmd
++            })
++          )
++        }
++
++        await new Promise(resolve => setTimeout(resolve, Math.min(100, remaining)))
++      }
++
++      throw new Error('Source update check timed out waiting for available memory.')
+     })
+-  )
 +
 +    const next = { key: probe.force || probe.setChannel ? null : key, response }
 +
@@ -91378,7 +91653,7 @@ index 44d25bc19bae30f9665f7c418a2dcf102e6fbccb..ade136286e3e6511ce2962243555153e
 +| `lazy` | bool | both | Register the server's tools from the on-disk schema cache at startup and only spawn/connect it on the first tool call (default: `false`, or `true` for eligible stdio servers under `mcp.memory_saving`). Needs one prior live connect to fill the cache; a missing or stale entry falls back to the normal eager connect. Status surfaces show the server as `lazy` with its cached tool count until first use |
  | `idle_timeout_seconds` | number | stdio | Optional stdio server recycle after idle time (`0` disables). May also live under a `lifecycle:` mapping |
 diff --git a/website/docs/user-guide/desktop.md b/website/docs/user-guide/desktop.md
-index 2021ee43feb046d980a57b30d68a6e3e2c98d616..c92d202f40252e7983d4bc81f55d0570c022457b 100644
+index 2021ee43feb046d980a57b30d68a6e3e2c98d616..6004dcccfb5c03299a590904bb4d0a7c6f2b7dee 100644
 --- a/website/docs/user-guide/desktop.md
 +++ b/website/docs/user-guide/desktop.md
 @@ -250,2 +250,52 @@ The pre-window reader is a small YAML subset, not the full parser the rest of He
@@ -91434,6 +91709,29 @@ index 2021ee43feb046d980a57b30d68a6e3e2c98d616..c92d202f40252e7983d4bc81f55d0570
 +or OS-wide memory. A child that has not closed continues to hold its slot.
 +
  ### Settings & onboarding
+@@ -686,2 +736,22 @@ bootstrap marker does not force installation when that launcher works.
+
++Source update checks share one active operation and up to 256 pending operations
++per Electron process. Adjacent identical ordinary requests join the same running
++check; force checks and channel changes remain separate FIFO barriers. Completed
++results are not retained by this queue; Python keeps its existing cache policy.
++
++Before starting source-check Python, Desktop requires a safe integer of at least
++512 MiB from the execution host's `process.availableMemory()` snapshot. Low,
++missing, throwing or invalid observations wait. The active admission owns one
++outstanding polling timer, normally 100 ms and shortened to the remaining budget.
++Queued operations do not create their own pollers. Memory observations, waiting and execution share a six-minute budget
++that starts after the previous operation settles; time behind earlier checks is
++outside that budget. Waiting reduces the remaining process timeout. Expiry while
++waiting says the source check timed out waiting for available memory; ordinary
++execution errors keep their existing reasons. No automatic retry is added.
++
++This is an observation, not reserved memory or a global helper/RAM limit. Checks
++can take longer or time out when memory stays low or cannot be read. It covers
++source-update checks only; installation/backend selection, actual update/apply,
++other helper entrypoints and other Electron processes keep their own policies.
++
+ On Linux, Chromium's own errors go to `HERMES_HOME/logs/desktop-chromium.log`, and a crash of the shell itself leaves a minidump under the app's `Crashpad/` directory (inside Electron's user-data directory, next to `connection.json`). If the window vanishes with `SIGTRAP` in the journal, the `FATAL:` line in that log names the check that fired; attach it to the bug report. Nothing is uploaded.
 diff --git a/website/docs/user-guide/features/cron.md b/website/docs/user-guide/features/cron.md
 index 6e315619f22387697b0aaad59cd4afb60ee54435..35153492989e4b6d11bad6a0d81042ac6cca8782 100644
 --- a/website/docs/user-guide/features/cron.md
