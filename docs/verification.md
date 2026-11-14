@@ -1,3 +1,55 @@
+# v0.8.61 — Preserve named-profile links through native case aliases
+
+The shared recall link helper replaces one validated candidate's resolved-string
+comparison with `samefile(home)`. Native case-insensitive directory aliases can
+have different resolved spellings despite identical filesystem identity. Before
+repair a work-profile read emitted a bare link, which reopened review content
+after switching profiles with a colliding ID. Actual Mac Python 3.14.9 reproduces
+this with native SQLite stores and no model request.
+
+Original link-file baseline: 24 pass/one known FileExistsError before assertion.
+A conditional fixture uses the existing native case alias, or creates the original
+symlink when absent, and asserts same-file identity. Fixture-only red now reaches
+the canonical-link assertion. Extended red: six intended failures/25 controls.
+The helper plus five registered-handler modes require canonical work qualification
+and original content after switching to review. Main/WAL byte preservation and
+specifically injected runtime-identity OSError fallback pass. Validation, existence,
+default-root, explicit profile precedence and the existing quiet failure boundary
+remain. No broader normalization, schema/query/provider/config/control change.
+
+Seven selected native files pass 221, zero failures/skips/deselections/retries,
+38.8 s, one worker. The prior case-alias exclusion is gone:
+
+```sh
+bash scripts/run_tests.sh -j 1 \
+  tests/tools/test_session_search_title_bounds.py \
+  tests/tools/test_session_search_scoped_query.py \
+  tests/tools/test_session_search_link_scope.py \
+  tests/tools/test_session_search_readonly.py \
+  tests/tools/test_session_search.py \
+  tests/tools/test_session_search_safe_window.py \
+  tests/tools/test_session_search_fleet_scope.py
+```
+
+Reapplied link-file checks pass 31 again, overlapping the 221. Actual Mac filesystem
+case alias is exercised; the retained symlink branch needs a case-sensitive host
+for fresh execution. This is not a full native-suite or fresh Linux result. Prior
+two HTTP/four PID cases are not selected or newly validated. No UI/model/fleet/
+service/process-wait or owner state/control/quota/stop/timer changes.
+
+Committed runtime/dependencies borrowed read-only, separate native PM locked
+pytest 9.1.1/pytest-asyncio 1.3.0, same scoped audit guard/null/scratch/wrapper checks,
+fresh negative/exit-status-7 selfchecks, one CPU/worker, no retries. OS/native-
+extension containment remains unproven; no runtime harness correction needed.
+
+Export retains all 998 paths, pinned v0.22.5 base/before hashes and native selection
+bytes. Only existing search runtime/link-test after hashes change. Installed,
+reverse-to-base and reapply checks pass all 998. Companion suite: 124 run,
+122 pass, two Linux-only skips, 3.886 s. Native changed-source and raw root
+whitespace pass. The tracked-only 222-file release inventory passes. Exact
+Gitleaks directory/history scans exit zero with no leaks; history covers 191
+commits. Final refresh follows owned cleanup. See [behavior and limits](session-recall.md#case-alias-profile-links-v0861).
+
 # v0.8.60 — Keep recall usable with nonfinite start timestamps
 
 The existing `_coerce_started_ts` helper returns None for numeric conversion

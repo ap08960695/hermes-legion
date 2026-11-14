@@ -74695,10 +74695,10 @@ index 0000000000000000000000000000000000000000..2139525e1f067c32f99f381f633fc546
 +    assert json.loads(session_search(query="x", scope="fleet", profile="worker"))["success"] is False
 diff --git a/tests/tools/test_session_search_link_scope.py b/tests/tools/test_session_search_link_scope.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..445ce662475553240426b877f7d81943b39380d6
+index 0000000000000000000000000000000000000000..b60e1c68539c6896f7191bd1b52764b2bc5f2e3a
 --- /dev/null
 +++ b/tests/tools/test_session_search_link_scope.py
-@@ -0,0 +1,202 @@
+@@ -0,0 +1,261 @@
 +"""Session links resolve in the caller's fleet without exposing other stores."""
 +
 +import json
@@ -74880,13 +74880,72 @@ index 0000000000000000000000000000000000000000..445ce662475553240426b877f7d81943
 +    assert result["results"][0]["link"] == "@session:work/s_shared"
 +
 +
-+def test_context_profile_symlink_uses_a_canonical_link_name(two_fleets):
-+    roots, _, _ = two_fleets
-+    alias = roots[1] / "profiles/WoRk"
-+    alias.symlink_to(roots[1] / "profiles/work", target_is_directory=True)
++@pytest.mark.parametrize("mode", ["link", "read", "browse", "discover", "scoped", "page"])
++def test_context_profile_symlink_uses_a_canonical_link_name(two_fleets, mode):
++    from pathlib import Path
++    from tools.registry import registry
++
++    roots, databases, current = two_fleets
++    alias, target = roots[1] / "profiles/WoRk", roots[1] / "profiles/work"
++    if not alias.exists():
++        alias.symlink_to(target, target_is_directory=True)
++    assert alias.samefile(target)
++    paths = [databases[("fleet-b", name)][0].db_path for name in ("work", "review")]
++    paths += [Path(str(path) + "-wal") for path in paths]
++    before = {path: path.read_bytes() for path in paths if path.exists()}
++    handler = registry.get_entry("session_search").handler
 +    token = set_hermes_home_override(alias)
 +    try:
-+        assert _session_link("s_shared") == "@session:work/s_shared"
++        try:
++            if mode == "link":
++                assert _session_link("s_shared") == "@session:work/s_shared"
++                return
++            args = {
++                "read": {"session_id": "s_shared"},
++                "browse": {},
++                "discover": {"query": "fleet"},
++                "scoped": {"session_id": "s_shared", "query": "fleet"},
++                "page": {"session_id": "s_shared", "around_message_id": databases[("fleet-b", "work")][1],
++                         "content_offset": 0},
++            }[mode]
++            original = json.loads(handler(args, db=current))
++            assert original["success"] is True
++            entry = original["results"][0] if mode in ("browse", "discover") else original
++            link = entry["link"]
++        finally:
++            reset_hermes_home_override(token)
++        review, _ = databases[("fleet-b", "review")]
++        token = set_hermes_home_override(roots[1] / "profiles/review")
++        try:
++            reopened = json.loads(handler({"session_id": link}, db=review))
++        finally:
++            reset_hermes_home_override(token)
++        assert reopened["success"] is True
++        assert _text(reopened) == "fleet-b-work"
++        assert link == "@session:work/s_shared"
++    finally:
++        assert {path: path.read_bytes() for path in paths if path.exists()} == before
++
++
++def test_context_profile_identity_error_keeps_unqualified_fallback(two_fleets, monkeypatch):
++    from pathlib import Path
++
++    roots, _, _ = two_fleets
++    alias, target = roots[1] / "profiles/WoRk", roots[1] / "profiles/work"
++    if not alias.exists():
++        alias.symlink_to(target, target_is_directory=True)
++    assert alias.samefile(target)
++    native_samefile = Path.samefile
++
++    def unavailable(path, other):
++        if path == target and other == alias:
++            raise OSError("synthetic identity observation unavailable")
++        return native_samefile(path, other)
++
++    monkeypatch.setattr(Path, "samefile", unavailable)
++    token = set_hermes_home_override(alias)
++    try:
++        assert _session_link("s_shared") == "@session:s_shared"
 +    finally:
 +        reset_hermes_home_override(token)
 +
@@ -81683,7 +81742,7 @@ index c6f442809329b97ad43019e5451a3fe807c56187..e3c6777a565fc3113367ceb52e600880
 +    omitted = total - _MAX_OUTPUT_CHARS
      return joined[:_MAX_OUTPUT_CHARS] + f"\n… [{omitted:,} output chars truncated{hint}]"
 diff --git a/tools/session_search_tool.py b/tools/session_search_tool.py
-index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..ac4cdd9856b96581b30446e7c4b3e88a7db41319 100644
+index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..5be67338605c9ae95bc0640bf4fb83665bfcbd36 100644
 --- a/tools/session_search_tool.py
 +++ b/tools/session_search_tool.py
 @@ -10,5 +10,8 @@ No LLM calls — every shape returns actual DB messages.
@@ -81799,7 +81858,7 @@ index de6b29e902b1d884cf5601250a463f7c6d3ca0b4..ac4cdd9856b96581b30446e7c4b3e88a
 +        candidate = normalize_profile_name(home.name)
 +        validate_profile_name(candidate)
 +        if (profile_exists(candidate, home=home)
-+                and get_profile_dir(candidate, home=home).resolve() == home.resolve()):
++                and get_profile_dir(candidate, home=home).samefile(home)):
 +            return candidate
 +        return ""
      name = (profile or "").strip() or _quiet(_active, "", "get_active_profile_name failed for session link")

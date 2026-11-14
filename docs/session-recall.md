@@ -113,3 +113,40 @@ That case fails before its behavior assertion and remains unchanged/unverified,
 not a green full-native-suite result. See the [verification record](verification.md)
 for exact selection, export and release gates. Original-session continuation,
 owner-process adoption, UI, Linux parity and workload gains remain separate.
+
+
+## Case-alias profile links (v0.8.61)
+
+On a case-insensitive filesystem, `profiles/WoRk` and `profiles/work` can be the
+same directory while their resolved path strings differ. Recall then failed to
+recognize the canonical named profile and emitted an unqualified session link.
+After switching to another profile containing the same session ID, reopening that
+link could show the other conversation.
+
+The existing validated profile candidate now uses `Path.samefile` to confirm
+filesystem identity instead of comparing resolved strings. Profile validation,
+existence checks, default-root handling, explicit-profile precedence and the
+existing bare-link fallback when identity cannot be observed remain. This is a
+named-profile leaf-path repair, not a general home-path normalization change.
+No search, schema, payload, provider, configuration or ownership rule is added.
+
+Actual native Mac Python 3.14.9 reproduces same-directory/different-string identity
+and the incorrect work-to-review reopening using synthetic colliding IDs. The
+old fixture first fails during symlink creation. Its portable setup now creates
+the original symlink only when the case alias does not already exist, then asserts
+same-file identity. With original runtime it reaches the intended canonical-link
+assertion. Six red cases cover that helper and registered read, browse, discovery,
+scoped-query and message-page links reopening the wrong conversation. Twenty-five
+controls pass before repair, including an identity-observation error fallback.
+
+After repair all 31 link cases pass. The complete seven-file selected search run
+passes 221, zero failures/skips/deselections/retries; the old case-alias exclusion
+is removed. Reapplied link cases pass 31 again. Five handler modes require the
+canonical work-qualified link and original work content after switching to review;
+work/review main/WAL bytes remain unchanged. The error is injected specifically at
+the runtime comparison, after the fixture's real identity check.
+
+This Mac run exercises the native case-alias branch. The fixture also retains its
+symlink branch for case-sensitive filesystems, but fresh Linux execution remains
+separate. Source adoption, owner conversation continuation, live UI and workload
+measurements are not established by this synthetic native proof.

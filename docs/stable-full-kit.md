@@ -10,6 +10,14 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Case-alias profile links (v0.8.61)
+
+Recall compares the validated named-profile directory with its context home using
+filesystem identity, so native case aliases retain their canonical profile label.
+See [registered-handler reopening checks](session-recall.md#case-alias-profile-links-v0861).
+Only existing search runtime/link-regression after hashes change. All 998 targets,
+before hashes, pinned base and native test-selection bytes remain.
+
 ## Nonfinite recall timestamps (v0.8.60)
 
 The existing session-start conversion helper returns its None sentinel when a
