@@ -77448,10 +77448,10 @@ index 0000000000000000000000000000000000000000..13b3fa1891aa2a957b7b1eb5744cfec3
 +    asyncio.run(scenario())
 diff --git a/tests/tools/test_vision_analysis_content_cache.py b/tests/tools/test_vision_analysis_content_cache.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..030de277657ac8d0149580ab459923b567343a22
+index 0000000000000000000000000000000000000000..4cab347b7d111c40033f8295a9105133b19b2a27
 --- /dev/null
 +++ b/tests/tools/test_vision_analysis_content_cache.py
-@@ -0,0 +1,113 @@
+@@ -0,0 +1,227 @@
 +import asyncio
 +import json
 +from unittest.mock import AsyncMock
@@ -77565,6 +77565,120 @@ index 0000000000000000000000000000000000000000..030de277657ac8d0149580ab459923b5
 +
 +        monkeypatch.setattr(Path, "open", fail_open)
 +    assert vt._analysis_cache_key(image, "q", "m", {}) is None
++
++
++def _retained_charge():
++    import sys
++
++    return sum(sys.getsizeof(part) for key, entry in vt._ANALYSIS_CACHE.items()
++               for part in (key, entry, *entry, *entry[1]))
++
++
++@pytest.mark.parametrize("character", ["x", "ก", "🙂"])
++@pytest.mark.parametrize("with_note", [False, True])
++def test_content_cache_obeys_byte_count_and_lru_bounds(image, monkeypatch, character, with_note):
++    import sys
++    import threading
++    from concurrent.futures import ThreadPoolExecutor
++
++    now = [1000.0]
++    monkeypatch.setattr(vt.time, "monotonic", lambda: now[0])
++    keys = [f"{i:064x}" for i in range(3)]
++    value = (character * 48, character * 12 if with_note else None)
++    entry = (now[0], value)
++    charge = sum(sys.getsizeof(part) for part in (keys[0], entry, *entry, *value))
++    monkeypatch.setattr(vt, "_ANALYSIS_CACHE_MAX_BYTES", 2 * charge, raising=False)
++    vt._analysis_cache_put(keys[0], value)
++    vt._analysis_cache_put(keys[1], value)
++    assert _retained_charge() == 2 * charge
++    assert vt._analysis_cache_get(keys[0]) is value
++    vt._analysis_cache_put(keys[2], value)
++    assert list(vt._ANALYSIS_CACHE) == [keys[0], keys[2]]
++    assert _retained_charge() <= 2 * charge
++    smaller = (character, None)
++    vt._analysis_cache_put(keys[0], smaller)
++    assert vt._analysis_cache_get(keys[0]) is smaller
++    assert list(vt._ANALYSIS_CACHE) == [keys[2], keys[0]]
++    vt._analysis_cache_put(keys[0], (character * 4096, value[1]))
++    assert list(vt._ANALYSIS_CACHE) == [keys[2]]
++    assert vt._analysis_cache_get(keys[2]) is value
++
++    vt._ANALYSIS_CACHE.clear()
++    monkeypatch.setattr(vt, "_ANALYSIS_CACHE_MAX_BYTES", charge - 1)
++    vt._analysis_cache_put(keys[0], value)
++    assert not vt._ANALYSIS_CACHE
++    monkeypatch.setattr(vt, "_ANALYSIS_CACHE_MAX_BYTES", charge)
++    vt._analysis_cache_put(keys[0], value)
++    assert _retained_charge() == charge
++    assert vt._analysis_cache_get(keys[0]) is value
++    now[0] += vt._ANALYSIS_CACHE_TTL
++    assert vt._analysis_cache_get(keys[0]) is None
++    assert not vt._ANALYSIS_CACHE
++
++    monkeypatch.setattr(vt, "_ANALYSIS_CACHE_MAX_BYTES", 10**8)
++    monkeypatch.setattr(vt, "_ANALYSIS_CACHE_MAX", 2)
++    for key in keys[:2]:
++        vt._analysis_cache_put(key, value)
++    assert vt._analysis_cache_get(keys[0]) is value
++    vt._analysis_cache_put(keys[2], value)
++    assert list(vt._ANALYSIS_CACHE) == [keys[0], keys[2]]
++    monkeypatch.setattr(vt, "_ANALYSIS_CACHE_MAX_BYTES", 2 * charge)
++    start = threading.Barrier(4)
++
++    def produce(worker):
++        start.wait(timeout=3)
++        for i in range(8):
++            vt._analysis_cache_put(f"{worker * 8 + i + 10:064x}", value)
++            with vt._ANALYSIS_CACHE_LOCK:
++                assert len(vt._ANALYSIS_CACHE) <= 2
++                assert _retained_charge() <= 2 * charge
++
++    with ThreadPoolExecutor(4) as pool:
++        list(pool.map(produce, range(4)))
++
++
++@pytest.mark.parametrize("character", ["x", "ก", "🙂"])
++@pytest.mark.parametrize("entrypoint", ["direct", "registered"])
++def test_oversized_analysis_returns_fresh_and_preserves_small_hit(image, monkeypatch, character, entrypoint):
++    from tools import vision_request_cache
++    from tools.registry import registry
++
++    monkeypatch.setattr(vt, "_ANALYSIS_CACHE_MAX_BYTES", 4096, raising=False)
++    monkeypatch.setattr(vt, "_should_use_native_vision_fast_path", lambda: False)
++    monkeypatch.setattr(vision_request_cache, "CACHE", vision_request_cache.VisionCache())
++    analysis = ["useful small result"]
++    llm = AsyncMock(return_value="fixed provider response")
++    monkeypatch.setattr(vt, "async_call_llm", llm)
++    monkeypatch.setattr(vt, "extract_content_or_reasoning", lambda result: analysis[0])
++    before = image.read_bytes()
++
++    def analyze(prompt):
++        if entrypoint == "registered":
++            return json.loads(registry.dispatch("vision_analyze", {"image_url": str(image), "question": prompt},
++                                                task_id="fixture-task", session_id="fixture-session"))
++        return _run(image, prompt)
++
++    first = analyze("small")
++    assert first == {"success": True, "analysis": analysis[0]}
++    assert len(vt._ANALYSIS_CACHE) == 1
++    small = dict(vt._ANALYSIS_CACHE)
++    if entrypoint == "registered":
++        assert len(vision_request_cache.CACHE.done) == 1
++    analysis[0] = character * 300000
++    for _ in range(2):
++        assert analyze("large") == {"success": True, "analysis": analysis[0]}
++        assert dict(vt._ANALYSIS_CACHE) == small
++        assert _retained_charge() <= 4096
++    assert llm.await_count == 3
++    assert analyze("small")["analysis"] == first["analysis"]
++    assert llm.await_count == 3
++    llm.side_effect = RuntimeError("synthetic provider failure")
++    assert analyze("error")["success"] is False
++    assert analyze("small")["analysis"] == first["analysis"]
++    assert llm.await_count == 4
++    assert dict(vt._ANALYSIS_CACHE) == small
++    assert image.read_bytes() == before
++    assert not vision_request_cache.CACHE.pending
 diff --git a/tests/tools/test_vision_request_cache.py b/tests/tools/test_vision_request_cache.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..ddaac9da41fd9fd04cb97d1aa0dd55e2c0ab0164
@@ -83904,7 +84018,7 @@ index 0000000000000000000000000000000000000000..349b657033f13320255a52203cf00cf6
 +
 +CACHE = VisionCache()
 diff --git a/tools/vision_tools.py b/tools/vision_tools.py
-index c244fd4fa1ea32757b751592b593243b101ef0e2..a1e59122697c1a371925970f93881028c38522e3 100644
+index c244fd4fa1ea32757b751592b593243b101ef0e2..20edf6378e08c5e538f2d7ec838384bca95c0525 100644
 --- a/tools/vision_tools.py
 +++ b/tools/vision_tools.py
 @@ -10,3 +10,6 @@ import base64
@@ -83914,12 +84028,13 @@ index c244fd4fa1ea32757b751592b593243b101ef0e2..a1e59122697c1a371925970f93881028
  import json
 +import threading
  from concurrent.futures import ThreadPoolExecutor
-@@ -15,2 +18,4 @@ import logging
+@@ -15,2 +18,5 @@ import logging
  import os
 +import re
++import sys
 +import time
  import uuid
-@@ -832,2 +837,49 @@ async def _call_vision_llm(call_kwargs: dict, empty_log: str, response=None):
+@@ -832,2 +838,62 @@ async def _call_vision_llm(call_kwargs: dict, empty_log: str, response=None):
  
 +# Content-addressed reuse of aux analyses: key = sha256(prepared image bytes) + prompt + route.
 +# Remote/data URLs hash AFTER the download the analysis needs anyway. Only non-empty successes
@@ -83927,6 +84042,13 @@ index c244fd4fa1ea32757b751592b593243b101ef0e2..a1e59122697c1a371925970f93881028
 +_ANALYSIS_CACHE: "OrderedDict[str, tuple[float, tuple]]" = OrderedDict()
 +_ANALYSIS_CACHE_LOCK = threading.Lock()
 +_ANALYSIS_CACHE_MAX, _ANALYSIS_CACHE_TTL = 256, 3600.0
++# shortcut: payload accounting excludes map/lock overhead, use process limits for an RSS bound.
++_ANALYSIS_CACHE_MAX_BYTES = 32 * 1024 * 1024
++
++
++def _analysis_cache_entry_bytes(key: str, entry: tuple) -> int:
++    """Charge the native timestamp/(analysis, scale-note) record without encoding strings."""
++    return sum(sys.getsizeof(part) for part in (key, entry, entry[0], entry[1], *entry[1]))
 +
 +
 +def _analysis_cache_key(image_path: Path, prompt: str, model: Optional[str], crop_offset: dict) -> Optional[str]:
@@ -83962,19 +84084,25 @@ index c244fd4fa1ea32757b751592b593243b101ef0e2..a1e59122697c1a371925970f93881028
 +    if key is None or not isinstance(value[0], str) or not value[0].strip():
 +        return
 +    with _ANALYSIS_CACHE_LOCK:
-+        _ANALYSIS_CACHE[key] = (time.monotonic(), value)
++        entry = (time.monotonic(), value)
++        if _analysis_cache_entry_bytes(key, entry) > _ANALYSIS_CACHE_MAX_BYTES:
++            _ANALYSIS_CACHE.pop(key, None)
++            return
++        _ANALYSIS_CACHE[key] = entry
 +        _ANALYSIS_CACHE.move_to_end(key)
-+        while len(_ANALYSIS_CACHE) > _ANALYSIS_CACHE_MAX:
-+            _ANALYSIS_CACHE.popitem(last=False)
++        retained = sum(_analysis_cache_entry_bytes(k, item) for k, item in _ANALYSIS_CACHE.items())
++        while len(_ANALYSIS_CACHE) > _ANALYSIS_CACHE_MAX or retained > _ANALYSIS_CACHE_MAX_BYTES:
++            old_key, old_entry = _ANALYSIS_CACHE.popitem(last=False)
++            retained -= _analysis_cache_entry_bytes(old_key, old_entry)
 +
 +
  async def _run_analysis(
-@@ -865,2 +917,4 @@ async def _run_analysis(
+@@ -865,2 +931,4 @@ async def _run_analysis(
              result["scale_note"] = scale_note
 +        if debug_call_data.get("cached"):
 +            result["cached"] = True
          debug_call_data.update(success=True, analysis_length=analysis_length)
-@@ -896,2 +950,8 @@ async def vision_analyze_tool(
+@@ -896,2 +964,8 @@ async def vision_analyze_tool(
          logger.info("Image ready (%.1f KB)", prepared.size_bytes / 1024)
 +        cache_key = await asyncio.to_thread(_analysis_cache_key, prepared.path, prompt, model, prepared.crop_offset)
 +        cached = _analysis_cache_get(cache_key)
@@ -83983,14 +84111,14 @@ index c244fd4fa1ea32757b751592b593243b101ef0e2..a1e59122697c1a371925970f93881028
 +            debug_call_data["cached"] = True
 +            return cached
          # Send at full resolution first; on a size rejection, downscale and retry.
-@@ -924,3 +984,5 @@ async def vision_analyze_tool(
+@@ -924,3 +998,5 @@ async def vision_analyze_tool(
              call_kwargs, "Vision LLM returned empty content, retrying once", response)
 -        return analysis, _build_scale_note(_scale_info or None, prepared.crop_offset or None)
 +        outcome = (analysis, _build_scale_note(_scale_info or None, prepared.crop_offset or None))
 +        _analysis_cache_put(cache_key, outcome)
 +        return outcome
      return await _run_analysis("image", image_url, user_prompt, model, stage)
-@@ -1012,5 +1074,16 @@ def _configured_aux_model(sections: tuple, env_vars: tuple) -> Optional[str]:
+@@ -1012,5 +1088,16 @@ def _configured_aux_model(sections: tuple, env_vars: tuple) -> Optional[str]:
  
 -async def _handle_vision_analyze(args: dict[str, Any], **kw: Any) -> str:
 +async def _handle_vision_analyze(args: dict[str, Any], **kw: Any):

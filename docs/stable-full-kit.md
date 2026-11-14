@@ -10,6 +10,17 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Vision analysis byte budget (v0.8.74)
+
+The auxiliary content cache now combines its existing count/TTL/LRU limits with a
+32 MiB charged key/entry payload budget. Large results still return in full; an
+oversized replacement removes only its own key. Other useful hits survive.
+[Native boundaries, retention and put-cost measurements](vision-cache-routes.md#retained-analysis-byte-budget-v0874).
+Same 1004 targets/base/selection: only the existing vision runtime and content-cache
+regression after hashes/sections change. No public file, dependency, lock, schema
+or configuration is added. Fewer retained hits can cause more later provider work;
+this is a payload budget, not a process RSS or production saving guarantee.
+
 ## Gateway compression-tip liveness (v0.8.73)
 
 The transcript rerouter now uses the existing metadata reader for its tip-liveness

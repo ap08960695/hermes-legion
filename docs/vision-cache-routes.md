@@ -95,3 +95,68 @@ complete vision-workload peak, startup, production cache-hit-rate or billed savi
 Image ingestion, normalization, base64 and provider processing retain their normal
 cost. Linux parity, original owner-session continuation and app adoption remain
 separate.
+
+
+## Retained analysis byte budget (v0.8.74)
+
+The auxiliary content cache already limited itself to 256 entries and a one-hour
+TTL, but had no byte budget. The outer request cache's result-size limit does not
+bound this inner cache: the inner result is stored before the outer admission
+check. After each put, the content cache retains at most 32 MiB of charged key/entry payload,
+alongside the existing entry count, TTL and lookup promotion.
+
+A small local helper uses native `sys.getsizeof` for the key, timestamp, outer
+entry tuple, result tuple, analysis string and optional scale-note string. The
+producer's result shape remains `(analysis, scale_note)`. Shared objects can be
+counted more than once, conservatively. Accounting does not encode, copy or
+truncate results. Under the existing lock, each put recomputes charges over at
+most 257 records (256 prior entries plus the candidate) and evicts oldest entries
+until both limits hold. Equality is
+admitted. An individually oversized replacement removes only the matching key;
+unrelated useful hits remain. No counter, secondary size map or new cache layer
+is needed.
+
+Fresh analyses still return unchanged. When both cache layers decline a result,
+a repeated request can call the provider again; fewer retained hits are an
+explicit memory/reuse tradeoff. Routes, content keys, TTL, native multimodal
+bypass, error handling and the outer cache remain unchanged. The budget excludes
+map/lock overhead, interpreter memory, temporary provider results and concurrent
+in-flight work. It is not an RSS limit or a promise about total Hermes memory.
+
+Native Mac baseline: 68 cases across five complete files. Two new invariant tests
+add twelve cases before product edit; all twelve fail meaningfully on the original
+cache and all seven prior content-cache cases pass. Tests use small controlled
+budgets for exact equality/one-byte denial, ASCII/Thai/non-BMP and scale notes,
+byte/count LRU, replacement, expiry and concurrent puts. Direct and actual registry
+dispatch keep fresh oversized analyses exact, preserve a small useful hit and the
+source image, leave no pending reservation, and retain provider errors. The
+registered cases also verify that outer reuse is active for the small result.
+After true exported reverse/base/reapplication, all 80 cases across the same five
+files pass in 8.2 s, with no failures, skips, retries or exclusions. Existing saved/
+runtime route, concurrent-route, request, native-pixel and history-budget tests run.
+
+Three alternating, separate GC/tracemalloc phases compare the original native put
+function, compiled from its exact saved AST with the same unchanged globals/lock,
+with the imported candidate. Both receive the same 256 distinct ASCII analyses,
+each with 250,000 filler characters, plus identical keys and metadata. Surviving
+result values are identical; admission intentionally retains fewer entries.
+
+| Median fixture metric | Original | Byte-budgeted |
+|---|---:|---:|
+| Retained entries | 256 | 134 |
+| Charged key/entry bytes | 64,081,298 | 33,542,612 |
+| Traced retained allocations | 64,069,122 bytes | 33,541,294 bytes |
+| Traced transient peak | 64,319,428 bytes | 34,042,341 bytes |
+
+A separate seven alternating batches of 256 puts, with 256 small entries already
+resident and tracing disabled, measure the accounting cost: median per put rises
+from 0.000141 ms to 0.104933 ms. No timing assertion is added. These are synthetic
+cache-component measurements, not whole-process RSS, response latency, cache-hit
+rate, billed usage or production savings. All external provider calls in behavior
+tests use fixed responses; the measurement makes none.
+
+Source/runtime dependencies are borrowed read-only through PM-selected Python
+3.14.9, with private synthetic homes and unchanged scoped audit negatives. No
+service, Gateway, UI or real model workload is launched. Existing processes need
+normal idle adoption; current read-only source comparison finds 974/1004 matching
+kit targets and 30 pending normal lead adoption/Linux validation.

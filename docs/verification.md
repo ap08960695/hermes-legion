@@ -1,3 +1,62 @@
+# v0.8.74 — Bound retained auxiliary vision analysis payload
+
+The existing content cache now adds a 32 MiB charged key/entry payload limit to its
+256-entry/one-hour TTL/LRU behavior. Native string/tuple size accounting runs under
+the existing lock; oversized replacement removes only the same key, and admitted
+puts evict oldest entries until both limits hold. Fresh results return unchanged.
+[Native regression, limits and measurements](vision-cache-routes.md#retained-analysis-byte-budget-v0874).
+No new config, dependency, fallback, result truncation or cache layer is added.
+
+The original native 256-entry probe charges 64,081,298 bytes, despite outer-cache
+result admission. Baseline: 68 passes/five files. Two invariant tests add twelve
+cases before product edit: meaningful red twelve failures/seven prior passes.
+ASCII/Thai/non-BMP, scale notes, exact equality/one-byte denial, byte/count LRU,
+replacement, TTL and concurrent puts are covered. Direct and actual registry
+paths return full fresh large results, preserve useful small hits and source
+images, retain provider errors and release reservations. Exported reverse/base/
+reapplication: 80 passes/five complete files, zero fail/skip/retry/exclusion, 8.2 s.
+Counts: content19, route14, request16, native20, history11. Existing native-pixel
+bypass and saved/runtime/concurrent route cases remain in that complete selection.
+
+Same bounded 256-analysis fixture, original AST put with unchanged globals/lock
+versus imported candidate: three separate GC/tracemalloc phases yield median
+charged bytes64,081,298->33,542,612, traced retained64,069,122->33,541,294 and peak
+64,319,428->34,042,341 bytes; retained entries256->134, surviving values identical.
+Seven separate alternating256-put time batches at256 resident small entries show
+median0.000141->0.104933ms per put. Actual imported path/hash matches export.
+Container/lock overhead, transient provider results and in-flight work are outside
+the budget. Fewer retained hits can require later provider calls. No whole-Hermes
+RSS, workload cache-hit-rate, response-latency or billing improvement is claimed.
+
+Borrowed PM-selected native3.14.9/deps read-only, separate PM-locked pytest9.1.1/
+asyncio1.3.0, private HOME/HERMES_HOME/TMPDIR and unchanged self-tested scopedPython
+owner-read/write/SQLite/network/process/null/leading-flag/per-PID negatives/exit7;
+one CPU/worker. No full native suite, pinned whole-source lint/health, OS containment,
+provider/model/API/UI/service/fleet/original-session/terminal-goal runtime proof.
+Owner data/source/apps/config/control/quota/ESTOP/pauses/stopped timers remain.
+
+Same1004 targets/basebf0203a(v0.22.5), all before/unrelated after hashes/sections and
+selection unchanged. Exactly existing vision runtime/content-cache test after
+hashes/sections change. Temporary-index full-index binary-U1 export and installed/
+reverse/check/base/reapply pass; native/raw-root whitespace clean. Read-only owner
+974/1004 match,30 pending normal lead adoption/Linux validation. Driver commits;
+lead handles adoption and publication. Required companion:133 run,131 pass/two
+Linux skips,4.457s,exit0. Tracked-only222 inventory/current hashes/exact7paths/empty
+real index/unchanged selection/neutral history pass; disposable copy removed.
+Both exact directory/history secret scans pass (204 commits,no leaks). Advisors
+80/81 accept the bounded design/handoff, supplied evidence only; actual mandated
+CLI/session/outcome are recorded privately.
+
+All own native/probe/benchmark/export/companion/release/scan/advisor handles are
+terminal. Actual separate-argv Git common/object-path checks establish owned clone
+paths and a separate owner object store before deletion. Exact owned trial/source/
+test-tools/fixtures/home/log/cache/temp-index/probe/benchmark/export tree, pointer
+and setup are removed; absence and borrowed resources/protected hashes verified.
+Pre-cleanup714144KiB is not attributed saving; no owner backup is created or purged.
+Final records/hashes/inventory/scope/index/preservation/whitespace/exact scans
+precede the subject-only driver handoff. Broad standing goal remains active.
+
+
 # v0.8.73 — Avoid context hydration in Gateway tip checks
 
 One native production line switches the transcript rerouter's liveness check to
