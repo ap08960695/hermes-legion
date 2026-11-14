@@ -1,3 +1,53 @@
+# v0.8.67 — Avoid unused context in declared cache-scope identity
+
+The shared identity lookup selects source, parent ID and model configuration,
+retaining the existing marker helper and source handling order. Direct token
+flush-before-read and missing-row behavior remain. Receipt snapshots keep the
+same connection/transaction, no flush, and the original missing-row TypeError.
+No fallback query, full-reader retry, auth/receipt/schema/provider-key change.
+Only this method and its explanatory docstring change; source stays at2000 lines.
+
+Baseline87 native pass. Actual original direct/snapshot/raw helper parity covers
+84 configuration/source/parent states per adapter; final candidate repeats them.
+Initial authorizer red3 fail/4 controls. First seven-file candidate148 pass/one
+existing full-reader-call spy fails; corrected SQL trace tests the same one-row
+contract and passes on original. Separate native missing-snapshot probe exposes
+and preserves its error instead of a false verdict. Corrected original two-file
+red3 fail/59 pass. Final/reapplied seven-file149 pass,0 fail/skip/retry,12.7s.
+Seventeen explicit marker/source cases per writer/read-only handle preserve exact
+scope outputs and DB/WAL bytes; receipt savepoint/visibility/queue/no-write/error
+checks and direct flush-before-read/error controls pass. Existing worker ownership
+and foreign-target refusal remain. [Detailed proof and measurement](session-metadata-reads.md#declared-cache-scope-identity-v0867).
+
+Native3.14.9 borrowed PM runtime/deps, isolated PM-locked pytest9.1.1/asyncio1.3.0,
+unchanged scoped Python audit/null/scratch/leading-flag/per-PID self-checks and exit7,
+one CPU compile/one worker/no retries. No full native suite, live service/model/
+MCP/fleet/UI, OS/native-extension containment or new HTTP2/PID4 proof.
+
+Same read-only payload-heavy identity fixture, exact original AST versus actual
+final method: seven alternating40-call timing batches, three separate traced
+batches after GC, five warmups each. Equal outputs and DB/WAL hashes/empty queues.
+Median batch-average1.255107->0.560297ms; traced peak4,000,638->2,107,076bytes.
+Identity component only; scope memoization means no every-request saving claim.
+No workload RSS/latency/cache-hit/billed-usage result.
+
+Export1002 on pinnedv0.22.5: two existing upstream test files newly patched with
+nonnull before hashes; only one prior runtime after hash changes. All previous
+1000 before/other-after hashes, selection and exact unrelated patch sections stay.
+Filtered bytes, installed/reverse/base/reapply pass; no public file/dependency/lock
+added. Read-only owner979/1002 match,23 pending normal adoption paths.
+Native source/nonpatch whitespace pass. Raw root git diff --check reports exactly
+two single-space empty unified-diff context records in the patch; documented
+format exception, not a passing raw whitespace gate. Canonical full-index binary
+-U1 format and apply/hash checks remain; no checker/attributes changes.
+Required full companion:129 run,127 pass/two Linux-only skips,4.699s,exit0.
+Tracked-only222-file inventory/current hashes and exact directory/all-history
+Gitleaks scans pass, no leaks,197 commits. Advisor67 accepts the bounded handoff,
+concrete adapter predicate and exact raw-whitespace disposition. Owned trial/source/
+tools/fixtures/logs, pointer and setup removed; absence verified, borrowed source/
+runtime/dependencies/objects retained. Pre-cleanup713496KiB is not attributed disk
+saving. Final hash/inventory/format/secret-scan refresh precedes driver signal.
+
 # v0.8.66 — Normalize MCP filter names before cache fingerprint sorting
 
 Registration already stringifies include/exclude entries. Fingerprinting sorted

@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1000-path** Legion source, interface and optimization alternative
+This is the complete **1002-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,16 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Declared cache-scope identity (v0.8.67)
+
+The shared identity read selects source, parent ID and marker configuration without
+hydrating prompt/tool context. Direct token flushing, source/fork rules and the
+receipt snapshot's connection, transaction and missing-row error remain intact.
+See [native parity checks and measured component costs](session-metadata-reads.md#declared-cache-scope-identity-v0867).
+Two existing upstream regression files join the patch, giving 1002 targets. Only
+one previous runtime after hash changes; all previous 1000 before/other-after
+hashes, pinned base and native selection bytes remain unchanged.
 
 ## Mixed-name MCP filter fingerprints (v0.8.66)
 

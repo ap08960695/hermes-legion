@@ -384,3 +384,72 @@ result is True and database/WAL hashes remain unchanged.
 These payload-heavy direct-helper measurements exclude setup, import and other
 lineage reads. They do not measure receipt-snapshot savings, complete resume or
 Gateway latency, whole-service RSS, representative workload or provider usage.
+
+
+## Declared cache-scope identity (v0.8.67)
+
+`declared_scope_identity` needs source, parent ID and model configuration to decide
+whether a host-declared cache scope can be shared. It previously used the full
+session reader, hydrating prompt/tool context and doing the full row conversion.
+It now selects only those three fields and retains the existing fork-marker
+helper. The ordinary metadata reader is unsuitable here because it omits marker
+configuration. That configuration is still read and parsed; no schema, cache,
+provider key, prompt history, route, source or marker policy changes.
+
+Direct SessionDB reads retain one token flush before lookup, including a missing
+row. Missing direct rows return `(False, "")`; errors still propagate into the
+caller's existing fail-closed path. Receipt snapshots use their existing bound
+connection without a flush, new connection or commit. On a missing receipt row,
+the original `dict(None)` TypeError remains: it must not become a false fork
+verdict. The supported receipt connection supplies this distinction; no concrete
+class test, flush-based adapter inference or fallback query is added.
+
+Actual Mac Python 3.14.9 checks the original full readers and projected helper
+across 84 states per direct/snapshot adapter: three raw source values, matching/
+absent parents and fourteen serialized-object, SQL/JSON-null, malformed/non-object
+and marker configurations. Candidate parity repeats those states. Source is tested
+for fork identity before stripping, preserving the existing `" tool "` behavior.
+These are overlapping characterization states, not additional pytest counts.
+
+Baseline: 87 native cases across three files. New authorizer regressions fail on
+the original for direct writer, read-only reader and receipt snapshot. The first
+candidate passes 148 cases but fails an existing test that counts full-reader
+calls. Its one-row-read contract is now measured with actual SQLite tracing;
+that corrected test also passes against the exact original. A separate original
+snapshot probe catches the initial mistaken missing-row expectation before final
+repair. Corrected original red: three targeted failures and 59 controls passing
+across the two affected test files. No test failure is excluded or retried.
+
+Final seven-file selection: 149 pass, also after actual exported reapplication,
+12.7 seconds, one worker. Positive identity and exact native declared-scope outputs
+accompany denied prompt/tool SQL reads. Seventeen explicit marker/source cases run
+through writer and read-only handles; main/WAL bytes stay exact. Snapshot checks
+retain an uncommitted source update on the same connection, savepoint rollback,
+unchanged total changes and queued tokens, exact missing error and read-error
+identity. Direct controls verify queued 17-token/one-call deltas are flushed once
+before each present/missing read; query/flush errors retain fail-closed behavior.
+Existing authorized worker lineage/foreign-target denial and full-context reads
+remain covered. No ownership, receipt or runtime wire format changes.
+
+For one isolated identity-path measurement, the original function is compiled
+from its exact AST and compared with the normally imported final method. Both
+read the same native read-only database: a 1,806,336-byte synthetic prompt, a
+1,048,576-character configuration payload and 4,096 pinned synthetic tool names.
+Initialization and five warmups per variant precede measurement. Seven alternating
+40-call timing batches run without tracing; three separate alternating 40-call
+allocation batches follow GC. Every identity matches; main/WAL hashes and empty
+pending queues remain unchanged.
+
+| Identity-path measurement | Full session reader | Selected fields |
+| --- | ---: | ---: |
+| Median batch-average time | 1.255107 ms | 0.560297 ms |
+| Batch-average time range | 1.252620–1.281984 ms | 0.558785–0.560969 ms |
+| Median traced batch peak | 4,000,638 bytes | 2,107,076 bytes |
+| Traced peak range | 4,000,046–4,000,830 bytes | 2,106,788–2,107,108 bytes |
+
+The scope resolver memoizes per segment. This measures identity resolution, not
+an every-request saving, higher provider cache-hit rate, billed usage, whole-process
+RSS or end-to-end latency. Marker configuration still contributes to allocation.
+No live model, MCP, fleet, service, UI or original owner-session work is performed.
+Owner controls, ESTOP/pauses and stopped timers remain unchanged; adoption and
+Linux/workload proof remain separate.
