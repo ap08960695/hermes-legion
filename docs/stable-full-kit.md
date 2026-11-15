@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1080-path** Legion source, interface and optimization alternative
+This is the complete **1085-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,17 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Local group naming workflow (v0.31.0)
+
+The canonical room has a capability-gated Rename dialog using the existing
+owning gateway. Confirmation keeps the room ID and members, retains the unsent
+message, and updates its header and open tab without remounting the workspace.
+Earlier create/cancel/reopen behavior joins the same checked Local workflow.
+Seven changed source/test sections include five newly carried upstream paths,
+for 1085 targets; one regression joins the Desktop selection. No membership API,
+backend migration or model request is added. Rebuild Desktop including the SDK.
+[Adoption, checks and limits](release-notes-v0.31.0.md).
 
 ## Live background report refresh (v0.30.2)
 

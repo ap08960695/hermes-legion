@@ -75,8 +75,8 @@ For a backend with canonical groups, the room stores its initial members on
 the gateway authority. Return with **Back**, choose **Manage team**, then click
 the saved group name to reopen it. The bot cards' **All groups** filter and
 legacy **Manage groups** metadata are separate from canonical room membership.
-The observed canonical room displays its members but offers no membership-edit
-control. Creating the initial roster does not prove later add/remove support.
+The canonical room displays its members but offers no membership-edit control.
+Creating the initial roster does not prove later add/remove support.
 
 Native Local acceptance used a fresh isolated home and the v0.29.3 renderer.
 A synthetic bot was created with introduction off, then joined the default bot
@@ -97,3 +97,23 @@ This proves creation, cancellation and in-app reopening for the controlled case.
 It does not prove restart persistence, canonical membership editing, active
 worker monitoring, owner-app adoption or another backend. No runtime source
 changed in this acceptance round; no new version or performance saving is claimed.
+
+
+## Naming a saved Local room (v0.31.0)
+
+Open the room, choose **Rename**, edit **New name**, then **Save**. A blank name
+cannot be saved; Cancel leaves the saved room unchanged. Successful confirmation
+updates the room header and main-tab caption while keeping the current unsent
+chat message. **Back → Manage team** lists the saved name for reopening.
+
+The control uses the existing gateway `groups.rename` contract for the room's
+canonical ID and authority. It appears only if `groups.capabilities` advertises
+that method. Readback must match the requested name before the editor closes.
+Errors keep the draft; an unchanged explicit retry in the open editor reuses its
+event ID. There is no automatic write retry, new room, member change or model call.
+This does not add a concurrent-edit lock. Cancelling/reopening starts a new edit.
+
+Rebuild the complete Desktop source kit, including the SDK caption update. An
+older Desktop SDK retains its previous tab-caption behavior until reopening.
+The earlier creation-only acceptance above remains historical; see the
+[v0.31.0 notes](release-notes-v0.31.0.md) for the current workflow proof and limits.

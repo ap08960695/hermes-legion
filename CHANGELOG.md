@@ -5,6 +5,21 @@ supported update or Desktop rebuild path. This kit does not install a rebuilt
 Hermes.app. Linked notes identify opt-in memory settings and admission guards
 that apply after adoption. Each entry states its adoption and verification limits.
 
+## v0.31.0 — Name and reopen Local group chats
+
+Create a Local room with two to six bots, cancel an unwanted draft, and reopen
+its saved room from Manage team. The room now has **Rename**: change its name
+without creating a replacement room or changing its members. The header and
+main-tab caption update after the gateway confirms the name; the unsent message
+stays in the composer. A failed write keeps the name draft and Save available.
+
+Same-home native process restart retained the saved name and members; the final
+UI updated the header/tab together without losing the unsent message. No model
+call was made. This groups the earlier creation/reopen acceptance with the new
+naming control. Apply the source kit and rebuild Desktop, including its SDK. Rename appears only
+when the owning gateway advertises it. Canonical membership editing remains open.
+[Checks, adoption and limits](docs/release-notes-v0.31.0.md).
+
 ## v0.30.2 — Show background reports without Reload
 
 After Hermes finishes replying to a background completion, its task summary and

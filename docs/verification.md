@@ -1,3 +1,35 @@
+# v0.31.0 — Name and reopen Local groups
+
+The native Local UI created a helper without introduction, then a two-member
+canonical room. Blank names could not be saved; cancelling left the native room
+and log unchanged. Saving a Thai/English name retained the current unsent message.
+Back/Manage team reopened the same room. All first-run processes stopped and its
+bundle/config were restored before a final build opened the SAME native home:
+name, room ID, authority and member targets survived that process restart.
+
+The first candidate exposed an old main-tab caption after Rename. A small SDK
+caption update now preserves the existing workspace render callback and disposer,
+without focus movement or reopening a closed pane. The final native UI changed
+header and tab together and retained the unsent message. SQLite readback found
+one room and exactly two rename events for two explicit different names, with
+zero sessions/messages/driver tasks. This proves the controlled naming workflow,
+not populated history, inference, membership edits or sibling/legacy monitoring.
+
+Original missing-control red2 and caption-path red2 precede implementation. Final
+63 nearest tests pass across workspace, reopen, capability and SDK contracts.
+Types/build pass. Scoped lint adds no diagnostics; two pre-existing ref-cleanup
+warnings and the build's inherited dynamic-import warning remain. Seven changed
+sections pass pinned-base apply/hash/reverse, adding five upstream targets for
+1085 total. The workspace regression joins the existing Desktop selection.
+
+Both actual60s Local gates had SSH0 and <=4 sampled Hermes processes, under4GiB.
+First/final2490/1574samples peaked at940228608/884637696B RSS including observer.
+No owner app/home/data/other host/ESTOP/pause/timer was touched. Owned identities
+ended, ports closed and313original bundle entries/signature/configs restored.
+A second-run diagnostic-backup name collision was recovered without overwriting
+its first verified backup. Raw state, images, failures and rollback stay private.
+No full source sweep or unchanged native/mock suite was repeated.
+
 # v0.30.2 — Live background reports without Reload
 
 A fresh empty Local home created a real native parent and two delegated children
