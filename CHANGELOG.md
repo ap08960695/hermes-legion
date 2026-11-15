@@ -5,6 +5,20 @@ supported update or Desktop rebuild path. This kit does not install a rebuilt
 Hermes.app. Linked notes identify opt-in memory settings and admission guards
 that apply after adoption. Each entry states its adoption and verification limits.
 
+## v0.29.4 — Show delegated bot work
+
+Bots shows Working while a native delegated child runs, with its observed
+activity separate from the parent conversation preview. Refresh clears the
+worker detail after native completion. Both canonical and legacy backend
+projections recognize the child's source. Adopt the updated backend; the
+existing renderer already supports these fields.
+
+Actual Local UI Send, native delegation, advancing heartbeat, completion and
+terminal Refresh passed with deterministic loopback replies. Four new cases
+failed before; fourteen native test-body cases pass through a local assertion
+runner (pytest unavailable). No production saving is claimed. See
+[release notes](docs/release-notes-v0.29.4.md) for scope and limits.
+
 ## v0.29.3 — Keep bot model labels readable
 
 Long provider names in Edit profile stay inside their dropdown instead of

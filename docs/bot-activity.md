@@ -1,5 +1,16 @@
 # Bot activity
 
+From v0.29.4, native `subagent` runs also reach the existing worker summary.
+Canonical own/sibling reads and the legacy roster admit these children without
+widening human conversation listings. A child can keep the bot Working after
+its parent acknowledges background dispatch. Refresh removes worker detail
+after its terminal timestamp; the parent preview stays separate.
+
+Controlled native Local UI Send now covers real delegation, an advancing native
+heartbeat, completion delivery and terminal Refresh. Only model reply content
+and timing were simulated on loopback; no activity rows were seeded. See the
+[v0.29.4 notes](release-notes-v0.29.4.md) for test-runner and live-proof limits.
+
 The Bots rail keeps a bot's canonical conversation preview and opening behavior.
 A separate tools icon and short worker description show a recent observed worker
 stamp. The full localized context is available in the existing tooltip; the row
@@ -14,8 +25,8 @@ query, account lookup or provider fallback. The usual roster refresh owns update
 The full Bots cards also reuse this display, with reported tool, step, elapsed
 time and token facts below the canonical preview. Native Local acceptance used
 controlled SessionDB records and checked display at both widths and removal
-after ending a record and clicking Refresh. Actual worker lifecycle was not
-exercised. See [v0.29.0 notes](release-notes-v0.29.0.md).
+after ending a record and clicking Refresh. That earlier v0.29.0 check did not
+exercise an actual worker lifecycle. See [v0.29.0 notes](release-notes-v0.29.0.md).
 
 ## Meaning and limits
 
