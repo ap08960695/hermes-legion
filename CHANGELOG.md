@@ -5,6 +5,18 @@ supported update or Desktop rebuild path. This kit does not install a rebuilt
 Hermes.app. Linked notes identify opt-in memory settings and admission guards
 that apply after adoption. Each entry states its adoption and verification limits.
 
+## v0.29.0 — Activity on bot cards
+
+- See reported worker activity directly on a bot card, separately from its
+  conversation preview: description, tool, step, elapsed time and token totals.
+- Received ended or unusable observations hide their activity using the same
+  policy as the compact roster. Existing refresh and chat destinations remain.
+
+Apply the source kit and rebuild Desktop. Controlled native SessionDB records
+verified display at wide/narrow widths and disappearance after ending a record
+and clicking Refresh. Actual worker lifecycle remains unverified. No model call
+or new polling is added. See [release notes](docs/release-notes-v0.29.0.md).
+
 ## v0.28.1 — Readable status on bot cards
 
 The Bots screen gives each card's status its own row above Open Screen,

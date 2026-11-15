@@ -10,6 +10,15 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Activity on bot cards (v0.29.0)
+
+Cards reuse the compact roster's activity description and reported tool, step,
+elapsed time and token facts. Canonical preview and chat navigation stay separate.
+Controlled native records verified wide/narrow display and hiding after a record
+ended and Refresh was clicked. This does not prove actual worker lifecycle.
+[Adoption, checks and limits](release-notes-v0.29.0.md). Two existing source/test
+sections change; the kit remains 1064 paths, with unrelated sections retained.
+
 ## Readable bot card status (v0.28.1)
 
 A layout fix gives the existing status a full row above the card actions.

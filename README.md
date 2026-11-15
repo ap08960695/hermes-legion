@@ -13,6 +13,8 @@ the [release policy](CONTRIBUTING.md#release-policy) for future versioning.
 
 ## What is included
 
+- [v0.29.0: activity on bot cards](docs/release-notes-v0.29.0.md), reported description/tool/step/time/token facts beside the canonical preview; native Local display and ended-record transitions checked with controlled records, not real worker execution.
+
 - [v0.28.1: readable bot card status](docs/release-notes-v0.28.1.md), fixes status text squeezed beside the action buttons; checked on the native Local Mac app at wide and narrow widths.
 
 - [v0.28.0: easier Settings actions without losing your draft](docs/release-notes-v0.28.0.md), named Export/Import/Reset actions, keyboard continuation after Cancel, and first-visit Local draft preservation, checked in wide and narrow native Mac windows.

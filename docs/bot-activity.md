@@ -11,6 +11,12 @@ the worker description (at most 120 characters) and terminal timestamp alongside
 existing identity/title/activity fields. It adds no model request, timer, extra
 query, account lookup or provider fallback. The usual roster refresh owns updates.
 
+The full Bots cards also reuse this display, with reported tool, step, elapsed
+time and token facts below the canonical preview. Native Local acceptance used
+controlled SessionDB records and checked display at both widths and removal
+after ending a record and clicking Refresh. Actual worker lifecycle was not
+exercised. See [v0.29.0 notes](release-notes-v0.29.0.md).
+
 ## Meaning and limits
 
 - A worker with a terminal timestamp does not show current-worker detail or a
@@ -47,7 +53,8 @@ These tests use temporary native SQLite state. They exercise terminal and active
 workers, compact/full compression projection, payload boundaries and canonical
 conversation preservation. They do not create a real task or call a provider.
 
-Renderer checks live with `bot-row.test.tsx` and `row-helpers.test.ts` under the
+Renderer checks live with `workspace.test.tsx`, `bot-worker-activity.test.tsx`,
+`bot-row.test.tsx` and `row-helpers.test.ts` under the
 native Desktop package. Follow upstream's dependency setup; the companion does
 not install those dependencies. The rendered fixture used during development
 also exercised active, terminal, unreachable and older-backend states with
