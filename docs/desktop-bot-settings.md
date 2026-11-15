@@ -1,5 +1,11 @@
 # Visible bot model settings
 
+From v0.29.3, long provider/model selections stay inside their own dropdowns,
+leaving both arrows visible. Keyboard focus shows the full name in the existing
+tooltip. Native Local wide/narrow layout and both menus' Escape behavior were
+checked without changing or saving a model. See the
+[release notes](release-notes-v0.29.3.md) for adoption and verification limits.
+
 Open **Bots → Edit profile** to review identity and model settings. The form keeps
 Mode and provider/model/effort above the expanded role, family and counterpart fields.
 The existing [per-model effort ceiling](reasoning-effort-limits.md) stays visible in a

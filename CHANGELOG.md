@@ -5,6 +5,18 @@ supported update or Desktop rebuild path. This kit does not install a rebuilt
 Hermes.app. Linked notes identify opt-in memory settings and admission guards
 that apply after adoption. Each entry states its adoption and verification limits.
 
+## v0.29.3 — Keep bot model labels readable
+
+Long provider names in Edit profile stay inside their dropdown instead of
+overlapping Model. Both arrows remain visible; keyboard focus reveals the full
+name. Apply the source kit and rebuild Desktop. The shared picker also serves
+bot creation and advanced configuration.
+
+Native Local wide/narrow screenshots, full-name tooltip and menu dismissal pass.
+Ten real-Radix picker cases, types, build and scoped lint pass. Model changes
+have component proof only this round; no profile was saved or inference run.
+Owner-app adoption remains open. See [release notes](docs/release-notes-v0.29.3.md).
+
 ## v0.29.2 — Save bot descriptions without a helper
 
 Edit profile uses the existing gateway writer for descriptions, avoiding a
