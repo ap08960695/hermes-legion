@@ -8,6 +8,9 @@ The design is simple: give each bot a clear responsibility, dispatch independent
 
 Historical source comments and release payloads received [privacy maintenance](docs/privacy-maintenance.md). Version names remain available, but corrected commit and archive hashes differ from older downloads.
 
+Read the [changelog](CHANGELOG.md) for improvements grouped by capability and
+the [release policy](CONTRIBUTING.md#release-policy) for future versioning.
+
 ## What is included
 
 - [v0.27.0: on-demand host toolchain facts](docs/release-notes-v0.27.0.md), disabled gateway warmup now defers five unused startup checks; first-use facts remain, with longer first-turn time and no proven RAM saving.
