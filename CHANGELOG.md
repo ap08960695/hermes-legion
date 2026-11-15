@@ -5,6 +5,18 @@ supported update or Desktop rebuild path. This kit does not install a rebuilt
 Hermes.app. Linked notes identify opt-in memory settings and admission guards
 that apply after adoption. Each entry states its adoption and verification limits.
 
+## v0.29.2 — Save bot descriptions without a helper
+
+Edit profile uses the existing gateway writer for descriptions, avoiding a
+separate Python process on supported backends. Native Local Save/reopen and
+file readback preserve Thai/English text and line breaks. Missing or rejected
+acknowledgment keeps the draft; CLI fallback is limited to an explicitly missing
+method and checks its result. Apply the source kit and rebuild Desktop.
+
+Eleven editor and nineteen SDK cases, types, build and scoped lint pass.
+Older-backend fallback has component proof only. No production RAM saving is
+claimed. See [release notes](docs/release-notes-v0.29.2.md).
+
 ## v0.29.1 — Keep bot edits after a failed save
 
 Edit profile stays open with your draft when a description, appearance or

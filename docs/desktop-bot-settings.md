@@ -42,5 +42,17 @@ Native Local acceptance created a synthetic bot with introduction off, reopened
 its saved profile, and exercised the same rejected description write before and
 after the fix. The corrected form retained the draft; a subsequent title-only
 Save and reopen passed. New group chat → Cancel returned to Bots. No prompt or
-inference ran. Successful native description execution and group creation or
-membership changes remain unverified. See the [release notes](release-notes-v0.29.1.md).
+inference ran. That v0.29.1 check did not exercise successful native description execution or
+group creation/membership. See the [release notes](release-notes-v0.29.1.md).
+
+
+From v0.29.2, description Save uses the existing scoped gateway writer and
+requires `applied.description === true`. False or missing acknowledgment and
+transport errors retain the draft. Only an explicitly missing RPC method uses
+the previous CLI path, which must return code zero and not be blocked.
+
+Native Local Save/reopen now passes with the unchanged subprocess guard:
+Thai/English text and line breaks persisted, with independent metadata readback
+and unchanged profile config. No prompt or inference ran. An older backend that
+cannot acknowledge description writes needs an upgrade. See the
+[v0.29.2 release notes](release-notes-v0.29.2.md) for compatibility and limits.

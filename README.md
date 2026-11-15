@@ -13,6 +13,8 @@ the [release policy](CONTRIBUTING.md#release-policy) for future versioning.
 
 ## What is included
 
+- [v0.29.2: save bot descriptions without a helper](docs/release-notes-v0.29.2.md), uses the existing gateway writer, confirms each write and retains failed drafts; native Local Thai/English Save and reopen checked.
+
 - [v0.29.1: keep bot edits after a failed save](docs/release-notes-v0.29.1.md), retains the draft and avoids a false success when a profile section fails; native Local rejected-write handling and title Save/reopen checked.
 
 - [v0.29.0: activity on bot cards](docs/release-notes-v0.29.0.md), reported description/tool/step/time/token facts beside the canonical preview; native Local display and ended-record transitions checked with controlled records, not real worker execution.
