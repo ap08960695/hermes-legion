@@ -54,6 +54,22 @@ Native async history without per-child status retains its parked rows; this
 change does not reconstruct an outcome from notification text.
 [Checks and adoption](release-notes-v0.29.5.md).
 
+## Read saved child outcomes
+
+From v0.30.0, expand the saved **Subagent Tasks** completion in chat after Reload.
+The detail starts with each task's number, terminal outcome and bounded, redacted
+task name, followed by the existing report. Collapse and reopen it when needed.
+A batch with no report output can still show its retained outcomes. The source
+kit and a Desktop rebuild are required.
+
+The producer pairs each authoritative result index with its goal before saving
+the display text. It does not guess an outcome from report prose, rewrite the
+model notification or add a database field. Older saved notifications keep their
+fallback. Original dispatch cards can still appear parked; the new detail belongs
+to the completion notification. Live pre-Reload summary visibility and existing
+report trace plumbing remain outside this capability.
+[Adoption and checks](release-notes-v0.30.0.md).
+
 ## Meaning and limits
 
 - A worker with a terminal timestamp does not show current-worker detail or a

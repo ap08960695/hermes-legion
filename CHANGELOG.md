@@ -5,6 +5,20 @@ supported update or Desktop rebuild path. This kit does not install a rebuilt
 Hermes.app. Linked notes identify opt-in memory settings and admission guards
 that apply after adoption. Each entry states its adoption and verification limits.
 
+## v0.30.0 — Reopen delegated task outcomes
+
+A saved batch completion can now show which task was interrupted, completed or
+failed beside its task name. Expand its compact summary after Reload, read the
+existing report, then collapse or reopen it. Outcomes stay available even when
+there is no report output. Task names are redacted and bounded for display.
+
+Apply the source kit and rebuild Desktop. Native Local Stop A / complete B,
+parent delivery, Reload and reopen passed with controlled loopback replies.
+Older notifications keep their previous summary; this does not retrofit old
+outcomes or relabel the original parked dispatch cards. Live pre-Reload summary
+visibility and report trace cleanup remain open. See
+[release notes](docs/release-notes-v0.30.0.md).
+
 ## v0.29.5 — Show stopped delegated responses
 
 An interrupted child now shows Response stopped and a neutral stop icon on its

@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1070-path** Legion source, interface and optimization alternative
+This is the complete **1077-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,18 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Retained child outcome details (v0.30.0)
+
+Saved batch completions now carry per-task outcome/name pairs. After Reload,
+expand the compact summary to read them beside the existing report; collapse
+and reopen it, including when the report has no output. Adopt the backend source
+and rebuild Desktop. Older payloads retain their fallback and original dispatch
+cards remain parked. [Adoption and limits](release-notes-v0.30.0.md).
+Seven existing upstream source/test files join the patch: 1077 paths. Only those
+sections were checked against the pinned base with apply/hash/reverse. One Python
+and two Desktop files join the explicit test selection. No dependency or schema
+change; the model's notification content is unchanged.
 
 ## Stopped delegation cards (v0.29.5)
 

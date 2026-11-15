@@ -13,6 +13,7 @@ the [release policy](CONTRIBUTING.md#release-policy) for future versioning.
 
 ## What is included
 
+- [v0.30.0: reopen delegated task outcomes](docs/release-notes-v0.30.0.md), expand a saved completion after Reload to see each task's outcome beside its name and the existing report.
 - [v0.29.5: show stopped delegated responses](docs/release-notes-v0.29.5.md), uses a neutral stopped label instead of Error for an interrupted child; native Stop A / keep B working checked.
 
 - [v0.29.4: show delegated bot work](docs/release-notes-v0.29.4.md), reports native delegated children as Working and clears their detail after completion; actual Local UI lifecycle checked with loopback replies.

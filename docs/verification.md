@@ -1,3 +1,32 @@
+# v0.30.0 — Retained delegated task outcome details
+
+Actual native Local UI Send started two delegated children. Composer Stop ended
+A before its held response; B stayed live, emitted its native 60-second heartbeat
+and completed independently. A late reply could not change its terminal result.
+The parent received the native interrupted/completed batch. SQLite retained the
+producer's paired outcome/name lines in existing display metadata, while the
+model received the exact separate notification content. Native View → Reload,
+open, collapse and reopen showed both pairs and the existing report. No lifecycle
+or activity rows were seeded; only five loopback model replies and timing were
+controlled. The earlier v0.29.5 restored-history screenshot is the before reference.
+
+Three new UI/hydration cases fail before the change; all 14 nearest tests pass.
+Two new native backend cases and updated existing assertions fail on the original
+code; all three native test bodies pass via stdlib fixture adapters (not canonical
+pytest/conftest). Coverage includes unsorted task indices, stored restoration,
+unchanged model content, forced redaction before shortening, the 2000-character
+card limit, literal task text, empty report and remount. Scoped lint, renderer
+types and build pass; the unrelated dynamic-import warning remains. Seven changed
+patch sections apply/hash/reverse; unchanged source and mock suites were not swept.
+
+The fresh cohort passed its actual 60-second Local/SSH-zero gate, sampled at most
+four Hermes processes and 1,355,825,152 bytes RSS including the observer. All owned
+identities ended, both ports closed, 313 original bundle entries and strict
+signature were restored, and exact baseline config was restored. Sampled RSS is
+not a physical RAM or production-saving measurement. Daily-app adoption, Linux,
+whole native suite, live pre-Reload summary visibility and legacy report trace
+cleanup remain open. See [release notes](release-notes-v0.30.0.md).
+
 # v0.29.5 — Stopped delegation cards
 
 Native Local before/after evidence covers real UI Send, two native child agents,
