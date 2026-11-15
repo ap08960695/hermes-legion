@@ -10,6 +10,16 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Separate same-goal delegation cards (v0.31.1)
+
+Chat cards use the native receipt's existing child IDs before any legacy match.
+Two same-name calls keep their own progress and outcome; an unresolved advertised
+identity never claims a different worker. Older no-ID receipts retain the old
+fallback. Apply the source kit and rebuild Desktop. Three existing source/test
+sections change; 1085 targets and the explicit test selection stay unchanged.
+Scoped apply/hash/reverse and native Local before/after acceptance pass.
+[Checks and limits](release-notes-v0.31.1.md).
+
 ## Local group naming workflow (v0.31.0)
 
 The canonical room has a capability-gated Rename dialog using the existing

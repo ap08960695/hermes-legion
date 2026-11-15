@@ -1,3 +1,32 @@
+# v0.31.1 — Separate same-goal delegation cards
+
+Fresh native Local homes ran two real delegated calls with the exact same goal
+and distinct producer child IDs. Before the fix, stopping A made both cards show
+Response stopped while B was still running; they stayed wrong after B completed.
+The fixed renderer showed A Stopped / B Running, then A Stopped / B Done with B's
+own output. Both runs refused A's late held reply and delivered both native
+completion notifications. Only model content/timing were controlled on loopback;
+no lifecycle rows or dispatch receipts were seeded. Each run used seven controlled
+model requests and the same two-tool-call parent fixture cap, not a production
+model or whole-autonomy check. Dispatch history without live state stays unknown.
+
+Eleven regressions fail on the original matcher with 17 controls passing; the
+fixed 28 nearest tests pass. Scoped lint, types and renderer build pass, with the
+inherited dynamic-import warning. Three changed sections pass pinned-base
+apply/hash/reverse; 1085 targets and the existing test selection remain. No new
+backend API, schema, model request, polling timer or prompt/context change.
+
+Both actual 60-second Local gates had SSH0 and at most four sampled Hermes processes.
+Before/after observers collected 2742/2227 samples with RSS maxima of
+1,224,884,224/1,295,679,488 bytes including the observer.
+All owned identities ended, gateway/model ports closed and the 313-entry original
+trial bundle, strict signature and exact baseline configs were restored. These
+are sampled resource bounds, not continuous peaks or a production RAM comparison.
+Distinct before/after terminal-card images and native DB snapshots stay private.
+No unchanged native/mock suite or full source sweep was repeated. Daily-app
+adoption, Linux/ai, legacy matching ambiguity and broader monitoring remain open.
+[Release notes](release-notes-v0.31.1.md).
+
 # v0.31.0 — Name and reopen Local groups
 
 The native Local UI created a helper without introduction, then a two-member
@@ -22,7 +51,7 @@ warnings and the build's inherited dynamic-import warning remain. Seven changed
 sections pass pinned-base apply/hash/reverse, adding five upstream targets for
 1085 total. The workspace regression joins the existing Desktop selection.
 
-Both actual60s Local gates had SSH0 and <=4 sampled Hermes processes, under4GiB.
+Both actual 60-second Local gates had SSH0 and <=4 sampled Hermes processes, under4GiB.
 First/final2490/1574samples peaked at940228608/884637696B RSS including observer.
 No owner app/home/data/other host/ESTOP/pause/timer was touched. Owned identities
 ended, ports closed and313original bundle entries/signature/configs restored.

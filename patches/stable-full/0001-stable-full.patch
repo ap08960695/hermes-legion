@@ -23007,7 +23007,7 @@ index 702a14b90cc2f76a3427b8bb0475cd274ba766aa..1e7e5fe8e6084cfd5e896d19a44eb553
 +  if (processResult || resultKind === 'delegation' || (typeof asyncResult === 'string' && asyncResult)) {
      return (
 diff --git a/apps/desktop/src/components/assistant-ui/tool/delegate-model.test.ts b/apps/desktop/src/components/assistant-ui/tool/delegate-model.test.ts
-index 14882cdf73e072bf1e6da9964e9eb22ec268300d..037fa324bb60cd75ba0422aab32ea438a2d4a49b 100644
+index 14882cdf73e072bf1e6da9964e9eb22ec268300d..28ed60d58e24911dea987fbfa4da7c2aba556af4 100644
 --- a/apps/desktop/src/components/assistant-ui/tool/delegate-model.test.ts
 +++ b/apps/desktop/src/components/assistant-ui/tool/delegate-model.test.ts
 @@ -74,2 +74,16 @@ describe('delegateRowsFromCall', () => {
@@ -23027,11 +23027,70 @@ index 14882cdf73e072bf1e6da9964e9eb22ec268300d..037fa324bb60cd75ba0422aab32ea438
 +  })
 +
    it('still lists a background dispatch whose goals only survive in the result', () => {
+@@ -80,2 +94,53 @@ describe('delegateRowsFromCall', () => {
+ describe('mergeDelegateRows', () => {
++  it('binds separate same-goal calls to their exact native workers despite reversed live order', () => {
++    const args = { goal: 'Same goal' }
++
++    const live = [
++      subagent({ id: 'native-b', goal: 'Same goal', status: 'completed', sessionId: 'session-b', model: 'model-b' }),
++      subagent({ id: 'native-a', goal: 'Same goal', status: 'interrupted', sessionId: 'session-a', model: 'model-a' })
++    ]
++
++    const a = delegateRowsFromCall(args, JSON.stringify({ status: 'dispatched', subagent_ids: ['native-a'] }), 'call-a')
++    const b = delegateRowsFromCall(args, { status: 'dispatched', subagent_ids: ['native-b'] }, 'call-b')
++
++    expect(mergeDelegateRows(a, live, 'call-a')[0]).toMatchObject({ status: 'interrupted', sessionId: 'session-a', model: 'model-a' })
++    expect(mergeDelegateRows(b, live, 'call-b')[0]).toMatchObject({ status: 'completed', sessionId: 'session-b', model: 'model-b' })
++  })
++
++  it('does not assign a missing native child by goal, count or a synthetic call placeholder', () => {
++    const rows = delegateRowsFromCall({ goal: 'Same goal' }, { status: 'dispatched', subagent_ids: ['gone-native'] }, 'call-a')
++    const live = [subagent({ id: 'delegate-tool:call-a:0', goal: 'Same goal', status: 'completed', sessionId: 'wrong-session' })]
++
++    expect(mergeDelegateRows(rows, live, 'call-a')[0]).toMatchObject({ status: 'dispatched' })
++    expect(mergeDelegateRows(rows, live, 'call-a')[0]?.sessionId).toBeUndefined()
++    expect(mergeDelegateRows(rows, [], 'call-a')[0]?.status).toBe('dispatched')
++  })
++
++  it('keeps native identity holes in their original task positions', () => {
++    const rows = delegateRowsFromCall({ tasks: [{ goal: 'Same' }, { goal: 'Same' }, { goal: 'Same' }] },
++      { status: 'dispatched', subagent_ids: ['native-a', null, 'native-c'] }, 'holes')
++
++    const live = [
++      subagent({ id: 'native-c', goal: 'Same', status: 'completed', model: 'c' }),
++      subagent({ id: 'other', goal: 'Same', status: 'running', model: 'wrong' }),
++      subagent({ id: 'native-a', goal: 'Same', status: 'interrupted', model: 'a' })
++    ]
++
++    const merged = mergeDelegateRows(rows, live, 'holes')
++
++    expect(merged.map(row => row.status)).toEqual(['interrupted', 'dispatched', 'completed'])
++    expect(merged.map(row => row.model)).toEqual(['a', undefined, 'c'])
++  })
++
++  it.each([[], ['native-a'], ['native-a', 'native-a'], ['native-a', 4], ['native-a', ''], null, { 0: 'native-a', 1: 'native-b' }].map(ids => ({ ids })))(
++    'leaves malformed or unaligned advertised identities unresolved: %j', ({ ids }) => {
++      const rows = delegateRowsFromCall({ tasks: [{ goal: 'Same' }, { goal: 'Same' }] },
++        { status: 'dispatched', subagent_ids: ids }, 'invalid')
++
++      const live = [subagent({ id: 'native-a', goal: 'Same' }), subagent({ id: 'native-b', goal: 'Same' })]
++
++      expect(mergeDelegateRows(rows, live, 'invalid').map(row => row.status)).toEqual(['dispatched', 'dispatched'])
++    }
++  )
++
+   it('joins fallback rows by the tool call id they were keyed with', () => {
 diff --git a/apps/desktop/src/components/assistant-ui/tool/delegate-model.ts b/apps/desktop/src/components/assistant-ui/tool/delegate-model.ts
-index 694c34d7526cb80f110738874df336ec8a19a39f..33dbebbad993effbbd88e66c4342ef11e44af9ba 100644
+index 694c34d7526cb80f110738874df336ec8a19a39f..7ebcd16a8a427ec2ecf88ab717a15e14e97fb84f 100644
 --- a/apps/desktop/src/components/assistant-ui/tool/delegate-model.ts
 +++ b/apps/desktop/src/components/assistant-ui/tool/delegate-model.ts
-@@ -56,5 +56,9 @@ function resultRows(result: unknown): Record<string, unknown>[] {
+@@ -18,2 +18,4 @@ export interface DelegateRow {
+   model?: string
++  /** Undefined for legacy receipts; null when advertised native identity is unresolved. */
++  nativeSubagentId?: string | null
+   /** The child's own session id, when it reported one — opens its window. */
+@@ -56,5 +58,9 @@ function resultRows(result: unknown): Record<string, unknown>[] {
  // 'timeout', 'failed'/'failure' (tools/delegate_tool.py). Anything that is
 -// not a success must render as failed — mapping unknown statuses to
 -// 'completed' hid timed-out children behind a green check (#73728, #85492).
@@ -23043,13 +23102,55 @@ index 694c34d7526cb80f110738874df336ec8a19a39f..33dbebbad993effbbd88e66c4342ef11
 +  }
 +
    return status === '' || status === 'ok' || status === 'completed' ? 'completed' : 'failed'
+@@ -86,2 +92,10 @@ export function delegateRowsFromCall(args: unknown, result: unknown, toolCallId
+   const idle: DelegateRowStatus = result === undefined ? 'running' : 'dispatched'
++  const record = parseMaybeObject(result)
++  const nativeIdentity = field(record, 'status') === 'dispatched' && Object.hasOwn(record, 'subagent_ids')
++  const nativeIds = Array.isArray(record.subagent_ids) ? record.subagent_ids : []
++  const knownIds = nativeIds.filter((id): id is string => typeof id === 'string')
++
++  const alignedIds = nativeIds.length === titles.length &&
++    nativeIds.every(id => id === null || id === undefined || (typeof id === 'string' && id.length > 0)) &&
++    new Set(knownIds).size === knownIds.length
+
+@@ -97,2 +111,3 @@ export function delegateRowsFromCall(args: unknown, result: unknown, toolCallId
+       model: entry ? field(entry, 'model') || undefined : undefined,
++      nativeSubagentId: nativeIdentity ? alignedIds && typeof nativeIds[index] === 'string' ? nativeIds[index] : null : undefined,
+       status: entry ? settledRowStatus(field(entry, 'status')) : idle
+@@ -117,3 +132,5 @@ function fromSubagent(live: SubagentProgress, fallbackId: string, fallbackGoal:
+  *
+- * Three joins, narrowest first. The delegate fallback (used when the gateway
++ * Native receipt identities join only their exact worker; unresolved identities
++ * never claim another child. Older receipts keep three joins, narrowest first.
++ * The delegate fallback (used when the gateway
+  * relays no native `subagent.*` events) keys its rows off the tool call id, so
+@@ -146,4 +163,12 @@ export function mergeDelegateRows(
+   const prefix = toolCallId ? `delegate-tool:${toolCallId}:` : ''
+-  const byId = rows.map((_row, index) => (prefix ? claim(c => c.id === `${prefix}${index}`) : undefined))
+-  const byGoal = rows.map((row, index) => byId[index] ?? claim(c => normalize(c.goal) === normalize(row.goal)))
++
++  const byId = rows.map((row, index) => {
++    if (row.nativeSubagentId !== undefined) {
++      return row.nativeSubagentId === null ? undefined : claim(c => c.id === row.nativeSubagentId)
++    }
++
++    return prefix ? claim(c => c.id === `${prefix}${index}`) : undefined
++  })
++
++  const byGoal = rows.map((row, index) => byId[index] ?? (row.nativeSubagentId === undefined ? claim(c => normalize(c.goal) === normalize(row.goal)) : undefined))
+   const sameShape = rows.length === live.length
+@@ -151,3 +176,3 @@ export function mergeDelegateRows(
+   return rows.map((row, index) => {
+-    const matched = byGoal[index] ?? (sameShape ? claim(c => c.taskIndex === index) : undefined)
++    const matched = byGoal[index] ?? (row.nativeSubagentId === undefined && sameShape ? claim(c => c.taskIndex === index) : undefined)
+
 diff --git a/apps/desktop/src/components/assistant-ui/tool/delegate.test.tsx b/apps/desktop/src/components/assistant-ui/tool/delegate.test.tsx
-index 6d1b50cdc6eb4e7df46c1f23f062a6c3f077d15b..5d8b221be9081672b9b52977b5a5a047cd97db8e 100644
+index 6d1b50cdc6eb4e7df46c1f23f062a6c3f077d15b..7b330b5343a364c968feceff8800ff1fbc10b636 100644
 --- a/apps/desktop/src/components/assistant-ui/tool/delegate.test.tsx
 +++ b/apps/desktop/src/components/assistant-ui/tool/delegate.test.tsx
 @@ -1,2 +1,2 @@
 -import { cleanup, render } from '@testing-library/react'
-+import { act, cleanup, render } from '@testing-library/react'
++import { act, cleanup, render, within } from '@testing-library/react'
  import { atom } from 'nanostores'
 @@ -35,3 +35,3 @@ function view(): SessionView {
 
@@ -23061,7 +23162,32 @@ index 6d1b50cdc6eb4e7df46c1f23f062a6c3f077d15b..5d8b221be9081672b9b52977b5a5a047
 -          result={undefined}
 +          result={result}
            toolCallId="call-1"
-@@ -100 +100,54 @@ describe('delegate card fade', () => {
+@@ -56,2 +56,24 @@ afterEach(() => {
+
++it('keeps a stopped child separate from another same-goal call that is still working', () => {
++  $activeSessionId.set(SESSION)
++  const goal = 'Inspect the delegate card'
++  upsertSubagent(SESSION, { subagent_id: 'native-a', goal, status: 'interrupted', summary: 'A stopped' }, true, 'subagent.complete')
++  upsertSubagent(SESSION, { subagent_id: 'native-b', goal, status: 'running', text: 'B working' }, true, 'subagent.progress')
++
++  const card = render(<I18nProvider configClient={null} initialLocale="en"><SessionViewProvider value={view()}>
++    <DelegateTool args={{ goal }} result={{ status: 'dispatched', subagent_ids: ['native-a'] }} toolCallId="call-a" />
++    <DelegateTool args={{ goal }} result={{ status: 'dispatched', subagent_ids: ['native-b'] }} toolCallId="call-b" />
++  </SessionViewProvider></I18nProvider>)
++
++  const [a, b] = [...card.container.querySelectorAll<HTMLElement>('[data-delegate-card]')]
++
++  expect(within(a!).getByText('Response stopped')).toBeTruthy()
++  expect(within(b!).queryByText('Response stopped')).toBeNull()
++  expect(within(b!).getByLabelText('Running')).toBeTruthy()
++  expect(within(b!).getByText('B working')).toBeTruthy()
++  act(() => upsertSubagent(SESSION, { subagent_id: 'native-b', status: 'completed', summary: 'B finished' }, false, 'subagent.complete'))
++  expect(within(a!).getByText('Response stopped')).toBeTruthy()
++  expect(within(b!).getByLabelText('Done')).toBeTruthy()
++})
++
+ describe('delegate card fade', () => {
+@@ -100 +122,54 @@ describe('delegate card fade', () => {
  })
 +
 +

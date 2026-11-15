@@ -13,6 +13,7 @@ the [release policy](CONTRIBUTING.md#release-policy) for future versioning.
 
 ## What is included
 
+- [v0.31.1: keep same-goal delegation cards separate](docs/release-notes-v0.31.1.md), shows each native child's own progress and outcome when two calls have identical goals.
 - [v0.31.0: name and reopen Local groups](docs/release-notes-v0.31.0.md), creates and reopens canonical rooms, with a new Rename control that keeps the room identity, members and unsent chat draft.
 - [v0.30.2: show background reports without Reload](docs/release-notes-v0.30.2.md), refreshes the saved completion after the parent reply finishes; task outcomes and reports appear in the current chat.
 - [v0.30.1: clean saved background reports](docs/release-notes-v0.30.1.md), hides the canonical gateway notice and terminal trace path while keeping task outcomes and report output.

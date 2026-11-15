@@ -38,6 +38,22 @@ controlled SessionDB records and checked display at both widths and removal
 after ending a record and clicking Refresh. That earlier v0.29.0 check did not
 exercise an actual worker lifecycle. See [v0.29.0 notes](release-notes-v0.29.0.md).
 
+## Separate calls with the same goal
+
+From v0.31.1, a native dispatched receipt's `subagent_ids` identify the exact
+children shown by its chat cards. Two separate calls with identical goals no
+longer claim the same live child. Stopping A leaves B Running, then B Done.
+An absent live record or an unresolved advertised identity stays parked; it
+cannot borrow a same-name or same-position worker. IDs are opaque and positional;
+missing slots keep their neighbors, and malformed/duplicate/misaligned lists
+remain unresolved. Receipts with no identity field keep legacy matching.
+
+Native Local before/after Send, per-child Stop, late-response refusal, B completion
+and parent delivery were checked with controlled loopback replies. Reloaded
+history without live children still does not infer outcomes from dispatch alone.
+No new API, poll, backend field, model request or stored-content change.
+[Adoption and evidence](release-notes-v0.31.1.md).
+
 ## Stop one delegated child
 
 From v0.29.5, a chat delegation card with an explicit `interrupted` outcome shows

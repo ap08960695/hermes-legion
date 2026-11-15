@@ -5,6 +5,18 @@ supported update or Desktop rebuild path. This kit does not install a rebuilt
 Hermes.app. Linked notes identify opt-in memory settings and admission guards
 that apply after adoption. Each entry states its adoption and verification limits.
 
+## v0.31.1 — Keep same-goal delegation cards separate
+
+Two delegated calls with the same task name now show their own native child.
+Stopping one leaves the other card running until that child completes. A missing
+advertised child stays unknown instead of borrowing another child's outcome.
+Apply the source kit and rebuild Desktop; older receipts without child IDs keep
+their existing matching behavior.
+
+Fresh native Local before/after runs reproduced both cards incorrectly showing
+Stopped, then verified A Stopped / B Running and B Done. Only model content and
+timing were controlled on loopback. [Checks and limits](docs/release-notes-v0.31.1.md).
+
 ## v0.31.0 — Name and reopen Local group chats
 
 Create a Local room with two to six bots, cancel an unwanted draft, and reopen
