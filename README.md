@@ -13,6 +13,8 @@ the [release policy](CONTRIBUTING.md#release-policy) for future versioning.
 
 ## What is included
 
+- [v0.28.0: easier Settings actions without losing your draft](docs/release-notes-v0.28.0.md), named Export/Import/Reset actions, keyboard continuation after Cancel, and first-visit Local draft preservation, checked in wide and narrow native Mac windows.
+
 - [v0.27.0: on-demand host toolchain facts](docs/release-notes-v0.27.0.md), disabled gateway warmup now defers five unused startup checks; first-use facts remain, with longer first-turn time and no proven RAM saving.
 
 - [v0.26.0: Local startup leaves saved remotes on demand](docs/release-notes-v0.26.0.md), passive roster and Bot Relay work no longer initializes unused remote connections; explicit remote work remains available.
@@ -132,7 +134,7 @@ the [release policy](CONTRIBUTING.md#release-policy) for future versioning.
 
 - A [compact bot settings editor](docs/desktop-bot-settings.md) that keeps model/effort visible and groups optional appearance controls.
 - Optional [per-model effort ceilings](docs/reasoning-effort-limits.md), with effective/requested effort disclosure and offline request-boundary checks.
-- A consolidated [1004-path source and Desktop kit for upstream v0.22.5](docs/stable-full-kit.md), with pinned hashes and a reproducible test selection. It includes the interface, workflow, search, memory/cache, usage, waiting and update-preservation changes as one complete alternative.
+- A consolidated [1064-path source and Desktop kit for upstream v0.22.5](docs/stable-full-kit.md), with pinned hashes and a reproducible test selection. It includes the interface, workflow, search, memory/cache, usage, waiting and update-preservation changes as one complete alternative.
 - v0.8.0 adds live bot progress (current tool, step, elapsed, tokens), inline `chart` answers with diagram guidance, a vision result cache, cacheable compression prompts, crash-safe worker attempt markers, opt-in delegated goal decisions and fleet-wide session search. See [the update notes](docs/stable-full-kit.md#efficiency-monitoring-and-autonomy-update-v080).
 - v0.8.10 records [native Desktop and bounded recall acceptance](docs/native-desktop-recall-acceptance.md), without changing the source patch.
 - v0.8.13 [explains settings write failures without exposing private paths](docs/settings-write-errors.md), with native permission-failure recovery checks.

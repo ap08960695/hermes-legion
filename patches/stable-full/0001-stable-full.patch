@@ -10972,17 +10972,31 @@ index c93a53e419252ff7d13d44cfd79abd9cdcee85a0..ce47890fe4f37dae777ac122c82eadea
 +  const result = await flight.response
 
 diff --git a/apps/desktop/src/api/client.ts b/apps/desktop/src/api/client.ts
-index 68c5a3e1b74856ec19591084e20c681d92984ba5..0ae229939f6a02d078660078690cf24a19abb351 100644
+index 68c5a3e1b74856ec19591084e20c681d92984ba5..611d1a2baa53cdd89d6052f9c30747ffa88a1a5e 100644
 --- a/apps/desktop/src/api/client.ts
 +++ b/apps/desktop/src/api/client.ts
-@@ -7,6 +7,5 @@ import {
+@@ -7,5 +7,4 @@ import {
  } from '@hermes/shared'
-+import type { HermesApiRequest } from '@hermes/shared'
- import { map, type MapStore } from 'nanostores'
- 
--import type { HermesApiRequest } from '@/global'
+-import { map, type MapStore } from 'nanostores'
 -
- import { CANONICAL_GATEWAY_PROTOCOL, CanonicalDesktopProtocol, canonicalProfile, canonicalPromptParams, canonicalSessionKey, recordCanonicalOwner, splitRewindSubmit } from './canonical-protocol'
+-import type { HermesApiRequest } from '@/global'
++import type { HermesApiRequest } from '@hermes/shared'
++import { atom, map, type MapStore } from 'nanostores'
+
+@@ -676,6 +675,6 @@ export function connectionScoped(): { connectionId?: string } {
+ // through @/hermes.
+-let _apiLocalMode = false
++export const $apiLocalMode = atom(false)
+
+ export function setApiRequestLocalMode(local: boolean): void {
+-  _apiLocalMode = local
++  $apiLocalMode.set(local)
+ }
+@@ -687,3 +686,3 @@ export function setApiRequestLocalMode(local: boolean): void {
+ export function ambientOwnerConnectionId(): string | undefined {
+-  return $apiRequestScope.get().connectionId ?? (_apiLocalMode ? 'local' : undefined)
++  return $apiRequestScope.get().connectionId ?? ($apiLocalMode.get() ? 'local' : undefined)
+ }
 diff --git a/apps/desktop/src/api/config.ts b/apps/desktop/src/api/config.ts
 index 976f79976e40cc672ef1a9bdfe6c1c80b91f4f1f..d65e9e9d6b7b93890c91dcbdb1bf080721550461 100644
 --- a/apps/desktop/src/api/config.ts
@@ -13001,13 +13015,13 @@ index 0000000000000000000000000000000000000000..33e83bfb74f1364a64afee6819d52a32
 +}
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-owner.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-owner.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..442e4c54384cecc2b29eb6c355b87a55fcdd13a7
+index 0000000000000000000000000000000000000000..baf6563b51f6402453db3adae70ebc989a555ff4
 --- /dev/null
 +++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-owner.ts
-@@ -0,0 +1,31 @@
+@@ -0,0 +1,34 @@
 +import { useStore } from '@nanostores/react'
 +
-+import { $apiRequestScope } from '@/api/client'
++import { $apiLocalMode, $apiRequestScope } from '@/api/client'
 +import { sessionDraftOwner } from '@/store/session-draft-owner'
 +import type { SessionOwnerScope } from '@/store/session-request-router'
 +
@@ -13019,9 +13033,12 @@ index 0000000000000000000000000000000000000000..442e4c54384cecc2b29eb6c355b87a55
 +  explicit?: SessionOwnerScope,
 +  fallbackId?: string | null
 +): SessionOwnerScope {
++  'use no memo' // Owner lookup reads registries outside compiler-tracked arguments.
++
 +  const surface = useComposerScope()
 +  const id = sessionId || fallbackId
 +  const ambient = useStore($apiRequestScope)
++  useStore($apiLocalMode)
 +
 +  if (explicit != null || surface.ownerRoute != null) {
 +    return sessionDraftOwner(id, explicit ?? surface.ownerRoute)
@@ -16510,6 +16527,157 @@ index 0000000000000000000000000000000000000000..49c319fe54968e8bc78badd2dd2ec866
 +    </Routes>
 +  )
 +}
+diff --git a/apps/desktop/src/app/contrib/workspace-settings-draft.test.tsx b/apps/desktop/src/app/contrib/workspace-settings-draft.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..8da431e7051eeb4738ac642ce50f5170c8a44f4e
+--- /dev/null
++++ b/apps/desktop/src/app/contrib/workspace-settings-draft.test.tsx
+@@ -0,0 +1,145 @@
++import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
++import { MemoryRouter, useNavigate } from 'react-router'
++import { afterEach, expect, it, vi } from 'vitest'
++
++import { setApiRequestConnection, setApiRequestLocalMode } from '@/api/client'
++import { useComposerDraft } from '@/app/chat/composer/hooks/use-composer-draft'
++import { useComposerDraftOwner } from '@/app/chat/composer/hooks/use-composer-owner'
++import { composerPlainText } from '@/app/chat/composer/rich-editor'
++import {
++  clearSessionDraft,
++  mainComposerScope,
++  NEW_SESSION_DRAFT_KEY,
++  stashSessionDraft,
++  takeSessionDraft
++} from '@/store/composer'
++
++import { WorkspaceRoutes } from './workspace-routes'
++
++const runtime = vi.hoisted(() => ({
++  text: '',
++  setText(value: string) {
++    runtime.text = value
++  },
++  getState: () => ({ text: runtime.text }),
++  subscribe: () => () => undefined
++}))
++
++vi.mock('@assistant-ui/react', () => ({
++  useAui: () => ({ composer: () => runtime }),
++  useAuiState: (select: (state: { composer: { text: string } }) => unknown) =>
++    select({ composer: { text: runtime.text } }),
++  useComposerRuntime: () => runtime
++}))
++vi.mock('./surfaces', () => ({ SidebarSurface: () => null }))
++vi.mock('./panes', () => ({ setStatusbarItemGroup: () => {} }))
++
++function Draft() {
++  const owner = useComposerDraftOwner(null, undefined, NEW_SESSION_DRAFT_KEY)
++
++  const draft = useComposerDraft({
++    activeQueueSessionKey: NEW_SESSION_DRAFT_KEY,
++    draftOwner: owner,
++    focusKey: null,
++    inputDisabled: false,
++    queueEditRef: { current: null },
++    sessionId: null
++  })
++
++  return (
++    <div
++      aria-label="Draft"
++      contentEditable
++      data-slot="composer-rich-input"
++      onInput={() => draft.syncDraftFromEditor()}
++      ref={draft.editorRef}
++      role="textbox"
++      suppressContentEditableWarning
++    />
++  )
++}
++
++function Harness() {
++  const navigate = useNavigate()
++
++  return (
++    <>
++      <button onClick={() => navigate('/settings')} type="button">
++        Settings
++      </button>
++      <button onClick={() => navigate('/')} type="button">
++        Close settings
++      </button>
++      <WorkspaceRoutes actions={{} as never} chatView={<Draft />} routeContributions={[]} />
++    </>
++  )
++}
++
++afterEach(() => {
++  cleanup()
++  clearSessionDraft(NEW_SESSION_DRAFT_KEY, 'default')
++  clearSessionDraft(NEW_SESSION_DRAFT_KEY, { connectionId: 'local', profile: 'default' })
++  clearSessionDraft(NEW_SESSION_DRAFT_KEY, { connectionId: 'remote-draft', profile: 'default' })
++  mainComposerScope.clear()
++  setApiRequestConnection(null)
++  setApiRequestLocalMode(false)
++  runtime.text = ''
++})
++
++it('restores a first-visit Settings draft when the Local pool gains its explicit registry tag', () => {
++  setApiRequestLocalMode(true)
++  setApiRequestConnection(null)
++  render(
++    <MemoryRouter initialEntries={['/']}>
++      <Harness />
++    </MemoryRouter>
++  )
++  const text = 'ทดสอบ Settings — keep this draft'
++  fireEvent.input(screen.getByRole('textbox', { name: 'Draft' }), { target: { textContent: text } })
++  const actual = runtime.text
++  expect(actual).toBe(text)
++  fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
++  expect(screen.queryByRole('textbox')).toBeNull()
++  act(() => setApiRequestConnection('local'))
++  fireEvent.click(screen.getByRole('button', { name: 'Close settings' }))
++  expect(composerPlainText(screen.getByRole('textbox', { name: 'Draft' }))).toBe(actual)
++  expect(runtime.text).toBe(actual)
++})
++
++it('keeps the first Settings draft when legacy Local mode resolves after the composer mounted', () => {
++  setApiRequestLocalMode(false)
++  setApiRequestConnection(null)
++  render(
++    <MemoryRouter initialEntries={['/']}>
++      <Harness />
++    </MemoryRouter>
++  )
++  act(() => setApiRequestLocalMode(true))
++  const text = 'ทดสอบ Local startup — keep this draft'
++  fireEvent.input(screen.getByRole('textbox', { name: 'Draft' }), { target: { textContent: text } })
++  expect(runtime.text).toBe(text)
++  fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
++  expect(screen.queryByRole('textbox')).toBeNull()
++  fireEvent.click(screen.getByRole('button', { name: 'Close settings' }))
++  expect(composerPlainText(screen.getByRole('textbox', { name: 'Draft' }))).toBe(text)
++  expect(runtime.text).toBe(text)
++})
++
++it('keeps an explicit remote draft separate when the legacy Local mode flag changes', () => {
++  setApiRequestLocalMode(false)
++  setApiRequestConnection('remote-draft')
++  const local = { connectionId: 'local', profile: 'default' }
++  stashSessionDraft(NEW_SESSION_DRAFT_KEY, 'Other Local draft', [], local)
++  render(
++    <MemoryRouter initialEntries={['/']}>
++      <Harness />
++    </MemoryRouter>
++  )
++  const text = 'Remote draft stays on its owner'
++  fireEvent.input(screen.getByRole('textbox', { name: 'Draft' }), { target: { textContent: text } })
++  act(() => setApiRequestLocalMode(true))
++  fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
++  fireEvent.click(screen.getByRole('button', { name: 'Close settings' }))
++  expect(composerPlainText(screen.getByRole('textbox', { name: 'Draft' }))).toBe(text)
++  expect(takeSessionDraft(NEW_SESSION_DRAFT_KEY, local).text).toBe('Other Local draft')
++})
 diff --git a/apps/desktop/src/app/focus/catalog.test.ts b/apps/desktop/src/app/focus/catalog.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..30af00844d3a601d3da6537f213e0145521a0a58
@@ -21135,6 +21303,202 @@ index fa2b1996b102517262ac337612b8ec226dd54399..9fd3e55fdb92c9cce8da85aff04d17b4
  import type { DelegationRouting } from '@/api/delegation'
 -import type { HermesApiRequest } from '@/global'
  import { queryClient } from '@/lib/query-client'
+diff --git a/apps/desktop/src/app/settings/index.tsx b/apps/desktop/src/app/settings/index.tsx
+index f550dae314b58ea3089a8570be6b5a8335db1aff..2f92d5fb6c32b39707c379bcf31041c5cb70c30c 100644
+--- a/apps/desktop/src/app/settings/index.tsx
++++ b/apps/desktop/src/app/settings/index.tsx
+@@ -1,8 +1,9 @@
+ import { useStore } from '@nanostores/react'
+-import { type ComponentType, useCallback, useEffect, useMemo, useRef } from 'react'
++import { type ComponentType, type RefObject, useCallback, useEffect, useMemo, useRef } from 'react'
+ import { Navigate, useLocation, useNavigate } from 'react-router'
+
++import { ActionsMenu } from '@/components/ui/actions-menu'
++import { Button } from '@/components/ui/button'
+ import { codiconIcon } from '@/components/ui/codicon'
+ import { KbdCombo } from '@/components/ui/kbd'
+-import { Tip } from '@/components/ui/tooltip'
+ import { getHermesConfigDefaults, getHermesConfigRecord, saveHermesConfig } from '@/hermes'
+@@ -41,3 +42,2 @@ import { $settingsScopeProfile } from '@/store/settings-scope'
+ import { useRouteEnumParam } from '../hooks/use-route-enum-param'
+-import { OverlayIconButton } from '../overlays/overlay-chrome'
+ import { OverlayMain, OverlayNav, type OverlayNavGroup, OverlaySplitLayout } from '../overlays/overlay-split-layout'
+@@ -100,2 +100,94 @@ const SUBPAGE_VIEWS: Partial<Record<SettingsViewId, ComponentType<{ subpage?: st
+
++// OverlayNav mounts wide and narrow footers together; each needs its own trigger.
++function SettingsActions({
++  importInputRef,
++  onConfigSaved
++}: {
++  importInputRef: RefObject<HTMLInputElement | null>
++  onConfigSaved: SettingsPageProps['onConfigSaved']
++}) {
++  const { t } = useI18n()
++  const actionsTriggerRef = useRef<HTMLButtonElement | null>(null)
++
++  const exportConfig = async () => {
++    try {
++      const cfg = await getHermesConfigRecord()
++      const blob = new Blob([JSON.stringify(cfg, null, 2)], { type: 'application/json' })
++      const url = URL.createObjectURL(blob)
++      const a = document.createElement('a')
++      a.href = url
++      a.download = 'hermes-config.json'
++      a.click()
++      URL.revokeObjectURL(url)
++      triggerHaptic('success')
++    } catch (err) {
++      notifyError(err, t.settings.exportFailed)
++    }
++  }
++
++  const resetConfig = async () => {
++    const ok = await confirm({
++      confirmLabel: t.settings.resetToDefaults,
++      onCloseAutoFocus: event => {
++        event.preventDefault()
++        actionsTriggerRef.current?.focus()
++      },
++      destructive: true,
++      title: t.settings.resetConfirm
++    })
++
++    if (!ok) {
++      return
++    }
++
++    try {
++      await saveHermesConfig(await getHermesConfigDefaults())
++      triggerHaptic('success')
++      onConfigSaved?.()
++    } catch (err) {
++      notifyError(err, t.settings.resetFailed)
++    }
++  }
++
++  return (
++    <ActionsMenu
++      align="start"
++      ariaLabel={t.settings.envActions.actions}
++      items={kit => (
++        <>
++          <kit.Item onSelect={() => void exportConfig()}>
++            <Download />
++            {t.settings.exportConfig}
++          </kit.Item>
++          <kit.Item
++            onSelect={() => {
++              triggerHaptic('open')
++              importInputRef.current?.click()
++            }}
++          >
++            <Upload />
++            {t.settings.importConfig}
++          </kit.Item>
++          <kit.Separator />
++          <kit.Item
++            onSelect={() => {
++              triggerHaptic('warning')
++              void resetConfig()
++            }}
++            variant="destructive"
++          >
++            <RefreshCw />
++            {t.settings.resetToDefaults}
++          </kit.Item>
++        </>
++      )}
++    >
++      <Button ref={actionsTriggerRef} size="sm" type="button" variant="ghost">
++        <Settings2 />
++        {t.settings.envActions.actions}
++      </Button>
++    </ActionsMenu>
++  )
++}
++
+ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: SettingsPageProps) {
+@@ -207,38 +299,2 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
+
+-  const exportConfig = async () => {
+-    try {
+-      const cfg = await getHermesConfigRecord()
+-      const blob = new Blob([JSON.stringify(cfg, null, 2)], { type: 'application/json' })
+-      const url = URL.createObjectURL(blob)
+-      const a = document.createElement('a')
+-      a.href = url
+-      a.download = 'hermes-config.json'
+-      a.click()
+-      URL.revokeObjectURL(url)
+-      triggerHaptic('success')
+-    } catch (err) {
+-      notifyError(err, t.settings.exportFailed)
+-    }
+-  }
+-
+-  const resetConfig = async () => {
+-    const ok = await confirm({
+-      confirmLabel: t.settings.resetToDefaults,
+-      destructive: true,
+-      title: t.settings.resetConfirm
+-    })
+-
+-    if (!ok) {
+-      return
+-    }
+-
+-    try {
+-      await saveHermesConfig(await getHermesConfigDefaults())
+-      triggerHaptic('success')
+-      onConfigSaved?.()
+-    } catch (err) {
+-      notifyError(err, t.settings.resetFailed)
+-    }
+-  }
+-
+   const navGroups: OverlayNavGroup[] = useMemo(
+@@ -506,33 +562,2 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
+
+-  const navFooter = (
+-    <>
+-      <Tip label={t.settings.exportConfig}>
+-        <OverlayIconButton onClick={() => void exportConfig()}>
+-          <Download />
+-        </OverlayIconButton>
+-      </Tip>
+-      <Tip label={t.settings.importConfig}>
+-        <OverlayIconButton
+-          onClick={() => {
+-            triggerHaptic('open')
+-            importInputRef.current?.click()
+-          }}
+-        >
+-          <Upload />
+-        </OverlayIconButton>
+-      </Tip>
+-      <Tip label={t.settings.resetToDefaults}>
+-        <OverlayIconButton
+-          className="hover:text-destructive"
+-          onClick={() => {
+-            triggerHaptic('warning')
+-            void resetConfig()
+-          }}
+-        >
+-          <RefreshCw />
+-        </OverlayIconButton>
+-      </Tip>
+-    </>
+-  )
+-
+   const SubpageView = SUBPAGE_VIEWS[activeView]
+@@ -579,3 +604,6 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
+       <OverlaySplitLayout>
+-        <OverlayNav footer={navFooter} groups={navGroups} />
++        <OverlayNav
++          footer={<SettingsActions importInputRef={importInputRef} onConfigSaved={onConfigSaved} />}
++          groups={navGroups}
++        />
+
 diff --git a/apps/desktop/src/app/settings/profile-scope.test.tsx b/apps/desktop/src/app/settings/profile-scope.test.tsx
 index ce247ebbd1ec49fa1708030b396849c32ba49f38..9328312453a7b2140a7edc435c7e65e3e37a5c42 100644
 --- a/apps/desktop/src/app/settings/profile-scope.test.tsx
@@ -21308,6 +21672,239 @@ index fb45db8578840ad35d929b158926a2dcd0170622..256212523e4545e70854c1a48f813227
            aria-haspopup="listbox"
 +          aria-label={ariaLabel}
            className={cn(
+diff --git a/apps/desktop/src/app/settings/settings-actions.test.tsx b/apps/desktop/src/app/settings/settings-actions.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..23b59aacbe500ad0c471e312343daeab89dc1d05
+--- /dev/null
++++ b/apps/desktop/src/app/settings/settings-actions.test.tsx
+@@ -0,0 +1,227 @@
++import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
++import type { ReactNode, Ref } from 'react'
++import { MemoryRouter } from 'react-router'
++import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest'
++
++import { ConfirmHost } from '@/components/confirm-host'
++import type * as HermesApi from '@/hermes'
++import { getHermesConfigDefaults, getHermesConfigRecord, saveHermesConfig } from '@/hermes'
++import { I18nProvider } from '@/i18n'
++import { $confirmRequest, settleConfirm } from '@/store/confirm'
++
++import { SettingsView } from './index'
++
++const layout = vi.hoisted(() => ({ narrow: false }))
++
++// Isolate unrelated panes and native I/O; keep the actual action menu and confirmation host.
++vi.mock('@/hermes', async importOriginal => ({
++  ...(await importOriginal<typeof HermesApi>()),
++  getHermesConfigDefaults: vi.fn(async () => ({})),
++  getHermesConfigRecord: vi.fn(async () => ({})),
++  retainConfigReadOrigin: (record: unknown) => record,
++  saveHermesConfig: vi.fn(async () => ({ ok: true }))
++}))
++vi.mock('@/lib/haptics', () => ({ triggerHaptic: () => {} }))
++vi.mock('@/store/desktop-metrics', () => ({ recordFeatureUse: () => {}, settingsArea: () => 'settings' }))
++vi.mock('@/store/keybinds', () => ({ bindingsFor: () => [] }))
++vi.mock('@/store/command-palette', async () => ({
++  $commandPaletteOpen: (await import('nanostores')).atom(false),
++  openCommandPalettePage: () => {}
++}))
++vi.mock('../overlays/overlay-view', () => ({
++  OverlayView: ({ children }: { children: ReactNode }) => <>{children}</>
++}))
++vi.mock('../overlays/overlay-split-layout', () => ({
++  OverlaySplitLayout: ({ children }: { children: ReactNode }) => <>{children}</>,
++  OverlayMain: ({ children }: { children: ReactNode }) => <>{children}</>,
++  OverlayNav: ({ footer }: { footer: ReactNode }) => (
++    <nav aria-label="Settings">
++      {/* Match OverlayNav: both responsive footers stay mounted. */}
++      <div hidden={layout.narrow}>{footer}</div>
++      <div hidden={!layout.narrow}>{footer}</div>
++    </nav>
++  )
++}))
++vi.mock('./subpage-navigation', () => ({ SettingsSubpageHeader: () => null }))
++vi.mock('./about-settings', () => ({ AboutSettings: () => null }))
++vi.mock('./appearance-settings', () => ({ AppearanceSettings: () => null }))
++vi.mock('./billing', () => ({ BILLING_VIEWS: ['overview', 'plans'], BillingSettings: () => null }))
++vi.mock('./billing/use-billing-state', () => ({
++  useBillingState: () => ({ data: undefined }),
++  useSubscriptionState: () => ({ data: undefined }),
++  deriveBillingView: () => ({ status: 'loading' })
++}))
++vi.mock('./config-settings', () => ({
++  ConfigSettings: ({ importInputRef }: { importInputRef: Ref<HTMLInputElement> }) => (
++    <input aria-label="Config import" ref={importInputRef} type="file" />
++  )
++}))
++vi.mock('./gateway-settings', () => ({ GatewaySettings: () => null }))
++vi.mock('./keybind-settings', () => ({ KeybindSettings: () => null }))
++vi.mock('./keys-settings', () => ({ KEYS_VIEWS: ['tools'], KeysSettings: () => null }))
++vi.mock('./notifications-settings', () => ({ NotificationsSettings: () => null }))
++vi.mock('./providers-settings', () => ({ PROVIDER_VIEWS: ['accounts'], ProvidersSettings: () => null }))
++vi.mock('./sessions-settings', () => ({ SessionsSettings: () => null }))
++vi.mock('./vault-settings', () => ({ VaultSettings: () => null, vaultOwnerKey: () => 'local/default' }))
++vi.mock('./plugin-settings', () => ({
++  PLUGINS_NAV_ICON: () => null,
++  pluginSettingsNavChildren: () => [],
++  PluginSettingsPane: () => null,
++  usePluginSettingsRoute: () => ({ entries: [], pending: false, missing: false })
++}))
++
++const configuration = { model: { default: 'synthetic-offline' }, terminal: { backend: 'local' } }
++let exported: Blob | undefined
++let downloadName = ''
++const revokeObjectURL = vi.fn()
++let settingsRender: ReturnType<typeof render>
++
++function SettingsHarness({ showSettings = true }: { showSettings?: boolean }) {
++  return (
++    <I18nProvider configClient={null} initialLocale="en">
++      <MemoryRouter initialEntries={['/settings?page=main']}>
++        {showSettings ? <SettingsView onClose={() => {}} /> : <button type="button">Other screen</button>}
++        <ConfirmHost />
++      </MemoryRouter>
++    </I18nProvider>
++  )
++}
++
++beforeAll(() => {
++  vi.stubGlobal(
++    'URL',
++    class extends URL {
++      static createObjectURL(blob: Blob) {
++        exported = blob
++
++        return 'blob:synthetic-settings'
++      }
++      static revokeObjectURL = revokeObjectURL
++    }
++  )
++})
++
++beforeEach(() => {
++  layout.narrow = false
++  exported = undefined
++  downloadName = ''
++  vi.clearAllMocks()
++  vi.mocked(getHermesConfigRecord).mockResolvedValue(structuredClone(configuration))
++  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
++    downloadName = this.download
++  })
++  settingsRender = render(<SettingsHarness />)
++})
++
++afterEach(() => {
++  settleConfirm(false)
++  cleanup()
++  vi.restoreAllMocks()
++})
++afterAll(() => vi.unstubAllGlobals())
++
++async function openActions() {
++  const trigger = screen.getByRole('button', { name: 'Actions' })
++  fireEvent.pointerDown(trigger, { button: 0, pointerType: 'mouse' })
++  await screen.findByRole('menu')
++
++  return trigger
++}
++
++it('names the three configuration actions in a visible menu', async () => {
++  const trigger = await openActions()
++  expect(trigger.textContent).toContain('Actions')
++  expect(screen.getAllByRole('menuitem').map(item => item.textContent)).toEqual([
++    'Export config',
++    'Import config',
++    'Reset to defaults'
++  ])
++  expect(getHermesConfigDefaults).not.toHaveBeenCalled()
++  expect(saveHermesConfig).not.toHaveBeenCalled()
++})
++
++it('opens and dismisses the action menu with the keyboard', async () => {
++  const trigger = screen.getByRole('button', { name: 'Actions' })
++  trigger.focus()
++  fireEvent.keyDown(trigger, { key: 'ArrowDown' })
++  const first = await screen.findByRole('menuitem', { name: 'Export config' })
++  await waitFor(() => expect(first.ownerDocument.activeElement).toBe(first))
++  fireEvent.keyDown(first, { key: 'ArrowDown' })
++  const next = screen.getByRole('menuitem', { name: 'Import config' })
++  await waitFor(() => expect(next.ownerDocument.activeElement).toBe(next))
++  fireEvent.keyDown(next, { key: 'Escape' })
++  await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
++  await waitFor(() => expect(trigger.ownerDocument.activeElement).toBe(trigger))
++})
++
++it('exports the current configuration through the existing download path', async () => {
++  await openActions()
++  fireEvent.click(screen.getByRole('menuitem', { name: 'Export config' }))
++  await waitFor(() => expect(exported).toBeDefined())
++
++  const content = await new Promise<string>((resolve, reject) => {
++    const reader = new FileReader()
++    reader.onload = () => resolve(String(reader.result))
++    reader.onerror = reject
++    reader.readAsText(exported!)
++  })
++
++  expect(JSON.parse(content)).toEqual(configuration)
++  expect(downloadName).toBe('hermes-config.json')
++  expect(revokeObjectURL).toHaveBeenCalledWith('blob:synthetic-settings')
++  expect(saveHermesConfig).not.toHaveBeenCalled()
++})
++
++it('opens the existing import input without saving configuration', async () => {
++  const input = screen.getByLabelText('Config import')
++  const click = vi.spyOn(input, 'click')
++  await openActions()
++  fireEvent.click(screen.getByRole('menuitem', { name: 'Import config' }))
++  expect(click).toHaveBeenCalledTimes(1)
++  expect(saveHermesConfig).not.toHaveBeenCalled()
++  expect(getHermesConfigDefaults).not.toHaveBeenCalled()
++})
++
++it.each([false, true])(
++  'preserves config and returns Cancel focus to the visible Actions trigger (narrow=%s)',
++  async narrow => {
++    layout.narrow = narrow
++    settingsRender.rerender(<SettingsHarness />)
++    const trigger = await openActions()
++    fireEvent.click(screen.getByRole('menuitem', { name: 'Reset to defaults' }))
++    await screen.findByRole('dialog', { name: 'Reset all settings to Hermes defaults?' })
++    expect(screen.getAllByRole('dialog')).toHaveLength(1)
++    expect($confirmRequest.get()?.destructive).toBe(true)
++    expect(getHermesConfigDefaults).not.toHaveBeenCalled()
++    expect(saveHermesConfig).not.toHaveBeenCalled()
++    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Cancel' })))
++    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
++    expect($confirmRequest.get()).toBeNull()
++    await waitFor(() => expect(trigger.ownerDocument.activeElement).toBe(trigger))
++    expect(getHermesConfigDefaults).not.toHaveBeenCalled()
++    expect(saveHermesConfig).not.toHaveBeenCalled()
++    expect(await getHermesConfigRecord()).toEqual(configuration)
++    fireEvent.keyDown(trigger, { key: 'Enter' })
++    const first = await screen.findByRole('menuitem', { name: 'Export config' })
++    await waitFor(() => expect(first.ownerDocument.activeElement).toBe(first))
++    fireEvent.keyDown(first, { key: 'Escape' })
++    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
++    await waitFor(() => expect(trigger.ownerDocument.activeElement).toBe(trigger))
++  }
++)
++
++it('does not redirect focus if Settings unmounts while Reset confirmation is open', async () => {
++  await openActions()
++  fireEvent.click(screen.getByRole('menuitem', { name: 'Reset to defaults' }))
++  const dialog = await screen.findByRole('dialog', { name: 'Reset all settings to Hermes defaults?' })
++  const closed = vi.fn()
++  dialog.addEventListener('focusScope.autoFocusOnUnmount', closed)
++  settingsRender.rerender(<SettingsHarness showSettings={false} />)
++  const other = screen.getByText('Other screen')
++  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Cancel' })))
++  await waitFor(() => expect(closed).toHaveBeenCalledTimes(1))
++  expect(screen.queryByRole('dialog')).toBeNull()
++  expect(other.ownerDocument.activeElement).not.toBe(other)
++  expect(saveHermesConfig).not.toHaveBeenCalled()
++  expect(getHermesConfigDefaults).not.toHaveBeenCalled()
++})
 diff --git a/apps/desktop/src/app/shell/account-usage-statusbar.test.tsx b/apps/desktop/src/app/shell/account-usage-statusbar.test.tsx
 new file mode 100644
 index 0000000000000000000000000000000000000000..fe28c0e6f75cb9008d117c9744de6233f37b44f4
@@ -22221,6 +22818,14 @@ index 75efbfd7e0a8b37f91b8e531d76c9ff1cbc1bc13..3d287cb58fb03014b4a720b28532c539
 -        <Wordmark className="mb-1" text={WORDMARK} />
 +        {compact ? <h1>{t.sidebar.nav['new-session']}</h1> : <Wordmark className="mb-1" text={WORDMARK} />}
  
+diff --git a/apps/desktop/src/components/confirm-host.tsx b/apps/desktop/src/components/confirm-host.tsx
+index 02446f70d04439af18f5e2aca282b64fb4e08061..2d79d5510712b7525c9284933232055e854147bc 100644
+--- a/apps/desktop/src/components/confirm-host.tsx
++++ b/apps/desktop/src/components/confirm-host.tsx
+@@ -35,2 +35,3 @@ export function ConfirmHost() {
+       onClose={() => settleConfirm(shown.phase === 'done', shown)}
++      onCloseAutoFocus={shown.onCloseAutoFocus}
+       onConfirm={() => runConfirm(shown)}
 diff --git a/apps/desktop/src/components/notifications.test.tsx b/apps/desktop/src/components/notifications.test.tsx
 index 23f07b1fd9939bd8194bc2770b5b8b3d063ca773..c4733a307f1174737289cff2034b0e98b0c75c98 100644
 --- a/apps/desktop/src/components/notifications.test.tsx
@@ -22928,6 +23533,22 @@ index 81a8dce948384a21ccbf5e43d00dafe38e012565..88600e09d6b5a5bb09f2aae32dc87d4a
          variant === 'menu' ? 'dt-portal-scrollbar max-h-72' : 'max-h-100',
 -        pointerQuiet && 'pointer-events-none',
          className
+diff --git a/apps/desktop/src/components/ui/confirm-dialog.tsx b/apps/desktop/src/components/ui/confirm-dialog.tsx
+index 37f5a904617d9977b662fd534c3b3c91fcde45bc..6f0a50f539a879c92fdd25dc9cfa64e5a74a162e 100644
+--- a/apps/desktop/src/components/ui/confirm-dialog.tsx
++++ b/apps/desktop/src/components/ui/confirm-dialog.tsx
+@@ -19,2 +19,3 @@ interface ConfirmDialogProps {
+   onClose: () => void
++  onCloseAutoFocus?: (event: Event) => void
+   // Does the work. Throw to surface an inline error and keep the dialog open.
+@@ -48,2 +49,3 @@ export function ConfirmDialog({
+   onClose,
++  onCloseAutoFocus,
+   onConfirm,
+@@ -133,2 +135,3 @@ export function ConfirmDialog({
+         className="max-w-md"
++        onCloseAutoFocus={onCloseAutoFocus}
+         onKeyDown={event => {
 diff --git a/apps/desktop/src/components/ui/zoomable.test.tsx b/apps/desktop/src/components/ui/zoomable.test.tsx
 index a276dd89cc2e3727737477c117d307512c7d45f7..b0f097fb4366ada60de6ce28273318fe5c6881a0 100644
 --- a/apps/desktop/src/components/ui/zoomable.test.tsx
@@ -33368,6 +33989,14 @@ index 2c4c553b2819455c47ae32e1990358f2039d1835..3f806971280cc7c25abc0261dd7df3c2
 +  stashSessionDraft(notice.fromKey, notice.text, current.attachments, owner)
 +  clearSessionDraft(null, owner)
    recordDislike('undo', 'restored_draft')
+diff --git a/apps/desktop/src/store/confirm.ts b/apps/desktop/src/store/confirm.ts
+index d1918bdaf54cdcc51e7869eb59aa0003a383eb80..72153a6bc587a7d41dc15dcbe9232755ae183624 100644
+--- a/apps/desktop/src/store/confirm.ts
++++ b/apps/desktop/src/store/confirm.ts
+@@ -10,2 +10,3 @@ export interface ConfirmRequest {
+   onConfirm?: () => Promise<void>
++  onCloseAutoFocus?: (event: Event) => void
+   cancelLabel?: string
 diff --git a/apps/desktop/src/store/dead-session-prune.test.ts b/apps/desktop/src/store/dead-session-prune.test.ts
 index b09a0ac84c5353d16e5f297e0a352664db34c3e4..d6153eb0dad25fa03f8be442351a3f6fc371f797 100644
 --- a/apps/desktop/src/store/dead-session-prune.test.ts
@@ -33547,11 +34176,11 @@ index 0046d47826fe8c53df69858c9b22999ab8717597..c750a6537775a6f6450f159696861e44
  
 diff --git a/apps/desktop/src/store/session-draft-owner.ts b/apps/desktop/src/store/session-draft-owner.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..0b20496cb9c5a9098ef3ef97b8390bd1f7aee16b
+index 0000000000000000000000000000000000000000..ecd9851038771e8d40bdbe4f92162561c0344dbb
 --- /dev/null
 +++ b/apps/desktop/src/store/session-draft-owner.ts
-@@ -0,0 +1,26 @@
-+import { resolveOwnerNow } from '@/api/client'
+@@ -0,0 +1,28 @@
++import { ambientOwnerConnectionId, resolveOwnerNow } from '@/api/client'
 +
 +import type { SessionOwnerScope } from './session-request-router'
 +import { knownOwnerForSession, runtimeSessionOwner } from './session-states'
@@ -33570,7 +34199,9 @@ index 0000000000000000000000000000000000000000..0b20496cb9c5a9098ef3ef97b8390bd1
 +  const ambient = resolveOwnerNow()
 +  const profile = ambient.profile || 'default'
 +
-+  return ambient.connectionId ? { connectionId: ambient.connectionId, profile } : profile
++  const connectionId = ambientOwnerConnectionId()
++
++  return connectionId ? { connectionId, profile } : profile
 +}
 +
 +/** Creation already captured these fields before its first await. */

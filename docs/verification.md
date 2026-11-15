@@ -1,3 +1,28 @@
+# v0.28.0 — Settings actions keep your place
+
+The corrected renderer passed native Mac acceptance with isolated Local data:
+a Thai/English draft seeded before the first Settings visit remained exact on
+return, and after Export/Import chooser cancellation and Reset Cancel. Named
+Actions and settled Cancel focus worked in wide and narrow windows; Return
+reopened the menu and Escape dismissed it. Configuration bytes stayed exact.
+Both this corrected cohort and its preceding diagnostic cohort passed a 60s
+Local launch gate with zero SSH attempts/executions. Owned processes stopped,
+gateway ports closed, DesktopSSH was zero, and the original trial bundle was
+restored. Raw screenshots and receipts remain outside the release inventory.
+
+The exact late-Local-mode route regression failed before correction and passed
+afterward, with an explicit remote-owner isolation control. The fresh nearest
+selection passed 58 tests across six files, including seven real Settings
+Actions/confirmation integration cases. Scoped lint, renderer types and a
+bounded renderer build passed. Nine changed patch sections apply/hash/reverse
+against the pinned base; unchanged source targets and old mock suites were not
+reswept. Companion tests and the release/secret gates are recorded separately.
+
+This proves the scoped Settings flow on a real native app with synthetic data.
+It does not prove daily-app adoption, a full native suite, completed import or
+destructive reset, remote-host behavior, or production RAM/model savings.
+See [v0.28.0 notes](release-notes-v0.28.0.md) for adoption and manual checks.
+
 # v0.27.0 — Host toolchain probes follow on-demand startup
 
 [Behavior and limits](release-notes-v0.27.0.md). Eight native unittest contracts

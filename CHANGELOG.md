@@ -3,8 +3,23 @@
 What you will notice after applying the source kit and adopting it through the
 supported update or Desktop rebuild path. This kit does not install a rebuilt
 Hermes.app. Linked notes identify opt-in memory settings and admission guards
-that apply after adoption. The changes below are historical; this summary adds
-no runtime feature.
+that apply after adoption. Each entry states its adoption and verification limits.
+
+## v0.28.0 — Settings actions keep your place
+
+- Find **Export config**, **Import config** and **Reset to defaults** under a
+  named **Actions** button, with consistent wide and narrow layouts.
+- Cancel a reset and continue with the keyboard: focus returns to Actions;
+  Return opens its menu again.
+- Keep an unsent Local draft when opening Settings for the first time after
+  startup and returning to Chat.
+
+Apply the source kit and rebuild Desktop to adopt this capability set. Native
+Mac acceptance used isolated Local data: first-visit draft preservation,
+Export/Import cancellation, and Reset Cancel focus at both window widths.
+Completed imports, destructive reset, daily-app adoption and remote-host use
+were not exercised. Older differently owned draft keys are not migrated.
+See [release notes](docs/release-notes-v0.28.0.md) for checks and limits.
 
 ## v0.9.0–v0.27.0 — consolidated capability summary
 

@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1058-path** Legion source, interface and optimization alternative
+This is the complete **1064-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,17 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Settings actions keep your place (v0.28.0)
+
+The grouped Settings capability adds named Actions, keyboard continuation after
+Reset Cancel, and first-visit Local draft preservation. The corrected renderer
+passed native Mac acceptance with isolated data in wide and narrow windows.
+[Behavior, adoption and limits](release-notes-v0.28.0.md). Nine source/test targets
+change from v0.27.0, including six added kit paths; unrelated patch sections are
+retained. The changed sections apply, match their hashes and reverse to the
+pinned base. Rebuild Desktop to adopt; older differently owned drafts are not
+migrated. Remote transport policy is unchanged and no other host was contacted.
 
 ## On-demand host facts (v0.27.0)
 
