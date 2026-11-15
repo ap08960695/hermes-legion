@@ -11,6 +11,16 @@ heartbeat, completion delivery and terminal Refresh. Only model reply content
 and timing were simulated on loopback; no activity rows were seeded. See the
 [v0.29.4 notes](release-notes-v0.29.4.md) for test-runner and live-proof limits.
 
+A later native Local check also exercised a child calling `read_file` on a
+synthetic task file. The result persisted through the real tool and SessionDB
+paths. While its next model response was held, Bots showed Working and step
+1/250; Refresh after the normal heartbeat showed the model-wait description,
+without advertising `read_file` as still running. Native completion returned the
+bot to Ready / Working 0 and removed worker details; the parent received its
+result. Model content and timing were controlled on loopback. This proves
+completed-tool progress and the waiting/terminal transitions, not visibility
+during the brief file read or scoped cancellation. No runtime change was needed.
+
 The Bots rail keeps a bot's canonical conversation preview and opening behavior.
 A separate tools icon and short worker description show a recent observed worker
 stamp. The full localized context is available in the existing tooltip; the row

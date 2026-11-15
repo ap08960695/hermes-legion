@@ -1,3 +1,26 @@
+# Native child file-read monitoring acceptance
+
+On the current v0.29.4 runtime, actual Local UI Send started a native delegated
+child, which called `read_file` once on an isolated synthetic UTF-8 file. Its
+native tool result, child lineage, step count, heartbeat and terminal timestamps
+were read back from SQLite. Bots displayed Working / step 1/250 after the read,
+then a native model-wait heartbeat and finally Ready / Working 0 with no active
+worker detail. The parent received the native completion delivery. No lifecycle
+or activity row was inserted by the diagnostic fixture.
+
+Only model replies and timing were simulated on loopback, with five successful
+responses. A preceding cohort was stopped after its preparation omitted the
+model-port registration from the audit guard; the corrected fresh cohort reused
+the previously proven guard. Native shell environment probes remained refused;
+the native file-read path succeeded. This is not shell-tool acceptance. Both
+cohorts closed and restored the task app/config; the accepted cohort passed its
+actual 60-second Local/SSH-zero gate within the four-Hermes-process and 4 GiB
+sampled resource limits. Raw screenshots and receipts remain outside the kit.
+
+The brief running-file-read state, cancellation, sibling/legacy live behavior,
+daily-app adoption and production model/efficiency results remain unverified.
+No runtime patch, dependency or release version changed for this acceptance.
+
 # v0.28.0 — Settings actions keep your place
 
 The corrected renderer passed native Mac acceptance with isolated Local data:
