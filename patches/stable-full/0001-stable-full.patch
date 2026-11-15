@@ -5784,10 +5784,10 @@ index 0000000000000000000000000000000000000000..4455992455b9a0f634f3013dc282c1b3
 +})
 diff --git a/apps/desktop/electron/local-gateway-python-admission.test.ts b/apps/desktop/electron/local-gateway-python-admission.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..85dee11611fbb95709eb187b57ae6e89029a3f1d
+index 0000000000000000000000000000000000000000..a78e661523b3a8734bc46ef7050100a8a56c4e79
 --- /dev/null
 +++ b/apps/desktop/electron/local-gateway-python-admission.test.ts
-@@ -0,0 +1,513 @@
+@@ -0,0 +1,766 @@
 +import { EventEmitter } from 'node:events'
 +import { PassThrough } from 'node:stream'
 +
@@ -5884,9 +5884,12 @@ index 0000000000000000000000000000000000000000..85dee11611fbb95709eb187b57ae6e89
 +  expect(helpers[0].kill).not.toHaveBeenCalled()
 +  helpers[0].reply('a'); await a
 +  helpers[0].emit('close')
++  expect(helpers[1].frames).toHaveLength(1)
++  helpers[1].reply('b1', 0)
++  await expect(b).resolves.toBe('b1')
 +  expect(helpers[1].frames).toHaveLength(2)
-+  helpers[1].reply('b1', 0); helpers[1].reply('b2', 1)
-+  await expect(b).resolves.toBe('b1'); await expect(b2).resolves.toBe('b2')
++  helpers[1].reply('b2', 1)
++  await expect(b2).resolves.toBe('b2')
 +  helpers[1].emit('close')
 +  helpers[2].reply('c'); await expect(c).resolves.toBe('c')
 +})
@@ -6301,6 +6304,256 @@ index 0000000000000000000000000000000000000000..85dee11611fbb95709eb187b57ae6e89
 +  helpers[0].emit('close', 0)
 +  await Promise.allSettled([first, ...pending])
 +})
++
++
++it('submits only one request to a cached busy helper until its reply', async () => {
++  const first = mint()
++  const second = mint()
++  expect(helpers).toHaveLength(1)
++  expect(helpers[0].frames).toHaveLength(1)
++  helpers[0].reply('first-grant', 0)
++  await expect(first).resolves.toBe('first-grant')
++  expect(helpers[0].frames).toHaveLength(2)
++  helpers[0].reply('second-grant', 1)
++  await expect(second).resolves.toBe('second-grant')
++})
++
++
++it('serializes purposes and owner instances with captured queued identity and fresh grants', async () => {
++  const env = { EXTRA: 'original' }
++  const ep = { ...endpoint(), instance_id: 'next-owner' }
++  const first = api.mintGatewayTicketWithPython({ ...backend, env }, '/cwd', endpoint(), 'interactive')
++  const second = api.mintGatewayTicketWithPython({ ...backend, env }, '/cwd', ep, 'native-http')
++  const third = api.mintGatewayTicketWithPython({ ...backend, env }, '/cwd', { ...endpoint(), instance_id: 'third-owner' }, 'native-profile-create')
++
++  for (const call of [first, second, third]) { void call.catch(() => {}) }
++  ep.instance_id = 'mutated'; env.EXTRA = 'mutated'
++  expect(helpers[0].frames).toHaveLength(1)
++  helpers[0].reply('fresh-one')
++  await expect(first).resolves.toBe('fresh-one')
++  expect(helpers[0].frames).toHaveLength(2)
++  expect(helpers[0].frames[1]).toMatchObject({ purpose: 'native-http', endpoint: { instance_id: 'next-owner' } })
++  helpers[0].reply('fresh-two')
++  await expect(second).resolves.toBe('fresh-two')
++  expect(helpers[0].frames).toHaveLength(3)
++  expect(helpers[0].frames[2]).toMatchObject({ purpose: 'native-profile-create', endpoint: { instance_id: 'third-owner' } })
++  helpers[0].reply('fresh-three')
++  await expect(third).resolves.toBe('fresh-three')
++  expect(helpers).toHaveLength(1)
++  expect(spawn.mock.calls[0][2].env.EXTRA).toBe('original')
++})
++
++it('counts busy-helper requests and runtime lookups in the same 256 waiting positions', async () => {
++  const active = mint()
++  const waiting = Array.from({ length: 255 }, () => mint())
++  const runtime = api.ticketRuntimeFor({ command: '/launcher', kind: 'command', root: '/cwd' })
++  void runtime.catch(() => {})
++  await expect(mint()).rejects.toThrow('Gateway ticket helper queue is full')
++  expect(helpers).toHaveLength(1)
++  expect(helpers[0].frames).toHaveLength(1)
++  api.closeGatewayTicketBridges()
++  helpers[0].emit('close', 0)
++  const outcomes = await Promise.allSettled([active, ...waiting, runtime])
++  expect(outcomes.every(result => result.status === 'rejected')).toBe(true)
++  await vi.advanceTimersByTimeAsync(30001)
++  expect(helpers).toHaveLength(1)
++})
++
++it('deducts busy-helper waiting from the original ten-second mint budget', async () => {
++  const active = mint(); const queued = mint()
++  await vi.advanceTimersByTimeAsync(9000)
++  helpers[0].reply('first')
++  await expect(active).resolves.toBe('first')
++  expect(helpers[0].frames).toHaveLength(2)
++  await vi.advanceTimersByTimeAsync(999)
++  expect(helpers[0].kill).not.toHaveBeenCalled()
++  await vi.advanceTimersByTimeAsync(1)
++  await expect(queued).rejects.toThrow('Gateway ticket bootstrap failed')
++  expect(helpers[0].kill).toHaveBeenCalledOnce()
++  helpers[0].reply('late', 1)
++  expect(helpers[0].frames).toHaveLength(2)
++  helpers[0].emit('close', 0)
++})
++
++it('expires an unassigned ticket behind a longer runtime admission without writing it', async () => {
++  const active = mint()
++  const runtime = api.ticketRuntimeFor({ command: '/launcher', kind: 'command', root: '/cwd' })
++  void runtime.catch(() => {})
++  const nonHead = mint()
++  await vi.advanceTimersByTimeAsync(10000)
++  await expect(active).rejects.toThrow('Gateway ticket bootstrap failed')
++  await expect(nonHead).rejects.toThrow('admission timed out')
++  expect(helpers).toHaveLength(1)
++  expect(helpers[0].frames).toHaveLength(1)
++  helpers[0].emit('close', 0)
++  expect(helpers).toHaveLength(2)
++  expect(helpers[1].frames).toHaveLength(0)
++  helpers[1].stdout.write(JSON.stringify([process.execPath]))
++  helpers[1].emit('close', 0)
++  await expect(runtime).resolves.toMatchObject({ command: process.execPath })
++  expect(helpers).toHaveLength(2)
++})
++
++it('expires a blocked ticket head and lets a later live helper request advance', async () => {
++  api.configureGatewayTicketHelpers({ gatewayTicketHelperLimit: 2, gatewayTicketHelperIdleMs: 30000 })
++  const prime = mint('b'); helpers[0].reply('prime'); await prime
++  const active = mint(); const head = mint()
++  await vi.advanceTimersByTimeAsync(5000)
++  const otherActive = mint('b'); const otherQueued = mint('b')
++  expect(helpers[0].frames).toHaveLength(2)
++  expect(helpers[1].frames).toHaveLength(1)
++  await vi.advanceTimersByTimeAsync(5000)
++  await expect(active).rejects.toThrow('Gateway ticket bootstrap failed')
++  await expect(head).rejects.toThrow('admission timed out')
++  expect(helpers[1].frames).toHaveLength(1)
++  helpers[0].reply('other-active', 1)
++  await expect(otherActive).resolves.toBe('other-active')
++  expect(helpers[0].frames).toHaveLength(3)
++  helpers[0].reply('other-queued', 2)
++  await expect(otherQueued).resolves.toBe('other-queued')
++})
++
++it('preserves a native refusal reason and admits the next request on the healthy helper', async () => {
++  const active = mint(); const queued = mint()
++  helpers[0].stdout.write(JSON.stringify({ id: helpers[0].frames[0].id, error: 'owner-changed' }) + '\n')
++  await expect(active).rejects.toHaveProperty('reason', 'owner-changed')
++  expect(helpers[0].frames).toHaveLength(2)
++  expect(helpers[0].kill).not.toHaveBeenCalled()
++  helpers[0].reply('fresh-owner')
++  await expect(queued).resolves.toBe('fresh-owner')
++  expect(helpers).toHaveLength(1)
++})
++
++it.each(['child error', 'stdin error', 'malformed reply', 'unknown reply'])('holds the retiring slot after %s while an unassigned request waits', async failure => {
++  const active = mint(); const queued = mint()
++  let queuedSettled = false
++  void queued.then(() => { queuedSettled = true }, () => { queuedSettled = true })
++
++  if (failure === 'child error') { helpers[0].emit('error', new Error('transport failed')) }
++  else if (failure === 'stdin error') { helpers[0].stdin.emit('error', new Error('pipe failed')) }
++  else if (failure === 'malformed reply') { helpers[0].stdout.write('not json\n') }
++  else { helpers[0].stdout.write(JSON.stringify({ id: 999, ticket: 'unknown' }) + '\n') }
++
++  await expect(active).rejects.toThrow('Gateway ticket bootstrap failed')
++  expect(queuedSettled).toBe(false)
++  expect(helpers).toHaveLength(1)
++  expect(helpers[0].frames).toHaveLength(1)
++  expect(helpers[0].kill).toHaveBeenCalledOnce()
++  helpers[0].emit('close', 0)
++  expect(helpers).toHaveLength(2)
++  helpers[0].emit('close', 0)
++  helpers[1].reply('replacement-grant')
++  await expect(queued).resolves.toBe('replacement-grant')
++  expect(helpers).toHaveLength(2)
++})
++
++it('handles an unannounced child close once before replacing its queued request', async () => {
++  const active = mint(); const queued = mint()
++  helpers[0].emit('close', 0)
++  await expect(active).rejects.toThrow('Gateway ticket bootstrap failed')
++  expect(helpers).toHaveLength(2)
++  helpers[0].emit('close', 0)
++  const nextProfile = mint('c')
++  expect(helpers).toHaveLength(2)
++  helpers[1].reply('replacement')
++  await expect(queued).resolves.toBe('replacement')
++  helpers[1].emit('close', 0)
++  expect(helpers).toHaveLength(3)
++  helpers[2].reply('c')
++  await expect(nextProfile).resolves.toBe('c')
++})
++
++it('cancels active and unassigned ticket/runtime jobs without reviving old output after reset', async () => {
++  const active = mint(); const queued = mint()
++  const runtime = api.ticketRuntimeFor({ command: '/launcher', kind: 'command', root: '/cwd' })
++  void runtime.catch(() => {})
++  api.closeGatewayTicketBridges()
++  await expect(active).rejects.toThrow('Gateway ticket bootstrap failed')
++  await expect(queued).rejects.toThrow('runtime changed')
++  await expect(runtime).rejects.toThrow('runtime changed')
++  const replacement = mint()
++  helpers[0].reply('obsolete', 0)
++  expect(helpers).toHaveLength(1)
++  helpers[0].emit('close', 0)
++  helpers[0].emit('close', 0)
++  expect(helpers).toHaveLength(2)
++  expect(helpers[1].frames).toHaveLength(1)
++  helpers[1].reply('new-generation')
++  await expect(replacement).resolves.toBe('new-generation')
++})
++
++it('keeps a busy cached head ahead of later queued work even with a second free slot', async () => {
++  api.configureGatewayTicketHelpers({ gatewayTicketHelperLimit: 2 })
++  const active = mint(); const queued = mint(); const other = mint('b')
++  expect(helpers).toHaveLength(1)
++  helpers[0].reply('a1')
++  await expect(active).resolves.toBe('a1')
++  expect(helpers[0].frames).toHaveLength(2)
++  expect(helpers).toHaveLength(2)
++  helpers[1].reply('b'); helpers[0].reply('a2')
++  await expect(queued).resolves.toBe('a2')
++  await expect(other).resolves.toBe('b')
++})
++
++it('lets an idle cached helper fast path bypass a busy queued head', async () => {
++  api.configureGatewayTicketHelpers({ gatewayTicketHelperLimit: 2 })
++  const prime = mint('b'); helpers[0].reply('prime'); await prime
++  const active = mint(); const queued = mint()
++  const bypass = mint('b')
++  expect(helpers[0].frames).toHaveLength(2)
++  expect(helpers[1].frames).toHaveLength(1)
++  helpers[0].reply('bypass')
++  await expect(bypass).resolves.toBe('bypass')
++  helpers[1].reply('a1')
++  await expect(active).resolves.toBe('a1')
++  expect(helpers[1].frames).toHaveLength(2)
++  helpers[1].reply('a2')
++  await expect(queued).resolves.toBe('a2')
++})
++
++it('serves busy-queued requests on the existing helper under low memory without observing again', async () => {
++  const active = mint(); const queued = mint()
++  vi.mocked(process.availableMemory).mockReturnValue(0)
++  const observations = vi.mocked(process.availableMemory).mock.calls.length
++  helpers[0].reply('a1')
++  await expect(active).resolves.toBe('a1')
++  expect(helpers[0].frames).toHaveLength(2)
++  helpers[0].reply('a2')
++  await expect(queued).resolves.toBe('a2')
++  expect(process.availableMemory).toHaveBeenCalledTimes(observations)
++  expect(helpers).toHaveLength(1)
++})
++
++it('keeps oversized busy-helper requests out of the queue and admits the following valid request', async () => {
++  const active = mint()
++  await expect(api.mintGatewayTicketWithPython(backend, '/cwd', { ...endpoint(), instance_id: 'x'.repeat(65536) }, 'interactive')).rejects.toThrow('too large')
++  const queued = mint()
++  expect(helpers[0].frames).toHaveLength(1)
++  helpers[0].reply('a1'); await active
++  expect(helpers[0].frames).toHaveLength(2)
++  helpers[0].reply('a2')
++  await expect(queued).resolves.toBe('a2')
++})
++
++
++it('keeps one written request per helper with a fixed limit of two', async () => {
++  api.configureGatewayTicketHelpers({ gatewayTicketHelperLimit: 2 })
++  const a1 = mint(); const b1 = mint('b'); const a2 = mint(); const b2 = mint('b')
++  expect(helpers).toHaveLength(2)
++  expect(helpers[0].frames).toHaveLength(1)
++  expect(helpers[1].frames).toHaveLength(1)
++  helpers[1].reply('b1')
++  await expect(b1).resolves.toBe('b1')
++  expect(helpers[1].frames).toHaveLength(1)
++  helpers[0].reply('a1')
++  await expect(a1).resolves.toBe('a1')
++  expect(helpers[0].frames).toHaveLength(2)
++  expect(helpers[1].frames).toHaveLength(2)
++  helpers[0].reply('a2'); helpers[1].reply('b2')
++  await expect(a2).resolves.toBe('a2')
++  await expect(b2).resolves.toBe('b2')
++  expect(helpers).toHaveLength(2)
++})
 diff --git a/apps/desktop/electron/local-gateway-python-launcher-argv.test.ts b/apps/desktop/electron/local-gateway-python-launcher-argv.test.ts
 index b03f70fabfc95aa5d16d163075f463bfc8614e96..9f3f6a05a5299cefeefd6a228ebef69b99fcf7f8 100644
 --- a/apps/desktop/electron/local-gateway-python-launcher-argv.test.ts
@@ -6335,14 +6588,14 @@ index 5afdabe2d0606a3a1d515ce595825aff0f68b9cd..bf1d9bd5cecc5f30c6e119ff809c3208
 +
  beforeEach(async () => { dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'ticket-runtime-'))) })
 diff --git a/apps/desktop/electron/local-gateway-python.ts b/apps/desktop/electron/local-gateway-python.ts
-index 25f6be5afdd223c7e4ce48c37075a1f034f19150..231c5de6d490978cf3efc0e81178d9151e399341 100644
+index 25f6be5afdd223c7e4ce48c37075a1f034f19150..55ac8062abfbd2ce601992ee438165ce2f058f91 100644
 --- a/apps/desktop/electron/local-gateway-python.ts
 +++ b/apps/desktop/electron/local-gateway-python.ts
 @@ -54,2 +54,3 @@ interface PendingTicket {
    timer: ReturnType<typeof setTimeout>
 +  deadline: number
  }
-@@ -57,3 +58,141 @@ interface PendingTicket {
+@@ -57,3 +58,143 @@ interface PendingTicket {
  const bridges = new Map<string, TicketBridge>()
 +const liveBridges = new Set<TicketBridge>()
  let bridgeGeneration = 0
@@ -6424,6 +6677,8 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..231c5de6d490978cf3efc0e81178d915
 +
 +      let bridge = job.kind === 'ticket' ? bridges.get(job.key) : undefined
 +
++      if (bridge && !bridge.idle) { return }
++
 +      if (!bridge && helperSlots >= helperLimit) {
 +        // Retiring children still consume a slot until the OS reports close.
 +        const idle = [...bridges.values()].find(candidate => candidate.idle)
@@ -6484,11 +6739,11 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..231c5de6d490978cf3efc0e81178d915
 +  } finally { pumping = false }
 +}
 
-@@ -72,2 +211,3 @@ class TicketBridge {
+@@ -72,2 +213,3 @@ class TicketBridge {
      }))
 +    liveBridges.add(this)
      this.child.stderr.resume()
-@@ -77,8 +217,14 @@ class TicketBridge {
+@@ -77,8 +219,14 @@ class TicketBridge {
      this.child.stdin.on('error', () => this.dispose())
 -    this.child.on('close', () => this.dispose())
 +    this.child.once('close', () => {
@@ -6506,7 +6761,7 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..231c5de6d490978cf3efc0e81178d915
 
 +  request(endpoint: TicketEndpoint, purpose: GatewayTicketPurpose, deadline: number): Promise<string> {
      return new Promise((resolve, reject) => {
-@@ -95,4 +241,11 @@ class TicketBridge {
+@@ -95,4 +243,11 @@ class TicketBridge {
 
 -      const timer = setTimeout(() => this.dispose(), 10_000)
 -      this.pending.set(id, { resolve, reject, timer })
@@ -6520,12 +6775,12 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..231c5de6d490978cf3efc0e81178d915
 +      const timer = setTimeout(() => this.dispose(), remaining)
 +      this.pending.set(id, { resolve, reject, timer, deadline })
        // Private stdin carries identity as data. EOF also retires the helper if Desktop exits.
-@@ -119,3 +272,3 @@ class TicketBridge {
+@@ -119,3 +274,3 @@ class TicketBridge {
 
 -        if (!waiter) { this.dispose();
 +        if (!waiter || performance.now() >= waiter.deadline) { this.dispose();
 
-@@ -134,3 +287,7 @@ class TicketBridge {
+@@ -134,3 +289,7 @@ class TicketBridge {
 
 -    if (!this.pending.size) { this.idleTimer = setTimeout(() => this.dispose(), 30_000) }
 +    if (!this.pending.size) {
@@ -6534,7 +6789,7 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..231c5de6d490978cf3efc0e81178d915
 +      pumpAdmissions()
 +    }
    }
-@@ -156,4 +313,13 @@ export function closeGatewayTicketBridges(): void {
+@@ -156,4 +315,13 @@ export function closeGatewayTicketBridges(): void {
    bridgeGeneration++
 +  clearTimeout(memoryPoll)
 +  memoryPoll = undefined
@@ -6549,7 +6804,7 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..231c5de6d490978cf3efc0e81178d915
 +
 +  for (const lookup of liveRuntimeLookups) { lookup.stop(new Error('Gateway ticket runtime changed; retry connection')) }
  }
-@@ -174,45 +340,89 @@ const RUNTIME_COMMAND_TIMEOUT_MS = 30_000
+@@ -174,45 +342,89 @@ const RUNTIME_COMMAND_TIMEOUT_MS = 30_000
  /** Ask an installation launcher for its interpreter; it owns ABI and store selection. */
 -function launcherRuntimePython(backend: ResolvedTicketBackend & { root: string }): Promise<string> {
 +function launcherRuntimePython(backend: ResolvedTicketBackend & { root: string }, generation: number): Promise<string> {
@@ -6668,14 +6923,14 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..231c5de6d490978cf3efc0e81178d915
 +
 +  if (expired) { lookup.stop(expired) }
  }
-@@ -228,3 +438,5 @@ function isFile(candidate: string): boolean {
+@@ -228,3 +440,5 @@ function isFile(candidate: string): boolean {
   */
 -export async function ticketRuntimeFor(backend: ResolvedTicketBackend): Promise<{ command: string; env?: NodeJS.ProcessEnv }> {
 +export async function ticketRuntimeFor(backend: ResolvedTicketBackend, generation = bridgeGeneration): Promise<{ command: string; env?: NodeJS.ProcessEnv }> {
 +  if (generation !== bridgeGeneration) { throw new Error('Gateway ticket runtime changed; retry connection') }
 +
    if (backend.ticketCommand) {
-@@ -238,5 +450,6 @@ export async function ticketRuntimeFor(backend: ResolvedTicketBackend): Promise<
+@@ -238,5 +452,6 @@ export async function ticketRuntimeFor(backend: ResolvedTicketBackend): Promise<
    if (backend.kind === 'command' && backend.root) {
 -    const python = await launcherRuntimePython({ ...backend, root: backend.root })
 +    const selected = { ...backend, root: backend.root, env: { ...backend.env } }
@@ -6684,17 +6939,17 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..231c5de6d490978cf3efc0e81178d915
 -    return { command: python, env: { ...backend.env, PYTHONPATH: backend.root } }
 +    return { command: python, env: { ...selected.env, PYTHONPATH: selected.root } }
    }
-@@ -256,3 +469,3 @@ export function createGatewayTicketResolver(resolveBackend: () => Promise<Resolv
+@@ -256,3 +471,3 @@ export function createGatewayTicketResolver(resolveBackend: () => Promise<Resolv
 
 -      const flight = resolveBackend().then(ticketRuntimeFor).catch(error => {
 +      const flight = resolveBackend().then(backend => ticketRuntimeFor(backend, generation)).catch(error => {
          if (cached === flight) { cached = undefined }
-@@ -272,3 +485,3 @@ export function createGatewayTicketResolver(resolveBackend: () => Promise<Resolv
+@@ -272,3 +487,3 @@ export function createGatewayTicketResolver(resolveBackend: () => Promise<Resolv
 
 -export function mintGatewayTicketWithPython(
 +export async function mintGatewayTicketWithPython(
    backend: { command: string; env?: NodeJS.ProcessEnv },
-@@ -278,2 +491,9 @@ export function mintGatewayTicketWithPython(
+@@ -278,2 +493,9 @@ export function mintGatewayTicketWithPython(
  ): Promise<string> {
 +  const deadline = performance.now() + 10_000
 +  endpoint = { ...endpoint }
@@ -6704,7 +6959,7 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..231c5de6d490978cf3efc0e81178d915
 +  }
 +
    const env = { ...process.env, ...backend.env, HERMES_HOME: endpoint.profile_id,
-@@ -282,10 +502,25 @@ export function mintGatewayTicketWithPython(
+@@ -282,10 +504,25 @@ export function mintGatewayTicketWithPython(
    const key = JSON.stringify([backend.command, cwd, Object.entries(env).sort(([a], [b]) => a.localeCompare(b))])
 -  let bridge = bridges.get(key)
 +  const bridge = bridges.get(key)
@@ -6713,7 +6968,7 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..231c5de6d490978cf3efc0e81178d915
 -    bridge = new TicketBridge(backend.command, cwd, env, key)
 -    bridges.set(key, bridge)
 -  }
-+  if (bridge) { return bridge.request(endpoint, purpose, deadline) }
++  if (bridge?.idle) { return bridge.request(endpoint, purpose, deadline) }
 
 -  return bridge.request(endpoint, purpose)
 +  if (admissions.length >= 256) { throw new Error('Gateway ticket helper queue is full') }
@@ -91653,10 +91908,10 @@ index 44d25bc19bae30f9665f7c418a2dcf102e6fbccb..ade136286e3e6511ce2962243555153e
 +| `lazy` | bool | both | Register the server's tools from the on-disk schema cache at startup and only spawn/connect it on the first tool call (default: `false`, or `true` for eligible stdio servers under `mcp.memory_saving`). Needs one prior live connect to fill the cache; a missing or stale entry falls back to the normal eager connect. Status surfaces show the server as `lazy` with its cached tool count until first use |
  | `idle_timeout_seconds` | number | stdio | Optional stdio server recycle after idle time (`0` disables). May also live under a `lifecycle:` mapping |
 diff --git a/website/docs/user-guide/desktop.md b/website/docs/user-guide/desktop.md
-index 2021ee43feb046d980a57b30d68a6e3e2c98d616..6004dcccfb5c03299a590904bb4d0a7c6f2b7dee 100644
+index 2021ee43feb046d980a57b30d68a6e3e2c98d616..c656485ee884038e9598c8d725a09a777b9f0898 100644
 --- a/website/docs/user-guide/desktop.md
 +++ b/website/docs/user-guide/desktop.md
-@@ -250,2 +250,52 @@ The pre-window reader is a small YAML subset, not the full parser the rest of He
+@@ -250,2 +250,62 @@ The pre-window reader is a small YAML subset, not the full parser the rest of He
 
 +#### On-demand gateway ticket helpers
 +
@@ -91677,16 +91932,25 @@ index 2021ee43feb046d980a57b30d68a6e3e2c98d616..6004dcccfb5c03299a590904bb4d0a7c
 +There is no Settings control for these launch-only keys.
 +
 +Each helper stays bound to its interpreter, working directory, full environment
-+and profile. Every request obtains a new ticket from the native owner. A busy
-+helper finishes its requests before retirement. Other profiles wait for capacity,
-+including the retiring process's actual exit. Up to 256 runtime lookups and ticket
-+requests can wait together in admission order. Ticket requests have a ten-second
-+total mint-helper budget; runtime lookups have a separate 30-second budget that
-+includes queue waiting. An existing eligible
-+helper can still serve its profile while other admissions wait; sustained activity
-+can make a waiting request time out. Queue-full, admission timeout and runtime-reset
-+errors are distinct from native owner or credential refusal. Smaller limits reduce
-+peak RAM but can slow profile switching and cause more cold starts.
++and profile. Every request obtains a new ticket from the native owner. At a fixed
++helper limit, only one unanswered request is written to each helper. Further
++requests, including requests for that busy helper, share the existing queue of
++up to 256 runtime lookups and ticket requests. Overflow reports
++`Gateway ticket helper queue is full`.
++
++Queued work follows admission order. A busy head keeps later jobs waiting;
++an idle cached helper can still serve its profile directly while admissions wait.
++Sustained activity can make queued work expire. Ticket requests have ten seconds
++from entry to the mint helper, including admission and exchange; earlier backend
++selection/runtime lookup is outside that budget. Runtime lookups retain their
++separate 30-second budget including queue waiting. Native owner/credential errors
++keep their reason; no automatic retry is added.
++
++During normal capacity or idle retirement, a busy helper finishes its request
++first; timeout, reset or fatal failure can terminate an active request. Its slot
++remains held until actual process close. Lowering the limit from two to one retains the existing
++retirement behavior; it does not immediately kill a busy helper. Smaller limits
++can slow profile switching and cause more cold starts.
 +
 +Before starting a new helper, Desktop requires at least 512 MiB from the
 +execution host's `process.availableMemory()` snapshot. Low, missing or invalid
@@ -91703,13 +91967,14 @@ index 2021ee43feb046d980a57b30d68a6e3e2c98d616..6004dcccfb5c03299a590904bb4d0a7c
 +started before reset cannot enqueue a lookup in the new generation. Successful
 +lookups still share the existing resolver cache within their generation.
 +
-+This limits launcher runtime-lookups and ticket-helper processes per Electron
-+process. It does not bound requests or stdin buffering already assigned to a
-+helper, backend selection/installation before the lookup, other helper entrypoints
-+or OS-wide memory. A child that has not closed continues to hold its slot.
++This bounds launcher runtime-lookups, ticket-helper processes and unanswered
++ticket submissions per helper in one Electron process. Caller promises, queued
++metadata, backend selection/installation before lookup, other helper entrypoints
++and OS-wide memory remain outside a global RAM bound. A child that has not closed
++continues to hold its slot.
 +
  ### Settings & onboarding
-@@ -686,2 +736,22 @@ bootstrap marker does not force installation when that launcher works.
+@@ -686,2 +746,22 @@ bootstrap marker does not force installation when that launcher works.
 
 +Source update checks share one active operation and up to 256 pending operations
 +per Electron process. Adjacent identical ordinary requests join the same running

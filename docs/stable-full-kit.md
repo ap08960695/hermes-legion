@@ -10,6 +10,14 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Bounded Desktop ticket backlogs (v0.24.0)
+
+Busy cached helpers now send one unanswered ticket frame at a time and share the
+existing 256-job FIFO. Fresh grants, deadlines, reset and actual-close ownership
+remain. [Behavior, native Mac parity/overload evidence and limits](release-notes-v0.24.0.md).
+Three existing targets change; all 1,045 unrelated targets and P0 remain exact.
+Measured RSS is essentially unchanged; no new setting or dependency is added.
+
 ## Source-check memory admission (v0.23.0)
 
 The existing Desktop source-check queue waits for at least 512 MiB observed

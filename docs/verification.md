@@ -1,3 +1,36 @@
+# v0.24.0 — Busy ticket helpers share bounded admission
+
+[Behavior and measured native Mac evidence](release-notes-v0.24.0.md).
+Two guards keep busy cached reuse in the existing shared 256-job queue and leave
+its head deadline/timer intact while that helper is busy. One unanswered frame
+per helper at fixed configuration; live two-to-one retirement remains unchanged.
+Old canonical red: two frames != one; same regression green. Three canonical
+Vitest files pass 64 cases, Electron types and scoped ESLint pass. No full app or
+canonical Mac hard-coded-/tmp helper fixture acceptance is claimed.
+
+Corrected native fresh old/current/current/old: 64 equal fresh grants each,
+submitted unanswered64 ->1 with63queued, one native RPC in progress both arms,
+one helper/zero survivors. Whole-Node-lifetime median combined peak120.46875 ->
+120.8203125MiB, mint duration including >=100ms hold175.935 ->178.750ms.
+No RAM saving or speed claim. External psutil samples requested20ms/median35.5–
+36.1ms/max40.5ms, simultaneous Node/helper sums exclude observer, include startup
+and idle retirement. Three known processes including observer/<4GiB sampled.
+Shared RSS, transient misses, four cases and synthetic grants limit attribution.
+Prior synchronous Node/ps sampler contaminated timing/RSS and caused an overload
+deadline failure; that cohort is retained privately and excluded from numbers.
+A corrected preflight first used strip-only Node against a parameter property;
+it exited before any helper. Node22 transform mode matches prior runtime. No
+product bug or additional regression credit for these fixture corrections.
+
+Separate native300overload: old300fresh/current257fresh+43queue-full; subsequent
+fresh recovery grant both arms. Not equal-work/RAM comparison. All cases preserve
+config/program hashes and close helpers/socket. Actual healthy memory observations,
+owned Unix only, six audit negatives/not OS containment. No app/owner mutation,
+other host/SSH/inference/physical pressure/other-OS/production acceptance.
+Three prior targets change;1048total/1045unrelatedrows-bytes-sections/P0 exact.
+Required roundtrip, strict-installed, companion, release, scans, advisor and
+preservation/process cleanup gate driver handoff.
+
 # v0.23.0 — Source-check Python waits for available memory
 
 [User-visible behavior and controlled native evidence](release-notes-v0.23.0.md).
