@@ -62,3 +62,38 @@ Thai/English text and line breaks persisted, with independent metadata readback
 and unchanged profile config. No prompt or inference ran. An older backend that
 cannot acknowledge description writes needs an upgrade. See the
 [v0.29.2 release notes](release-notes-v0.29.2.md) for compatibility and limits.
+
+## Creating and reopening a Local group
+
+Open **Bots → New group chat**, select two to six bots from the same Local
+authority, name the room and choose **Create Group**. One selected bot leaves
+Create disabled. Cancel leaves no room behind; reopening resets the draft.
+Creating a room does not send a message. Sending is a separate action that can
+run the selected bots through their existing model routes and quota.
+
+For a backend with canonical groups, the room stores its initial members on
+the gateway authority. Return with **Back**, choose **Manage team**, then click
+the saved group name to reopen it. The bot cards' **All groups** filter and
+legacy **Manage groups** metadata are separate from canonical room membership.
+The observed canonical room displays its members but offers no membership-edit
+control. Creating the initial roster does not prove later add/remove support.
+
+Native Local acceptance used a fresh isolated home and the v0.29.3 renderer.
+A synthetic bot was created with introduction off, then joined the default bot
+in a new room. Independent read-only SQLite inspection confirmed exactly one
+room with both Local profile targets. After Back → Manage team → saved group,
+the same room ID and complete membership remained. A cancelled one-member draft
+had left the room and event tables empty. Profile metadata/config stayed
+byte-identical during group operations; background runtime files are separate.
+
+The completed launch passed an actual 60-second gate with zero SSH attempts or
+executions, at most four sampled Hermes processes and sampled RSS below 4 GiB.
+Owned processes stopped and the original trial bundle/config were restored.
+No group message, model run or worker task was created; native event, session
+and driver-task tables remained empty. Screenshots and private readback receipts
+are retained in the local work report, outside this source kit.
+
+This proves creation, cancellation and in-app reopening for the controlled case.
+It does not prove restart persistence, canonical membership editing, active
+worker monitoring, owner-app adoption or another backend. No runtime source
+changed in this acceptance round; no new version or performance saving is claimed.
