@@ -10,6 +10,34 @@ shows tables.
 | TUI (terminal) | yes | yes | shown as Unicode | not rendered; the hint steers the model to tables or indented sketches |
 | Web dashboard session viewer | yes (new) | yes, with a language label (new) | no | shown as labelled source |
 
+## Native Local Mac acceptance (2026-11-16, after v0.29.0)
+
+The existing Desktop renderer passed a bounded native Mac walkthrough:
+
+- A Markdown table displayed its English headers, Thai/English cells and counts.
+- A valid `chart` fence displayed a bar chart with values 3, 5 and 2, title,
+  category labels and units.
+- A valid `mermaid` fence displayed Read -> Check -> Done after its deferred
+  renderer loaded. Open diagram opened the viewer; Escape returned to Chat.
+- An incomplete chart specification stayed readable as source. Its following
+  text and the surrounding valid formats remained visible.
+- The cases fit wide and narrow windows. Closing the chat tab and reopening
+  the same saved chat from History retained the rendered formats and fallback.
+
+The isolated Local chat was created through the native session API; its saved
+assistant text was synthetic. Screenshots measured 3010x1776 and 1712x2018
+pixels, not CSS viewport sizes. The launch passed its 60-second SSH-zero gate;
+all owned processes stopped, the gateway closed, configuration stayed exact,
+and the original trial bundle was restored with a verified strict signature.
+Owner data and other hosts were untouched. Private images and receipts remain
+outside the package, referenced by the local work report.
+
+No runtime change or new feature was needed. This is acceptance documentation;
+it adds no version and does not replace the existing v0.29.0 tag or artifact.
+Large tables, streaming, line/pie charts, other Mermaid families, clipboard/file
+exports, live model generation, Linux parity and daily-app adoption were not
+checked. This bounded display proof does not close the entire Chat walkthrough.
+
 ## Changes
 
 - `agent/prompt_builder.py`: the `tui` platform hint names what renders and says
