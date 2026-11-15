@@ -38,6 +38,22 @@ controlled SessionDB records and checked display at both widths and removal
 after ending a record and clicking Refresh. That earlier v0.29.0 check did not
 exercise an actual worker lifecycle. See [v0.29.0 notes](release-notes-v0.29.0.md).
 
+## Stop one delegated child
+
+From v0.29.5, a chat delegation card with an explicit `interrupted` outcome shows
+Response stopped with a neutral stop icon. Partial activity stays available;
+genuine errors remain errors. The same presentation applies to explicit settled
+results without a live roster.
+
+In Layout editor, select Advanced and Done. In the parent chat, expand the
+Subagents shelf, select a child there and choose Stop. The existing native
+control targets that child; a two-child Local check verified the other child and
+parent continued, and a late reply could not revive the stopped child. This does
+not undo finished work or prove immediate cancellation of external operations.
+Native async history without per-child status retains its parked rows; this
+change does not reconstruct an outcome from notification text.
+[Checks and adoption](release-notes-v0.29.5.md).
+
 ## Meaning and limits
 
 - A worker with a terminal timestamp does not show current-worker detail or a

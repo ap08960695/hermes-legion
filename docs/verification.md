@@ -1,6 +1,23 @@
+# v0.29.5 — Stopped delegation cards
+
+Native Local before/after evidence covers real UI Send, two native child agents,
+composer Stop for A, B's continuing heartbeat, rejection of A's late response,
+B's independent completion and native parent delivery. The repaired renderer
+shows a visible and accessible Response stopped label with a neutral icon;
+the earlier renderer labelled that interruption Error. Five controlled loopback
+model calls per admitted cohort; no product lifecycle/activity rows were seeded.
+
+Seven new cases include live/explicit settled results, empty/partial output,
+late progress, and real failure/completion controls. With the corrected native
+start→terminal fixture, five cases fail on the original code; the repaired two
+files pass 17 tests. Scoped lint, renderer types and build pass. Four changed
+patch sections apply/hash/reverse against the pinned base; unchanged source and
+mock suites were not reswept. See [v0.29.5 notes](release-notes-v0.29.5.md) for the
+initial cap-triggered diagnostic, build warning and precise history boundary.
+
 # Native child file-read monitoring acceptance
 
-On the current v0.29.4 runtime, actual Local UI Send started a native delegated
+On the v0.29.4 runtime, actual Local UI Send started a native delegated
 child, which called `read_file` once on an isolated synthetic UTF-8 file. Its
 native tool result, child lineage, step count, heartbeat and terminal timestamps
 were read back from SQLite. Bots displayed Working / step 1/250 after the read,

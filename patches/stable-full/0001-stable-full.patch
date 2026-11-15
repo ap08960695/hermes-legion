@@ -22773,6 +22773,146 @@ index 4e08d584e07affac6147fb2e05f9317e1f3374e3..614b63ba2f32027d3329615bbb39d6f6
 +      })
 +    )
    })
+diff --git a/apps/desktop/src/components/assistant-ui/tool/delegate-model.test.ts b/apps/desktop/src/components/assistant-ui/tool/delegate-model.test.ts
+index 14882cdf73e072bf1e6da9964e9eb22ec268300d..037fa324bb60cd75ba0422aab32ea438a2d4a49b 100644
+--- a/apps/desktop/src/components/assistant-ui/tool/delegate-model.test.ts
++++ b/apps/desktop/src/components/assistant-ui/tool/delegate-model.test.ts
+@@ -74,2 +74,16 @@ describe('delegateRowsFromCall', () => {
+
++  it('keeps explicit interrupted results distinct from failures without guessing from text', () => {
++    const rows = delegateRowsFromCall(
++      { tasks: [{ goal: 'Stopped' }, { goal: 'Unknown' }, { goal: 'Failed' }] },
++      { results: [
++        { status: 'interrupted', summary: 'Partial findings' },
++        { status: 'cancelled', summary: 'Partial findings' },
++        { status: 'error', summary: 'Interrupted by user' }
++      ] }
++    )
++
++    expect(rows.map(row => row.status)).toEqual(['interrupted', 'failed', 'failed'])
++    expect(rows[0]?.activity).toEqual(['Partial findings'])
++  })
++
+   it('still lists a background dispatch whose goals only survive in the result', () => {
+diff --git a/apps/desktop/src/components/assistant-ui/tool/delegate-model.ts b/apps/desktop/src/components/assistant-ui/tool/delegate-model.ts
+index 694c34d7526cb80f110738874df336ec8a19a39f..33dbebbad993effbbd88e66c4342ef11e44af9ba 100644
+--- a/apps/desktop/src/components/assistant-ui/tool/delegate-model.ts
++++ b/apps/desktop/src/components/assistant-ui/tool/delegate-model.ts
+@@ -56,5 +56,9 @@ function resultRows(result: unknown): Record<string, unknown>[] {
+ // 'timeout', 'failed'/'failure' (tools/delegate_tool.py). Anything that is
+-// not a success must render as failed — mapping unknown statuses to
+-// 'completed' hid timed-out children behind a green check (#73728, #85492).
++// not a success must never get a green check (#73728, #85492). Interruption
++// keeps its separate stopped presentation; other unsuccessful outcomes fail.
+ function settledRowStatus(status: string): DelegateRowStatus {
++  if (status === 'interrupted') {
++    return 'interrupted'
++  }
++
+   return status === '' || status === 'ok' || status === 'completed' ? 'completed' : 'failed'
+diff --git a/apps/desktop/src/components/assistant-ui/tool/delegate.test.tsx b/apps/desktop/src/components/assistant-ui/tool/delegate.test.tsx
+index 6d1b50cdc6eb4e7df46c1f23f062a6c3f077d15b..5d8b221be9081672b9b52977b5a5a047cd97db8e 100644
+--- a/apps/desktop/src/components/assistant-ui/tool/delegate.test.tsx
++++ b/apps/desktop/src/components/assistant-ui/tool/delegate.test.tsx
+@@ -1,2 +1,2 @@
+-import { cleanup, render } from '@testing-library/react'
++import { act, cleanup, render } from '@testing-library/react'
+ import { atom } from 'nanostores'
+@@ -35,3 +35,3 @@ function view(): SessionView {
+
+-function renderCard() {
++function renderCard(result?: unknown) {
+   return render(
+@@ -41,3 +41,3 @@ function renderCard() {
+           args={{ tasks: [{ goal: 'Inspect the delegate card' }] }}
+-          result={undefined}
++          result={result}
+           toolCallId="call-1"
+@@ -100 +100,54 @@ describe('delegate card fade', () => {
+ })
++
++
++describe('stopped delegation cards', () => {
++  it.each(['', 'Partial findings'])('shows live interruption with partial text %j and ignores a late running stamp', summary => {
++    $activeSessionId.set(SESSION)
++    upsertSubagent(SESSION, {
++      goal: 'Inspect the delegate card',
++      status: 'running',
++      subagent_id: 'delegate-tool:call-1:0',
++      task_index: 0
++    })
++    upsertSubagent(SESSION, {
++      goal: 'Inspect the delegate card',
++      status: 'interrupted',
++      subagent_id: 'delegate-tool:call-1:0',
++      task_index: 0,
++      summary
++    }, false, 'subagent.complete')
++
++    const card = renderCard()
++    expect(card.getByText('Response stopped')).toBeTruthy()
++    const icon = card.getByRole('img', { name: 'Response stopped' })
++    expect(icon.classList.contains('codicon-debug-stop')).toBe(true)
++    expect(icon.classList.contains('text-destructive')).toBe(false)
++    expect(card.queryByLabelText('Error')).toBeNull()
++
++    if (summary) {expect(card.getByText(summary)).toBeTruthy()}
++
++    act(() => upsertSubagent(SESSION, {
++      subagent_id: 'delegate-tool:call-1:0',
++      status: 'running',
++      text: 'Late activity'
++    }, false, 'subagent.progress'))
++    expect(card.getByText('Response stopped')).toBeTruthy()
++    expect(card.queryByLabelText('Running')).toBeNull()
++  })
++
++  it.each(['', 'Partial findings'])('keeps settled interruption visible without a live roster, partial text %j', summary => {
++    const card = renderCard({ results: [{ status: 'interrupted', summary }] })
++    expect(card.getByText('Response stopped')).toBeTruthy()
++    expect(card.getByRole('img', { name: 'Response stopped' })).toBeTruthy()
++    expect(card.queryByLabelText('Error')).toBeNull()
++
++    if (summary) {expect(card.getByText(summary)).toBeTruthy()}
++  })
++
++  it.each([['failed', 'Error'], ['completed', 'Done']])('retains genuine %s presentation', (status, label) => {
++    const card = renderCard({ results: [{ status, summary: 'Original result' }] })
++    expect(card.getByLabelText(label)).toBeTruthy()
++    expect(card.getByText('Original result')).toBeTruthy()
++    expect(card.queryByText('Response stopped')).toBeNull()
++  })
++})
+diff --git a/apps/desktop/src/components/assistant-ui/tool/delegate.tsx b/apps/desktop/src/components/assistant-ui/tool/delegate.tsx
+index 6d585c975ac611ed5b2c5587eb2ed4da0051da9f..d660b9d4854591493a05e19e256d9dc949ca2467 100644
+--- a/apps/desktop/src/components/assistant-ui/tool/delegate.tsx
++++ b/apps/desktop/src/components/assistant-ui/tool/delegate.tsx
+@@ -42,3 +42,7 @@ function statusGlyph(status: DelegateRowStatus, label: string): ReactNode {
+
+-  if (status === 'failed' || status === 'interrupted') {
++  if (status === 'interrupted') {
++    return <Codicon aria-hidden={false} aria-label={label} className="size-3.5 text-(--ui-text-tertiary)" name="debug-stop" role="img" />
++  }
++
++  if (status === 'failed') {
+     return <AlertCircle aria-label={label} className="size-3.5 text-destructive" />
+@@ -77,5 +81,7 @@ function DelegateRowView({ row }: { row: DelegateRow }) {
+     ? copy.statusRunning
+-    : row.status === 'failed' || row.status === 'interrupted'
+-      ? copy.statusError
+-      : copy.statusDone
++    : row.status === 'interrupted'
++      ? t.assistant.thread.responseStopped
++      : row.status === 'failed'
++        ? copy.statusError
++        : copy.statusDone
+
+@@ -83,3 +89,4 @@ function DelegateRowView({ row }: { row: DelegateRow }) {
+     row.model ? displayModelName(row.model) : '',
+-    !live && row.durationSeconds ? formatDurationSeconds(row.durationSeconds) : ''
++    !live && row.durationSeconds ? formatDurationSeconds(row.durationSeconds) : '',
++    row.status === 'interrupted' ? statusLabel : ''
+   ].filter(Boolean)
 diff --git a/apps/desktop/src/components/chat/intro.test.tsx b/apps/desktop/src/components/chat/intro.test.tsx
 index 99451467956206b6e12f4abd079936dffb18a5f4..5a1bcb7e7f99def3bf69e12e59162252ab2f815e 100644
 --- a/apps/desktop/src/components/chat/intro.test.tsx

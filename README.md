@@ -13,6 +13,8 @@ the [release policy](CONTRIBUTING.md#release-policy) for future versioning.
 
 ## What is included
 
+- [v0.29.5: show stopped delegated responses](docs/release-notes-v0.29.5.md), uses a neutral stopped label instead of Error for an interrupted child; native Stop A / keep B working checked.
+
 - [v0.29.4: show delegated bot work](docs/release-notes-v0.29.4.md), reports native delegated children as Working and clears their detail after completion; actual Local UI lifecycle checked with loopback replies.
 
 - [v0.29.3: keep bot model labels readable](docs/release-notes-v0.29.3.md), keeps long provider/model text inside its dropdown with visible arrows and full-name tooltips; native Local wide/narrow layout and menu dismissal checked.

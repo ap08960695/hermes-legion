@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1064-path** Legion source, interface and optimization alternative
+This is the complete **1070-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,17 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Stopped delegation cards (v0.29.5)
+
+An explicit interrupted child shows Response stopped with a neutral stop icon
+rather than Error. The card preserves partial output and distinguishes real
+failures/completions. Apply the source kit and rebuild Desktop. Native Local
+composer Stop A / keep B running, late-reply rejection and parent delivery were
+checked before/after. [Adoption and history limits](release-notes-v0.29.5.md).
+Four existing upstream source/test files join the patch: 1070 paths. Their
+scoped apply/hash/reverse proof passes; unrelated sections are retained. Two
+Desktop test files join the explicit selection. No backend/dependency change.
 
 ## Activity on bot cards (v0.29.0)
 

@@ -5,6 +5,18 @@ supported update or Desktop rebuild path. This kit does not install a rebuilt
 Hermes.app. Linked notes identify opt-in memory settings and admission guards
 that apply after adoption. Each entry states its adoption and verification limits.
 
+## v0.29.5 — Show stopped delegated responses
+
+An interrupted child now shows Response stopped and a neutral stop icon on its
+chat card. Partial output remains; real errors and completed work keep their
+existing states. Apply the source kit and rebuild Desktop.
+
+Actual native Local Stop A / keep B working, late-reply rejection, B completion
+and parent delivery passed with controlled loopback replies. The fix changes
+presentation only. Native async history without a child outcome remains parked;
+no production saving or external-tool cancellation claim. See
+[release notes](docs/release-notes-v0.29.5.md).
+
 ## v0.29.4 — Show delegated bot work
 
 Bots shows Working while a native delegated child runs, with its observed
