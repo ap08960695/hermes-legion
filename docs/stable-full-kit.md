@@ -10,6 +10,15 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Readable bot card status (v0.28.1)
+
+A layout fix gives the existing status a full row above the card actions.
+Native Mac before/after images show the inactive status fits instead of
+splitting into four lines; a narrow-window check also passes.
+[Adoption, checks and limits](release-notes-v0.28.1.md). One existing source
+section changes; the kit remains 1064 paths and unrelated sections are retained.
+Bot monitoring and the full Config/Bots/Chat walkthrough remain incomplete.
+
 ## Settings actions keep your place (v0.28.0)
 
 The grouped Settings capability adds named Actions, keyboard continuation after

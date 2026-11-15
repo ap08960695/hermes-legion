@@ -5,6 +5,16 @@ supported update or Desktop rebuild path. This kit does not install a rebuilt
 Hermes.app. Linked notes identify opt-in memory settings and admission guards
 that apply after adoption. Each entry states its adoption and verification limits.
 
+## v0.28.1 — Readable status on bot cards
+
+The Bots screen gives each card's status its own row above Open Screen,
+Edit profile and Open chat. An inactive status no longer gets squeezed into
+four lines beside these buttons. Apply the source kit and rebuild Desktop.
+Native Mac before/after screenshots verify the correction; a narrow-window
+check and empty-search recovery also passed. Live worker monitoring and
+owner-app adoption remain untested. Existing scoped lint findings are unchanged.
+See [release notes](docs/release-notes-v0.28.1.md) for checks and limits.
+
 ## v0.28.0 — Settings actions keep your place
 
 - Find **Export config**, **Import config** and **Reset to defaults** under a

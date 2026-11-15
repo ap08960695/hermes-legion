@@ -13,6 +13,8 @@ the [release policy](CONTRIBUTING.md#release-policy) for future versioning.
 
 ## What is included
 
+- [v0.28.1: readable bot card status](docs/release-notes-v0.28.1.md), fixes status text squeezed beside the action buttons; checked on the native Local Mac app at wide and narrow widths.
+
 - [v0.28.0: easier Settings actions without losing your draft](docs/release-notes-v0.28.0.md), named Export/Import/Reset actions, keyboard continuation after Cancel, and first-visit Local draft preservation, checked in wide and narrow native Mac windows.
 
 - [v0.27.0: on-demand host toolchain facts](docs/release-notes-v0.27.0.md), disabled gateway warmup now defers five unused startup checks; first-use facts remain, with longer first-turn time and no proven RAM saving.
