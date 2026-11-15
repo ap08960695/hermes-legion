@@ -7549,7 +7549,7 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..55ac8062abfbd2ce601992ee438165ce
 +  })
  }
 diff --git a/apps/desktop/electron/main.ts b/apps/desktop/electron/main.ts
-index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..1f3bfb88b8be9dccdb6516b95a41fd67f667ec55 100644
+index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..4ff6a2623b17093f96dd106e15e2e0b0edf03b4b 100644
 --- a/apps/desktop/electron/main.ts
 +++ b/apps/desktop/electron/main.ts
 @@ -2,5 +2,7 @@ import { type ChildProcess, execFileSync, spawn } from 'node:child_process'
@@ -7576,6 +7576,11 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..1f3bfb88b8be9dccdb6516b95a41fd67
 -  backendOwnedByApp,
 +  backendMayStopOnQuit,
    mergeActiveWork,
+@@ -539,3 +543,3 @@ import { loadRendererLoadErrorPage } from './renderer-load-error-page'
+ import { attachRendererConsoleCapture, formatRendererBoundaryReport } from './renderer-log'
+-import { fetchRosterSourceData } from './roster-source-fetch'
++import { fetchRosterSourceData, readConnectedRosterSource } from './roster-source-fetch'
+ import { rosterSourceStatus } from './roster-source-status'
 @@ -570,2 +574,3 @@ import { createSshIsolatedKeepaliveRegistry } from './ssh-isolated-keepalive'
  import { createSshTeardownTracker } from './ssh-teardown'
 +import { markSshTransportHealthy, recordSshFailure } from './ssh-transport'
@@ -7617,7 +7622,169 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..1f3bfb88b8be9dccdb6516b95a41fd67
 +const createSessionWindow = (sessionId, opts = {}) =>
 +  sessionWindows.openOrFocus(sessionId, () => spawnSecondaryWindow({ ...opts, sessionId }), opts)
 
-@@ -16134,9 +16137,2 @@ async function teardownConnectionScopedProfileBackend(connectionId, profile) {
+@@ -14666,3 +14669,3 @@ ipcMain.handle('hermes:plugin-profile-routes', async (_event, rawProfileNames) =
+
+-  return buildRegistryProfileRoutes({
++  const routes = buildRegistryProfileRoutes({
+     agents,
+@@ -14671,2 +14674,16 @@ ipcMain.handle('hermes:plugin-profile-routes', async (_event, rawProfileNames) =
+   })
++
++  return Promise.all(routes.map(async route => {
++    if (route.mode === 'local') {
++      return route
++    }
++
++    const source = registry.connections.find(connection => connection.id === route.connectionId)
++    const live = await readConnectedRosterSource(registry, route.connectionId, backendConnectionState, backendPool)
++    const current = readDesktopConnectionsRegistry().connections.find(connection => connection.id === route.connectionId)
++
++    return source && live?.isCurrent() && current && !connectionDialFieldsChanged(source, current)
++      ? route
++      : { ...route, connectOnDemand: true as const }
++  }))
+ })
+@@ -14793,3 +14810,25 @@ ipcMain.handle('hermes:connections:test', async (_event, id) => {
+       sshRosterCache.delete(entry.id)
+-      await probeSshProfileInventory(entry)
++      const config = normalizeSshConfig({ ...entry, mode: 'ssh' })
++
++      const ssh = createSshProbeConnection(
++        { host: config.host, user: config.user, port: config.port, keyPath: config.keyPath },
++        { rememberLog: sshRememberLog, sshBinary: desktopSshBinary() }
++      )
++
++      try {
++        await ssh.open()
++        await probeSshProfileInventory(entry, ssh, () => {
++          const current = readDesktopConnectionsRegistry().connections.find(source => source.id === entry.id)
++
++          return Boolean(current && !connectionDialFieldsChanged(entry, current))
++        })
++      } catch (error: any) {
++        sshRememberLog(`[ssh] profile inventory failed for ${entry.id}: ${error?.message || error}`)
++      } finally {
++        try {
++          await ssh.close()
++        } catch {
++          void 0
++        }
++      }
+     }
+@@ -14859,3 +14898,3 @@ ipcMain.handle('hermes:connections:test', async (_event, id) => {
+ // Enumerate every registered connection's profiles concurrently and flatten
+-// into the union roster. Eager REST enumeration, lazy sockets: local + already
++// into the union roster. Passive remote reads: local + already
+ // -dialed sources answer instantly; unreachable ones return an error entry
+@@ -14876,4 +14915,5 @@ const probeConnectionInstallId = (connectionId: string, descriptor: any) =>
+
+-async function probeSshProfileInventory(connection) {
++async function probeSshProfileInventory(connection, ssh, isCurrent: () => boolean) {
+   if (
++    !isCurrent() ||
+     !shouldRetrySshInventory(
+@@ -14890,24 +14930,9 @@ async function probeSshProfileInventory(connection) {
+
+-  const sshConfig = normalizeSshConfig({
+-    mode: 'ssh',
+-    host: connection.host,
+-    user: connection.user,
+-    port: connection.port,
+-    keyPath: connection.keyPath,
+-    remoteHermesPath: connection.remoteHermesPath
+-  })
+-
+-  if (!sshConfig) {
+-    return
+-  }
+-
+-  const ssh = createSshProbeConnection(
+-    { host: sshConfig.host, user: sshConfig.user, port: sshConfig.port, keyPath: sshConfig.keyPath },
+-    { rememberLog: sshRememberLog, sshBinary: desktopSshBinary() }
+-  )
+-
+   try {
+-    await ssh.open()
+     const profiles = await remoteLifecycle.listRemoteHermesProfiles(ssh)
+
++    if (!isCurrent()) {
++      return
++    }
++
+     if (profiles.length > 0) {
+@@ -14919,14 +14944,9 @@ async function probeSshProfileInventory(connection) {
+     // (#88828 wired this for remote/local only, through /api/status).
+-    connectionInstallIds.set(connection.id, {
+-      id: await remoteLifecycle.readRemoteInstallId(ssh),
+-      ts: Date.now()
+-    })
++    const installId = await remoteLifecycle.readRemoteInstallId(ssh)
++
++    if (isCurrent()) {
++      connectionInstallIds.set(connection.id, { id: installId, ts: Date.now() })
++    }
+   } catch (error: any) {
+     sshRememberLog(`[ssh] profile inventory failed for ${connection.id}: ${error?.message || error}`)
+-  } finally {
+-    try {
+-      await ssh.close()
+-    } catch {
+-      void 0
+-    }
+   }
+@@ -14973,8 +14993,33 @@ async function enumerateRegistryAgentSources(registry = readDesktopConnectionsRe
+         try {
+-          // SSH roster listing must never spawn a dashboard. A stale
+-          // sshConnections key used to fall into ensureRegistryBackend and
+-          // respawn Spark/Mini every Bot Mode poll (~5s), then the mux died
+-          // (ECONNRESET / liveness probe drop).
+-          if (connection.kind === 'ssh') {
+-            await probeSshProfileInventory(connection)
++          const live = connection.kind === 'local'
++            ? null
++            : await readConnectedRosterSource(registry, connection.id, backendConnectionState, backendPool)
++
++          const liveIsCurrent = () => {
++            const current = readDesktopConnectionsRegistry().connections.find(source => source.id === connection.id)
++
++            return Boolean(live?.isCurrent() && current && !connectionDialFieldsChanged(connection, current))
++          }
++
++          if (connection.kind !== 'local' && !liveIsCurrent()) {
++            raw = { connection, profiles: null, error: 'connect-on-demand' }
++          } else if (connection.kind === 'ssh') {
++            // Inventory borrows an explicitly opened transport; it never opens or closes one.
++            const scope = registrySshPoolScopeByConnectionId(sshConnections, connection.id) ?? live.scope
++
++            const target = scope !== null
++              ? { scope, ssh: sshConnections.get(scope)?.ssh }
++              : activeSshTerminalTarget()
++
++            if (target && target !== 'pending' && target.ssh) {
++              const inventoryIsCurrent = () =>
++                liveIsCurrent() && sshConnections.get(target.scope)?.ssh === target.ssh
++
++              await probeSshProfileInventory(connection, target.ssh, inventoryIsCurrent)
++
++              if (!inventoryIsCurrent()) {
++                return { connection, profiles: null, error: 'connect-on-demand' }
++              }
++            }
++
+             // The inventory probe learns the backend's install id on its own session; carrying it
+@@ -15011,3 +15056,3 @@ async function enumerateRegistryAgentSources(registry = readDesktopConnectionsRe
+             // bootstrapping a second SSH tunnel / remote dashboard.
+-            const descriptor: any = await withEnumerationDeadline(
++            const descriptor: any = live?.descriptor ?? await withEnumerationDeadline(
+               Promise.resolve(
+@@ -15028,2 +15073,6 @@ async function enumerateRegistryAgentSources(registry = readDesktopConnectionsRe
+
++            if (live && !liveIsCurrent()) {
++              return { connection, profiles: null, error: 'connect-on-demand' }
++            }
++
+             const profiles = Array.isArray(body?.profiles)
+@@ -16134,9 +16183,2 @@ async function teardownConnectionScopedProfileBackend(connectionId, profile) {
 
 -// A 404 raised by `fetchJson` — the shape is `404: <body>` (see fetchJson).
 -// Session lookups are a probe ladder: "not on this profile" is a normal rung
@@ -7627,7 +7794,7 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..1f3bfb88b8be9dccdb6516b95a41fd67
 -}
 -
  async function handleHermesApiRequest(request) {
-@@ -16249,15 +16245,31 @@ async function handleHermesApiRequest(request) {
+@@ -16249,15 +16291,31 @@ async function handleHermesApiRequest(request) {
 
 -// Format an api-request failure for desktop.log. The renderer only ever sees
 -// the invoke rejection; the real stack lives here in main, so persist it
@@ -7671,7 +7838,7 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..1f3bfb88b8be9dccdb6516b95a41fd67
 +  notify: payload => nativeNotifications.show(payload)
 +})
 
-@@ -16272,22 +16284,24 @@ ipcMain.handle('hermes:api', async (_event, request) => {
+@@ -16272,22 +16330,24 @@ ipcMain.handle('hermes:api', async (_event, request) => {
    try {
 -    if (deletingProfile && registryConnectionId) {
 -      return await dispatchConnectionScopedProfileDelete(request, {
@@ -7713,7 +7880,7 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..1f3bfb88b8be9dccdb6516b95a41fd67
 +      return handleHermesApiRequest(request).finally(releaseProfileDeletion)
 +    })
    } catch (error) {
-@@ -18058,33 +18072,8 @@ function configureSpellChecker() {
+@@ -18058,33 +18118,8 @@ function configureSpellChecker() {
 
 -// Does quitting take the agent down with the app? Reads the primary profile's
 -// route through the same resolver resolveRemoteBackend uses, plus every backend
@@ -7753,7 +7920,7 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..1f3bfb88b8be9dccdb6516b95a41fd67
 +}), () => (backendConnectionState.getProcess() ? 1 : 0) +
 +  [...backendPool.values()].filter(entry => entry?.process).length + sshConnections.size)
 
-@@ -18163,2 +18152,8 @@ function heldQuitForActiveWork(event: Electron.Event): boolean {
+@@ -18163,2 +18198,8 @@ function heldQuitForActiveWork(event: Electron.Event): boolean {
  function registerChatWindow(window: BrowserWindow) {
 +  const deferClose = createConfigQuitGate({
 +    queue: configAutosaves, holdForActiveWork: () => false,
@@ -7762,17 +7929,17 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..1f3bfb88b8be9dccdb6516b95a41fd67
 +  })
 +
    chatWindows.add(window)
-@@ -18174,3 +18169,3 @@ function registerChatWindow(window: BrowserWindow) {
+@@ -18174,3 +18215,3 @@ function registerChatWindow(window: BrowserWindow) {
 
 -    if (!shouldGuardWindowClose(work, isQuittingForHandoff, IS_MAC, hasOtherChatWindows(window))) {
 +    if (shouldGuardWindowClose(work, isQuittingForHandoff, IS_MAC, hasOtherChatWindows(window)) && heldQuitForActiveWork(event)) {
        return
-@@ -18178,3 +18173,3 @@ function registerChatWindow(window: BrowserWindow) {
+@@ -18178,3 +18219,3 @@ function registerChatWindow(window: BrowserWindow) {
 
 -    heldQuitForActiveWork(event)
 +    deferClose(event)
    })
-@@ -18206,3 +18201,3 @@ app.on('before-quit', event => {
+@@ -18206,3 +18247,3 @@ app.on('before-quit', event => {
    // overlay-suppression latch must not leak into the next close (#130810).
 -  if (heldQuitForActiveWork(event)) {
 +  if (deferConfigQuit(event)) {
@@ -7805,6 +7972,15 @@ index 2c784ec2a2e709f7fc953d88399b3078aaa5e12b..5492eec425bbd695225966f3bc91032d
 +
 +  return { dispose: () => linux?.dispose(), show }
  }
+diff --git a/apps/desktop/electron/plugin-profile-routes.ts b/apps/desktop/electron/plugin-profile-routes.ts
+index d8c15a6c4ebfb032daeb38d34baaabf3a00f878c..36e0974b669d3c66ba717f4bc6ea17e3d151543f 100644
+--- a/apps/desktop/electron/plugin-profile-routes.ts
++++ b/apps/desktop/electron/plugin-profile-routes.ts
+@@ -21,2 +21,4 @@ export interface OpaqueProfileRoute {
+   connectionId: string
++  /** Snapshot hint: passive background work must not dial this route. */
++  connectOnDemand?: true
+   mode: 'local' | 'remote'
 diff --git a/apps/desktop/electron/quit-guard.ts b/apps/desktop/electron/quit-guard.ts
 index d88d2c65dc964e200a7a0fb4f1fff3a898f0fe5d..1eaf248e1c44b3545b2bb9817c1488e4bd2a6f10 100644
 --- a/apps/desktop/electron/quit-guard.ts
@@ -7945,6 +8121,171 @@ index 85cbbbc57e4c78cbac028c0aacbb371690a91d6e..eff9bc9f5a3841a34f93cac8ec0fa8eb
 +      }
 +    } else if (key === 'ssh_path') {
        // YAML double quotes escape backslashes ("C:\\Git\\usr\\bin\\ssh.exe");
+diff --git a/apps/desktop/electron/roster-source-fetch.test.ts b/apps/desktop/electron/roster-source-fetch.test.ts
+index a071fc618802557a212031ca6ce51b06d01fe972..39ad266529999da9672f9d9db2e2a762f54715b8 100644
+--- a/apps/desktop/electron/roster-source-fetch.test.ts
++++ b/apps/desktop/electron/roster-source-fetch.test.ts
+@@ -4,3 +4,4 @@ import { test } from 'vitest'
+
+-import { fetchRosterSourceData } from './roster-source-fetch'
++import type { ConnectionRegistry, ResolvedConnectionDescriptor } from './connection-registry'
++import { fetchRosterSourceData, readConnectedRosterSource } from './roster-source-fetch'
+
+@@ -61 +62,107 @@ test('roster source preserves a profile-read failure after starting the install-
+ })
++
++const registry: ConnectionRegistry = {
++  version: 2,
++  primary: 'local',
++  lastUsed: 'local',
++  launchMode: 'primary',
++  connections: [
++    { id: 'local', kind: 'local', label: 'This device' },
++    { id: 'ssh', kind: 'ssh', label: 'SSH', host: 'fixture.invalid' },
++    { id: 'url', kind: 'remote', label: 'URL', url: 'https://fixture.invalid' },
++    { id: 'cloud', kind: 'cloud', label: 'Cloud', url: 'https://cloud.invalid' }
++  ]
++}
++
++type Pool = Map<string, { connectionPromise: Promise<ResolvedConnectionDescriptor> | null }>
++const noPrimary = { getPromise: () => null }
++
++test.each(['ssh', 'url', 'cloud'])('unused %s stays on demand without waiting for pending or retrying failed dials', async id => {
++  const pending = new Promise<ResolvedConnectionDescriptor>(() => {})
++
++  const pool: Pool = new Map([
++    ['pending', { connectionPromise: pending }],
++    ['failed', { connectionPromise: Promise.reject(new Error('failed dial')) }]
++  ])
++
++  assert.equal(await readConnectedRosterSource(registry, id, { getPromise: () => pending }, pool), null)
++  assert.equal(pool.size, 2)
++})
++
++test.each(['ssh', 'url', 'cloud'])('reads an already-connected %s under its actual pool scope', async id => {
++  const descriptor: ResolvedConnectionDescriptor = { connectionId: id, mode: 'remote' }
++  const entry = { connectionPromise: Promise.resolve(descriptor) }
++  const pool: Pool = new Map([['profile-bootstrap-key', entry]])
++  const live = await readConnectedRosterSource(registry, id, noPrimary, pool)
++
++  assert.equal(live?.descriptor, descriptor)
++  assert.equal(live?.scope, 'profile-bootstrap-key')
++  assert.equal(live?.isCurrent(), true)
++  pool.delete('profile-bootstrap-key')
++  assert.equal(live?.isCurrent(), false)
++})
++
++test('legacy primary identity respects the actual SSH route instead of the preferred source', async () => {
++  const descriptor: ResolvedConnectionDescriptor = {
++    mode: 'remote', remoteKind: 'ssh', ssh: { host: 'fixture.invalid' }
++  }
++
++  let promise = Promise.resolve(descriptor)
++  const primary = { getPromise: () => promise }
++  const live = await readConnectedRosterSource(registry, 'ssh', primary, new Map())
++
++  assert.equal(live?.descriptor, descriptor)
++  assert.equal(live?.scope, null)
++  assert.equal(await readConnectedRosterSource(registry, 'url', primary, new Map()), null)
++  promise = Promise.resolve({ mode: 'local' })
++  assert.equal(live?.isCurrent(), false)
++})
++
++test('ambiguous legacy hosts and malformed or retired explicit identities are never borrowed', async () => {
++  const ambiguous: ConnectionRegistry = {
++    ...registry,
++    connections: [...registry.connections, { id: 'other-ssh', kind: 'ssh', label: 'Other', host: 'fixture.invalid' }]
++  }
++
++  for (const descriptor of [
++    { mode: 'remote', remoteKind: 'ssh', remoteHost: 'fixture.invalid' },
++    { mode: 'remote', remoteKind: 'ssh', ssh: { host: 'fixture.invalid' }, connectionId: '' },
++    { mode: 'remote', connectionId: 'removed' }
++  ] as ResolvedConnectionDescriptor[]) {
++    assert.equal(await readConnectedRosterSource(ambiguous, 'ssh', { getPromise: () => Promise.resolve(descriptor) }, new Map()), null)
++  }
++})
++
++test('a stale result cannot survive replacing a pool entry or its promise during the lookup', async () => {
++  const descriptor: ResolvedConnectionDescriptor = { connectionId: 'ssh', mode: 'remote' }
++
++  for (const replaceEntry of [true, false]) {
++    const entry = { connectionPromise: Promise.resolve(descriptor) }
++    const pool: Pool = new Map([['research', entry]])
++    const pending = readConnectedRosterSource(registry, 'ssh', noPrimary, pool)
++
++    if (replaceEntry) {
++      pool.set('research', { connectionPromise: Promise.resolve({ connectionId: 'url', mode: 'remote' }) })
++    } else {
++      entry.connectionPromise = Promise.resolve({ connectionId: 'url', mode: 'remote' })
++    }
++
++    assert.equal(await pending, null)
++  }
++})
++
++test('connected lookup ignores mismatched sources and can still find a later correct profile', async () => {
++  const descriptor: ResolvedConnectionDescriptor = { connectionId: 'ssh', mode: 'remote' }
++  const entry = { connectionPromise: Promise.resolve(descriptor) }
++
++  const pool: Pool = new Map([
++    ['unrelated', { connectionPromise: Promise.resolve({ connectionId: 'url', mode: 'remote' }) }],
++    ['research', entry]
++  ])
++
++  assert.equal((await readConnectedRosterSource(registry, 'ssh', noPrimary, pool))?.descriptor, descriptor)
++  assert.equal(await readConnectedRosterSource(registry, 'removed', noPrimary, pool), null)
++  const live = await readConnectedRosterSource(registry, 'ssh', noPrimary, pool)
++  entry.connectionPromise = Promise.resolve(descriptor)
++  assert.equal(live?.isCurrent(), false)
++})
+diff --git a/apps/desktop/electron/roster-source-fetch.ts b/apps/desktop/electron/roster-source-fetch.ts
+index bbe77e535d812c127aba499e182fdd12d1f98c2c..c28558f1782db530be817ac46df5c4c101b5ba0f 100644
+--- a/apps/desktop/electron/roster-source-fetch.ts
++++ b/apps/desktop/electron/roster-source-fetch.ts
+@@ -1 +1,42 @@
++import type { ConnectionRegistry, ResolvedConnectionDescriptor } from './connection-registry'
++import { resolvedConnectionId } from './connection-registry'
++
++/** Read only already-settled, still-owned descriptors; a roster never owns a dial. */
++export async function readConnectedRosterSource(
++  registry: ConnectionRegistry,
++  connectionId: string,
++  primary: { getPromise: () => Promise<ResolvedConnectionDescriptor> | null },
++  pool: Map<string, { connectionPromise: Promise<ResolvedConnectionDescriptor> | null }>
++): Promise<null | { descriptor: ResolvedConnectionDescriptor; scope: null | string; isCurrent: () => boolean }> {
++  if (!registry.connections.some(source => source.id === connectionId)) {
++    return null
++  }
++
++  const primaryPromise = primary.getPromise()
++
++  const candidates = [
++    { promise: primaryPromise, scope: null as null | string, isCurrent: () => primary.getPromise() === primaryPromise },
++    ...[...pool].map(([scope, entry]) => {
++      const promise = entry.connectionPromise
++
++      return { promise, scope, isCurrent: () => pool.get(scope) === entry && entry.connectionPromise === promise }
++    })
++  ]
++
++  for (const candidate of candidates) {
++    if (!candidate.promise) {
++      continue
++    }
++
++    // A pending or rejected dial stays on demand; never wait for it or retry it here.
++    const descriptor = await Promise.race([candidate.promise, Promise.resolve(null)]).catch(() => null)
++
++    if (descriptor && candidate.isCurrent() && resolvedConnectionId(registry, descriptor) === connectionId) {
++      return { descriptor, scope: candidate.scope, isCurrent: candidate.isCurrent }
++    }
++  }
++
++  return null
++}
++
+ export async function fetchRosterSourceData<T>(
 diff --git a/apps/desktop/electron/session-windows.test.ts b/apps/desktop/electron/session-windows.test.ts
 index 2d57a5039b1a56bf6b32ff07f2b7f550bda0e19d..51e73b0b43b67ef2374e1174e1ea35590451ac73 100644
 --- a/apps/desktop/electron/session-windows.test.ts
@@ -22632,14 +22973,18 @@ index 7d1c2ea4b9ff9f1908bdb750a838cf1f6f1d2e47..dd2ca05e000ebd575864e2bdb05c7048
 +        <DialogTitle className="sr-only">{label}</DialogTitle>
          <div
 diff --git a/apps/desktop/src/global.d.ts b/apps/desktop/src/global.d.ts
-index b266da09084b763017fd34ad93e0aba8dda2d700..c8e625a41028ae9d5aac8dfaad71d6af286588bc 100644
+index b266da09084b763017fd34ad93e0aba8dda2d700..76c566ee81539ad0239eb3c64d11b04a990d4d9d 100644
 --- a/apps/desktop/src/global.d.ts
 +++ b/apps/desktop/src/global.d.ts
 @@ -1 +1,2 @@
 +import type { HermesApiRequest } from '@hermes/shared'
  import type { GatewayWsUrlResult } from '@hermes/shared'
-@@ -1525,31 +1526,2 @@ export type DesktopBootstrapEvent =
- 
+@@ -981,2 +982,3 @@ export interface DesktopPluginProfileRoute {
+   connectionId: string
++  connectOnDemand?: true
+   mode: 'local' | 'remote'
+@@ -1525,31 +1527,2 @@ export type DesktopBootstrapEvent =
+
 -export interface HermesApiRequest {
 -  path: string
 -  method?: string
@@ -22669,7 +23014,7 @@ index b266da09084b763017fd34ad93e0aba8dda2d700..c8e625a41028ae9d5aac8dfaad71d6af
 -  // slot for the user's visible request.
 -  priority?: 'foreground'
 -}
- 
+
 diff --git a/apps/desktop/src/hermes.ts b/apps/desktop/src/hermes.ts
 index 4a1fd216cab155c4ea62120db72c9f3884a797a3..8d2b9520fc0e5eabae81e5b8697651c28bcc6485 100644
 --- a/apps/desktop/src/hermes.ts
@@ -26374,6 +26719,223 @@ index 5a2351a37e630c6c6923f5049b33ab3f0ed90951..b9ad7786ea09ff4f1cee15da26877e07
 -      i18n: { register: () => () => undefined },
 +      i18n: { register: () => () => undefined, t: (key: string) => key },
        onDispose: () => undefined,
+diff --git a/apps/desktop/src/plugins/hermes-bots/relay.test.ts b/apps/desktop/src/plugins/hermes-bots/relay.test.ts
+index 8be00078d66270405ed59e8cafdc1b2d5a315dad..c4042fc480b30df3ff984dbf599ef1390a2b3fff 100644
+--- a/apps/desktop/src/plugins/hermes-bots/relay.test.ts
++++ b/apps/desktop/src/plugins/hermes-bots/relay.test.ts
+@@ -367,2 +367,176 @@ describe('the 30s drain does not open a gateway socket with nothing to deliver (
+ describe('relay-route socket retention (#93594)', () => {
++  it.each([true, false])('leaves a saved cold peer undialed through startup and idle polling (push=%s)', async push => {
++    hostMock.profileRoutes = vi.fn(async () => [
++      route('local', { mode: 'local', primary: true }),
++      { ...route('saved'), connectOnDemand: true }
++    ])
++
++    if (!push) {hostMock.onEvent = undefined}
++    const pins = trackRetention()
++    const calls = respondWith(() => ({ envelopes: [] }))
++    const { startBotRelay, stopBotRelay } = await loadRelay()
++
++    try {
++      startBotRelay()
++      await vi.advanceTimersByTimeAsync(60_001)
++
++      expect(calls.filter(call => call.connectionId === 'saved')).toEqual([])
++      expect(pins.filter(pin => pin.route.connectionId === 'saved')).toEqual([])
++    } finally {
++      stopBotRelay()
++    }
++  })
++
++  it('delivers claimed local work to a cold peer without passively polling or pinning it', async () => {
++    hostMock.profileRoutes = vi.fn(async () => [
++      route('local', { mode: 'local', primary: true }),
++      { ...route('saved'), connectOnDemand: true }
++    ])
++    const pins = trackRetention()
++    let pending = false
++
++    const calls = respondWith(call => {
++      if (call.method === 'bot_relay.outbox.drain' && call.connectionId === 'local' && pending) {
++        pending = false
++
++        return { envelopes: [{ id: 'cold-delivery', target_connection: 'saved', target_profile: 'research', message: 'hello' }] }
++      }
++
++      if (call.method === 'bot_relay.deliver') {
++        return { status: 'settled', delivery_id: 'cold-delivery', admission_id: 'receipt', reply: 'delivered' }
++      }
++
++      return { envelopes: [] }
++    })
++
++    const { startBotRelay, stopBotRelay } = await loadRelay()
++
++    try {
++      startBotRelay()
++      await vi.advanceTimersByTimeAsync(0)
++      pending = true
++      await pushAndSettle(1, { connectionId: 'local' })
++
++      const remote = calls.filter(call => call.connectionId === 'saved')
++
++      expect(remote.map(call => call.method)).toEqual(['bot_relay.deliver'])
++      expect(remote[0].route.profile).toBe('research')
++      expect(calls.find(call => call.method === 'bot_relay.reply')).toMatchObject({
++        connectionId: 'local', params: { id: 'cold-delivery', reply: 'delivered' }
++      })
++      expect(pins.filter(pin => pin.route.connectionId === 'saved')).toEqual([])
++    } finally {
++      stopBotRelay()
++    }
++  })
++
++  it('reconciles cold and ready snapshots without retaining old roster contributions or pins', async () => {
++    let cold = true
++    let failRead = false
++    hostMock.profileRoutes = vi.fn(async () => [
++      route('local', { mode: 'local', primary: true }), route('ready'),
++      { ...route('saved'), ...(cold ? { connectOnDemand: true as const } : {}) }
++    ])
++    const pins = trackRetention()
++
++    const calls = respondWith(call => {
++      if (call.method === 'profiles.list') {
++        if (call.connectionId === 'saved' && failRead) {throw new Error('read unavailable')}
++
++        return { profiles: [{ name: call.connectionId }] }
++      }
++
++      return { envelopes: [] }
++    })
++
++    const { startBotRelay, stopBotRelay } = await loadRelay()
++
++    try {
++      startBotRelay()
++      await vi.advanceTimersByTimeAsync(0)
++      expect(calls.filter(call => call.connectionId === 'saved')).toEqual([])
++      cold = false
++      await vi.advanceTimersByTimeAsync(60_000)
++      expect(calls.some(call => call.connectionId === 'saved' && call.method === 'profiles.list')).toBe(true)
++      const savedPin = pins.find(pin => pin.route.connectionId === 'saved')!
++
++      expect(savedPin).toBeDefined()
++      expect(savedPin.released).toBe(false)
++      cold = true
++      calls.length = 0
++      await vi.advanceTimersByTimeAsync(60_000)
++      expect(savedPin.released).toBe(true)
++      expect(calls.filter(call => call.connectionId === 'saved')).toEqual([])
++      expect(calls.filter(call => call.method === 'bot_relay.roster.sync').some(call =>
++        (call.params.agents as Array<{ connection_id: string }>).some(agent => agent.connection_id === 'saved')
++      )).toBe(false)
++      cold = false
++      failRead = true
++      calls.length = 0
++      await vi.advanceTimersByTimeAsync(60_000)
++      expect(calls.filter(call => call.method === 'bot_relay.roster.sync').some(call =>
++        (call.params.agents as Array<{ connection_id: string }>).some(agent => agent.connection_id === 'saved')
++      )).toBe(false)
++    } finally {
++      stopBotRelay()
++    }
++
++    expect(pins.every(pin => pin.released)).toBe(true)
++    const count = calls.length
++
++    await vi.advanceTimersByTimeAsync(60_000)
++    expect(calls).toHaveLength(count)
++  })
++
++  it.each([1, 2])('does no passive RPC or pin when all %s routes are cold', async count => {
++    hostMock.profileRoutes = vi.fn(async () => Array.from({ length: count }, (_, index) => ({
++      ...route(`cold-${index}`), connectOnDemand: true
++    })))
++    const pins = trackRetention()
++    const calls = respondWith(() => ({ envelopes: [] }))
++    const { startBotRelay, stopBotRelay } = await loadRelay()
++
++    try {
++      startBotRelay()
++      await vi.advanceTimersByTimeAsync(60_001)
++      expect(calls).toEqual([])
++      expect(pins).toEqual([])
++    } finally {
++      stopBotRelay()
++    }
++  })
++
++  it('keeps the last good roster through a temporarily empty route inventory', async () => {
++    let empty = false
++    let failed = false
++    hostMock.profileRoutes = vi.fn(async () => empty ? [] : [route('a'), route('b')])
++
++    const calls = respondWith(call => {
++      if (call.method === 'profiles.list') {
++        if (failed) {throw new Error('transient read failure')}
++
++        return { profiles: [{ name: call.connectionId }] }
++      }
++
++      return { envelopes: [] }
++    })
++
++    const { startBotRelay, stopBotRelay } = await loadRelay()
++
++    try {
++      startBotRelay()
++      await vi.advanceTimersByTimeAsync(0)
++      empty = true
++      await vi.advanceTimersByTimeAsync(60_000)
++      empty = false
++      failed = true
++      calls.length = 0
++      await vi.advanceTimersByTimeAsync(60_000)
++      expect(calls.find(call => call.connectionId === 'a' && call.method === 'bot_relay.roster.sync')?.params.agents)
++        .toEqual([expect.objectContaining({ connection_id: 'b', profile: 'b' })])
++    } finally {
++      stopBotRelay()
++    }
++  })
++
+   it('does not poll or retain the non-primary local source of a remote-primary Desktop', async () => {
+diff --git a/apps/desktop/src/plugins/hermes-bots/relay.ts b/apps/desktop/src/plugins/hermes-bots/relay.ts
+index 40bd20a167e2a97fc8eca8c69aaf13fca2b33dca..777fc43954e51ce434fe307b58e6c748885601d0 100644
+--- a/apps/desktop/src/plugins/hermes-bots/relay.ts
++++ b/apps/desktop/src/plugins/hermes-bots/relay.ts
+@@ -376,4 +376,4 @@ function rosterTrace(rows: RelayAgentRow[], installId: string): string {
+  *  transient failure never reads as "everyone on that machine went away".
+- *  The sweep below drops disconnected ids, but only on a cycle that had two
+- *  or more connections to relay between; the ceiling is what bounds the rest.
++ *  Cold sources lose their cached contribution locally; disconnected ids are
++ *  swept on cycles with at least two participating connections.
+  *  Every live connection is rewritten each cycle, so eviction can only ever
+@@ -394,3 +394,4 @@ async function syncRelayRosters() {
+   try {
+-    const connections = await relayConnections()
++    const inventory = await relayConnections()
++    const connections = inventory.filter(connection => !connection.route.connectOnDemand)
+
+@@ -404,2 +405,8 @@ async function syncRelayRosters() {
+
++    for (const connection of inventory) {
++      if (connection.route.connectOnDemand) {
++        relayAgentsCache.delete(connection.id)
++      }
++    }
++
+     for (const [install, connectionId] of answeringInstall) {
+@@ -546,3 +553,3 @@ async function drainRelayOutboxes() {
+     // connections there is nothing to relay, so nothing stays pinned.
+-    syncRelayRetention(peerCount(connections) >= 2 ? connections : [])
++    syncRelayRetention(peerCount(connections) >= 2 ? connections.filter(connection => !connection.route.connectOnDemand) : [])
+
+@@ -571,3 +578,3 @@ async function drainRelayOutboxes() {
+     for (const sender of connections) {
+-      if (pushDoor && !routeSignaledOutboxWork(sender.id, work)) {
++      if (sender.route.connectOnDemand || (pushDoor && !routeSignaledOutboxWork(sender.id, work))) {
+         continue
 diff --git a/apps/desktop/src/plugins/hermes-bots/roster-pane-dialogs.tsx b/apps/desktop/src/plugins/hermes-bots/roster-pane-dialogs.tsx
 index d0cc9a7e611c318aa0dcca31cfcb0c31c9a59c47..d77d1f58c7198cbd6d7e14cacf8e7824c80103c9 100644
 --- a/apps/desktop/src/plugins/hermes-bots/roster-pane-dialogs.tsx
@@ -26484,16 +27046,20 @@ index ec8bd2b691954433f7f2c519b54149fc753dca89..271cdb989a3f71ebdbc5443dedd04925
 +
  /** Older shells without the live-turn atom remain idle rather than reading socket state. */
 diff --git a/apps/desktop/src/plugins/hermes-bots/types.ts b/apps/desktop/src/plugins/hermes-bots/types.ts
-index 860445748c4b9b68b9e6349e6bf26df3c9ad9e85..b54741300356af34550fa962574700333b4c2363 100644
+index 860445748c4b9b68b9e6349e6bf26df3c9ad9e85..6a979005d92a89058f8b6b2ee5e5a565ef9e9a7a 100644
 --- a/apps/desktop/src/plugins/hermes-bots/types.ts
 +++ b/apps/desktop/src/plugins/hermes-bots/types.ts
-@@ -97,2 +97,5 @@ export interface RosterRow {
+@@ -28,2 +28,3 @@ export interface ProfileRoute {
+   connectionId: string
++  connectOnDemand?: true
+   mode: 'local' | 'remote'
+@@ -97,2 +98,5 @@ export interface RosterRow {
    name: string
 +  /** Configured route reported by profiles.list; not proof of a live session binding or allowance. */
 +  model?: string | null
 +  provider?: string | null
    canonical_session?: CanonicalSession | null
-@@ -133,3 +136,14 @@ export interface RosterRow {
+@@ -133,3 +137,14 @@ export interface RosterRow {
    ui_meta_revisions?: Record<string, number>
 -  worker_session?: { last_active?: number } | null
 +  worker_session?: {
@@ -31463,6 +32029,14 @@ index 24bf8b26c27fef8286c4bb1b8ceaa56e3562ea95..79cefb612b0e2be554f34a9bd5c59415
 -    stashSessionDraft('stored-stash', 'runtime-addressed', [])
 +    stashSessionDraft('stored-stash', 'runtime-addressed', [], 'default')
  
+diff --git a/apps/desktop/src/sdk/profile-request.ts b/apps/desktop/src/sdk/profile-request.ts
+index 1b24565de7a5173919d7b7a5362b6e2b63f07dc2..5090366b249535dbd25c17aeda68bdc4f10660cc 100644
+--- a/apps/desktop/src/sdk/profile-request.ts
++++ b/apps/desktop/src/sdk/profile-request.ts
+@@ -7,2 +7,3 @@ export interface PluginProfileRoute {
+   connectionId: string
++  connectOnDemand?: true
+   mode: 'local' | 'remote'
 diff --git a/apps/desktop/src/store/composer-draft-lifecycle.ts b/apps/desktop/src/store/composer-draft-lifecycle.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..f31f3ad067d0baca2d3949ad027442eaa9cb88c4
@@ -92474,7 +93048,7 @@ index 44d25bc19bae30f9665f7c418a2dcf102e6fbccb..ade136286e3e6511ce2962243555153e
 +| `lazy` | bool | both | Register the server's tools from the on-disk schema cache at startup and only spawn/connect it on the first tool call (default: `false`, or `true` for eligible stdio servers under `mcp.memory_saving`). Needs one prior live connect to fill the cache; a missing or stale entry falls back to the normal eager connect. Status surfaces show the server as `lazy` with its cached tool count until first use |
  | `idle_timeout_seconds` | number | stdio | Optional stdio server recycle after idle time (`0` disables). May also live under a `lifecycle:` mapping |
 diff --git a/website/docs/user-guide/desktop.md b/website/docs/user-guide/desktop.md
-index 2021ee43feb046d980a57b30d68a6e3e2c98d616..48ff237e0b48d9fc95909faf94b4467c2ddd87ee 100644
+index 2021ee43feb046d980a57b30d68a6e3e2c98d616..45ae7eb67083fb71df7016bf3701e2544d021878 100644
 --- a/website/docs/user-guide/desktop.md
 +++ b/website/docs/user-guide/desktop.md
 @@ -250,2 +250,97 @@ The pre-window reader is a small YAML subset, not the full parser the rest of He
@@ -92575,7 +93149,20 @@ index 2021ee43feb046d980a57b30d68a6e3e2c98d616..48ff237e0b48d9fc95909faf94b4467c
 +continues to hold its slot.
 +
  ### Settings & onboarding
-@@ -686,2 +781,22 @@ bootstrap marker does not force installation when that launcher works.
+@@ -466,2 +561,12 @@ Side-by-side routing is live: each registered gateway dials its own backends and
+
++On a cold launch with the local gateway selected, merely listing saved gateways
++or running Bot Relay does not connect unused SSH, remote URL or cloud entries.
++Cached agent rows and SSH seed routes remain available. Selecting a remote,
++pressing **Test**, updating it or delivering an actual queued cross-gateway
++message can still connect it. Already opened remote work keeps its existing
++connection lifecycle.
++
++An already-opened remote can still reconnect through its normal lifecycle.
++Adoption requires rebuilding Desktop with the source kit.
++
+
+@@ -686,2 +791,22 @@ bootstrap marker does not force installation when that launcher works.
 
 +Source update checks share one active operation and up to 256 pending operations
 +per Electron process. Adjacent identical ordinary requests join the same running

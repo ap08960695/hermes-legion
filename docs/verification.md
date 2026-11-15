@@ -1,3 +1,80 @@
+# v0.26.0 — Cold Local startup keeps saved remotes on demand
+
+[Behavior and adoption limits](release-notes-v0.26.0.md). The accepted item is
+passive cold-start transport initialization. Config/Bots/Chat Computer Use
+walkthrough and screenshots remain unfinished; native window capture returned
+`cgWindowNotFound` for the exact isolated app path. This is not screen acceptance,
+daily-app adoption, a whole-goal completion or permission to connect another host.
+
+Before the relay fix, an actual isolated source-built Mac app selected Local but
+attempted SSH config resolution for a saved source. The execution guard refused
+that attempt before SSH ran and stopped the owned tree. Passive Electron roster
+paths also dialed saved SSH/URL/cloud sources in the actual-handler fixture.
+After the shared readiness lookup and relay filters, a fresh final production
+artifact ran **60.031 seconds** with the identical Local selection and three
+reserved synthetic saved SSH/URL/cloud inputs: **zero SSH attempts and executions**,
+no unexpected Node nonlocal-network attempts and zero surviving owned processes.
+No actual remote host was used.
+
+Passive SSH inventory borrows an existing, correctly owned session and never
+opens/closes it. Current source, promise and borrowed-session ownership are
+checked after awaits. A review found the post-profiles/install-id-await SSH
+publication race; actual-handler red demonstrated stale profiles, then the
+post-await fence passed all five interleavings for each roster/plugin consumer.
+An identity-read failure still preserves a valid profile-list success.
+
+Six meaningful relay cold-route failures precede the fix; a fresh original
+relay run has those six failures and 44 passing controls. Final official UI
+project: three files, 104 passing cases, including 50 relay lifecycle cases.
+Seven scoped canonical Electron files pass 155 cases. Full UI/Electron types
+and scoped ESLint pass. An isolated actual-main IPC fixture passes 43 cases;
+these boundary-double controls do not execute SSH or inference. They cover
+cached/seed routes, ready registry/legacy ownership, pending/rejected lookups,
+retarget/removal/generation/session races, cold-target delivery and explicit
+selection/Test. Older unmarked relay behavior remains covered. A transient-empty
+inventory control caught our initial cache-sweep regression; cold-only early
+cleanup preserves the previous normal sweep timing and last-good cache behavior.
+
+The final app uses its actual dirty local source stamp and production product
+identity. Its identity initializer was executed with runtime fallback refused;
+retained native module layout, ASAR integrity and strict signature checks pass.
+Only fresh renderer assets remain in the final task-owned stage. Task-local
+Node TCP/DNS/UDP refusal, OS-contained CLI children, a dead loopback Chromium
+proxy and a guarded native local gateway bound the test. Chromium's built-in
+sandbox stays enabled. Configured HOME isolation is not a whole-app access
+sandbox, and loaded renderer/healthy REST do not establish visual usability.
+
+One accepted final cohort has **782.640625 MiB sampled workload peak RSS** and
+**806.703125 MiB including the observer**. Maximum sampled Hermes count is four;
+maximum observed workload OS count plus observer is five. Utilities and observer
+remain included in RSS/count reporting. The requested sample period is 100 ms;
+473 samples have a median gap of 132.848 ms and maximum gap of 138.853 ms. Shared
+pages, missed short transients, resource-limiting launch flags and one isolated
+case prevent normal-app/global RAM or speed conclusions. The failed before arm
+ended early, so it is not an equal-work memory comparison; no RAM saving is claimed.
+
+Rejected cohorts stay excluded: an earlier nested-sandbox renderer restart hit
+five actual Hermes processes and was stopped. A later five-count sample was four
+Hermes processes plus macOS `locale LC_CTYPE`; the revised utility exception
+requires exact executable, argv and stable PID/birth, with conservative negative
+self-checks. That sample remains rejected, and a fresh run supplied acceptance.
+A successful pre-publication-fence cohort was also superseded after main changed.
+The synthetic gateway configuration and restored registry match their saved
+inputs; original trial configuration and three protected app hashes also match.
+Recorded process identities are absent.
+
+Ten native paths change: four prior targets and six existing upstream files
+joining the 1,056-target kit. All 1,046 unrelated rows, bytes and patch sections
+remain exact, including SSH transport/helper protections. Actual reverse/base/
+reapply and all target hashes pass; strict installed verification passes. The
+13 inherited cumulative whitespace diagnostics remain unchanged; incremental
+changes are clean. A final user-guide wording edit leaves all runtime/program/
+artifact hashes exact and needs only doc export/roundtrip verification.
+
+Companion tests, intended-tracked-only release inventory, directory/history
+secret scans, final advisor review and cleanup/preservation gate driver handoff.
+No direct commit, push or publication is performed here.
+
 # v0.25.0 — Bounded fresh backend probes
 
 [Behavior, controlled native measurements and limits](release-notes-v0.25.0.md).

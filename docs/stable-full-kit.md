@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1050-path** Legion source, interface and optimization alternative
+This is the complete **1056-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,17 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Local startup keeps saved remotes on demand (v0.26.0)
+
+Passive roster enumeration and Bot Relay no longer initialize unused SSH, URL
+or cloud connections on a cold Local launch. Cached rows and SSH seed routes
+remain; explicit remote selection, Test, updates and actual queued-message
+delivery retain their existing dialing paths. [Behavior, isolated native Mac
+launch proof and limits](release-notes-v0.26.0.md). Six existing upstream files
+join the kit, four prior targets change and all 1,046 unrelated targets remain
+exact. Rebuild Desktop to adopt it. This does not close existing authorized
+remote work or certify the separate Config/Bots/Chat screen walkthrough.
 
 ## Bounded fresh backend checks (v0.25.0)
 
