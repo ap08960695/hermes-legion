@@ -28,3 +28,19 @@ evidence, not a rerun for this presentation-only change.
 Source application, an installed packaged app in an isolated home, an existing user's
 window/session and provider-backed execution are separate evidence. No workload
 usage or RAM percentage improvement is inferred from these interface checks.
+
+
+## Recovering from a partial save
+
+From v0.29.1, a failed description, appearance or advanced write keeps Edit
+profile open with its draft and Save available. Existing error messages remain;
+success and close require all attempted sections to succeed. The older-gateway
+appearance fallback still counts as supported. Correct the draft or retry
+explicitly; successful sections may already be persisted, with no rollback.
+
+Native Local acceptance created a synthetic bot with introduction off, reopened
+its saved profile, and exercised the same rejected description write before and
+after the fix. The corrected form retained the draft; a subsequent title-only
+Save and reopen passed. New group chat → Cancel returned to Bots. No prompt or
+inference ran. Successful native description execution and group creation or
+membership changes remain unverified. See the [release notes](release-notes-v0.29.1.md).

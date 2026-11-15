@@ -5,6 +5,19 @@ supported update or Desktop rebuild path. This kit does not install a rebuilt
 Hermes.app. Linked notes identify opt-in memory settings and admission guards
 that apply after adoption. Each entry states its adoption and verification limits.
 
+## v0.29.1 — Keep bot edits after a failed save
+
+Edit profile stays open with your draft when a description, appearance or
+advanced section fails to save. A failed description write no longer also
+announces success. Correct or retry explicitly; previously saved sections are
+not rolled back. Existing older-gateway fallback and successful Save remain.
+
+Apply the source kit and rebuild Desktop. Native Local before/after checks
+used the same process guard to reject the description write; title-only Save
+and reopen also passed. Five component cases, types and build pass. Successful
+native description execution and owner-app adoption remain unverified.
+See [release notes](docs/release-notes-v0.29.1.md).
+
 ## v0.29.0 — Activity on bot cards
 
 - See reported worker activity directly on a bot card, separately from its
