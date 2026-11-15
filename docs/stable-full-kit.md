@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1056-path** Legion source, interface and optimization alternative
+This is the complete **1058-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,15 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## On-demand host facts (v0.27.0)
+
+Nonpositive gateway startup warmup now defers eager host toolchain probing;
+first local use retains facts and cache. Positive policy starts only after PID
+admission and logging. [Behavior, native ABBA measurements and tradeoff](release-notes-v0.27.0.md).
+One prior runtime target changes; a native regression and configuration guide
+join the kit. All 1,055 unrelated targets, including P0 transport protections,
+remain exact. Five unused boot commands disappear; RAM saving is not established.
 
 ## Local startup keeps saved remotes on demand (v0.26.0)
 

@@ -10,6 +10,8 @@ Historical source comments and release payloads received [privacy maintenance](d
 
 ## What is included
 
+- [v0.27.0: on-demand host toolchain facts](docs/release-notes-v0.27.0.md), disabled gateway warmup now defers five unused startup checks; first-use facts remain, with longer first-turn time and no proven RAM saving.
+
 - [v0.26.0: Local startup leaves saved remotes on demand](docs/release-notes-v0.26.0.md), passive roster and Bot Relay work no longer initializes unused remote connections; explicit remote work remains available.
 
 - [v0.25.0: bounded fresh backend checks](docs/release-notes-v0.25.0.md), configurable probe concurrency and memory admission; controlled native Mac cases used 27.93% less combined peak RSS, with slower completion.

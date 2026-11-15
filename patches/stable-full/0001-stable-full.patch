@@ -35004,11 +35004,11 @@ index cbb599dcacc02ac7ef193703c027c6df002af9d6..fbeb34374388a0ca908375481621618d
 +        return
      handle = getattr(runner, "session_api", None)
 diff --git a/gateway/run_bootstrap.py b/gateway/run_bootstrap.py
-index 0a682990e7ffb6f3ec6e49c5a1b8c43f5caf3797..fabf449fe12218476d1528c44b495b38a9e07f0f 100644
+index 0a682990e7ffb6f3ec6e49c5a1b8c43f5caf3797..887054a5cf66551586c70ccb40153ef5587a3474 100644
 --- a/gateway/run_bootstrap.py
 +++ b/gateway/run_bootstrap.py
 @@ -316,23 +316,2 @@ async def _start_gateway_start_control_socket(runner):
- 
+
 -        def _pause_for_update_handler() -> dict:
 -            try:
 -                from hermes_cli.gateway import _get_restart_drain_timeout
@@ -35030,15 +35030,39 @@ index 0a682990e7ffb6f3ec6e49c5a1b8c43f5caf3797..fabf449fe12218476d1528c44b495b38
 -            return {
 -                "pausing": accepted, "already_stopping": not accepted,
 -                "pid": os.getpid(), "drain_timeout": _drain}
- 
+
 @@ -353,4 +332,6 @@ async def _start_gateway_start_control_socket(runner):
- 
+
 +        from gateway.run_update_control import make_pause_handler
          _control_server = GatewayControlServer(
 -            verb_handlers={"pause-for-update": _pause_for_update_handler, "identify": _identify_runtime,
 +            verb_handlers={"pause-for-update": make_pause_handler(runner, _main_loop),
 +            "pause-if-idle": make_pause_handler(runner, _main_loop, only_if_idle=True), "identify": _identify_runtime,
                             "rescan-profiles": _rescan_profiles_handler,
+@@ -714,5 +695,10 @@ async def _start_gateway_run_runner(runner, _signal_initiated_shutdown: list) ->
+ def _start_gateway_early_environment_probe() -> None:
+-    """Background-start the host toolchain probe the warm-up and first prompt read (idempotent;
+-    honours ``agent.environment_probe: false``). Never raises: the warm-up still runs it lazily."""
++    """Warm host facts only when startup warmup is enabled; first prompts still read them lazily.
++
++    Idempotent, honours ``agent.environment_probe: false``, and never raises.
++    """
+     try:
++        from gateway.run import _startup_warmup_timeout_secs
++        if _startup_warmup_timeout_secs() <= 0:
++            return
+         from hermes_cli.config import load_config_readonly
+@@ -764,5 +750,2 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool =
+     resolved_config = config if config is not None else load_gateway_config_for_runner()
+-    # The first turn's prompt needs the host toolchain probe (five subprocess calls); start it now
+-    # so it runs beside the boot imports instead of serially inside the pre-READY warm-up.
+-    _start_gateway_early_environment_probe()
+     profile_homes = (_multiplex_profile_homes(resolved_config)
+@@ -806,2 +789,4 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool =
+         _start_gateway_configure_logging(verbosity)
++        # Only the admitted gateway overlaps optional host probes with its remaining boot imports.
++        _start_gateway_early_environment_probe()
+
 diff --git a/gateway/run_busy.py b/gateway/run_busy.py
 index 2273eefbfbde931de128cb32e3904a294ee472b9..8b7ce4b9e69df541771d87510ce323b5ff686fa9 100644
 --- a/gateway/run_busy.py
@@ -59705,6 +59729,215 @@ index 85c8ef62c936e7b33a2855c46f623b87b5f1b4e0..1f4d6406d6076b623ce6e8026079fa1d
 -                        lambda: {'model': {'default': 'fixture'}, 'platform_toolsets': {'cli': []}})
 +                        lambda config_path=None: {'model': {'default': 'fixture'}, 'platform_toolsets': {'cli': []}})
      monkeypatch.setattr(run, '_resolve_gateway_model', lambda config: 'fixture')
+diff --git a/tests/gateway/test_environment_probe_startup_unittest.py b/tests/gateway/test_environment_probe_startup_unittest.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..6545a37d08fccecf8bd642e41c97556b4e4560c3
+--- /dev/null
++++ b/tests/gateway/test_environment_probe_startup_unittest.py
+@@ -0,0 +1,203 @@
++"""Native startup admission and deferred first-prompt facts; no inference requests."""
++import contextlib
++import json
++import os
++from pathlib import Path
++import tempfile
++from types import SimpleNamespace
++import unittest
++from unittest.mock import AsyncMock, patch
++
++
++class ProbeFixture(unittest.IsolatedAsyncioTestCase):
++    def setUp(self):
++        temp = tempfile.TemporaryDirectory()
++        self.addCleanup(temp.cleanup)
++        self.root = Path(temp.name)
++        self.home = self.root / "home"
++        self.home.mkdir()
++        self.context = self.root / "context"
++        self.context.mkdir()
++        (self.context / "AGENTS.md").write_text("WORKSPACE_CONTEXT_SENTINEL สวัสดี.\n")
++        (self.home / "SOUL.md").write_text("PROFILE_SOUL_SENTINEL.\n")
++        (self.home / ".env").write_text("OPENAI_API_KEY=synthetic-fixture\n")
++        env = patch.dict(os.environ, {"HOME": str(self.root), "HERMES_HOME": str(self.home),
++                         "TMPDIR": str(self.root), "PATH": os.defpath,
++                         "HERMES_DISABLE_LAZY_INSTALLS": "1"}, clear=True)
++        env.start()
++        self.addCleanup(env.stop)
++        from hermes_constants import set_hermes_home_override, reset_hermes_home_override
++        token = set_hermes_home_override(self.home)
++        self.addCleanup(reset_hermes_home_override, token)
++        self.config = {"model": {"default": "synthetic-offline", "provider": "custom",
++                                "base_url": "https://example.invalid/v1", "context_length": 131072},
++                       "agent": {"environment_probe": True, "gateway_startup_warmup_timeout": 0, "max_turns": 3},
++                       "terminal": {"backend": "local", "cwd": str(self.context)},
++                       "gateway": {"multiplex_profiles": False}, "platform_toolsets": {"cli": ["todo"]},
++                       "auxiliary": {"title_generation": {"enabled": False}}, "mcp_servers": {},
++                       "credential_pool": {}, "fallback_model": [], "fallback_providers": []}
++        self.write_config()
++        import gateway.run as run
++        import gateway.run_bootstrap as boot
++        from tools import env_probe
++        self.run, self.boot, self.probe = run, boot, env_probe
++        self.probe._reset_cache_for_tests()
++        self.addCleanup(self.finish_probe)
++        self.addCleanup(self.reset_logging)
++
++    def write_config(self):
++        (self.home / "config.yaml").write_text(json.dumps(self.config) + "\n")
++
++    def finish_probe(self):
++        worker = self.probe._PROBE_THREAD
++        if worker is not None:
++            worker.join(2)
++            self.assertFalse(worker.is_alive())
++        self.probe._reset_cache_for_tests()
++
++    @staticmethod
++    def reset_logging():
++        import hermes_logging
++        hermes_logging._reset_queued_handlers()
++        hermes_logging._logging_initialized = False
++        hermes_logging.clear_session_context()
++
++
++class ProbePolicyTests(ProbeFixture):
++    def test_nonpositive_warmup_defers_eager_probe(self):
++        for timeout in (0, -1):
++            with self.subTest(timeout=timeout), patch.object(self.run, "_startup_warmup_timeout_secs", return_value=timeout), patch.object(
++                self.probe, "warm_environment_probe_async"
++            ) as warm:
++                self.boot._start_gateway_early_environment_probe()
++                warm.assert_not_called()
++
++    def test_positive_warmup_preserves_background_probe(self):
++        with patch.object(self.run, "_startup_warmup_timeout_secs", return_value=20), patch.object(
++            self.probe, "warm_environment_probe_async"
++        ) as warm:
++            self.boot._start_gateway_early_environment_probe()
++            warm.assert_called_once_with()
++
++    def test_explicit_probe_disable_wins_with_positive_warmup(self):
++        self.config["agent"]["environment_probe"] = False
++        self.write_config()
++        with patch.object(self.run, "_startup_warmup_timeout_secs", return_value=20), patch.object(
++            self.probe, "warm_environment_probe_async"
++        ) as warm:
++            self.boot._start_gateway_early_environment_probe()
++            warm.assert_not_called()
++
++    def test_policy_or_configuration_failure_stays_nonfatal(self):
++        with patch.object(self.run, "_startup_warmup_timeout_secs", side_effect=RuntimeError("policy unavailable")), patch.object(
++            self.probe, "warm_environment_probe_async"
++        ) as warm:
++            self.boot._start_gateway_early_environment_probe()
++            warm.assert_not_called()
++        with patch.object(self.run, "_startup_warmup_timeout_secs", return_value=20), patch(
++            "hermes_cli.config.load_config_readonly", side_effect=RuntimeError("config unavailable")
++        ), patch.object(self.probe, "warm_environment_probe_async") as warm:
++            self.boot._start_gateway_early_environment_probe()
++            warm.assert_not_called()
++
++
++class ProbeAdmissionTests(ProbeFixture):
++    async def test_pre_admission_outcomes_start_no_probe(self):
++        cases = [("profile-refusal", False, None, None, True, True, False),
++                 ("host-attach", True, True, None, True, True, False),
++                 ("host-refusal", True, False, None, True, True, False),
++                 ("duplicate", True, None, 123456, True, True, False),
++                 ("reservation", True, None, None, False, True, False),
++                 ("pid-loss", True, None, None, True, False, True)]
++        for name, profile_ok, host, pid, reserve, claim, releases in cases:
++            with self.subTest(outcome=name), contextlib.ExitStack() as stack:
++                warm = stack.enter_context(patch.object(self.boot, "_start_gateway_early_environment_probe"))
++                stack.enter_context(patch.object(self.boot, "_start_gateway_resolve_terminal_cwd"))
++                stack.enter_context(patch("hermes_cli.resource_limits.apply_nofile_soft_limit"))
++                stack.enter_context(patch("gateway.code_skew.record_boot_fingerprint"))
++                homes = [self.home] if not profile_ok else []
++                stack.enter_context(patch.object(self.run, "_multiplex_profile_homes", return_value=homes))
++                stack.enter_context(patch.object(self.boot, "_launch_home_may_multiplex", return_value=profile_ok))
++                stack.enter_context(patch.object(self.run, "_host_attach_or_none", new=AsyncMock(return_value=host)))
++                stack.enter_context(patch("gateway.status.get_running_pid", return_value=pid))
++                stack.enter_context(patch.object(self.boot, "_start_gateway_replace_existing_instance", new=AsyncMock(return_value=False)))
++                stack.enter_context(patch.object(self.boot, "_start_gateway_reserve_profiles", return_value=reserve))
++                stack.enter_context(patch.object(self.boot, "_start_gateway_claim_pid_file", return_value=claim))
++                release = stack.enter_context(patch("gateway.status.release_gateway_runtime_lock"))
++                result = await self.boot.start_gateway(config=SimpleNamespace(multiplex_profiles=not profile_ok))
++                self.assertIs(result, True if name == "host-attach" else False)
++                warm.assert_not_called()
++                self.assertEqual(release.call_count, int(releases))
++
++    async def test_probe_admission_follows_pid_and_logging_before_runner(self):
++        events = []
++        with contextlib.ExitStack() as stack:
++            stack.enter_context(patch.object(self.boot, "_start_gateway_resolve_terminal_cwd"))
++            stack.enter_context(patch("hermes_cli.resource_limits.apply_nofile_soft_limit"))
++            stack.enter_context(patch("gateway.code_skew.record_boot_fingerprint"))
++            stack.enter_context(patch.object(self.run, "_host_attach_or_none", new=AsyncMock(return_value=None)))
++            stack.enter_context(patch("gateway.status.get_running_pid", return_value=None))
++            stack.enter_context(patch.object(self.boot, "_start_gateway_reserve_profiles", return_value=True))
++            stack.enter_context(patch.object(self.boot, "_start_gateway_claim_pid_file", side_effect=lambda **kw: events.append("pid") or True))
++            stack.enter_context(patch.object(self.boot, "_start_gateway_configure_logging", side_effect=lambda *a: events.append("logging")))
++            stack.enter_context(patch.object(self.boot, "_start_gateway_early_environment_probe", side_effect=lambda: events.append("probe")))
++            stack.enter_context(patch("gateway.run_startup.recover_left_core_at_gateway_start", side_effect=lambda: events.append("recovery")))
++            def runner_boundary(*args):
++                events.append("runner")
++                raise RuntimeError("runner boundary")
++            stack.enter_context(patch.object(self.run, "GatewayRunner", side_effect=runner_boundary))
++            stack.enter_context(patch("gateway.status.remove_pid_file"))
++            release = stack.enter_context(patch("gateway.status.release_gateway_runtime_lock"))
++            with self.assertRaisesRegex(RuntimeError, "runner boundary"):
++                await self.boot.start_gateway(config=SimpleNamespace(multiplex_profiles=False))
++            self.assertEqual(events, ["pid", "logging", "probe", "recovery", "runner"])
++            release.assert_called_once_with()
++
++
++class ProbeFirstUseTests(ProbeFixture):
++    async def test_first_native_turn_keeps_nonempty_facts_and_cached_prefix(self):
++        from gateway.config import Platform
++        from gateway.session import SessionSource
++        from run_agent import AIAgent
++        captured = []
++        def model_boundary(agent, kwargs, **unused):
++            captured.append((kwargs, agent._cached_system_prompt_static))
++            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
++                content="OFFLINE_COMPLETION", reasoning=None, reasoning_content=None,
++                reasoning_details=None, tool_calls=None), finish_reason="stop")], usage=None,
++                model="synthetic-offline")
++        runner = self.run.GatewayRunner()
++        source = SessionSource(platform=Platform.LOCAL, chat_id="offline", user_id="fixture", chat_type="dm")
++        try:
++            with patch.object(self.probe, "_build_probe_line", return_value="Python toolchain: NONEMPTY_FACT_SENTINEL.") as build, patch.object(
++                AIAgent, "_interruptible_api_call", model_boundary
++            ), patch.object(AIAgent, "_interruptible_streaming_api_call", model_boundary):
++                for text in ("FIRST_TURN_SENTINEL สวัสดี", "SECOND_TURN_SENTINEL"):
++                    result = await runner._run_agent(text, "", [], source, "offline-first", session_key="agent:main:offline")
++                    self.assertEqual(result["final_response"], "OFFLINE_COMPLETION")
++                build.assert_called_once_with()
++                self.assertTrue(self.probe._PROBE_DONE.is_set())
++                self.assertEqual(len(captured), 2)
++                self.assertEqual(captured[0][1], captured[1][1])
++                first = json.dumps(captured[0][0], ensure_ascii=False)
++                for text in ("NONEMPTY_FACT_SENTINEL", "PROFILE_SOUL_SENTINEL", "WORKSPACE_CONTEXT_SENTINEL", "สวัสดี"):
++                    self.assertIn(text, first)
++        finally:
++            await runner.stop()
++
++    def test_remote_and_plugin_remote_neither_start_nor_read_host_facts(self):
++        for backend, plugin in (("ssh", False), ("synthetic-remote", True)):
++            for cached in (False, True):
++                with self.subTest(backend=backend, cached=cached), patch.object(self.probe, "_resolve_terminal_backend", return_value=backend), patch.object(
++                    self.probe, "_plugin_backend_is_remote", return_value=plugin
++                ), patch.object(self.probe, "_ensure_probe_started") as start:
++                    if cached:
++                        self.probe._CACHED_LINE = "HOST_ONLY_SENTINEL"
++                        self.probe._PROBE_DONE.set()
++                    self.assertEqual(self.probe.get_environment_probe_line(), "")
++                    start.assert_not_called()
++                    self.probe._reset_cache_for_tests()
++
++
++if __name__ == "__main__":
++    unittest.main()
 diff --git a/tests/gateway/test_goal_kanban_route_count.py b/tests/gateway/test_goal_kanban_route_count.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..21bcc9d29d467a8f049f50688866da532167f3f9
@@ -93047,6 +93280,28 @@ index 44d25bc19bae30f9665f7c418a2dcf102e6fbccb..ade136286e3e6511ce2962243555153e
 -| `lazy` | bool | both | Register the server's tools from the on-disk schema cache at startup and only spawn/connect it on the first tool call (default: `false`). Needs one prior live connect to fill the cache; a missing or stale entry falls back to the normal eager connect. Status surfaces show the server as `lazy` with its cached tool count until first use |
 +| `lazy` | bool | both | Register the server's tools from the on-disk schema cache at startup and only spawn/connect it on the first tool call (default: `false`, or `true` for eligible stdio servers under `mcp.memory_saving`). Needs one prior live connect to fill the cache; a missing or stale entry falls back to the normal eager connect. Status surfaces show the server as `lazy` with its cached tool count until first use |
  | `idle_timeout_seconds` | number | stdio | Optional stdio server recycle after idle time (`0` disables). May also live under a `lifecycle:` mapping |
+diff --git a/website/docs/user-guide/configuration.md b/website/docs/user-guide/configuration.md
+index 4468904026f40b78cd8f376619c2870f1fe47ab3..82b8652409555a6bdc8e7e1cb269d0bacb771931 100644
+--- a/website/docs/user-guide/configuration.md
++++ b/website/docs/user-guide/configuration.md
+@@ -93,2 +93,17 @@ limit.
+
++## On-demand gateway startup
++
++Set `agent.gateway_startup_warmup_timeout: 0` in the intended profile to defer
++optional turn preparation and the host Python toolchain probe until needed.
++Negative values also disable eager warmup. The first local prompt still reads
++host facts through the existing bounded, cached probe; it can take longer.
++`agent.environment_probe: false` separately omits those facts altogether.
++
++The default timeout is 20 seconds. With a positive timeout, the asynchronous
++host probe starts only after the gateway claims its PID file and configures
++logging, before runner initialization. A later startup failure may still follow
++a started probe. Configured timeout values retain precedence over the environment
++bridge. Changes take effect on the gateway's next normal launch; they do not
++stop an active worker, unload agents or change ESTOP, pause or timer controls.
++
+ ## Database Settings
 diff --git a/website/docs/user-guide/desktop.md b/website/docs/user-guide/desktop.md
 index 2021ee43feb046d980a57b30d68a6e3e2c98d616..45ae7eb67083fb71df7016bf3701e2544d021878 100644
 --- a/website/docs/user-guide/desktop.md

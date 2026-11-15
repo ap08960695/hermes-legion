@@ -18,6 +18,14 @@ stdio MCP definitions use lazy startup, and discovery connects at most one
 server tree at a time per discovery pass. Missing or stale MCP caches still
 require live discovery. This is not an OS-wide process cap.
 
+With the v0.27 source kit, a nonpositive warmup timeout also defers eager host
+Python toolchain probing. The first local prompt retains its existing bounded
+facts lookup and completed-result cache. Positive policy keeps asynchronous
+probing after PID admission; later startup failures can still follow a probe.
+[Whole-gateway comparison and first-use tradeoff](release-notes-v0.27.0.md):
+five unused startup commands become zero, idle RSS is essentially unchanged,
+and sampled peak RSS and first-turn time increase. No RAM saving is claimed.
+
 The preset does not set an MCP idle timeout. Connected stateful servers keep
 their existing lifecycle policy. Use the [separate idle opt-in](release-notes-v0.17.0.md)
 only when their state may be discarded; per-server `idle_timeout_seconds: 0`

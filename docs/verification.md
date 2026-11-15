@@ -1,3 +1,45 @@
+# v0.27.0 — Host toolchain probes follow on-demand startup
+
+[Behavior and limits](release-notes-v0.27.0.md). Eight native unittest contracts
+pass. Original code fails ten assertions/subtests across nonpositive/error policy,
+six pre-admission exits and startup ordering. Positive and explicit-disable policy,
+deterministic nonempty native first-turn facts, cache/prefix preservation and
+remote/plugin omission controls pass. Eight fresh-process config bridge cases
+pass; a separate positive policy executes five real checks once and reuses its
+completed worker.
+
+Four isolated Mac whole-canonical-gateway cases ran before/after/after/before.
+READY, authority, control server and API were initialized by the real bootstrap,
+with two real GatewayRunner turns per case and offline inference responses.
+Startup checks change from five to zero; both arms total five after first use
+and retain identical facts, config and static-prefix hashes, SOUL/AGENTS/Thai
+context and second-turn cache reuse. Median idle RSS, 184.906 to 184.852 MiB,
+is essentially unchanged; lifecycle peak, 242.852 to 255.281 MiB, is higher.
+First-turn time is 861.61 to 1370.37 ms; second-turn time is 10.84 to 11.07 ms.
+These timings include import/setup of inference interception. No RAM, speed or
+model-usage saving is claimed. Median per-arm maximum sampled helper RSS is
+24.492 to 23.641 MiB. Observer-inclusive peaks are 272.063 to 284.492 MiB;
+maximum topology is two workload processes, three including the observer, with
+20 ms target samples and zero surviving owned children. Shared-page accounting
+and missed brief transients limit RSS evidence.
+
+Seven audit negative controls and Python 3.14.9/pip stdout, status and module-origin
+fidelity pass. Synthetic local profiles have no adapters or MCP; no inference
+request, owner app/home/data/control change or other-host connection occurred.
+This is task-local audit containment, not an OS sandbox. Canonical pytest, pinned
+Ruff, the full native suite, UI Config/Bots/Chat, daily-app adoption and other
+platforms remain unverified. Native contracts ran via stdlib unittest in the
+managed runtime.
+
+The kit companion suite runs 133 tests: 131 pass and two Linux-only cases skip.
+A tracked-only disposable copy passes 245 release files/246 intended paths and
+is removed with its private index. Actual reverse/base/reapply and strict
+installed compatibility pass all 1,058 targets; 1,055 unrelated prior rows,
+source bytes and patch sections, including P0, remain exact. The 13 inherited
+whitespace diagnostics are unchanged and the new delta is clean. Exact directory
+and all-history Gitleaks scans report no leaks; 225 commits were scanned. No
+direct commit, push, publication or remote access occurred.
+
 # v0.26.0 — Cold Local startup keeps saved remotes on demand
 
 [Behavior and adoption limits](release-notes-v0.26.0.md). The accepted item is
