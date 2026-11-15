@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1077-path** Legion source, interface and optimization alternative
+This is the complete **1080-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,15 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Live background report refresh (v0.30.2)
+
+Desktop recognizes a native completion turn as backend-originated, so its existing
+bounded post-reply history refresh loads the saved report without Reload. Stop
+clears that adoption flag. Ordinary turns retain their read behavior. Apply the
+source kit and rebuild Desktop. Four source/test sections change, adding three
+existing upstream paths for 1080 total; one Desktop regression file joins the
+explicit selection. [Adoption, evidence and limits](release-notes-v0.30.2.md).
 
 ## Clean background reports (v0.30.1)
 

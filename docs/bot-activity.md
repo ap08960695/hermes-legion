@@ -66,7 +66,7 @@ The producer pairs each authoritative result index with its goal before saving
 the display text. It does not guess an outcome from report prose, rewrite the
 model notification or add a database field. Older saved notifications keep their
 fallback. Original dispatch cards can still appear parked; the new detail belongs
-to the completion notification. Live pre-Reload summary visibility remains outside this capability.
+to the completion notification. The v0.30.0 capability covers restored history; v0.30.2 adds the live refresh described below.
 [Adoption and checks](release-notes-v0.30.0.md).
 
 ## Clean background reports (v0.30.1)
@@ -78,6 +78,20 @@ Task outcomes and partial/report output remain. Stored history and model text
 keep their original content. Unwrapped legacy reports and embedded, near-match
 or suffixed notice text retain their existing treatment. Rebuild Desktop after
 applying the source kit. [Checks and limits](release-notes-v0.30.1.md).
+
+## See a completion without Reload (v0.30.2)
+
+After the parent finishes replying to a native background completion, Desktop
+uses its existing bounded history refresh to load the saved notice and report.
+Open the **Subagent Tasks** summary in the current chat. Its outcome/name pairs,
+partial output and report use the same saved projection as Reload; later refresh
+keeps one copy. Native process completions use the same adopted-turn handling.
+
+Only recognized completion kinds mark a backend-originated turn as adopted.
+Ordinary streamed turns add no refresh through this rule; Stop settlement clears
+the flag. Existing execution, interruption, error and empty-final gates remain.
+This refresh follows the parent reply's terminal frame, not the instant a child
+finishes. [Adoption and checks](release-notes-v0.30.2.md).
 
 ## Meaning and limits
 

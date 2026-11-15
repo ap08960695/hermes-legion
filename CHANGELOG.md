@@ -5,6 +5,19 @@ supported update or Desktop rebuild path. This kit does not install a rebuilt
 Hermes.app. Linked notes identify opt-in memory settings and admission guards
 that apply after adoption. Each entry states its adoption and verification limits.
 
+## v0.30.2 — Show background reports without Reload
+
+After Hermes finishes replying to a background completion, its task summary and
+report now appear in the current chat through the existing history refresh.
+You can open the result without reloading the app. Ordinary streamed turns keep
+their existing read behavior; Stop clears the adoption flag before the next turn.
+Apply the source kit and rebuild Desktop.
+
+A fresh same-home native Local Send/delegate/Stop A/complete B flow showed both
+outcomes and report before Reload, then one retained report after Reload.
+Only model content/timing used a loopback fixture. See
+[release notes](docs/release-notes-v0.30.2.md).
+
 ## v0.30.1 — Clean saved background reports
 
 Opening a saved delegated report now hides the gateway's internal notice and

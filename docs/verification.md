@@ -1,3 +1,38 @@
+# v0.30.2 — Live background reports without Reload
+
+A fresh empty Local home created a real native parent and two delegated children
+through UI Send. Composer Stop ended A before its held reply; B completed and
+native parent delivery produced the streamed reply. The saved completion summary
+appeared without any manual Reload or Refresh. Opening it showed A Interrupted,
+B Completed, partial output and the report. A later native Reload/reopen retained
+exactly one summary. No copied owner receipt or lifecycle/activity row was seeded;
+only five loopback model requests and their timing were controlled. Stored model
+content matched delivery and there was no profile_mismatch. The before reference
+is the earlier native run with the same unmodified event handler.
+
+Two new tests fail on the original handler. A further Stop regression fails on
+the first candidate and passes after clearing adoption at interrupted settlement.
+All 25 nearest tests pass across three files. They cover delegated/process reports
+after streamed parent output, exactly one hydrate invocation, later refresh without
+duplication, ordinary nonproducer turns adding zero reads, Stop, prior adoption
+and stale execution fences. Scoped lint/types/build pass; the inherited dynamic-
+import warning remains. Four scoped sections apply/hash/reverse against the pinned
+base; unchanged source/mock suites were not repeated. This adds no model request.
+
+A preparatory cohort was stopped before app CUA work for the Stop-latch fix and
+final rebuild; it submitted no model request. Both cohorts passed their actual
+60-second Local/SSH-zero gates within four sampled Hermes processes and 4 GiB.
+The accepted cohort's 1283 samples peaked at 1,396,719,616 bytes RSS including the
+observer. All owned identities ended, both ports closed, the original 313-entry
+bundle/signature and exact baseline configs were restored. Values are sampled,
+not physical-RAM or production-saving measurements.
+
+Existing error/empty-final/Stop gates can still defer hydration; refresh follows
+the parent reply's end. Process report behavior has focused unit proof, not a new
+native shell-process acceptance. Original dispatch rows remain parked after
+restoration. Daily-app adoption, Linux parity, whole native suite and production
+efficiency remain open. See [release notes](release-notes-v0.30.2.md).
+
 # v0.30.1 — Clean saved background reports
 
 The v0.30.0 native two-child completion was copied through SQLite backup into a

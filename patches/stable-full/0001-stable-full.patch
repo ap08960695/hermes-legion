@@ -20419,6 +20419,143 @@ index 0656345dc306a5fb275dd9a8ffea1c5fc4584335..6531af02dc5824e0cf07caf703d25263
 -  onResume: (storedSessionId: string) => void
 +  onResume: (storedSessionId: string, owner?: SessionOwnerRoute) => void
  }
+diff --git a/apps/desktop/src/app/session/hooks/use-message-stream/duplicate-background-reply.test.tsx b/apps/desktop/src/app/session/hooks/use-message-stream/duplicate-background-reply.test.tsx
+index 64988f0096c5d1cc8b1ce68528b550ec5b9a400e..21109a790407cd11a960bd30ba35f4115a44b3aa 100644
+--- a/apps/desktop/src/app/session/hooks/use-message-stream/duplicate-background-reply.test.tsx
++++ b/apps/desktop/src/app/session/hooks/use-message-stream/duplicate-background-reply.test.tsx
+@@ -125 +125,112 @@ it('refreshes folded background replies without keeping their settled live copie
+ })
++
++
++it.each([
++  { kind: 'async_delegation_complete', title: 'Subagent Task Completed: Check', resultKind: 'delegation',
++    body: '[ASYNC DELEGATION COMPLETE — one]\n--- RESULT ---\nCompleted report', report: 'Completed report' },
++  { kind: 'process_complete', title: 'Background Process Finished: check', resultKind: 'process',
++    body: '[IMPORTANT: Completed process output]', report: 'Completed process output' }
++])('loads a live $kind report after the streamed reply without Reload', async ({ kind, title, resultKind, body, report }) => {
++  const rows: SessionMessage[] = [
++    { id: 1, role: 'user', content: 'Earlier prompt.', timestamp: 1 },
++    { id: 2, role: 'assistant', content: 'Earlier reply.', timestamp: 2 }
++  ]
++
++  let reads = 0
++
++  const h = renderMessageStream(SID, {
++    hydrateFromStoredSession: async () => {
++      reads++
++      const state = h.state()
++      h.states.set(SID, { ...state, messages: preserveLocalPendingTurnMessages(toChatMessages(rows), state.messages) })
++    }
++  })
++
++  h.states.set(SID, { ...h.state(), storedSessionId: SID, messages: toChatMessages(rows) })
++
++  const send = (type: GatewayEventName, payload: Record<string, unknown> = {}) =>
++    act(() => h.handleEvent({ type, payload, session_id: SID }))
++
++  rows.push({ id: 3, role: 'user', content: body, display_kind: kind,
++    display_metadata: { display_text: title }, timestamp: 3 })
++  await send('message.start', { display_kind: kind, display_text: title, text: body })
++  await send('message.delta', { text: 'Parent response.' })
++  rows.push({ id: 4, role: 'assistant', content: 'Parent response.', timestamp: 4 })
++  await send('message.complete', { text: 'Parent response.', persisted_turn: {
++    row_ids: [3, 4], user_row_id: 3, final_assistant_row_id: 4, complete: true
++  } })
++
++  const notice = h.state().messages.find(message => message.asyncResultKind === resultKind)
++  expect(notice?.asyncResult).toBe(report)
++  expect(notice && chatMessageText(notice)).toBe(title)
++  expect(reads).toBe(1)
++  expect(h.state().adoptedRunningTurn).toBe(false)
++  const refreshed = preserveLocalPendingTurnMessages(toChatMessages(rows), h.state().messages)
++  expect(refreshed.filter(message => message.asyncResultKind === resultKind)).toHaveLength(1)
++  expect(refreshed.filter(message => message.role === 'assistant').map(chatMessageText)).toEqual([
++    'Earlier reply.', 'Parent response.'
++  ])
++
++  h.states.set(SID, { ...h.state(), messages: refreshed })
++  await send('message.start')
++  await send('message.delta', { text: 'Ordinary response.' })
++  await send('message.complete', { text: 'Ordinary response.' })
++  expect(reads).toBe(1)
++  expect(h.state().adoptedRunningTurn).toBe(false)
++})
++
++it.each(['hidden', 'internal_notification', 'other'])('does not adopt an ordinary $0 display kind', async kind => {
++  let reads = 0
++  const h = renderMessageStream(SID, { hydrateFromStoredSession: async () => { reads++ } })
++
++  const send = (type: GatewayEventName, payload: Record<string, unknown>) =>
++    act(() => h.handleEvent({ type, payload, session_id: SID }))
++
++  await send('message.start', { display_kind: kind })
++  await send('message.delta', { text: 'Ordinary response.' })
++  await send('message.complete', { text: 'Ordinary response.' })
++  expect(reads).toBe(0)
++  expect(h.state().adoptedRunningTurn).toBe(false)
++})
++
++it('does not let a stale background start or a stopped turn adopt work', async () => {
++  const h = renderMessageStream(SID)
++
++  const start = (generation: number, kind?: string) => act(() => h.handleEvent({ type: 'message.start',
++    session_id: SID, authority_epoch: 1, execution_generation: generation, payload: { display_kind: kind } }))
++
++  await start(2)
++  await start(1, 'async_delegation_complete')
++  expect(h.state().adoptedRunningTurn).toBe(false)
++  h.states.set(SID, { ...h.state(), interrupted: true, busy: false })
++  await start(2, 'process_complete')
++  expect(h.state().adoptedRunningTurn).toBe(false)
++  expect(h.state().busy).toBe(false)
++})
++
++
++it('keeps an already adopted turn when another start carries no display kind', async () => {
++  const h = renderMessageStream(SID)
++  h.states.set(SID, { ...h.state(), adoptedRunningTurn: true })
++  await act(() => h.handleEvent({ type: 'message.start', session_id: SID, payload: {} }))
++  expect(h.state().adoptedRunningTurn).toBe(true)
++})
++
++
++it('clears background adoption when Stop settles so the next ordinary turn adds no read', async () => {
++  let reads = 0
++  const h = renderMessageStream(SID, { hydrateFromStoredSession: async () => { reads++ } })
++
++  const send = (type: GatewayEventName, generation: number, payload: Record<string, unknown> = {}) =>
++    act(() => h.handleEvent({ type, session_id: SID, authority_epoch: 1, execution_generation: generation, payload }))
++
++  await send('message.start', 1, { display_kind: 'async_delegation_complete' })
++  h.states.set(SID, { ...h.state(), interrupted: true })
++  await send('message.complete', 1, { text: '', status: 'interrupted' })
++  expect(h.state().adoptedRunningTurn).toBe(false)
++  expect(reads).toBe(0)
++  await send('message.start', 2)
++  await send('message.delta', 2, { text: 'Ordinary after Stop.' })
++  await send('message.complete', 2, { text: 'Ordinary after Stop.' })
++  expect(reads).toBe(0)
++})
+diff --git a/apps/desktop/src/app/session/hooks/use-message-stream/gateway-event/message-stream.ts b/apps/desktop/src/app/session/hooks/use-message-stream/gateway-event/message-stream.ts
+index 92392b292c9b9ca7aa73122aa4207a43581e9bab..8b40df1cd3cd008bab79186417c625b6a39fd7d0 100644
+--- a/apps/desktop/src/app/session/hooks/use-message-stream/gateway-event/message-stream.ts
++++ b/apps/desktop/src/app/session/hooks/use-message-stream/gateway-event/message-stream.ts
+@@ -196,2 +196,7 @@ export function handleMessageStreamEvent(ctx: GatewayEventContext): boolean {
+         ...state,
++        // Backend result turns need their stored notice even when the reply streamed here.
++        adoptedRunningTurn:
++          state.adoptedRunningTurn ||
++          payload?.display_kind === 'async_delegation_complete' ||
++          payload?.display_kind === 'process_complete',
+         busy: true,
+diff --git a/apps/desktop/src/app/session/hooks/use-message-stream/index.ts b/apps/desktop/src/app/session/hooks/use-message-stream/index.ts
+index 4035aaaa1eba32d0a48ab5303d32b737e7eff832..9b02e28e2f8458b6ac78083fb9f0b84bae6ed74a 100644
+--- a/apps/desktop/src/app/session/hooks/use-message-stream/index.ts
++++ b/apps/desktop/src/app/session/hooks/use-message-stream/index.ts
+@@ -760,2 +760,3 @@ export function useMessageStream({
+               status === 'interrupted' ? extendInterruptedReply(state.messages, text, occurredAt) : state.messages,
++            adoptedRunningTurn: false,
+             awaitingResponse: false,
 diff --git a/apps/desktop/src/app/session/hooks/use-session-actions/index.ts b/apps/desktop/src/app/session/hooks/use-session-actions/index.ts
 index 75a4e608afbc77db7c82d1f02264e62690139620..7a6846bbd4e907cd48f5be2530e7446238285c70 100644
 --- a/apps/desktop/src/app/session/hooks/use-session-actions/index.ts
@@ -25004,7 +25141,7 @@ index 57a7883e26b7d824533e0901f317235de790f943..8061e3caa3bb865b31207acb49745819
 +          : {}),
        timestamp: earliestTimestamp(message.timestamp, ...parts.map(part => part.timestamp)),
 diff --git a/apps/desktop/src/lib/chat-messages/types.ts b/apps/desktop/src/lib/chat-messages/types.ts
-index 2473f0ce2a5023aa2ca7a1d6c6efb3bd0ad394bc..33767965a44d58d251655b7ff5bf95e5d9ea2971 100644
+index 2473f0ce2a5023aa2ca7a1d6c6efb3bd0ad394bc..3dc09aeb27856aa978e70fa624b24d2a7bc0b63a 100644
 --- a/apps/desktop/src/lib/chat-messages/types.ts
 +++ b/apps/desktop/src/lib/chat-messages/types.ts
 @@ -36,3 +36,3 @@ export type ChatMessage = {
@@ -25012,6 +25149,10 @@ index 2473f0ce2a5023aa2ca7a1d6c6efb3bd0ad394bc..33767965a44d58d251655b7ff5bf95e5
 -  asyncResultKind?: 'process'
 +  asyncResultKind?: 'process' | 'delegation'
    timestamp?: number
+@@ -82,2 +82,3 @@ export type GatewayEventPayload = {
+   text?: string
++  display_kind?: string
+   rendered?: string
 diff --git a/apps/desktop/src/lib/composer-draft-lifecycle.test.ts b/apps/desktop/src/lib/composer-draft-lifecycle.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..87a3e74a30c0380198bedcaaed7f8b52d2d3e3ed
