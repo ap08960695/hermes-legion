@@ -10,6 +10,8 @@ Historical source comments and release payloads received [privacy maintenance](d
 
 ## What is included
 
+- [v0.25.0: bounded fresh backend checks](docs/release-notes-v0.25.0.md), configurable probe concurrency and memory admission; controlled native Mac cases used 27.93% less combined peak RSS, with slower completion.
+
 - [v0.24.0: bounded Desktop ticket backlogs](docs/release-notes-v0.24.0.md), one unanswered frame per helper and shared admission for busy reuse; native Mac 64-grant parity and 257/43 overload recovery, with unchanged RAM.
 
 - [v0.23.0: source-check memory admission](docs/release-notes-v0.23.0.md), waiting for low or unknown RAM within the existing active budget; four controlled native Mac overlap cases used 23.7% less median peak RSS, with longer completion.

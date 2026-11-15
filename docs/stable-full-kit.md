@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1048-path** Legion source, interface and optimization alternative
+This is the complete **1050-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,16 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Bounded fresh backend checks (v0.25.0)
+
+Import/version probes share default-one/configurable-two admission, a 256-job
+FIFO and an initial 512 MiB observation gate. Admitted callers execute fresh;
+full cold-start budgets and one existing timeout retry remain. [Behavior,
+controlled native memory measurements and limits](release-notes-v0.25.0.md).
+Three prior targets change and two join; all 1,045 unrelated targets remain exact.
+Main changes only launch-policy wiring; P0 SSH behavior remains. Adoption needs a
+Desktop rebuild; arbitrary wrapper descendants and other helpers are not capped.
 
 ## Bounded Desktop ticket backlogs (v0.24.0)
 

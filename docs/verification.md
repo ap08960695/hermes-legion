@@ -1,3 +1,45 @@
+# v0.25.0 — Bounded fresh backend probes
+
+[Behavior, controlled native measurements and limits](release-notes-v0.25.0.md).
+Old canonical red2children!=1 then correctedgreen. Four canonical files113pass,
+ElectronTSC/scopedESLint pass. Existing import/version/installation callers share
+one owner; fresh post-install checks execute independently of older pending work.
+No resultcache/coalescing/pool/newprogram/newcoldretry. Admission and execution
+budgets separate; actual close owns slots and one timeout retry. Unknown memory
+expires; upstream catches still report unavailable runtime. Arbitrary wrapper
+children/otherhelpers/bypasses/globalRAM remain outside direct-child cap.
+
+Before product edits: real native program and six audit negatives pass, then
+accepted external-observer two-import baseline (max4includingobserver/<4GiB/zero).
+Prior observer summary referenced obsolete ticket grant field AFTERsuccessful
+metrics/cleanup; retained/excluded terminal-failure result, corrected before
+accepted baseline. One test-runner wrong Vitest path failed beforetests; corrected
+before creditedred. Typecheck runner disabledincremental on composite config and
+failed before sourcechecking; corrected to normal noEmit with ownedbuildinfo.
+Lint type-import/spacing corrected, final canonical/types/lint pass. No productbug
+or additional regression credit for these fixture/configuration corrections.
+
+Fresh old/current/current/old: two real native import checks succeed each with
+identical250ms postimportholds/config/nativeprogram/case/adapters. Direct helper
+max2->1, two launches/zero survivors both. Median simultaneous combined Node+helper
+peak194.078125->139.875MiB(-54.203125MiB/-27.9285%); fixed>=5%AND10MiB gatepasses.
+Helper-only106.84375->53.375MiB; wholeharness includingobserver222.359375->
+168.1640625MiB. Completionincludingholds782.4538955->1208.4737915ms slower~426ms.
+Externalpsutil20ms requested/median37.3–45.5/max48.0msABBAgaps; sharedpages/transient
+misses/allocator/fourcases/modeledhold limit attribution. Configured2 nativecontrol
+keeps two-way overlap/two successes; actualhealthy memory allcandidatecases.
+No app, real pressure, otherhost, inference, normalstartup/globalRAM/otherOSclaim.
+
+A targeted close-ownership review found repeated async error events could throw
+after the first. New regression redcleanup-refused->green with retained listener,
+first error preserved. Final native paired preflights/ABBA/config2 rerun tied to
+final module hashes; earlier successful cohort retained/excluded from figures.
+
+Final1050targets/fivepaths(3prior2new)/1045unrelatedpriorrows-bytes-patchsections
+exact; main onlyimport+launchconfigcall and relatedSSHcode unchanged. Required
+roundtrip/strictinstalled/companion/release/scans/advisor/protectedstate/process
+cleanup gate handoff. No owner controls or state are changed.
+
 # v0.24.0 — Busy ticket helpers share bounded admission
 
 [Behavior and measured native Mac evidence](release-notes-v0.24.0.md).

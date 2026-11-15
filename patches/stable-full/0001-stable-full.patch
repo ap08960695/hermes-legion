@@ -4846,6 +4846,563 @@ index 0000000000000000000000000000000000000000..b518bf54e96bd05be1b76c6b2ff1e51d
 +  return /(?:^|\s)404\b/.test(String((error as any)?.message ?? error))
 +}
 +
+diff --git a/apps/desktop/electron/backend-probe-admission.test.ts b/apps/desktop/electron/backend-probe-admission.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..4d6db2561a86ad2c5e95efdc13d12583d2720cb0
+--- /dev/null
++++ b/apps/desktop/electron/backend-probe-admission.test.ts
+@@ -0,0 +1,348 @@
++import { EventEmitter } from 'node:events'
++import fs from 'node:fs'
++import os from 'node:os'
++import path from 'node:path'
++
++import { afterEach, beforeEach, expect, it, vi } from 'vitest'
++
++import type * as ProbeAPI from './backend-probes'
++import { readDesktopLaunchConfig } from './renderer-heap-flags'
++
++const spawn = vi.hoisted(() => vi.fn())
++vi.mock('node:child_process', () => ({ spawn }))
++
++class Child extends EventEmitter {
++  killed = false
++  closed = false
++  kill = vi.fn((_signal?: string) => { this.killed = true;
++
++ return true })
++  close(code = 0, signal: string | null = null): void {
++    if (this.closed) { return }
++    this.closed = true
++    this.emit('close', code, signal)
++  }
++}
++
++let api: typeof ProbeAPI
++let children: Child[]
++const floor = 536_870_912
++const tick = () => vi.advanceTimersByTimeAsync(0)
++
++function probe(command = '/python', timeout = 1000): Promise<void> {
++  const result = api.execProbe(command, ['--version'], { stdio: 'ignore', timeout })
++  void result.catch(() => {})
++
++  return result
++}
++
++beforeEach(async () => {
++  vi.resetModules()
++  vi.useFakeTimers()
++  vi.spyOn(performance, 'now').mockImplementation(() => Date.now())
++  vi.spyOn(process, 'availableMemory').mockReturnValue(floor)
++  children = []
++  spawn.mockReset().mockImplementation(() => {
++    const child = new Child()
++    children.push(child)
++
++    return child
++  })
++  api = await import('./backend-probes')
++})
++
++afterEach(async () => {
++  for (let round = 0; round < 3; round++) {
++    await vi.advanceTimersByTimeAsync(125_001)
++
++    for (const child of children) { child.close(1) }
++    await tick()
++  }
++
++  expect(vi.getTimerCount()).toBe(0)
++  vi.restoreAllMocks()
++  vi.useRealTimers()
++})
++
++it('serializes identical fresh probes until actual close', async () => {
++  const first = probe(); const second = probe()
++  expect(children).toHaveLength(1)
++  children[0].close()
++  await first; await tick()
++  expect(children).toHaveLength(2)
++  children[1].close()
++  await second
++})
++
++it('applies a parsed two-probe launch limit', async () => {
++  api.configureBackendProbes(readDesktopLaunchConfig('desktop:\n  backend_probe_limit: "2" # cap\n'))
++  const first = probe('/a'); const second = probe('/b'); const third = probe('/c')
++  expect(children).toHaveLength(2)
++  children[0].close(); await first; await tick()
++  expect(children).toHaveLength(3)
++  expect(spawn.mock.calls.map(call => call[0])).toEqual(['/a', '/b', '/c'])
++  children[1].close(); children[2].close()
++  await Promise.all([second, third])
++})
++
++it.each(['0', '3', '-1', '1.5', 'true', 'null', 'NaN', 'Infinity', '2e0'])('rejects invalid launch limit %s', value => {
++  expect(readDesktopLaunchConfig(`desktop:\n  backend_probe_limit: ${value}\n`).backendProbeLimit).toBeUndefined()
++})
++
++it('keeps the default limit for invalid configuration and unrelated sections', async () => {
++  expect(readDesktopLaunchConfig('other:\n  backend_probe_limit: 2\n').backendProbeLimit).toBeUndefined()
++  expect(readDesktopLaunchConfig('desktop:\n  backend_probe_limit: 1\n').backendProbeLimit).toBe(1)
++  api.configureBackendProbes({ backendProbeLimit: 3 })
++  const first = probe(); const second = probe()
++  expect(children).toHaveLength(1)
++  children[0].close(); await first; await tick(); children[1].close(); await second
++})
++
++it('bounds waiting probes at 256 without making overflow retryable', async () => {
++  const active = probe(); const waiting = Array.from({ length: 256 }, () => probe())
++  const overflow = probe()
++  await expect(overflow).rejects.toMatchObject({ code: 'EPROBE_QUEUE_FULL' })
++  expect(children).toHaveLength(1)
++  await vi.advanceTimersByTimeAsync(1000)
++  const results = await Promise.allSettled(waiting)
++  expect(results.every(result => result.status === 'rejected' && result.reason.code === 'EPROBE_ADMISSION_TIMEOUT')).toBe(true)
++  children[0].close(1); await tick()
++  children[1].close(); await active
++  expect(children).toHaveLength(2)
++})
++
++it('removes expired queued work before a fresh successor can spawn', async () => {
++  const first = probe('/active', 5000); const expired = probe('/expired', 50); const next = probe('/next', 500)
++  await vi.advanceTimersByTimeAsync(50)
++  await expect(expired).rejects.toMatchObject({ code: 'EPROBE_ADMISSION_TIMEOUT' })
++  children[0].close(); await first; await tick()
++  expect(spawn.mock.calls.map(call => call[0])).toEqual(['/active', '/next'])
++  children[1].close(); await next
++})
++
++it('waits below the memory floor and admits at the exact floor', async () => {
++  const memory = vi.mocked(process.availableMemory).mockReturnValue(floor - 1)
++  const result = probe()
++  expect(children).toHaveLength(0)
++  await vi.advanceTimersByTimeAsync(99)
++  expect(children).toHaveLength(0)
++  memory.mockReturnValue(floor)
++  await vi.advanceTimersByTimeAsync(1)
++  expect(children).toHaveLength(1)
++  children[0].close(); await result
++  expect(vi.getTimerCount()).toBe(0)
++})
++
++it.each([undefined, NaN, Infinity, -1, 1.5, true, '536870912'])('expires unknown memory %s without spawning or retrying', async value => {
++  vi.mocked(process.availableMemory).mockReturnValue(value as number)
++  const result = probe('/blocked', 250)
++  await vi.advanceTimersByTimeAsync(250)
++  await expect(result).rejects.toMatchObject({ code: 'EPROBE_ADMISSION_TIMEOUT' })
++  expect(children).toHaveLength(0)
++  expect(vi.getTimerCount()).toBe(0)
++})
++
++it('recovers from a throwing memory observer with one outstanding poll', async () => {
++  const memory = vi.mocked(process.availableMemory).mockImplementation(() => { throw new Error('unknown') })
++  const result = probe()
++  expect(vi.getTimerCount()).toBe(2)
++  memory.mockReturnValue(floor)
++  await vi.advanceTimersByTimeAsync(100)
++  children[0].close(); await result
++  expect(vi.getTimerCount()).toBe(0)
++})
++
++it('does not poll memory while capacity is occupied', async () => {
++  const first = probe('/a', 5000); const second = probe('/b', 5000)
++  vi.mocked(process.availableMemory).mockReturnValue(0)
++  await vi.advanceTimersByTimeAsync(300)
++  expect(process.availableMemory).toHaveBeenCalledTimes(1)
++  children[0].close(); await first; await tick()
++  expect(children).toHaveLength(1)
++  vi.mocked(process.availableMemory).mockReturnValue(floor)
++  await vi.advanceTimersByTimeAsync(100)
++  children[1].close(); await second
++})
++
++it('rechecks the admission deadline after a slow observer', async () => {
++  vi.mocked(process.availableMemory).mockImplementation(() => { vi.setSystemTime(Date.now() + 1000);
++
++ return floor })
++  const result = probe()
++  await expect(result).rejects.toMatchObject({ code: 'EPROBE_ADMISSION_TIMEOUT' })
++  expect(children).toHaveLength(0)
++})
++
++it('does not authorize a replacement head with an older observation', async () => {
++  let replacement!: Promise<void>
++  vi.mocked(process.availableMemory).mockImplementationOnce(() => {
++    replacement = probe('/replacement', 2000)
++    vi.advanceTimersByTime(1000)
++
++    return floor
++  }).mockReturnValue(0)
++  const expired = probe('/expired', 1000)
++  await expect(expired).rejects.toMatchObject({ code: 'EPROBE_ADMISSION_TIMEOUT' })
++  expect(children).toHaveLength(0)
++  vi.mocked(process.availableMemory).mockReturnValue(floor)
++  await vi.advanceTimersByTimeAsync(100)
++  expect(spawn.mock.calls.map(call => call[0])).toEqual(['/replacement'])
++  children[0].close(); await replacement
++})
++
++it('captures args, supplied environment replacement, and omitted cwd at entry', async () => {
++  const first = probe()
++  const args = ['--original']; const env = { ONLY_THIS: 'original' }
++  const options = { stdio: 'ignore' as const, timeout: 1000, env }
++  const cwd = vi.spyOn(process, 'cwd').mockReturnValue('/entry')
++  const second = api.execProbe('/second', args, options)
++  void second.catch(() => {})
++  args[0] = '--mutated'; env.ONLY_THIS = 'mutated'; options.timeout = 1; cwd.mockReturnValue('/later')
++  children[0].close(); await first; await tick()
++  expect(spawn.mock.calls[1]).toEqual(['/second', ['--original'], expect.objectContaining({ cwd: '/entry', env: { ONLY_THIS: 'original' } })])
++  await vi.advanceTimersByTimeAsync(2)
++  expect(children[1].kill).not.toHaveBeenCalled()
++  children[1].close(); await second
++})
++
++it('captures inherited environment when none is supplied', async () => {
++  const first = probe()
++  vi.stubEnv('LEGION_PROBE_SNAPSHOT_TEST', 'entry')
++  const second = probe('/second')
++  vi.stubEnv('LEGION_PROBE_SNAPSHOT_TEST', 'later')
++  children[0].close(); await first; await tick()
++  expect(spawn.mock.calls[1][2].env.LEGION_PROBE_SNAPSHOT_TEST).toBe('entry')
++  children[1].close(); await second
++  vi.unstubAllEnvs()
++})
++
++it('keeps a full execution budget after admission waiting', async () => {
++  const first = probe('/a'); const second = probe('/b', 400)
++  await vi.advanceTimersByTimeAsync(300)
++  children[0].close(); await first; await tick()
++  await vi.advanceTimersByTimeAsync(399)
++  expect(children[1].kill).not.toHaveBeenCalled()
++  children[1].close(); await second
++})
++
++it('holds a reservation through one timeout retry and both actual closes', async () => {
++  const first = probe('/retry', 50); const second = probe('/queued', 5000)
++  await vi.advanceTimersByTimeAsync(50)
++  expect(children[0].kill).toHaveBeenCalledWith('SIGTERM')
++  expect(children).toHaveLength(1)
++  children[0].close(0); await tick()
++  expect(spawn.mock.calls.map(call => call[0])).toEqual(['/retry', '/retry'])
++  children[1].close(); await first; await tick()
++  expect(spawn.mock.calls.map(call => call[0])).toEqual(['/retry', '/retry', '/queued'])
++  children[2].close(); await second
++})
++
++it('escalates ignored TERM and never treats a zero exit after timeout as success', async () => {
++  const result = probe('/slow', 50)
++  await vi.advanceTimersByTimeAsync(1049)
++  expect(children[0].kill.mock.calls).toEqual([['SIGTERM']])
++  await vi.advanceTimersByTimeAsync(1)
++  expect(children[0].kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']])
++  expect(children).toHaveLength(1)
++  children[0].close(0); await tick()
++  await vi.advanceTimersByTimeAsync(50)
++  children[1].close(0)
++  await expect(result).rejects.toMatchObject({ killed: true })
++  expect(children).toHaveLength(2)
++  expect(vi.getTimerCount()).toBe(0)
++})
++
++it('preserves a spawn error through timeout cleanup without retrying it', async () => {
++  const result = probe(); const next = probe('/next', 5000)
++  const failure = Object.assign(new Error('spawn refused'), { code: 'EACCES' })
++  let settled = false; void result.finally(() => { settled = true }).catch(() => {})
++  children[0].emit('error', failure)
++  await vi.advanceTimersByTimeAsync(2000)
++  expect(settled).toBe(false)
++  expect(children).toHaveLength(1)
++  children[0].close(1, 'SIGKILL')
++  await expect(result).rejects.toBe(failure); await tick()
++  expect(spawn.mock.calls.map(call => call[0])).toEqual(['/python', '/next'])
++  children[1].close(); await next
++})
++
++it('releases once after a synchronous spawn throw', async () => {
++  const failure = new Error('sync spawn failure')
++  spawn.mockImplementationOnce(() => { throw failure })
++  const failed = probe('/failed'); const next = probe('/next'); const last = probe('/last')
++  await expect(failed).rejects.toBe(failure); await tick()
++  expect(children).toHaveLength(1)
++  children[0].close(); await next; await tick()
++  expect(children).toHaveLength(2)
++  children[1].close(); await last
++})
++
++it('retains an unclosed child even when both kill attempts fail', async () => {
++  const first = probe('/unclosed', 50); const next = probe('/expired', 100)
++  children[0].kill.mockReturnValue(false)
++  await vi.advanceTimersByTimeAsync(5000)
++  await expect(next).rejects.toMatchObject({ code: 'EPROBE_ADMISSION_TIMEOUT' })
++  expect(children).toHaveLength(1)
++  expect(children[0].kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']])
++  children[0].close(1); await tick(); children[1].close(); await first
++})
++
++it('contains thrown kill errors without releasing before close', async () => {
++  const result = probe('/kill-error', 50)
++  const failure = new Error('kill failed')
++  children[0].kill.mockImplementation(() => { throw failure })
++  await vi.advanceTimersByTimeAsync(1050)
++  expect(children).toHaveLength(1)
++  children[0].close(1)
++  await expect(result).rejects.toBe(failure)
++  expect(children).toHaveLength(1)
++})
++
++it('ignores duplicate close for slot accounting', async () => {
++  const first = probe(); const second = probe('/second'); const third = probe('/third')
++  children[0].close(); await first; await tick()
++  children[0].emit('close', 0)
++  expect(children).toHaveLength(2)
++  children[1].close(); await second; await tick(); children[2].close(); await third
++})
++
++it('shares capacity across import, version and installation probes', async () => {
++  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'probe-owner-'))
++  fs.mkdirSync(path.join(root, 'hermes_cli')); fs.writeFileSync(path.join(root, 'hermes_cli/main.py'), '')
++  fs.mkdirSync(path.join(root, '.hermes/bin'), { recursive: true }); fs.writeFileSync(path.join(root, '.hermes/bin/hermes'), '')
++
++  try {
++    const { resolveSourceInstallationBackend } = await import('./source-backend')
++    const imported = api.canImportHermesCli('/import'); const version = api.verifyHermesCli('/version')
++    const installation = resolveSourceInstallationBackend(root, ['serve'], { isWindows: false })
++    expect(children).toHaveLength(1)
++    children[0].close(); await expect(imported).resolves.toBe(true); await tick()
++    expect(children).toHaveLength(2)
++    children[1].close(); await expect(version).resolves.toBe(true); await tick()
++    expect(children).toHaveLength(3)
++    children[2].close(); await expect(installation).resolves.toMatchObject({ root, command: path.join(root, '.hermes/bin/hermes') })
++  } finally { fs.rmSync(root, { recursive: true, force: true }) }
++})
++
++it('runs a post-install validation independently behind an older queued probe', async () => {
++  const { createInstalledRuntimeGate } = await import('./backend-resolution')
++  const gate = createInstalledRuntimeGate({}, () => {})
++  const active = probe('/active'); const older = api.verifyHermesCli('/same')
++  const afterInstall = gate.afterInstall(() => api.verifyHermesCli('/same'))
++  children[0].close(); await active; await tick(); children[1].close(1)
++  await expect(older).resolves.toBe(false); await tick()
++  expect(spawn.mock.calls.map(call => call[0])).toEqual(['/active', '/same', '/same'])
++  children[2].close(); await expect(afterInstall).resolves.toBe(true)
++})
++
++
++it('keeps the first asynchronous error while later cleanup errors await close', async () => {
++  const result = probe('/errors')
++  const first = Object.assign(new Error('spawn refused'), { code: 'EACCES' })
++  children[0].emit('error', first)
++  expect(() => children[0].emit('error', new Error('cleanup refused'))).not.toThrow()
++  expect(children).toHaveLength(1)
++  children[0].close(1)
++  await expect(result).rejects.toBe(first)
++  expect(children).toHaveLength(1)
++})
+diff --git a/apps/desktop/electron/backend-probes.ts b/apps/desktop/electron/backend-probes.ts
+index 6fa8486e5c575d00be9de602e22fc3f13a22ca2e..5d36dbbb99dc7d402ec20e05708adbfbc2076b02 100644
+--- a/apps/desktop/electron/backend-probes.ts
++++ b/apps/desktop/electron/backend-probes.ts
+@@ -56,48 +56,154 @@ function isTimeoutError(err: unknown): boolean {
+
+-/**
+- * Run without blocking the event loop; on timeout only, retry once before failing.
+- * Non-timeout failures (ENOENT, non-zero exit) fail immediately.
+- */
+-async function execProbe(
+-  command: string,
+-  args: string[],
+-  options: {
+-    cwd?: string
+-    env?: NodeJS.ProcessEnv
+-    stdio: 'ignore'
+-    timeout: number
+-    shell?: boolean
+-    windowsHide?: boolean
+-  }
+-): Promise<void> {
+-  const run = () =>
+-    new Promise<void>((resolve, reject) => {
+-      const child = spawn(command, args, options)
+-      child.once('error', reject)
+-      child.once('close', (code, signal) => {
+-        // A timed-out probe may handle SIGTERM and exit zero; it is still a timeout.
+-        if (code === 0 && !child.killed) {
+-          resolve()
+-        } else {
+-          reject(
+-            Object.assign(new Error(`Runtime probe failed: ${command} (${signal || code})`), {
+-              code,
+-              signal,
+-              killed: child.killed
+-            })
+-          )
+-        }
+-      })
++interface ProbeOptions {
++  cwd?: string
++  env?: NodeJS.ProcessEnv
++  stdio: 'ignore'
++  timeout: number
++  shell?: boolean
++  windowsHide?: boolean
++}
++
++interface ProbeAdmission {
++  command: string
++  args: string[]
++  options: ProbeOptions
++  deadline: number
++  timer: ReturnType<typeof setTimeout>
++  resolve: () => void
++  reject: (error: Error) => void
++}
++
++const probeAdmissions: ProbeAdmission[] = []
++let probeLimit = 1
++let activeProbes = 0
++let pumpingProbes = false
++let memoryPoll: ReturnType<typeof setTimeout> | undefined
++
++/** Launch-only policy, configured before backend discovery starts. */
++function configureBackendProbes(config: { backendProbeLimit?: number }): void {
++  const limit = config.backendProbeLimit
++
++  if (Number.isInteger(limit) && limit >= 1 && limit <= 2) { probeLimit = limit }
++}
++
++function probeMemoryReady(): boolean {
++  try {
++    const available = process.availableMemory()
++
++    return Number.isSafeInteger(available) && available >= 536_870_912
++  } catch { return false }
++}
++
++function runProbeAttempt(job: ProbeAdmission): Promise<void> {
++  return new Promise((resolve, reject) => {
++    const { timeout, ...options } = job.options
++    const child = spawn(job.command, job.args, options)
++    let failure: Error | undefined
++    let timedOut = false
++    let closed = false
++    let forceTimer: ReturnType<typeof setTimeout> | undefined
++
++    const terminate = (signal: 'SIGTERM' | 'SIGKILL'): void => {
++      try { child.kill(signal) }
++      catch (error) { failure ??= error as Error }
++    }
++
++    const timer = setTimeout(() => {
++      timedOut = true
++      terminate('SIGTERM')
++
++      if (!closed) { forceTimer = setTimeout(() => terminate('SIGKILL'), 1000) }
++    }, timeout)
++
++    child.on('error', error => { failure ??= error })
++    child.once('close', (code, signal) => {
++      closed = true
++      clearTimeout(timer)
++      clearTimeout(forceTimer)
++
++      // A signal request is not process exit; release only after close.
++      if (failure) { reject(failure) }
++      else if (code === 0 && !timedOut && !child.killed) { resolve() }
++      else {
++        reject(Object.assign(new Error(`Runtime probe failed: ${job.command} (${signal || code})`), {
++          code, signal, killed: timedOut || child.killed
++        }))
++      }
+     })
++  })
++}
++
++async function runProbeAttempts(job: ProbeAdmission): Promise<void> {
++  try { await runProbeAttempt(job) }
++  catch (error) {
++    if (!isTimeoutError(error)) { throw error }
++    // Keep the slot and full cold-start budget through the single existing retry.
++    await runProbeAttempt(job)
++  }
++}
++
++function pumpProbes(): void {
++  if (pumpingProbes) { return }
++  pumpingProbes = true
++  clearTimeout(memoryPoll)
++  memoryPoll = undefined
+
+   try {
+-    await run()
+-  } catch (err) {
+-    if (!isTimeoutError(err)) {
+-      throw err
++    while (activeProbes < probeLimit && probeAdmissions.length) {
++      const job = probeAdmissions[0]
++
++      if (performance.now() >= job.deadline) {
++        probeAdmissions.shift(); clearTimeout(job.timer)
++        job.reject(Object.assign(new Error('Runtime probe admission timed out'), { code: 'EPROBE_ADMISSION_TIMEOUT' }))
++
++        continue
++      }
++
++      const ready = probeMemoryReady()
++
++      if (probeAdmissions[0] !== job || performance.now() >= job.deadline || activeProbes >= probeLimit) { continue }
++
++      if (!ready) {
++        memoryPoll = setTimeout(pumpProbes, 100)
++
++        return
++      }
++
++      probeAdmissions.shift()
++      clearTimeout(job.timer)
++      activeProbes++
++      void runProbeAttempts(job).then(job.resolve, job.reject).finally(() => {
++        activeProbes--
++        pumpProbes()
++      })
+     }
++  } finally { pumpingProbes = false }
++}
+
+-    // One cold-cache / AV miss should not force hermes-setup --update (#61764).
+-    await run()
++/** Each caller runs a fresh probe; admission and each cold-start attempt have separate budgets. */
++async function execProbe(command: string, args: string[], options: ProbeOptions): Promise<void> {
++  const deadline = performance.now() + options.timeout
++  const snapshot = { ...options, cwd: options.cwd ?? process.cwd(), env: { ...(options.env ?? process.env) } }
++  const argv = [...args]
++
++  if (probeAdmissions.length >= 256) {
++    throw Object.assign(new Error('Runtime probe queue is full'), { code: 'EPROBE_QUEUE_FULL' })
+   }
++
++  return new Promise((resolve, reject) => {
++    const job: ProbeAdmission = {
++      command, args: argv, options: snapshot, deadline, resolve, reject,
++      timer: setTimeout(() => {
++        const index = probeAdmissions.indexOf(job)
++
++        if (index < 0) { return }
++        probeAdmissions.splice(index, 1)
++        reject(Object.assign(new Error('Runtime probe admission timed out'), { code: 'EPROBE_ADMISSION_TIMEOUT' }))
++        pumpProbes()
++      }, Math.max(0, deadline - performance.now()))
++    }
++
++    probeAdmissions.push(job)
++    pumpProbes()
++  })
+ }
+@@ -186,2 +292,3 @@ export {
+   canImportHermesCli,
++  configureBackendProbes,
+   DEFAULT_PROBE_TIMEOUT_MS,
 diff --git a/apps/desktop/electron/config-autosave-quit.test.ts b/apps/desktop/electron/config-autosave-quit.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..e2a82d3c91b4c8722ce01087db18825f868f7e43
@@ -6992,7 +7549,7 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..55ac8062abfbd2ce601992ee438165ce
 +  })
  }
 diff --git a/apps/desktop/electron/main.ts b/apps/desktop/electron/main.ts
-index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..50c76d67a2c99ea113bb9bf4f8d168fff1551e3b 100644
+index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..1f3bfb88b8be9dccdb6516b95a41fd67f667ec55 100644
 --- a/apps/desktop/electron/main.ts
 +++ b/apps/desktop/electron/main.ts
 @@ -2,5 +2,7 @@ import { type ChildProcess, execFileSync, spawn } from 'node:child_process'
@@ -7004,6 +7561,11 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..50c76d67a2c99ea113bb9bf4f8d168ff
 -import { closeGatewayTicketBridges, createGatewayTicketResolver } from './local-gateway-python'
 +import { closeGatewayTicketBridges, configureGatewayTicketHelpers, createGatewayTicketResolver } from './local-gateway-python'
  import { createPluginWsUrlHandler } from './plugin-ws-url'
+@@ -83,3 +85,3 @@ import {
+ } from './backend-ownership'
+-import { canImportHermesCli, PROBE_TIMEOUT_MS, shouldTrustHermesOverride, verifyHermesCli } from './backend-probes'
++import { canImportHermesCli, configureBackendProbes, PROBE_TIMEOUT_MS, shouldTrustHermesOverride, verifyHermesCli } from './backend-probes'
+ import { recycleOwnedBackend } from './backend-recycle'
 @@ -137,2 +139,4 @@ import { composerImageTimestamp } from './composer-image-name'
  import { writeComposerPaste } from './composer-paste'
 +import { createConfigAutosaveQueue } from './config-autosave'
@@ -7030,22 +7592,23 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..50c76d67a2c99ea113bb9bf4f8d168ff
 -// Windows ssh client for when the in-box OpenSSH is missing or broken.
 +// Apply launch-only policy before Chromium and ticket helpers can start.
  let desktopSshPathOverride = ''
-@@ -1304,2 +1302,3 @@ let desktopSshPathOverride = ''
+@@ -1304,2 +1302,4 @@ let desktopSshPathOverride = ''
    const desktopLaunchConfig = readDesktopLaunchConfig(desktopLaunchYaml)
 +  configureGatewayTicketHelpers(desktopLaunchConfig)
++  configureBackendProbes(desktopLaunchConfig)
    desktopSshPathOverride = desktopLaunchConfig.sshPath || ''
-@@ -9855,2 +9854,6 @@ async function bootstrapSshConnectionInner(profile, sshConfig, reuseToken, sourc
+@@ -9855,2 +9855,6 @@ async function bootstrapSshConnectionInner(profile, sshConfig, reuseToken, sourc
    } catch (error: any) {
 +    if (error.kind !== 'superseded' && ssh.controlPath) {
 +      recordSshFailure(ssh.controlPath)
 +    }
 +
      if (created) {
-@@ -9930,2 +9933,3 @@ async function bootstrapSshConnectionInner(profile, sshConfig, reuseToken, sourc
+@@ -9930,2 +9934,3 @@ async function bootstrapSshConnectionInner(profile, sshConfig, reuseToken, sourc
        })
 +      markSshTransportHealthy(ssh.controlPath)
        sshIsolatedKeepalives.start(scope, { baseUrl: result.baseUrl, token: result.token })
-@@ -12435,6 +12439,4 @@ function spawnSecondaryWindow({
+@@ -12435,6 +12440,4 @@ function spawnSecondaryWindow({
 
 -// Open (or focus) a standalone window for a single chat session.
 -function createSessionWindow(sessionId, { connectionId = null, profile = null, watch = false } = {}) {
@@ -7054,7 +7617,7 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..50c76d67a2c99ea113bb9bf4f8d168ff
 +const createSessionWindow = (sessionId, opts = {}) =>
 +  sessionWindows.openOrFocus(sessionId, () => spawnSecondaryWindow({ ...opts, sessionId }), opts)
 
-@@ -16134,9 +16136,2 @@ async function teardownConnectionScopedProfileBackend(connectionId, profile) {
+@@ -16134,9 +16137,2 @@ async function teardownConnectionScopedProfileBackend(connectionId, profile) {
 
 -// A 404 raised by `fetchJson` — the shape is `404: <body>` (see fetchJson).
 -// Session lookups are a probe ladder: "not on this profile" is a normal rung
@@ -7064,7 +7627,7 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..50c76d67a2c99ea113bb9bf4f8d168ff
 -}
 -
  async function handleHermesApiRequest(request) {
-@@ -16249,15 +16244,31 @@ async function handleHermesApiRequest(request) {
+@@ -16249,15 +16245,31 @@ async function handleHermesApiRequest(request) {
 
 -// Format an api-request failure for desktop.log. The renderer only ever sees
 -// the invoke rejection; the real stack lives here in main, so persist it
@@ -7108,7 +7671,7 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..50c76d67a2c99ea113bb9bf4f8d168ff
 +  notify: payload => nativeNotifications.show(payload)
 +})
 
-@@ -16272,22 +16283,24 @@ ipcMain.handle('hermes:api', async (_event, request) => {
+@@ -16272,22 +16284,24 @@ ipcMain.handle('hermes:api', async (_event, request) => {
    try {
 -    if (deletingProfile && registryConnectionId) {
 -      return await dispatchConnectionScopedProfileDelete(request, {
@@ -7150,7 +7713,7 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..50c76d67a2c99ea113bb9bf4f8d168ff
 +      return handleHermesApiRequest(request).finally(releaseProfileDeletion)
 +    })
    } catch (error) {
-@@ -18058,33 +18071,8 @@ function configureSpellChecker() {
+@@ -18058,33 +18072,8 @@ function configureSpellChecker() {
 
 -// Does quitting take the agent down with the app? Reads the primary profile's
 -// route through the same resolver resolveRemoteBackend uses, plus every backend
@@ -7190,7 +7753,7 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..50c76d67a2c99ea113bb9bf4f8d168ff
 +}), () => (backendConnectionState.getProcess() ? 1 : 0) +
 +  [...backendPool.values()].filter(entry => entry?.process).length + sshConnections.size)
 
-@@ -18163,2 +18151,8 @@ function heldQuitForActiveWork(event: Electron.Event): boolean {
+@@ -18163,2 +18152,8 @@ function heldQuitForActiveWork(event: Electron.Event): boolean {
  function registerChatWindow(window: BrowserWindow) {
 +  const deferClose = createConfigQuitGate({
 +    queue: configAutosaves, holdForActiveWork: () => false,
@@ -7199,17 +7762,17 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..50c76d67a2c99ea113bb9bf4f8d168ff
 +  })
 +
    chatWindows.add(window)
-@@ -18174,3 +18168,3 @@ function registerChatWindow(window: BrowserWindow) {
+@@ -18174,3 +18169,3 @@ function registerChatWindow(window: BrowserWindow) {
 
 -    if (!shouldGuardWindowClose(work, isQuittingForHandoff, IS_MAC, hasOtherChatWindows(window))) {
 +    if (shouldGuardWindowClose(work, isQuittingForHandoff, IS_MAC, hasOtherChatWindows(window)) && heldQuitForActiveWork(event)) {
        return
-@@ -18178,3 +18172,3 @@ function registerChatWindow(window: BrowserWindow) {
+@@ -18178,3 +18173,3 @@ function registerChatWindow(window: BrowserWindow) {
 
 -    heldQuitForActiveWork(event)
 +    deferClose(event)
    })
-@@ -18206,3 +18200,3 @@ app.on('before-quit', event => {
+@@ -18206,3 +18201,3 @@ app.on('before-quit', event => {
    // overlay-suppression latch must not leak into the next close (#130810).
 -  if (heldQuitForActiveWork(event)) {
 +  if (deferConfigQuit(event)) {
@@ -7352,27 +7915,30 @@ index 5ec95d2ad476bbf08534f6d08a025301a7c4af55..bc39482d4d701337f15161649bf3c68f
 +    `help="$( ${hermes} serve --help 2>&1 )"; ` +
        `printf '%s' "$help" | grep -q ssh-session-token-file && ` +
 diff --git a/apps/desktop/electron/renderer-heap-flags.ts b/apps/desktop/electron/renderer-heap-flags.ts
-index 85cbbbc57e4c78cbac028c0aacbb371690a91d6e..29cd1d51dce68e4b6ef09031bc0da476cb100f70 100644
+index 85cbbbc57e4c78cbac028c0aacbb371690a91d6e..eff9bc9f5a3841a34f93cac8ec0fa8eb5143d7a1 100644
 --- a/apps/desktop/electron/renderer-heap-flags.ts
 +++ b/apps/desktop/electron/renderer-heap-flags.ts
-@@ -17,2 +17,4 @@ export interface DesktopLaunchConfig {
+@@ -17,2 +17,5 @@ export interface DesktopLaunchConfig {
    sshPath?: string
++  backendProbeLimit?: number
 +  gatewayTicketHelperLimit?: number
 +  gatewayTicketHelperIdleMs?: number
  }
-@@ -25,3 +27,3 @@ export interface PlannedSwitch {
+@@ -25,3 +28,3 @@ export interface PlannedSwitch {
  /**
 - * Read the two launch keys out of `config.yaml` text without a YAML parser
 + * Read Desktop launch keys out of `config.yaml` text without a YAML parser
   * (the main bundle ships none). Deliberately narrow: a top-level `desktop:`
-@@ -68,3 +70,12 @@ export function readDesktopLaunchConfig(yamlText: string): DesktopLaunchConfig {
+@@ -68,3 +71,14 @@ export function readDesktopLaunchConfig(yamlText: string): DesktopLaunchConfig {
 
 -    if (key === 'ssh_path') {
-+    if (key === 'gateway_ticket_helper_limit' || key === 'gateway_ticket_helper_idle_ms') {
++    if (key === 'backend_probe_limit' || key === 'gateway_ticket_helper_limit' || key === 'gateway_ticket_helper_idle_ms') {
 +      const scalar = unquote(value)
 +      const number = /^\d+$/.test(scalar) ? Number(scalar) : NaN
 +
-+      if (key === 'gateway_ticket_helper_limit' && Number.isInteger(number) && number >= 1 && number <= 2) {
++      if (key === 'backend_probe_limit' && Number.isInteger(number) && number >= 1 && number <= 2) {
++        out.backendProbeLimit = number
++      } else if (key === 'gateway_ticket_helper_limit' && Number.isInteger(number) && number >= 1 && number <= 2) {
 +        out.gatewayTicketHelperLimit = number
 +      } else if (key === 'gateway_ticket_helper_idle_ms' && Number.isInteger(number) && number >= 100 && number <= 30_000) {
 +        out.gatewayTicketHelperIdleMs = number
@@ -91908,11 +92474,46 @@ index 44d25bc19bae30f9665f7c418a2dcf102e6fbccb..ade136286e3e6511ce2962243555153e
 +| `lazy` | bool | both | Register the server's tools from the on-disk schema cache at startup and only spawn/connect it on the first tool call (default: `false`, or `true` for eligible stdio servers under `mcp.memory_saving`). Needs one prior live connect to fill the cache; a missing or stale entry falls back to the normal eager connect. Status surfaces show the server as `lazy` with its cached tool count until first use |
  | `idle_timeout_seconds` | number | stdio | Optional stdio server recycle after idle time (`0` disables). May also live under a `lifecycle:` mapping |
 diff --git a/website/docs/user-guide/desktop.md b/website/docs/user-guide/desktop.md
-index 2021ee43feb046d980a57b30d68a6e3e2c98d616..c656485ee884038e9598c8d725a09a777b9f0898 100644
+index 2021ee43feb046d980a57b30d68a6e3e2c98d616..48ff237e0b48d9fc95909faf94b4467c2ddd87ee 100644
 --- a/website/docs/user-guide/desktop.md
 +++ b/website/docs/user-guide/desktop.md
-@@ -250,2 +250,62 @@ The pre-window reader is a small YAML subset, not the full parser the rest of He
+@@ -250,2 +250,97 @@ The pre-window reader is a small YAML subset, not the full parser the rest of He
 
++#### Backend probe admission
++
++Desktop runs one backend import/version probe at a time by default. Probes start
++only when needed; no idle Python pool or validation-result cache is kept. Set a
++launch-only limit of two if you prefer more overlap at a higher memory peak:
++
++```yaml
++desktop:
++  backend_probe_limit: 1  # integer 1–2; default 1
++```
++
++Import, CLI version and installation-launcher version checks share this limit and
++up to 256 waiting jobs per Electron process. Every successfully admitted caller executes its own fresh probe, including
++validation after installation; no earlier result satisfies it.
++New probes require a safe integer `process.availableMemory()` observation of at
++least 512 MiB. Low, unknown or throwing observations wait, with one 100 ms poll
++only while there is free capacity and memory blocks admission. This is an
++observation, not reserved memory or a global RAM limit.
++
++Admission has its own probe-timeout budget from entry (normally 15 seconds,
++using the existing `HERMES_PROBE_TIMEOUT_MS` policy). Once admitted, each attempt
++keeps the full execution timeout. The existing single cold-start retry occurs
++only after a timeout and actual child close; it retains the slot and does not
++repeat memory admission. At execution timeout Desktop sends TERM, then KILL after
++one second if still unclosed. A zero exit after timeout is still a failed attempt.
++No actual close means no slot release or retry; total completion is not guaranteed.
++
++Queue-full and admission-timeout failures do not cause a cold retry. Current
++runtime discovery callers still report failed admission as unavailable runtime,
++so sustained contention or an unsupported memory API can cause discovery to fall
++through. Queuing trades startup latency for a smaller concurrent probe footprint.
++The cap covers direct children of these probe calls; arbitrary shell/wrapper
++children, bundled/direct developer bypasses, other helpers and other Electron
++processes remain outside it. No new model or credential retry is added.
++
 +#### On-demand gateway ticket helpers
 +
 +Desktop starts Python ticket helpers only when a connection needs a fresh ticket.
@@ -91974,7 +92575,7 @@ index 2021ee43feb046d980a57b30d68a6e3e2c98d616..c656485ee884038e9598c8d725a09a77
 +continues to hold its slot.
 +
  ### Settings & onboarding
-@@ -686,2 +746,22 @@ bootstrap marker does not force installation when that launcher works.
+@@ -686,2 +781,22 @@ bootstrap marker does not force installation when that launcher works.
 
 +Source update checks share one active operation and up to 256 pending operations
 +per Electron process. Adjacent identical ordinary requests join the same running
