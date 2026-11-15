@@ -5,6 +5,18 @@ supported update or Desktop rebuild path. This kit does not install a rebuilt
 Hermes.app. Linked notes identify opt-in memory settings and admission guards
 that apply after adoption. Each entry states its adoption and verification limits.
 
+## v0.30.1 — Clean saved background reports
+
+Opening a saved delegated report now hides the gateway's internal notice and
+lets the existing terminal transcript-path cleanup work. Process logs also close
+their wrapper correctly. Task outcomes, partial output and report content stay
+available. Apply the source kit and rebuild Desktop.
+
+The same genuine native saved report was checked before and after on an isolated
+Local app. Its stored content and outcome metadata stayed exact. The copied
+home's resume was refused by its existing profile guard; acceptance covers
+reading history. See [release notes](docs/release-notes-v0.30.1.md).
+
 ## v0.30.0 — Reopen delegated task outcomes
 
 A saved batch completion can now show which task was interrupted, completed or

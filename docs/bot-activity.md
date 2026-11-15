@@ -66,9 +66,18 @@ The producer pairs each authoritative result index with its goal before saving
 the display text. It does not guess an outcome from report prose, rewrite the
 model notification or add a database field. Older saved notifications keep their
 fallback. Original dispatch cards can still appear parked; the new detail belongs
-to the completion notification. Live pre-Reload summary visibility and existing
-report trace plumbing remain outside this capability.
+to the completion notification. Live pre-Reload summary visibility remains outside this capability.
 [Adoption and checks](release-notes-v0.30.0.md).
+
+## Clean background reports (v0.30.1)
+
+The saved-report view removes the canonical trailing gateway notice from its
+local display input before parsing a producer envelope. This lets the existing
+terminal transcript-path cleanup work and keeps process-log brackets intact.
+Task outcomes and partial/report output remain. Stored history and model text
+keep their original content. Unwrapped legacy reports and embedded, near-match
+or suffixed notice text retain their existing treatment. Rebuild Desktop after
+applying the source kit. [Checks and limits](release-notes-v0.30.1.md).
 
 ## Meaning and limits
 

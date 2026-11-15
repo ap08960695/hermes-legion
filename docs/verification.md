@@ -1,3 +1,31 @@
+# v0.30.1 — Clean saved background reports
+
+The v0.30.0 native two-child completion was copied through SQLite backup into a
+fresh task-owned Local home. Its original content and outcome metadata matched
+before launch. On the rebuilt native app, Chat history opened that saved report:
+A/B outcome/name pairs, partial output and the successful child/parent result
+remained visible; the terminal trace path and gateway notice disappeared. The
+source database hash and copied row content/metadata stayed exact after viewing.
+Message count and stored API accounting were unchanged; no new Send/model work
+was submitted. The copied home's live resume was refused with profile_mismatch,
+so this proves saved-history display, not cross-home resume or fresh delegation.
+
+Three new regressions fail on the original parser; all ten nearest tests pass.
+The cases cover batch/single/process framing, preserved outcomes/input records,
+unwrapped legacy output, embedded notices, near matches and extra suffix text.
+Existing upstream display whitespace normalization is retained. Scoped lint,
+renderer types and build pass; the inherited dynamic-import warning remains.
+Two changed patch sections apply/hash/reverse; unchanged source/mock checks were
+not repeated. This is a renderer bug fix with no dependency/schema/backend change.
+
+The actual 60-second Local gate had zero SSH attempts/executions. The cohort's
+1120 samples saw at most four Hermes processes and 989,478,912 bytes RSS including
+the observer. Owned identities ended, the gateway port closed, 313 original bundle
+entries and strict signature were restored, and baseline config stayed exact.
+Sampled resource values are not continuous peaks or production savings.
+Daily-app adoption, Linux, the whole native suite and live pre-Reload summary
+visibility remain open. See [release notes](release-notes-v0.30.1.md).
+
 # v0.30.0 — Retained delegated task outcome details
 
 Actual native Local UI Send started two delegated children. Composer Stop ended

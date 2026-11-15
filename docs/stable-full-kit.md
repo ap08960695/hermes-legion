@@ -10,6 +10,15 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Clean background reports (v0.30.1)
+
+The renderer removes canonical terminal gateway provenance before splitting a
+saved background report. This repairs transcript-tail cleanup and process wrapper
+closing without changing stored/model content or per-task outcome metadata.
+Apply the source kit and rebuild Desktop. Two existing patch sections change;
+1077 targets and the explicit test selection are retained. Only those changed
+sections were checked. [Checks and adoption](release-notes-v0.30.1.md).
+
 ## Retained child outcome details (v0.30.0)
 
 Saved batch completions now carry per-task outcome/name pairs. After Reload,
