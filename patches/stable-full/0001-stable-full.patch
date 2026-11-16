@@ -42424,6 +42424,35 @@ index f39f121049f7352acee0bbfa989be66279aaf5ca..f38bf4f23d1650e056907551c5bb528e
 +        "    _hermes_closure_repair()\n"
 +        "    sys.exit('hermes: bootstrap is missing from the selected checkout; repair this installation')\n"
          "if sys.argv[1:2] == ['--print-runtime-command']:\n"
+diff --git a/hermes_cli/_subprocess_compat.py b/hermes_cli/_subprocess_compat.py
+index 8ec065c638016983089e6b174c89951e9e2e93a3..6f76b8ba7dbe102c04642f302a2f24dccf426108 100644
+--- a/hermes_cli/_subprocess_compat.py
++++ b/hermes_cli/_subprocess_compat.py
+@@ -800,3 +800,3 @@ def bounded_probe_run(
+     env: Mapping[str, str] | None = None, cwd: str | os.PathLike[str] | None = None,
+-    raise_on_spawn_failure: bool = False, input: str | None = None,
++    raise_on_spawn_failure: bool = False, input: str | bytes | None = None,
+ ) -> subprocess.CompletedProcess[str] | None:
+@@ -804,3 +804,4 @@ def bounded_probe_run(
+
+-    ``input`` is written to the child's stdin (closed afterwards); without it stdin is ``DEVNULL``.
++    ``input`` is written to the child's stdin (closed afterwards); bytes bypass text newline conversion.
++    Without input stdin is ``DEVNULL``; captured output always returns text.
+
+@@ -819,2 +820,3 @@ def bounded_probe_run(
+     _popen_kwargs: dict = {"creationflags": windows_hide_flags()} if IS_WINDOWS else {"process_group": 0}
++    binary_input = isinstance(input, bytes)
+     job = None
+@@ -830,3 +832,3 @@ def bounded_probe_run(
+             stdin=subprocess.DEVNULL if input is None else subprocess.PIPE,
+-            text=True, encoding="utf-8", errors=errors,
++            text=not binary_input, encoding=None if binary_input else "utf-8", errors=None if binary_input else errors,
+             env=dict(env) if env is not None else None, cwd=cwd, **_popen_kwargs)
+@@ -838,2 +840,4 @@ def bounded_probe_run(
+         stdout, stderr = proc.communicate(input=input, timeout=timeout)
++        if binary_input:
++            stdout, stderr = stdout.decode("utf-8", errors), stderr.decode("utf-8", errors)
+     except Exception:
 diff --git a/hermes_cli/account_usage_native_agy.py b/hermes_cli/account_usage_native_agy.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..43b3dc65a69a049f51ce585991f8dedccb5737c6
@@ -57471,17 +57500,17 @@ index 35ab62e06eda4ae463fa007b085a0059e7c1e1a2..1a8ae8c660ea6a19b3ad6ca1eecf4dd8
    queue:
 diff --git a/plugins/computer_use/agent-desktop/__init__.py b/plugins/computer_use/agent-desktop/__init__.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..d8fdaccca8876f0f5120db464909a560b63095fa
+index 0000000000000000000000000000000000000000..eab6702e978ff5dbf24c816881bba9a2ab33fb32
 --- /dev/null
 +++ b/plugins/computer_use/agent-desktop/__init__.py
 @@ -0,0 +1,23 @@
-+"""Opt-in agent-desktop provider; currently supports scoped AX reads only."""
++"""Opt-in agent-desktop provider with scoped AX reads and semantic ref input."""
 +from tools.computer_use.backend import ComputerUseProvider
 +
 +
 +class AgentDesktopProvider(ComputerUseProvider):
 +    name = 'agent-desktop'
-+    display_name = 'agent-desktop (AX read-only)'
++    display_name = 'agent-desktop (AX refs)'
 +
 +    def create_backend(self, *, permission_mode):
 +        from tools.computer_use.agent_desktop_backend import AgentDesktopBackend
@@ -57500,14 +57529,14 @@ index 0000000000000000000000000000000000000000..d8fdaccca8876f0f5120db464909a560
 +    ctx.register_computer_use_provider(AgentDesktopProvider())
 diff --git a/plugins/computer_use/agent-desktop/plugin.yaml b/plugins/computer_use/agent-desktop/plugin.yaml
 new file mode 100644
-index 0000000000000000000000000000000000000000..359956b963099809d12e6be0c05952535e522fb3
+index 0000000000000000000000000000000000000000..d4de82a49d75a3162b8db3e39f5ac32c882b6b35
 --- /dev/null
 +++ b/plugins/computer_use/agent-desktop/plugin.yaml
 @@ -0,0 +1,6 @@
 +name: agent-desktop
 +description: >-
-+  agent-desktop — opt-in AX read-only provider. Requires an explicit application
-+  name and mode=ax; screenshots and input are not implemented.
++  agent-desktop — opt-in AX refs. Capture with an explicit application and mode=ax;
++  semantic click and set_value consume that capture. No screenshots or physical input.
 +version: 0.1.0
 +author: Hermes Legion
 diff --git a/plugins/kanban/dashboard/dist/index.js b/plugins/kanban/dashboard/dist/index.js
@@ -63316,12 +63345,296 @@ index 0000000000000000000000000000000000000000..c351774589bc9cde32e237fe23c7f70c
 +    session = CodexAppServerSession(cwd=str(tmp_path), model='gpt-6.1-sol',client_factory=lambda **kw: client)
 +    assert session.ensure_started() == 't-public'
 +    assert client.calls == ['thread/start']
+diff --git a/tests/computer_use/test_agent_desktop_actions.py b/tests/computer_use/test_agent_desktop_actions.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..8f3cf4e89bc381d03d081175d14a5dafff078172
+--- /dev/null
++++ b/tests/computer_use/test_agent_desktop_actions.py
+@@ -0,0 +1,278 @@
++"""Single-use native refs, exact stdin and conservative action results."""
++import json
++from types import SimpleNamespace
++
++import pytest
++
++
++def observation():
++    return {'version': '2.6', 'ok': True, 'command': 'snapshot', 'data': {
++        'app': 'Fixture', 'complete': True, 'snapshot_id': 'observe', 'ref_count': 2,
++        'window': {'id': 'w-1', 'title': 'Fixture'}, 'tree': {
++            'role': 'window', 'name': 'Fixture', 'children': [
++                {'role': 'button', 'name': 'Activate', 'ref_id': '@observe:e1', 'available_actions': ['Click']},
++                {'role': 'textfield', 'name': 'Input', 'ref_id': '@observe:e2', 'available_actions': ['SetValue']}]}}}
++
++
++def completed(command):
++    return SimpleNamespace(returncode=0, stdout=json.dumps({'version': '2.6', 'ok': True, 'command': command,
++        'data': {'action': command, 'disposition': {'delivery': 'delivered_unverified', 'retry': 'unsafe'},
++                 'post_state': {'value': 'PRIVATE_DRIVER_OUTPUT'}}}), stderr='PRIVATE_DRIVER_OUTPUT')
++
++
++@pytest.fixture
++def controls(monkeypatch):
++    from tools.computer_use import agent_desktop_backend as module
++    calls, state = [], {}
++    monkeypatch.setattr(module.driver, 'resolve_agent_desktop', lambda **k: '/fixture/agent-desktop')
++    monkeypatch.setattr(module.driver, '_environment', lambda: {'SAFE': 'yes'})
++    def probe(argv, **kwargs):
++        calls.append((argv, kwargs))
++        if argv[1] == 'snapshot':
++            return state.get('capture', SimpleNamespace(returncode=0, stdout=json.dumps(observation())))
++        if 'action' in state:
++            value = state['action']
++            return value() if callable(value) else value
++        return completed(argv[1])
++    monkeypatch.setattr(module.driver, 'bounded_probe_run', probe)
++    backend = module.AgentDesktopBackend()
++    backend.start()
++    cap = backend.capture(mode='ax', app='Fixture')
++    return module, backend, calls, state, cap
++
++
++def test_semantic_click_consumes_all_refs_and_never_claims_effect(controls):
++    _, backend, calls, _, cap = controls
++    result = backend.click(element=cap.elements[1].index)
++    assert result.ok and result.action == 'click' and result.verified is None
++    assert result.meta['recapture_required'] is True and result.path == 'ax'
++    assert 'PRIVATE_DRIVER_OUTPUT' not in str(result)
++    argv, kwargs = calls[-1]
++    assert argv[:3] == ['/fixture/agent-desktop', 'click', '@observe:e1']
++    assert '--session' in argv and '--headed' not in argv and '--screenshot' not in argv
++    assert kwargs == {'timeout': 10, 'env': {'SAFE': 'yes'}}
++    again = backend.set_value('not delivered', element=cap.elements[2].index)
++    assert not again.ok and again.code == 'capture_required' and len(calls) == 2
++
++
++@pytest.mark.parametrize('value', ['', 'private value\n\r\nก', 'ก' * 43690 + 'ab'])
++def test_value_uses_exact_utf8_stdin_without_argument_or_result_echo(controls, value):
++    _, backend, calls, _, cap = controls
++    result = backend.set_value(value, element=cap.elements[2].index)
++    assert result.ok and result.action == 'set_value' and result.verified is None
++    argv, kwargs = calls[-1]
++    assert argv[:3] == ['/fixture/agent-desktop', 'set-value', '@observe:e2']
++    assert '--stdin' in argv and kwargs['input'] == value.encode('utf-8')
++    if value:
++        assert value not in str(argv) and value not in result.message
++    assert 'PRIVATE_DRIVER_OUTPUT' not in str(result)
++
++
++@pytest.mark.parametrize('value', [None, b'bytes', '\x00', '\ud800', 'ก' * 43691])
++def test_invalid_values_are_rejected_before_spawn(controls, value):
++    _, backend, calls, _, cap = controls
++    result = backend.set_value(value, element=cap.elements[2].index)
++    assert not result.ok and len(calls) == 1
++
++
++@pytest.mark.parametrize('kwargs', [{'x': 1, 'y': 1}, {'button': 'right'}, {'click_count': 2},
++                                   {'click_count': True}, {'modifiers': ['shift']},
++                                   {'delivery_mode': 'foreground'}, {'bring_to_front': True}])
++def test_nonsemantic_click_forms_never_spawn(controls, kwargs):
++    _, backend, calls, _, cap = controls
++    result = backend.click(element=cap.elements[1].index, **kwargs)
++    assert not result.ok and len(calls) == 1
++
++
++def test_static_nodes_wrong_actions_and_boolean_indices_have_no_authority(controls):
++    _, backend, calls, _, cap = controls
++    assert not backend.click(element=cap.elements[0].index).ok
++    cap = backend.capture(mode='ax', app='Fixture')
++    assert not backend.set_value('value', element=cap.elements[1].index).ok
++    cap = backend.capture(mode='ax', app='Fixture')
++    assert not backend.click(element=True).ok
++    assert all(call[0][1] == 'snapshot' for call in calls)
++
++
++def test_replacement_capture_and_restart_never_rebind_old_indices(controls):
++    _, backend, calls, _, old = controls
++    fresh = backend.capture(mode='ax', app='Fixture')
++    assert {e.index for e in old.elements}.isdisjoint(e.index for e in fresh.elements)
++    assert not backend.click(element=old.elements[1].index).ok
++    fresh = backend.capture(mode='ax', app='Fixture')
++    backend.stop()
++    backend.start()
++    restarted = backend.capture(mode='ax', app='Fixture')
++    assert {e.index for e in fresh.elements}.isdisjoint(e.index for e in restarted.elements)
++    assert not backend.click(element=fresh.elements[1].index).ok
++    assert all(c[0][1] == 'snapshot' for c in calls)
++
++
++def test_failed_recapture_invalidates_previous_refs(controls):
++    _, backend, calls, state, old = controls
++    state['capture'] = None
++    with pytest.raises(RuntimeError):
++        backend.capture(mode='ax', app='Fixture')
++    assert not backend.click(element=old.elements[1].index).ok
++    assert len(calls) == 2
++
++
++@pytest.mark.parametrize('native', [None, SimpleNamespace(returncode=1, stdout='PRIVATE_DRIVER_OUTPUT'),
++    SimpleNamespace(returncode=0, stdout='PRIVATE_DRIVER_OUTPUT'),
++    SimpleNamespace(returncode=0, stdout=json.dumps({'version': '2.6', 'ok': False, 'command': 'click',
++        'error': {'message': 'PRIVATE_DRIVER_OUTPUT', 'disposition': {'delivery': 'delivery_uncertain'}}})),
++    completed('different-command')])
++def test_failed_or_uncertain_native_attempts_never_retry_and_require_capture(controls, native):
++    _, backend, calls, state, cap = controls
++    state['action'] = native
++    result = backend.click(element=cap.elements[1].index)
++    assert not result.ok and result.meta['recapture_required'] is True
++    assert 'PRIVATE_DRIVER_OUTPUT' not in str(result)
++    assert not backend.click(element=cap.elements[1].index).ok
++    assert len(calls) == 2
++
++
++def test_probe_exception_and_cancellation_leave_refs_consumed(controls):
++    _, backend, calls, state, cap = controls
++    def failed():
++        raise OSError('PRIVATE_DRIVER_OUTPUT')
++    state['action'] = failed
++    result = backend.click(element=cap.elements[1].index)
++    assert not result.ok and 'PRIVATE_DRIVER_OUTPUT' not in str(result)
++    cap = backend.capture(mode='ax', app='Fixture')
++    def cancelled():
++        raise KeyboardInterrupt
++    state['action'] = cancelled
++    with pytest.raises(KeyboardInterrupt):
++        backend.click(element=cap.elements[1].index)
++    assert not backend.click(element=cap.elements[1].index).ok
++    assert len(calls) == 4
++
++
++def test_concurrent_inputs_cannot_reuse_one_capture(controls):
++    _, backend, calls, state, cap = controls
++    from concurrent.futures import ThreadPoolExecutor
++    from threading import Event
++    started, release = Event(), Event()
++    def delayed():
++        started.set()
++        assert release.wait(3)
++        return completed('click')
++    state['action'] = delayed
++    with ThreadPoolExecutor(max_workers=2) as pool:
++        first = pool.submit(backend.click, element=cap.elements[1].index)
++        try:
++            assert started.wait(2)
++            second = pool.submit(backend.click, element=cap.elements[1].index)
++        finally:
++            release.set()
++        assert sorted([first.result(timeout=3).ok, second.result(timeout=3).ok]) == [False, True]
++    assert len(calls) == 2
++
++
++def test_human_handoff_and_placement_change_invalidate_input(controls, monkeypatch):
++    _, backend, calls, _, cap = controls
++    from tools.bot_desktop import lease, placement
++    epoch = lease.assert_agent_may_act().epoch
++    monkeypatch.setattr(lease, 'assert_agent_may_act', lambda: SimpleNamespace(epoch=epoch + 1))
++    assert not backend.click(element=cap.elements[1].index).ok
++    cap = backend.capture(mode='ax', app='Fixture')
++    monkeypatch.setattr(placement, 'resolve', lambda: SimpleNamespace(where='terminal'))
++    assert not backend.set_value('value', element=cap.elements[2].index).ok
++    assert len(calls) == 2
++
++
++def test_common_tool_keeps_approval_and_recapture_verdict(controls, monkeypatch):
++    _, _, calls, _, _ = controls
++    from hermes_cli import config
++    from tools.computer_use import tool
++    monkeypatch.setattr(config, 'load_config_readonly', lambda: {'computer_use': {'backend': 'agent-desktop'}})
++    approvals = []
++    monkeypatch.setattr(tool, '_request_approval', lambda scope, args: approvals.append(scope))
++    tool.reset_backend_for_tests()
++    try:
++        cap = json.loads(tool.handle_computer_use({'action': 'capture', 'mode': 'ax', 'app': 'Fixture'}, session_id='actions'))
++        idx = next(e['index'] for e in cap['elements'] if e['label'] == 'Activate')
++        result = json.loads(tool.handle_computer_use({'action': 'click', 'element': idx, 'app': 'Fixture'}, session_id='actions'))
++        assert result['ok'] and result['verdict']['decision'] == 'verify_fresh_state' and approvals == ['click']
++        again = json.loads(tool.handle_computer_use({'action': 'click', 'element': idx}, session_id='actions'))
++        assert not again['ok'] and again['verdict']['decision'] == 'verify_fresh_state'
++        assert 'delivered' not in again['verdict']['hint'].lower()
++        assert len([c for c in calls if c[0][1] == 'click']) == 1
++    finally:
++        tool.reset_backend_for_tests()
++
++
++def test_pending_approved_index_cannot_rebind_after_another_capture(controls, monkeypatch):
++    _, _, calls, _, _ = controls
++    from hermes_cli import config
++    from tools.computer_use import tool
++    from concurrent.futures import ThreadPoolExecutor
++    from contextvars import copy_context
++    from threading import Event
++    pending, resume = Event(), Event()
++    monkeypatch.setattr(config, 'load_config_readonly', lambda: {'computer_use': {'backend': 'agent-desktop'}})
++    def approve(scope, args):
++        pending.set()
++        assert resume.wait(3)
++    monkeypatch.setattr(tool, '_request_approval', approve)
++    tool.reset_backend_for_tests()
++    try:
++        first = json.loads(tool.handle_computer_use({'action': 'capture', 'mode': 'ax', 'app': 'Fixture'}, session_id='pending'))
++        old = next(e['index'] for e in first['elements'] if e['label'] == 'Activate')
++        with ThreadPoolExecutor(max_workers=1) as pool:
++            future = pool.submit(copy_context().run, tool.handle_computer_use, {'action': 'click', 'element': old}, session_id='pending')
++            try:
++                assert pending.wait(2)
++                fresh = json.loads(tool.handle_computer_use({'action': 'capture', 'mode': 'ax', 'app': 'Fixture'}, session_id='pending'))
++                assert old not in {e['index'] for e in fresh['elements']}
++            finally:
++                resume.set()
++            result = json.loads(future.result(timeout=3))
++        assert not result['ok'] and result['code'] == 'capture_required'
++        assert all(c[0][1] == 'snapshot' for c in calls)
++    finally:
++        resume.set()
++        tool.reset_backend_for_tests()
++
++
++def test_denied_approval_and_wrong_app_never_dispatch(controls, monkeypatch):
++    _, _, calls, _, _ = controls
++    from hermes_cli import config
++    from tools.computer_use import tool
++    monkeypatch.setattr(config, 'load_config_readonly', lambda: {'computer_use': {'backend': 'agent-desktop'}})
++    tool.reset_backend_for_tests()
++    try:
++        cap = json.loads(tool.handle_computer_use({'action': 'capture', 'mode': 'ax', 'app': 'Fixture'}, session_id='denied'))
++        idx = next(e['index'] for e in cap['elements'] if e['label'] == 'Activate')
++        monkeypatch.setattr(tool, '_request_approval', lambda *a: json.dumps({'error': 'denied'}))
++        assert json.loads(tool.handle_computer_use({'action': 'click', 'element': idx}, session_id='denied'))['error'] == 'denied'
++        monkeypatch.setattr(tool, '_request_approval', lambda *a: None)
++        result = json.loads(tool.handle_computer_use({'action': 'click', 'element': idx, 'app': 'Different app'}, session_id='denied'))
++        assert result['code'] == 'input_target_mismatch'
++        assert all(c[0][1] == 'snapshot' for c in calls)
++    finally:
++        tool.reset_backend_for_tests()
++
++
++def test_native_value_readback_does_not_claim_application_commit(controls):
++    _, backend, _, state, cap = controls
++    result = completed('set-value')
++    value = json.loads(result.stdout)
++    value['data']['disposition']['delivery'] = 'delivered_verified'
++    value['data']['details'] = {'application_commit': 'not_verified'}
++    result.stdout = json.dumps(value)
++    state['action'] = result
++    out = backend.set_value('private value', element=cap.elements[2].index)
++    assert out.ok and out.verified is None and out.meta['recapture_required'] is True
++
++
++def test_action_indices_cannot_cross_backend_sessions(controls):
++    module, backend, calls, _, old = controls
++    other = module.AgentDesktopBackend()
++    other.start()
++    fresh = other.capture(mode='ax', app='Fixture')
++    assert {e.index for e in fresh.elements}.isdisjoint(e.index for e in old.elements)
++    assert not other.click(element=old.elements[1].index).ok
++    sessions = [argv[argv.index('--session') + 1] for argv, _ in calls]
++    assert sessions[0] != sessions[1]
 diff --git a/tests/computer_use/test_agent_desktop_backend.py b/tests/computer_use/test_agent_desktop_backend.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..0ea410086045a85cd0e5ca4c5380980f07913471
+index 0000000000000000000000000000000000000000..553ab7720bbc001eb480e30758ba5c5723c6e5f2
 --- /dev/null
 +++ b/tests/computer_use/test_agent_desktop_backend.py
-@@ -0,0 +1,232 @@
+@@ -0,0 +1,234 @@
 +"""Opt-in AX-only agent-desktop provider through the existing backend contract."""
 +import json
 +from types import SimpleNamespace
@@ -63335,7 +63648,7 @@ index 0000000000000000000000000000000000000000..0ea410086045a85cd0e5ca4c5380980f
 +    settings = {'computer_use': {'backend': 'agent-desktop'}}
 +    monkeypatch.setattr(config, 'load_config_readonly', lambda: settings)
 +    provider = get_active_provider()
-+    assert provider.name == 'agent-desktop' and 'read-only' in provider.display_name
++    assert provider.name == 'agent-desktop' and 'AX refs' in provider.display_name
 +    backend = provider.create_backend(permission_mode='standard')
 +    from tools.computer_use.backend import ComputerUseBackend
 +    assert isinstance(backend, ComputerUseBackend)
@@ -63372,15 +63685,17 @@ index 0000000000000000000000000000000000000000..0ea410086045a85cd0e5ca4c5380980f
 +    result = backend.capture(mode='ax', app='Fixture')
 +    assert result.mode == 'ax' and result.app == 'Fixture' and result.window_title == 'Fixture window'
 +    assert result.png_b64 is None and (result.width, result.height) == (0, 0)
-+    assert [(e.index, e.role, e.label) for e in result.elements] == [
-+        (1, 'window', 'Fixture'), (2, 'text', 'Result: ready'), (3, 'button', 'Run')]
++    assert [(e.role, e.label) for e in result.elements] == [
++        ('window', 'Fixture'), ('text', 'Result: ready'), ('button', 'Run')]
++    assert all(type(e.index) is int and 0 < e.index < 2**53 for e in result.elements)
++    assert len({e.index for e in result.elements}) == 3
 +    assert result.elements[2].element_token == '@snap:e1'
 +    assert all(not e.attributes and e.bounds == (0, 0, 0, 0) for e in result.elements)
 +    argv, kwargs = calls[0]
 +    assert argv[:4] == ['/fixture/agent-desktop', 'snapshot', '--app', 'Fixture']
 +    assert '--session' in argv and '--screenshot' not in argv and '--headed' not in argv
 +    assert kwargs == {'timeout': 10, 'env': {'SAFE': 'yes'}}
-+    assert 'read-only' in result.note
++    assert 'fresh capture' in result.note
 +
 +
 +def test_tool_capture_uses_selected_provider_and_preserves_standard_response(adapter, monkeypatch):
@@ -63496,16 +63811,16 @@ index 0000000000000000000000000000000000000000..0ea410086045a85cd0e5ca4c5380980f
 +    assert len(calls) == 2
 +
 +
-+def test_read_only_provider_refuses_all_input_and_unimplemented_listings(adapter):
++def test_unsupported_input_forms_and_unimplemented_listings_never_spawn(adapter):
 +    _, backend, calls = adapter
 +    for action, args in [('click', {}), ('drag', {}), ('scroll', {'direction': 'down'}),
 +                         ('type_text', {'text': 'PRIVATE_DRIVER_OUTPUT'}), ('key', {'keys': 'return'}),
 +                         ('set_value', {'value': 'PRIVATE_DRIVER_OUTPUT'}), ('focus_app', {'app': 'Fixture'})]:
 +        result = getattr(backend, action)(**args)
-+        assert result.ok is False and result.code == 'unsupported_action' and result.action == action
++        assert result.ok is False and result.code in {'unsupported_action', 'capture_required'} and result.action == action
 +        assert 'PRIVATE_DRIVER_OUTPUT' not in result.message
 +    for action in ('list_apps', 'list_windows'):
-+        with pytest.raises(RuntimeError, match='read-only'):
++        with pytest.raises(RuntimeError, match='does not implement'):
 +            getattr(backend, action)()
 +    assert calls == []
 +
@@ -70477,6 +70792,28 @@ index 0000000000000000000000000000000000000000..6232774239040ee0f7dd74d3b583383d
 +    assert snapshot["workflow"] is None
 +    configure_workflow(root, {}, snapshot["revision"])
 +    assert workflow_snapshot(root)["pair_status"] == "unassigned"
+diff --git a/tests/hermes_cli/test_bounded_probe_run.py b/tests/hermes_cli/test_bounded_probe_run.py
+index b8e091c538d951c4eb3a043e4ff7bab9f970dbce..c0c86474cdd34e9c97b29c35313e45e97553f827 100644
+--- a/tests/hermes_cli/test_bounded_probe_run.py
++++ b/tests/hermes_cli/test_bounded_probe_run.py
+@@ -112 +112,17 @@ def test_posix_child_gets_own_process_group():
+     assert result.stdout.strip() == "True"
++
++
++def test_binary_stdin_preserves_bytes_and_returns_text():
++    import base64
++    payload = 'ก\n\r\n'.encode('utf-8') + b'\x00\xff'
++    result = bounded_probe_run([_PY, '-c',
++        "import sys,base64; print(base64.b64encode(sys.stdin.buffer.read()).decode()); sys.stderr.buffer.write(b'err\\r\\n')"],
++        timeout=5, input=payload)
++    assert result is not None and result.returncode == 0
++    assert base64.b64decode(result.stdout.strip()) == payload
++    assert result.stderr == 'err\r\n'
++
++
++def test_existing_text_input_contract_is_unchanged():
++    result = bounded_probe_run([_PY, '-c', 'import sys; print(sys.stdin.read())'], timeout=5, input='text')
++    assert result is not None and result.stdout.strip() == 'text'
 diff --git a/tests/hermes_cli/test_cache_miss_evidence.py b/tests/hermes_cli/test_cache_miss_evidence.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..a082fb2a9b6006a49796bf15bdf2d4ea88691331
@@ -95790,19 +96127,25 @@ index 0000000000000000000000000000000000000000..5f4f0a82734efaf57c8a6b426ca1e2a1
 +    return 0
 diff --git a/tools/computer_use/agent_desktop_backend.py b/tools/computer_use/agent_desktop_backend.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..b21cceccd1ec546a767f170db5d555d2132bee60
+index 0000000000000000000000000000000000000000..2ce9f46ddb261b0f64b5006b0a0049191694b85f
 --- /dev/null
 +++ b/tools/computer_use/agent_desktop_backend.py
-@@ -0,0 +1,141 @@
-+"""Scoped AX reads via agent-desktop; no native input, screenshots or logging."""
+@@ -0,0 +1,233 @@
++"""Scoped AX reads and single-use semantic refs; no physical input or raw logging."""
 +from __future__ import annotations
 +
 +import json
 +import re
++from itertools import count
++from threading import Lock, RLock
 +from uuid import uuid4
 +
 +from tools.computer_use import agent_desktop as driver
 +from tools.computer_use.backend import ActionResult, CaptureResult, ComputerUseBackend, UIElement
++
++# An approved old index must never bind to a later capture or backend instance.
++_indices = count((uuid4().int >> 80) + 1)
++_index_lock = Lock()
 +
 +
 +def _host_placement():
@@ -95826,27 +96169,47 @@ index 0000000000000000000000000000000000000000..b21cceccd1ec546a767f170db5d555d2
 +            raise ValueError('agent-desktop AX provider does not implement bounded permissions')
 +        self._binary = None
 +        self._session = None
++        self._lock = RLock()
++        self._targets = {}
++        self._capture_epoch = None
++        self._last_app = None
 +
 +    def start(self):
-+        self.stop()
-+        if not _host_placement():
-+            raise RuntimeError('agent-desktop AX provider supports gateway-host placement only')
-+        try:
-+            binary = driver.resolve_agent_desktop()
-+            if not binary:
-+                raise ValueError('Missing binary')
-+        except Exception:
-+            raise RuntimeError('agent-desktop not found; check computer_use.agent_desktop.path') from None
-+        self._binary = binary
-+        self._session = 'hermes-' + uuid4().hex
++        with self._lock:
++            self.stop()
++            if not _host_placement():
++                raise RuntimeError('agent-desktop AX provider supports gateway-host placement only')
++            try:
++                binary = driver.resolve_agent_desktop()
++                if not binary:
++                    raise ValueError('Missing binary')
++            except Exception:
++                raise RuntimeError('agent-desktop not found; check computer_use.agent_desktop.path') from None
++            self._binary = binary
++            self._session = 'hermes-' + uuid4().hex
 +
 +    def stop(self):
-+        self._binary = self._session = None
++        with self._lock:
++            self._binary = self._session = self._last_app = None
++            self._targets = {}
++            self._capture_epoch = None
 +
 +    def is_available(self):
 +        return binary_available()
 +
 +    def capture(self, mode='som', app=None, pid=None, window_id=None):
++        from tools.bot_desktop import lease
++        with self._lock:
++            self._targets = {}
++            self._capture_epoch = self._last_app = None
++            epoch = lease.assert_agent_may_act().epoch
++            cap, targets = self._capture(mode, app, pid, window_id)
++            if lease.assert_agent_may_act().epoch != epoch:
++                raise RuntimeError('Desktop lease changed; capture fresh state')
++            self._targets, self._capture_epoch, self._last_app = targets, epoch, cap.app
++            return cap
++
++    def _capture(self, mode, app, pid, window_id):
 +        if self._binary is None:
 +            raise RuntimeError('agent-desktop AX backend is not started')
 +        if not _host_placement():
@@ -95875,7 +96238,7 @@ index 0000000000000000000000000000000000000000..b21cceccd1ec546a767f170db5d555d2
 +            if not isinstance(snapshot_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', snapshot_id):
 +                raise ValueError('Invalid snapshot')
 +            stack = [(data['tree'], 0)]
-+            elements, refs = [], set()
++            elements, refs, targets = [], set(), {}
 +            count = 0
 +            while stack:
 +                node, depth = stack.pop()
@@ -95894,23 +96257,81 @@ index 0000000000000000000000000000000000000000..b21cceccd1ec546a767f170db5d555d2
 +                if isinstance(value, str) and value and value != name:
 +                    label = f'{name}: {value}' if name else value
 +                if label or ref:
-+                    elements.append(UIElement(index=len(elements) + 1, role=role, label=label, app=app, element_token=ref))
++                    with _index_lock:
++                        index = next(_indices)
++                    if index >= 2**53:
++                        raise ValueError('Element index range exhausted')
++                    elements.append(UIElement(index=index, role=role, label=label, app=app, element_token=ref))
++                    if ref:
++                        actions = node.get('available_actions', [])
++                        if not isinstance(actions, list) or any(not isinstance(a, str) for a in actions):
++                            raise ValueError('Invalid actions')
++                        targets[index] = (ref, frozenset(a for a in actions if a in {'Click', 'SetValue'}))
 +                children = node.get('children', [])
 +                if not isinstance(children, list):
 +                    raise ValueError('Invalid children')
 +                stack.extend((child, depth + 1) for child in reversed(children))
 +            if type(data['ref_count']) is not int or data['ref_count'] != len(refs):
 +                raise ValueError('Invalid ref count')
-+            return CaptureResult(mode='ax', width=0, height=0, elements=elements, app=app,
-+                                 window_title=window['title'], note='AX read-only; entries may be non-actionable. No screenshots or input supported.')
++            return (CaptureResult(mode='ax', width=0, height=0, elements=elements, app=app,
++                                  window_title=window['title'], note='AX refs; read a fresh capture after every input attempt. No screenshots or physical input.'), targets)
 +        except Exception:
 +            raise RuntimeError('agent-desktop AX snapshot failed; check target, permissions and protocol') from None
 +
-+    def _unsupported(self, action):
-+        return ActionResult(ok=False, action=action, code='unsupported_action', message='agent-desktop AX read-only provider; input is not implemented.')
++    def _input_result(self, action, ok=False, code=None):
++        return ActionResult(ok=ok, action=action, code=code, path='ax' if ok else None, delivery_mode='background' if ok else None,
++                            meta={'recapture_required': True}, message=(
++                                'Command completed; UI effect unverified. Inspect a fresh capture before another input.' if ok else
++                                'Input refused or unconfirmed; inspect a fresh capture before another input.'))
 +
-+    def click(self, **kwargs):
-+        return self._unsupported('click')
++    def _unsupported(self, action):
++        with self._lock:
++            self._targets = {}
++            self._capture_epoch = None
++            return self._input_result(action, code='unsupported_action')
++
++    def _act(self, command, element, value=None):
++        from tools.bot_desktop import lease
++        action = command.replace('-', '_')
++        with self._lock:
++            targets, epoch = self._targets, self._capture_epoch
++            self._targets, self._capture_epoch = {}, None
++            if self._binary is None or type(element) is not int or element not in targets:
++                return self._input_result(action, code='capture_required')
++            if not _host_placement():
++                return self._input_result(action, code='placement_unsupported')
++            try:
++                if lease.assert_agent_may_act().epoch != epoch:
++                    return self._input_result(action, code='capture_required')
++            except Exception:
++                return self._input_result(action, code='human_has_control')
++            ref, actions = targets[element]
++            if ('Click' if command == 'click' else 'SetValue') not in actions:
++                return self._input_result(action, code='unsupported_action')
++            argv = [self._binary, command, ref, '--session', self._session, '--timeout-ms', '5000']
++            if value is not None:
++                argv.append('--stdin')
++            try:
++                result = driver.bounded_probe_run(argv, timeout=10, env=driver._environment(),
++                                                  **({'input': value} if value is not None else {}))
++                if result is None or result.returncode != 0 or len(result.stdout.encode('utf-8')) > 1024 * 1024:
++                    raise ValueError('Action probe failed')
++                envelope = json.loads(result.stdout)
++                if envelope.get('version') != '2.6' or envelope.get('ok') is not True or envelope.get('command') != command:
++                    raise ValueError('Invalid action envelope')
++                data = envelope['data']
++                if data['action'] not in {command, action} or data['disposition']['delivery'] not in {
++                        'delivered_verified', 'delivered_unverified', 'not_delivered'} or data['disposition']['retry'] not in {'safe', 'unsafe'}:
++                    raise ValueError('Invalid action report')
++                return self._input_result(action, ok=True)
++            except Exception:
++                return self._input_result(action, code='agent_desktop_action_failed')
++
++    def click(self, *, element=None, x=None, y=None, button='left', click_count=1, modifiers=None,
++              delivery_mode=None, bring_to_front=False):
++        if x is not None or y is not None or button != 'left' or type(click_count) is not int or click_count != 1 or modifiers or delivery_mode not in {None, 'background'} or bring_to_front:
++            return self._unsupported('click')
++        return self._act('click', element)
 +
 +    def drag(self, **kwargs):
 +        return self._unsupported('drag')
@@ -95925,16 +96346,33 @@ index 0000000000000000000000000000000000000000..b21cceccd1ec546a767f170db5d555d2
 +        return self._unsupported('key')
 +
 +    def set_value(self, value, element=None):
-+        return self._unsupported('set_value')
++        try:
++            if not isinstance(value, str) or '\x00' in value:
++                raise ValueError('Invalid value')
++            encoded = value.encode('utf-8')
++            if len(encoded) > 128 * 1024:
++                raise ValueError('Value too large')
++        except Exception:
++            return self._unsupported('set_value')
++        return self._act('set-value', element, encoded)
 +
 +    def focus_app(self, app, raise_window=False):
 +        return self._unsupported('focus_app')
 +
 +    def list_apps(self):
-+        raise RuntimeError('agent-desktop AX read-only provider does not implement app listing')
++        raise RuntimeError('agent-desktop AX provider does not implement app listing')
 +
 +    def list_windows(self):
-+        raise RuntimeError('agent-desktop AX read-only provider does not implement window listing')
++        raise RuntimeError('agent-desktop AX provider does not implement window listing')
+diff --git a/tools/computer_use/tool.py b/tools/computer_use/tool.py
+index bd59a30764482831bf60c1ed99d6984a3416eedd..8104236242c05946250fc50343d37dfe4e69fa8f 100644
+--- a/tools/computer_use/tool.py
++++ b/tools/computer_use/tool.py
+@@ -525,2 +525,4 @@ def _classify_action_result(res: ActionResult) -> dict[str, Any]:
+         return {"decision": "done"}
++    if isinstance(res.meta, dict) and res.meta.get("recapture_required") is True:
++        return {"decision": "verify_fresh_state", "hint": "Read a fresh capture before any further input; delivery and effect are not inferred."}
+     if res.effect == "unverifiable":
 diff --git a/tools/derived_cache.py b/tools/derived_cache.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..1340e2b44239c5bcc5ab9d3bd8ae131051951a47

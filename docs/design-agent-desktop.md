@@ -42,17 +42,17 @@ configuration, failed/timeout probe or invalid protocol. Permission grants and
 operational readiness are separate. Windows npm shims resolve to the packaged
 native executable; Windows/Linux path cases are fixtures, not live OS proof.
 
-## Second source slice: explicit read-only AX provider
+## AX capture provider
 
-The bounded read-only step registers `agent-desktop` through the existing provider
-loader. Selecting it is explicit; cua remains the default. Its label says AX
-read-only. Reuse discovery and bounded credential-stripped probes; availability
+The provider registers `agent-desktop` through the existing loader. Selecting it
+is explicit; cua remains the default. Its label says AX refs. Reuse discovery
+and bounded credential-stripped probes; availability
 checks may inspect paths/config but must not spawn npm or the driver. Full npm
 discovery remains available at start and through the explicit status command.
 When only the npm global probe locates a binary, set the discovered path explicitly
 so the cheap availability check can find it too.
 
-Support only `capture` with `mode=ax` and an explicit exact application name.
+Capture supports `mode=ax` with an explicit exact application name.
 Require complete protocol2.6 snapshot data for that same app and a valid window,
 with bounded payload/tree depth/count, unique snapshot-owned refs and no raw
 error disclosure. Map named AX nodes and native refs into existing CaptureResult/
@@ -61,12 +61,12 @@ captured, saved or uploaded by this backend; snapshot data is returned to the
 existing authorized tool caller. Existing tool artifact/approval/lease policy
 still applies. Do not add public logging or store raw driver output on failures.
 
-Input, focus, app/window listings, coordinate modes and bounded-permission mode
-fail explicitly; no fallback, focus change or fake successful empty result. The
+Unsupported input forms, focus, app/window listings, coordinate modes and bounded
+permission mode fail explicitly; no fallback or fake successful empty result. The
 provider currently runs on the gateway host only. It refuses terminal/sandbox or
 unresolved placement at start and again before every capture, so a configured
 sandbox can never silently become a host desktop read.
-It is an opt-in read-only development provider, not the full act/ref/verify backend.
+It is an opt-in development provider, not the full act/ref/verify backend.
 Registering actions prematurely would advertise work not implemented; keeping
 another standalone CLI path would bypass the actual provider/tool contracts.
 Standing delegation selects this scope after the native Monitor baseline failed
@@ -90,6 +90,45 @@ Seventy focused source cases pass, including35new adapter cases. The real instal
 binary is reached only for a private stopped-fixture missing-target error check;
 successful capture/tool mapping uses synthetic protocol data. Native successful
 adapter capture and Windows/Linux runtime acceptance remain open.
+
+## Single-use semantic ref input
+
+Add semantic `click(element)` and `set_value(value, element)` through the existing
+tool's approvals, hardblocks and lease. Only a native ref from the latest complete
+capture may advertise Click or SetValue. Bind it to that backend's private session
+and explicit target and lease epoch. Serialize capture/input state, invalidate old authority before
+replacement captures, and consume every ref before a permitted input is spawned.
+Success, timeout, failure and cancellation all require a fresh capture afterward;
+there is no retry, physical/foreground path or coordinate fallback.
+Human takeover invalidates the earlier capture even after control is handed back.
+
+Element indices must not rebind an approved stale request after a new capture or
+backend restart. Use process-wide non-reused positive indices within JSON's exact
+integer range; native qualified refs stay private to their snapshot/session. Keep
+the existing unknown geometry and explicit app capture requirement.
+
+`set_value` uses native `set-value --stdin`, never a value argument. Preserve UTF-8
+bytes, empty strings and line endings; reject NUL and more than128KiB before spawn.
+Extend the existing bounded probe with additive bytes stdin so Windows text-mode
+newline translation cannot alter a value. Existing text/no-input callers keep
+their behavior. Bound native action time/output; drop raw results/errors that may
+echo the value. A narrow additive common-tool verdict recognizes recapture-required
+results without recommending physical escalation or asserting delivery.
+
+Treat a valid action envelope as command completion only, not verified UI intent.
+Input, capture and host-placement authority are rechecked under the same lock.
+Other gestures, `type_text`, keyboard, focus, screenshots and bounded permission
+mode remain unsupported. No schema, default-provider, approval or lease change.
+Advisor315 supports this two-operation slice and atomic consumption. Standing
+delegation selects inline TDD; no native Monitor/owner-app action is needed.
+Transport fixtures prove success mapping; a real isolated unknown-ref refusal
+proves only the native failure boundary, not successful input or application effect.
+
+The installed1.3.1 help and [versioned ref contract](https://github.com/vercel-labs/agent-desktop/blob/v1.3.1/README.md#quick-start)
+define qualified refs and stdin. The [action result contract](https://agent-browser.dev/desktop/json-output)
+separates delivery from application effect; the [interaction reference](https://agent-browser.dev/desktop/commands/interaction)
+describes semantic activation and value replacement. No source claims mouse
+mechanics or automatic semantic verification from a successful command.
 
 ## Remaining capability set
 

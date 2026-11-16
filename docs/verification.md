@@ -1,3 +1,42 @@
+# Agent-desktop semantic ref input — unreleased
+
+The existing selected provider now supports semantic click(element) and
+set_value(value, element). Only the latest complete app-scoped capture's qualified
+refs and advertised Click/SetValue actions authorize input. Capture/input/stop
+state is locked; every input attempt consumes authority before native dispatch.
+Failed recapture, restart, lease epoch or placement changes invalidate old refs.
+Indices never rebind to later snapshots/instances and stay exact JSON integers.
+No coordinates, physical/foreground fallback, retry or implicit focus is added.
+
+Native set-value receives exact UTF-8 bytes through stdin, including empty values
+and line endings; NUL/invalid encoding/over128KiB refuses before spawn. The house
+bounded probe adds bytes stdin and still returns text. A real Python child roundtrip
+proves byte preservation; existing text/default/timeout behavior stays covered.
+Native responses that may echo values are discarded except for validated command/
+disposition structure. Fixed results never expose raw stdout/stderr or values.
+An additive recapture-required verdict asks for fresh evidence without asserting
+delivery or recommending physical escalation. No verified application-intent claim.
+
+Six source test files pass97cases:32new ref-input cases,35prior adapter cases,
+10probe cases including2new stdin cases, and20existing approval/fence/delivery
+cases. Reds expose unsupported ref actions and the helper's prior bytes rejection;
+one later guidance-wording mismatch is corrected. Tests include concurrent input,
+cancellation, pending approval versus replacement capture, human handoff, denied
+approval, app mismatch, native uncertainty and secret-result/argument isolation.
+These are synthetic protocol successes and deterministic boundary regressions.
+
+The private hybrid check uses a labelled synthetic capture with a fresh private
+native namespace. The actual installed binary receives click and set-value stdin
+but has no such snapshot, so both return SNAPSHOT_NOT_FOUND. The provider consumes
+refs and refuses reuse. No live application is targeted, no successful native
+input/application effect is claimed, and no owner app, permissions, model call,
+network service or remote machine is used. Native Monitor observation is not
+retried; its earlier failed terminal acceptance stays failed.
+
+Changed source sections are packaged/roundtripped separately, preserving unrelated
+patch bytes. No schema, default provider, common approval/lease or dependency
+change. Full backend/native input success, screenshots and Monitor UI remain open.
+
 # Agent-desktop AX read-only provider — unreleased
 
 The actual provider loader can now select `agent-desktop` explicitly while cua
