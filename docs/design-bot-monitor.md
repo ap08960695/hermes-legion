@@ -544,3 +544,21 @@ remain in RAM accounting but do not count as Hermes processes. No installed app
 or owner state is adopted. This is a dev bundle with source metadata dependencies,
 not production packaging proof. Full Monitor query/lifecycle, actual canonical
 navigation and on-screen layout/progress/degraded-refresh acceptance remain open.
+
+## Full native static walkthrough
+
+The full production renderer now runs with production main/preload, SDK and
+gateway transport in the isolated Local app, rather than a diagnostic renderer
+or substituted host. Two real profile definitions reach the visible Monitor.
+Native CUA screenshots show both rows, source labels, configured models and
+honest unavailable usage/report facts. Name search selects the named profile;
+Recorded issues shows an empty result for these empty histories; clearing the
+controls restores both rows. Explicit Refresh has fresh native inventory and
+gateway reads inside its observed action interval, with correct Local identities.
+
+This closes static native layout/query/control acceptance for two idle profiles.
+It does not close live worker progress/settlement, nonempty issue/report filtering,
+degraded-refresh paint, narrow-window layout or canonical navigation. Open-chat
+input hit native CUA elementHasNoFrame/noWindowsAvailable; no successful open or
+product defect is inferred. Keep the feature unreleased. No product source change
+was justified by this walkthrough. [Scope and limits](verification.md#full-native-monitor-static-walkthrough--unreleased).

@@ -1,3 +1,49 @@
+# Full native Monitor static walkthrough — unreleased
+
+A fresh full production renderer and entry/main/preload run against a real
+canonical Local gateway in a private runtime copy. The connection registry holds
+only Local; HOME, app-data and both profile configs belong to the trial and have
+backups. Unlike the preceding diagnostic-renderer and SDK contract slices, this
+uses the actual application, SDK, gateway transport, query and Workspace/Monitor
+together. Default and a named profile are real empty definitions; no test code
+seeds sessions, workers, reports, roster or query cache. A bounded loopback catalog
+serves model/context metadata only and rejects generation, rather than answering
+model prompts. The production preload is byte-identical to its fresh build.
+
+CUA opens Monitor in the native application. Matched native pixels and AX show
+two source-labelled rows, configured models, unavailable usage/report fields and
+zero current worker observations. Name search keeps only the named profile.
+Recorded issues produces an empty result for these empty histories; clearing
+search and restoring All returns both rows. An explicit Refresh action contains
+fresh production route/roster handler returns and real gateway profile reads
+inside its recorded interval; all identities remain Local. Existing interval
+polling also runs, so total read counts are not attributed to the manual action.
+Source checks bind the observed inputs to the renderer build. Receipt assertions
+reject missing profiles and wrong source labels. Screenshots establish this
+captured wide layout only, not narrow-window behavior or nonempty task filtering.
+
+The final native trial passes its 60-second Local observation, then stops its
+gateway and all known owned processes. Sampled peaks: 4 Hermes workload processes,
+7 including known OS probes; 942,309,376 bytes (about 898.7 MiB) including every
+observed child and the observer. This is fixture size, not before/after memory
+savings. Normal Chromium sandbox/proxy, main Node guards and OS gateway/helper
+boundaries remain. There are no task SSH attempts, generation attempts or Node
+network/filesystem refusals. Both gateway-adjusted configs match their boot
+backups. Runtime and generated artifacts are removed after evidence collection.
+
+Earlier setup/capture attempts are separate from this accepted trial. One
+metadata-only POST was initially misclassified and refused; its trial stopped.
+An earlier trial's exit receipt was unavailable, so its roots were independently
+confirmed absent before the final launch. A stale Monitor capture did not recur
+and is not treated as a product bug. Native Open chat input later returned
+elementHasNoFrame, then noWindowsAvailable: no canonical navigation claim.
+
+Live worker/progress/settlement, nonempty issue/report content, degraded-refresh
+paint, narrow layout, packaging and owner-app adoption still gate the feature
+batch. No product source, patch, version, tag or release changed. The prior SDK
+mock suites are not repeated; fresh companion/release-copy/secret gates remain
+separate. The feature is still unreleased.
+
 # Native Desktop profile inventory IPC — unreleased
 
 A fresh bundle from the production Electron entry/main/preload runs in a private
