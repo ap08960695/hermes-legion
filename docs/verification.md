@@ -1,3 +1,29 @@
+# Native provider capture and interaction-directory diagnosis — unreleased
+
+The actual common tool and selected provider parse a complete macOS native
+snapshot with five refs from an isolated production main/preload and synthetic
+renderer. Private checks bind live PID/birth/exe, nonce content, window and
+session/snapshot refs. CUA AX+pixels confirms initial state after an exposed
+Raise; this is foregrounded fixture capture, not Monitor or background proof.
+
+The subsequent native click returns INTERNAL/EPERM with unknown delivery/retry.
+The provider consumes authority and requests fresh state. No post-click capture,
+value input or live retry occurs; effect remains unknown.
+
+Version 1.3.1 source traces the macOS default interaction lease to a canonical
+`/tmp` directory outside the fixture's permitted write scope. An assert-based
+probe compiles the exact published directory/path/validation/error functions
+with minimal type shims, excluding UI dispatch and lock acquisition. Under the
+same sandbox it reproduces the native error; the same source creates a 0700
+owned-workspace control directory. The canonical directory stays absent.
+Installed binary matches its npm-packaged digest and source diagnostic markers;
+a reproducible binary-to-source build is not established. This identifies a
+necessary fixture blocker without assigning the prior click's exact provenance.
+
+Completed scope is native capture and offline boundary diagnosis. No product
+code, lease relocation, permission, sandbox or provider behavior changes. Native
+input effects, Monitor terminal visuals and the feature release remain open.
+
 # Agent-desktop ref scroll areas — unreleased
 
 The existing scroll action now accepts a latest captured native scrollarea ref.

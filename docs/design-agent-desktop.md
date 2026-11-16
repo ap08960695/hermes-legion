@@ -86,10 +86,11 @@ unknown, not a usable coordinate. Output is limited to1MiB UTF-8,2048nodes and
 64levels; incomplete/malformed/foreign-target responses fail with a fixed error.
 The limit is applied after the house probe captures output, not an OS output-memory
 quota. A successful transport does not prove that a visible UI painted correctly.
-Seventy focused source cases pass, including35new adapter cases. The real installed
-binary is reached only for a private stopped-fixture missing-target error check;
-successful capture/tool mapping uses synthetic protocol data. Native successful
-adapter capture and Windows/Linux runtime acceptance remain open.
+Seventy focused source cases pass, including35new adapter cases. The initial real-binary
+check targeted only a private stopped-fixture missing-target error;
+successful capture/tool mapping initially used synthetic protocol data. A later
+isolated macOS native capture passes through the actual provider and common tool;
+see the native runtime boundary below. Windows/Linux runtime acceptance stays open.
 
 ## Single-use semantic ref input
 
@@ -180,6 +181,29 @@ that a desired row is visible. Read fresh state before any further input.
 Standing delegation selects this next source slice; advisor319 supports bounded
 role semantics and existing guards. Use focused regression and native unknown-ref
 refusal only while the prior native capture/Monitor blocker remains unresolved.
+
+## Native capture and mutation runtime boundary
+
+A production main/preload build with a tiny synthetic renderer now passes an
+actual macOS provider capture: five native refs, independently checked process
+identity, nonce content and window/session binding. CUA verifies the initial
+screen after an explicit Raise. This proves foregrounded fixture capture only;
+Bot Monitor, background operation and input effects remain unverified.
+
+On macOS, agent-desktop 1.3.1's default interaction lease uses
+`/tmp/agent-desktop-<uid>/interaction.lock`, independently of HOME, TMPDIR and
+AGENT_DESKTOP_HOME. The [versioned implementation](https://github.com/vercel-labs/agent-desktop/blob/b0b7277bea09b770ef9d1fb45aad667bc432cd57/crates/core/src/session/interaction_lease.rs)
+creates a private runtime directory; [ref execution](https://github.com/vercel-labs/agent-desktop/blob/b0b7277bea09b770ef9d1fb45aad667bc432cd57/crates/core/src/ref_action/ref_action_wait.rs)
+acquires this lease before dispatch. A workspace-only write sandbox conflicts
+with that requirement even when snapshots succeed. A no-UI source-function
+probe reproduces INTERNAL/EPERM there; an owned workspace control succeeds.
+This is a fixture boundary diagnosis, not an Accessibility diagnosis or a runtime
+fix. The earlier live click's delivery/effect remain unknown.
+
+Do not infer action readiness from status or capture. Do not bypass the canonical
+lease, substitute a per-profile lock, weaken the sandbox or change permissions
+to make this fixture pass. Continue Monitor acceptance with the supported CUA
+path; native mutation acceptance needs compatible canonical coordination first.
 
 ## Remaining capability set
 
