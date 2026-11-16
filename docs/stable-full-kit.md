@@ -10,6 +10,14 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Fractional compression stepping (v0.33.4)
+
+One shared ConfigField input attribute gives the two known compression-ratio
+fields a 0.01 step. Other numeric fields retain native unit stepping. No schema,
+backend, conversion, dependency or locale changes. Apply the source kit and
+rebuild Desktop. Two existing source/test sections change; 1086 targets and the
+explicit test selection stay unchanged. [Checks and limits](release-notes-v0.33.4.md).
+
 ## Scoped Settings actions (v0.33.3)
 
 Export and Reset capture the selected config owner before awaiting reads or

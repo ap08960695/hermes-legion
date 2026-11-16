@@ -13,6 +13,7 @@ the [release policy](CONTRIBUTING.md#release-policy) for future versioning.
 
 ## What is included
 
+- [v0.33.4: nudge compression ratios precisely](docs/release-notes-v0.33.4.md), makes Threshold and Target arrows change by one percentage point.
 - [v0.33.3: scope Settings config actions](docs/release-notes-v0.33.3.md), makes Export and Reset use the displayed Applies to profile and names the Reset target.
 - [v0.33.2: keep untouched settings visible after import](docs/release-notes-v0.33.2.md), preserves switches and budgets through partial and repeated config imports.
 - [v0.33.1: confirm config imports after saving](docs/release-notes-v0.33.1.md), removes premature success on cancelled or failed Settings imports.

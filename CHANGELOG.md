@@ -5,6 +5,16 @@ supported update or Desktop rebuild path. This kit does not install a rebuilt
 Hermes.app. Linked notes identify opt-in memory settings and admission guards
 that apply after adoption. Each entry states its adoption and verification limits.
 
+## v0.33.4 — Nudge compression ratios precisely
+
+Compression Threshold and Compression Target arrows now move by 0.01, one
+percentage point, instead of jumping by 1. For example, increasing 0.50 becomes
+0.51. Count and timeout controls keep their existing whole-unit steps. Apply the
+source kit and rebuild Desktop. Existing saved values are not rewritten; correct
+an earlier mistaken ratio by typing its intended value.
+
+[Checks and limits](docs/release-notes-v0.33.4.md).
+
 ## v0.33.3 — Scope Settings config actions
 
 Export and Reset use the profile shown under **Applies to**. The target is kept

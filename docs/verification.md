@@ -1,3 +1,25 @@
+# v0.33.4 — Nudge compression ratios precisely
+
+Native Local before/after confirms one ArrowUp on Threshold 0.5 and Target 0.2
+saves 1.5/1.2 before and 0.51/0.21 after. Protected Recent Messages still steps
+20→21→20. Complete native config comparisons preserve other values and the other
+profile's bytes; Settings reopen reads 0.51/0.21 without another write. Session
+stores remain empty; no Send, model request or compression execution occurs.
+
+Genuine red: 8 failures and 14 passes, after correcting a controlled-prop test
+assertion. Final nearest selection: 65 passes; scoped lint/types/build pass, with
+the inherited dynamic-import build warning. Real input stepUp/Down plus the change
+callback cover ratios, zero, whole/absent values, integer/timeout and legacy
+controls. Two scoped pinned-base apply/hash/reverse sections; 1086 targets and
+the existing test selection remain. No unchanged source/mock/transport sweep.
+
+Both normal native closures pass actual 60-second SSH-zero gates and sample at
+most four Hermes processes. Observer-inclusive RSS maxima are 905,887,744 and
+898,891,776 bytes, without a memory-saving claim. All owned identities/ports end;
+config bytes/modes and the 313-entry bundle with strict signature restore.
+No daily-app, remote/ai/Linux, compression-effectiveness or new range-validation
+claim. [Release notes and limits](release-notes-v0.33.4.md).
+
 # Native Local profile Settings persistence — v0.33.3 follow-up
 
 Actual Mac UI edits save default Memory Budget from 3111 to 3333 while ambient

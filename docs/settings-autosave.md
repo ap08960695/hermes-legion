@@ -21,6 +21,14 @@ From v0.8.15, the shared merge also [preserves nested edits followed by a null
 section](settings-null-sections.md), matching the native API rather than dropping
 those edits during coalescing.
 
+## Fractional compression arrows (v0.33.4)
+
+Under **Memory & Context → Context & compression**, Threshold and Target arrows
+change the stored ratio by 0.01, one percentage point. Increasing 0.50 becomes
+0.51; counts and seconds retain their existing unit steps. Typed numeric values
+use the existing save path. Updating does not rewrite earlier saved settings or
+add new range validation. [Checks and limits](release-notes-v0.33.4.md).
+
 ## Export and Reset use the displayed profile (v0.33.3)
 
 Settings Actions captures the displayed **Applies to** profile and connection
