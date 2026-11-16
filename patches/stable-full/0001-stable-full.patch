@@ -10994,6 +10994,114 @@ index c93a53e419252ff7d13d44cfd79abd9cdcee85a0..ce47890fe4f37dae777ac122c82eadea
 +
 +  const result = await flight.response
 
+diff --git a/apps/desktop/scripts/check-bot-monitor-layout.mjs b/apps/desktop/scripts/check-bot-monitor-layout.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..501bcce5590cd9af9cfa23a8965f4aad7cab99c6
+--- /dev/null
++++ b/apps/desktop/scripts/check-bot-monitor-layout.mjs
+@@ -0,0 +1,102 @@
++// Run with an existing patched source checkout, its installed dependencies and private output directory.
++import assert from 'node:assert/strict'
++import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
++import { createServer } from 'node:http'
++import { createRequire } from 'node:module'
++import path from 'node:path'
++import { pathToFileURL } from 'node:url'
++
++const [source, output] = process.argv.slice(2).map(value => path.resolve(value))
++assert(source && output, 'Usage: node scripts/check-bot-monitor-layout.mjs SOURCE PRIVATE_OUTPUT')
++const app = path.join(source, 'apps/desktop')
++const require = createRequire(path.join(app, 'package.json'))
++const { build, loadConfigFromFile, mergeConfig } = await import(pathToFileURL(require.resolve('vite')))
++const { chromium } = require('playwright')
++await mkdir(output, { recursive: true, mode: 0o700 })
++const scratch = await mkdtemp(path.join(output, 'layout-'))
++const from = file => JSON.stringify(path.join(app, 'src', file))
++let browser, server
++try {
++  await writeFile(path.join(scratch, 'index.html'), '<meta charset="utf-8"><div id="root"></div><script type="module" src="/fixture.tsx"></script>')
++  await writeFile(path.join(scratch, 'style.css'), `@import ${from('styles.css')};\n@source ${JSON.stringify(path.join(app, 'src'))};\n@source "./fixture.tsx";\n`)
++  // The wrapping Workspace toolbar and shell space constrain the actual Monitor, as in a narrow desktop window.
++  await writeFile(path.join(scratch, 'fixture.tsx'), `
++import { createRoot } from 'react-dom/client'
++import { Button, Codicon } from '@hermes/plugin-sdk'
++import { BotMonitor } from ${from('plugins/hermes-bots/monitor')}
++import { BotWorkspaceActions } from ${from('plugins/hermes-bots/workspace-actions')}
++import { BOTS_LOCALES, useBots } from ${from('plugins/hermes-bots/i18n')}
++import { registerPluginLocales } from ${from('i18n/plugin-i18n')}
++import { I18nProvider } from ${from('i18n/context')}
++import './style.css'
++registerPluginLocales('hermes-bots', BOTS_LOCALES)
++const rows = Array.from({length: 3}, (_, i) => ({name: 'Layout bot ' + i, working: false,
++ needsAttention: false, attentionHint: '', source: {available: true, key: 'ready', label: 'Ready'},
++ bot: {name: 'layout-' + i, connectionId: 'local', connectionLabel: 'Isolated local fixture',
++ sourceReachable: true, description: 'Synthetic layout row ' + i, model: 'layout-model'}}))
++function Fixture() {
++ const b = useBots()
++ return <main style={{height:'calc(100vh - 160px)', marginTop:100}}>
++  <section className="flex h-full min-h-0 flex-col bg-background text-(--ui-text-primary)">
++   <header className="flex flex-wrap items-center justify-between gap-4 border-b border-(--ui-stroke-tertiary) px-6 py-5">
++    <div><h1 className="text-xl font-semibold">{b.workspace.title}<span className="ml-3 text-sm font-normal text-muted-foreground">3</span></h1><p className="mt-1 text-xs text-muted-foreground">{b.workspace.hint}</p></div>
++    <Button size="sm" variant="secondary"><Codicon name="pulse"/>{b.monitor.title}</Button>
++    <BotWorkspaceActions onNavigate={() => {throw Error('No fixture navigation')}}/>
++    <Button size="sm" variant="ghost"><Codicon name="refresh"/>{b.workspace.refresh}</Button>
++   </header>
++   <BotMonitor now={2000000} rows={rows} onOpen={() => {throw Error('No fixture navigation')}}/>
++  </section>
++ </main>
++}
++createRoot(document.getElementById('root')!).render(<I18nProvider configClient={{getConfig:async()=>({display:{language:'en'}}), saveConfig:async()=>{throw Error('No fixture writes')}}}><Fixture/></I18nProvider>)
++`)
++  const loaded = await loadConfigFromFile({ command: 'build', mode: 'production' }, path.join(app, 'vite.config.ts'), app)
++  assert(loaded, 'Production Vite configuration must load')
++  await build(mergeConfig(loaded.config, { configFile: false, root: scratch, base: './',
++    build: { outDir: path.join(scratch, 'dist'), emptyOutDir: true,
++      rolldownOptions: { input: path.join(scratch, 'index.html') } } }))
++  server = createServer(async (request, response) => {
++    try {
++      const name = new URL(request.url, 'http://localhost').pathname
++      const file = path.resolve(scratch, 'dist', '.' + decodeURIComponent(name === '/' ? '/index.html' : name))
++      assert(file.startsWith(path.join(scratch, 'dist') + path.sep))
++      response.setHeader('Content-Type', ({'.html':'text/html','.js':'text/javascript','.css':'text/css'})[path.extname(file)] || 'application/octet-stream')
++      response.end(await readFile(file))
++    } catch { response.writeHead(404).end() }
++  })
++  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
++  browser = await chromium.launch({ headless: true, chromiumSandbox: true,
++    args: ['--single-process', '--no-zygote', '--disable-gpu'] })
++  const page = await browser.newPage({ viewport: { width: 480, height: 620 } })
++  const errors = []
++  page.on('pageerror', error => errors.push(String(error)))
++  await page.goto(`http://127.0.0.1:${server.address().port}/`)
++  await page.getByRole('table', { name: 'Monitor', exact: true }).waitFor()
++  const geometry = await page.getByRole('table', { name: 'Monitor', exact: true }).evaluate(table => {
++    const wrapper = table.parentElement, monitor = wrapper.parentElement
++    monitor.scrollTop = monitor.scrollHeight
++    wrapper.scrollLeft = wrapper.scrollWidth
++    const bounds = element => { const r = element.getBoundingClientRect(); return {top:r.top,bottom:r.bottom,left:r.left,right:r.right,height:r.height} }
++    return { wrapper: bounds(wrapper), monitor: bounds(monitor), lastRow: bounds(table.tBodies[0].lastElementChild),
++      lastCell: bounds(table.tBodies[0].lastElementChild.lastElementChild),
++      wrapperClientHeight: wrapper.clientHeight, wrapperScrollHeight: wrapper.scrollHeight,
++      wrapperScrollTop: wrapper.scrollTop, wrapperScrollLeft: wrapper.scrollLeft,
++      monitorClientHeight: monitor.clientHeight, monitorScrollHeight: monitor.scrollHeight }
++  })
++  await page.screenshot({ path: path.join(output, 'narrow-layout.png') })
++  await writeFile(path.join(output, 'geometry.json'), JSON.stringify({geometry, errors}, null, 2) + '\n')
++  assert.deepEqual(errors, [], 'No renderer errors')
++  assert(geometry.wrapper.height > 0, 'Table wrapper must retain positive height')
++  assert(geometry.monitorScrollHeight > geometry.monitorClientHeight, 'Monitor must own vertical overflow')
++  assert(geometry.lastRow.top >= geometry.monitor.top && geometry.lastRow.bottom <= geometry.monitor.bottom,
++    'Outer vertical scroll must reveal the last row')
++  assert(geometry.wrapperScrollTop === 0 && geometry.wrapperScrollHeight <= geometry.wrapperClientHeight + 1,
++    'Rows must not be trapped in a second vertical scroll area')
++  assert(geometry.wrapperScrollLeft > 0 && geometry.lastCell.right <= geometry.wrapper.right + 1 && geometry.lastCell.left >= geometry.wrapper.left,
++    'Horizontal pan must reveal the last column')
++  console.log('PASS: actual Monitor/production CSS at 480x620; outer vertical and inner horizontal reveal')
++} finally {
++  await browser?.close()
++  if (server) {await new Promise(resolve => server.close(resolve))}
++  await rm(scratch, { recursive: true, force: true })
++}
 diff --git a/apps/desktop/src/api/client.ts b/apps/desktop/src/api/client.ts
 index 68c5a3e1b74856ec19591084e20c681d92984ba5..611d1a2baa53cdd89d6052f9c30747ffa88a1a5e 100644
 --- a/apps/desktop/src/api/client.ts
@@ -31947,7 +32055,7 @@ index 0000000000000000000000000000000000000000..54c8da1e446cc1efd20ce1b91fa2d78c
 +})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor.tsx b/apps/desktop/src/plugins/hermes-bots/monitor.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..20b05f940b16dba79c77874b5a01c2e023dce0dc
+index 0000000000000000000000000000000000000000..73e9039f27c69417cdddf84b1d95cd90a9e9801f
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor.tsx
 @@ -0,0 +1,218 @@
@@ -32101,7 +32209,7 @@ index 0000000000000000000000000000000000000000..20b05f940b16dba79c77874b5a01c2e0
 +        </div>
 +      </div>
 +      {shown.length === 0 ? <EmptyState title={b.workspace.empty} /> : (
-+        <div aria-label={m.title} className="overflow-x-auto focus-visible:outline-2 focus-visible:outline-(--ui-accent)" role="region" tabIndex={0}>
++        <div aria-label={m.title} className="shrink-0 overflow-x-auto focus-visible:outline-2 focus-visible:outline-(--ui-accent)" role="region" tabIndex={0}>
 +          <table aria-label={m.title} className="w-full border-collapse text-left text-xs">
 +            <thead className="text-muted-foreground">
 +              <tr>

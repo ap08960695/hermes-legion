@@ -696,3 +696,40 @@ worker progress/settlement and nonempty report paint gate left open by prior
 runs. Earlier terminal capture failures remain failed; there is no observer-cause
 claim. Native Error/Stopped presentation, narrow layout and final batch acceptance
 still need review before the feature release. No product change or release here.
+
+
+## Native Error outcome and narrow-table correction
+
+A fresh isolated Local production build now displays a real delegated file-read
+worker, removes it after a loopback model HTTP 400, and opens the exact canonical
+Error report with its task, completion time, nonempty summary and recorded error.
+CUA AX/pixels and native ledger/delivery/transcript controls agree. Seven unique
+fixture model calls are used; replies, timing and usage are simulated. No SQL or
+worker lifecycle is seeded, no host adapter or manual Refresh drives the view.
+
+The second fresh fixture uses the supported persisted 480x620 window size, with
+actual native content bounds verified. It finds the active worker in AX but
+cannot reveal the table in pixels: one vertical scroll moves the heading, and a
+further scroll reaches no additional rows. The run stops before acknowledging
+active presentation or requesting authenticated Stop. Stopped/report acceptance
+therefore remains open; that failed native attempt is retained unchanged.
+
+Actual-component/production-CSS browser geometry reproduces the cause: the
+horizontal-overflow table wrapper shrinks to zero height inside the column flex
+layout, trapping the rows in its own vertical overflow. One existing wrapper
+gets `shrink-0`. Monitor retains vertical scrolling and the focusable table region
+retains horizontal scrolling. At 480x620 the wrapper measures 355px, and scrolling
+the outer Monitor reveals the final row without inner vertical scrolling;
+horizontal panning reveals the final column. The same behavioral check fails
+before the fix. This is a browser layout regression with synthetic rows, not a
+native Stopped/report acceptance or a complete shell walkthrough after the fix.
+
+`apps/desktop/scripts/check-bot-monitor-layout.mjs` runs against an explicitly selected
+patched checkout and its installed Vite/Playwright/browser dependencies, builds
+the actual component with production CSS, and stores private geometry/screenshots
+in the supplied output directory. It uses a wrapping Workspace-style toolbar and
+reserved shell space, not a full Electron shell. It adds no runtime dependency.
+Nearest Monitor/open/workspace tests, scoped source lint and renderer types pass.
+Private native and browser images are under
+`../evidence/bot-monitor-error-narrow-20261117`. Native narrow/Stopped acceptance
+and the final feature-batch audit remain required; no release or owner adoption.

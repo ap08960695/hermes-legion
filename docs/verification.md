@@ -1,3 +1,72 @@
+# Native Monitor Error report and narrow-layout fix — unreleased
+
+Two fresh sequential isolated Local native fixtures use the same production
+renderer/main/preload bytes. Each passes the 60-second Local/zero-SSH gate and
+live instance identity checks before CUA interaction. Only the first fixture
+passes its outcome acceptance. Loopback model replies, timing and usage are
+simulated; no external model service, lifecycle/SQL seeding, host adapter, manual
+Refresh, DOM observer or appended preload capability is used.
+
+The first actually delegates and reads a fixture file. CUA AX and pixels show
+Working/step 1/250, then zero workers/no old step after the model HTTP 400.
+The exact source-qualified Recent reports dialog shows Error, its task/time,
+nonempty failure summary and HTTP 400: MONITOR_NATIVE_REJECTION. Native ended
+child, error ledger, accounted delivery and canonical report agree; independent
+nonempty side-chat and sibling-profile transcripts remain separate. Seven unique
+model call kinds complete, rejecting duplicate/extra calls. UI acknowledgments
+bind generation/parent/worker/report IDs and do not write lifecycle or SQL.
+
+The second uses supported persisted 480x620 geometry; native bounds and content
+size agree. AX contains the real active worker, but pixels show only instructions
+and filters. A planned vertical scroll moves the heading; a further scroll
+cannot reveal the table. No active acknowledgment or authenticated Stop occurs.
+The scenario subsequently times out awaiting that acknowledgment; its guardian
+records failure and closes the fixture. Stopped/report presentation and late
+canceled-client completion-handler arrival are unproven. No native retry occurs.
+
+A focused browser regression renders the actual BotMonitor and production CSS
+with synthetic rows, a wrapping Workspace-style toolbar and reserved shell space.
+It reproduces a zero-height table wrapper, with 355px of rows trapped inside it.
+Adding `shrink-0` to that wrapper is the only product change. The exact UTF8
+fixture fails on the old source and passes after repair: wrapper height 355px,
+outer Monitor scrollHeight 673px versus clientHeight 291px, final row revealed
+inside the viewport, zero inner vertical scroll/overflow, and horizontal panning
+reveals the final column. Renderer errors are zero. The check asserts geometry,
+not class names or DOM presence. It uses headless single-process Chromium with
+the Chromium sandbox retained, plus the existing workspace/network/SSH fence.
+This establishes browser layout behavior, not final native-shell acceptance.
+
+Run with existing source dependencies and an installed Playwright browser:
+`node apps/desktop/scripts/check-bot-monitor-layout.mjs /path/to/patched-source /path/to/private-output`.
+Select a private HOME/TMPDIR and local-only OS/network fence as for other isolated
+verification. The script binds its static fixture server only to 127.0.0.1,
+closes the browser/server and removes its generated build in finally; the caller
+retains screenshots and geometry. No dependency is installed by the check.
+
+Nearest Monitor/open/workspace checks pass 40 tests across three files; scoped
+source lint has zero warnings and renderer types pass. The Monitor and new
+layout-check patch sections are exported/apply/hash/reverse checked against
+pinned bf0203a794a07aac3ff764972ab9087baa4e4f4e. The target count is now 1,120;
+the existing source-test selection remains unchanged, with unrelated patch
+sections retained byte-exact.
+The reusable browser regression is packaged with the upstream desktop scripts.
+
+The native Error run lasts 149.828s, sampling four non-OS/six total children and
+945,045,504 bytes including guardian. The failed narrow run lasts 148.814s,
+sampling four non-OS/eight total children and 1,066,500,096 bytes. Source checks
+peak at 2,606,465,024 bytes including observer. Build, external CUA/advisor and
+short-lived setup controllers are separate; none is a whole-task benchmark or
+production RAM/usage saving. Five fixture configs and absent geometry restore
+for each fixture; nine relevant native source hashes match before the CSS fix.
+
+Private Error/failed-narrow/browser images are under
+`../evidence/bot-monitor-error-narrow-20261117`; raw receipts remain in
+`../uitest-v090-c2q4iijp/bots-r181{,-error,-stopped}/evidence`. Error acceptance
+predates the one-line CSS fix; the native narrow/Stopped gate and final batch
+acceptance remain open. Earlier failed observations stay failed. No release,
+version/tag, owner app/data, other host, permission, ESTOP/pause/timer or adoption
+change is included.
+
 # Native Monitor worker completion and nonempty report pass — unreleased
 
 A fresh full production renderer/main/preload/SDK/query displays a real native
@@ -129,7 +198,7 @@ passes. No unchanged Monitor mock sweep, post-correction renderer rebuild or liv
 retry is run.
 
 Two source sections apply, match after hashes and reverse against the pinned
-upstream. All unrelated cumulative patch bytes stay unchanged; 1,119 targets,
+upstream. All unrelated cumulative patch bytes stay unchanged; 1,120 targets,
 existing test selection retained. Native images prove the initial global-roster
 guard failure only; they do not prove the query-cache correction.
 Native after-fix degraded paint, canonical navigation, nonempty reports and live
