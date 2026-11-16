@@ -16,7 +16,7 @@ regression are included.
 | Bot/worker activity, step and elapsed time | Native completed-worker journey shows Working, step 1/250, elapsed 17s → 32s, then worker removal and a nonempty Completed report. | Observations come from the existing roster, not an OS process census. At most the newest 20 observations per bot are eligible, with the existing 150-second liveness window. |
 | Tokens, cost and model | Existing DB/reader/rendered checks cover recorded fields, invalid/missing values and independent bot/worker amounts. Native worker tokens/model are displayed. | Model replies/timing/usage are fixtures. Amounts have partial coverage, are not summed or treated as invoices; configured and recorded models do not establish a live binding. |
 | Recorded task outcomes and issues | Actual-query/component cases cover Error and Stopped; native wide Error report shows task/time/nonempty summary and the recorded rejection. Completed report also passes natively. | A fresh native narrow Stopped report now passes its final scenario ACK and matching DB readback. Prior184 remains INVALID/STOP; no canceled-client handler-arrival claim. Recorded stalled/Unknown stay explicit historical facts, never inferred from age or an empty report list. |
-| Local search, filters and sort | Current Monitor/open/workspace source checks pass 40 cases. Native idle-profile search and an empty Recorded issues result pass in the static walkthrough. | Native nonempty worker search/Working filtering and elapsed sorting now pass within the narrow Stop journey. Nonempty Error/Stalled filtering/search remains open; Stopped is deliberately excluded. Search uses current signals and the displayed latest issue, not every historical report body. |
+| Local search, filters and sort | Current Monitor/open/workspace source checks pass 40 cases. Native idle-profile search and an empty Recorded issues result pass in the static walkthrough. | Native nonempty worker search/Working filtering and elapsed sorting now pass within the narrow Stop journey. Recorded issues/default Error membership and excerpt search now have guarded native observations; that trial's report-click admission refuses, so no full-scenario acceptance. No live Stalled or Error-only dialog outcome-filter claim; Stopped remains deliberately excluded. Search uses current signals and the displayed latest issue, not every historical report body. |
 | Source-qualified canonical opening | Native named-profile Open creates an empty Bot Chat whose URL matches that profile's persisted canonical-title row; default profile remains empty. Source integration checks cover the existing registry action. | This native proof does not establish reopening a pre-existing nonempty transcript. Worker Open uses its parent bot's canonical chat, not a worker-session browser. |
 | Failed refresh and recovery | Native route-read fault preserves source labels and stale notice, hides current workers, disables Open; explicit successful Refresh recovers. | The read fault is simulated. The aggregate fault is configured but not reached after the route shortcircuit; no real outage/reconnect claim. |
 | Narrow table and report access | Actual component/production CSS at 480×620 fails before the one-class fix and passes afterward: outer vertical scroll reveals the last row; horizontal pan reveals the last column. | Fresh native vertical scrolling reveals the actual worker; its exact Stopped report and final ACK pass at 480×620. Keyboard Tab reveals the rightmost worker action. Wheel/trackpad panning remains unproven; the earlier pan request remains unconfirmed. |
@@ -27,8 +27,10 @@ The fresh narrow native journey now passes actual worker/step, nonempty worker
 search/Working filtering, elapsed sorting, keyboard horizontal reach and the
 source-qualified Stopped report after authenticated interrupt, including its final
 ACK. Controls are explicitly reset. Original process/window, Local/SSH fences and
-resource/deadline guards remain. Next close nonempty Error/Stalled filtering and
-native reopening of an existing nonempty canonical chat before final batch review.
+resource/deadline guards remain. Guarded recorded-issue Error membership/search
+observations now supplement those controls, but their trial stops at
+report-click admission. Next focus native reopening of an existing nonempty canonical chat; retain
+the failed scenario boundary during final batch review.
 
 Late server-response completion is not proof that a canceled client's completion
 handler ran. Existing stopped-state assertions after the held server handler
@@ -824,3 +826,21 @@ Recorded issues correctly excludes the Stopped-only history. A nonempty Error/
 Stalled filter/search and existing nonempty canonical chat reopen remain open
 before final feature-batch review/release handoff. No product change or release.
 [Detailed acceptance](verification.md#native-narrow-stop-acceptance-and-nonempty-worker-controls--unreleased).
+
+
+## Guarded native recorded-issue search observations
+
+A fresh narrow Local Error lifecycle now visibly demonstrates Recorded issues
+membership/default-only, search of the recorded Error excerpt, keyboard-revealed
+Error/time/task and control reset. Independent native DB/ledger/delivery and
+transcript controls corroborate the same result. These are completed guarded
+observations; the next report-click admission refuses the 20-second observation
+budget. No click, capture, terminal ACK, acceptance or canonical reopen follows. Original
+INVALID/STOP remains; no retry or guard relaxation.
+
+No Error-only report-dialog filter or live Stalled outcome is established. The
+named-profile canonical chat is snapshotted as preexisting/nonempty but never
+opened. Native canonical reopening stays the next focused gate. Accepted round181 wide
+Error and round185 narrow Stop coverage remains unchanged. Private images:
+`../evidence/bot-monitor-recorded-issue-search-20261117`. No product change/release.
+[Detailed observations](verification.md#native-recorded-issue-search-observations--phase-admission-refused-unreleased).

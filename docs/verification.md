@@ -1,3 +1,72 @@
+# Native recorded-issue search observations — phase admission refused, unreleased
+
+**Recorded-issue filtering/search is visibly observed and independently
+corroborated; the full round186 scenario remains INVALID/STOP.** No terminal ACK,
+acceptance file, report click or canonical reopen is claimed.
+
+One fresh isolated Local 480×620 production renderer/source-built main/preload
+bundle from kit `c225aaa` reuses the existing guarded lifecycle. Eleven source
+hashes and production preload remain unchanged. After the 60-second Local/zero-
+SSH gate, public RPC creates canonical, independent side-chat and named-profile
+controls, then delegates an actual fixture-file read. Releasing the held loopback
+response returns HTTP 400. Native child ending, Error ledger, accounted delivery,
+canonical report and independent transcripts pass. Seven unique model reply kinds
+are fixtures; replies/timing/usage are simulated, not paid/live-provider evidence.
+
+Guarded native AX/pixels show these completed observations:
+
+- Recorded issues is explicitly selected. Its AX result contains only the default
+  bot's native Error and excludes the independent profile/current worker.
+- Searching `MONITOR_NATIVE_REJECTION` retains that same Error row. The visible
+  query and selected Recorded issues control agree with the full captured tree.
+- Focusing the token-sort header and pressing Tab reveals the report column.
+  Pixels show Last recorded issue: Error, recorded time/task, the exact HTTP 400
+  error excerpt and Recent reports (1); AX agrees on the default/source identity.
+- Clear search, All and name sort reset the controls. AX restores both source-
+  qualified rows; pixels show empty search, selected All and the name-sort arrow.
+
+This tests Recorded issues membership plus search of the selected visible error
+excerpt. It does **not** select an Error-only report-dialog outcome filter, test a
+live Recorded stalled outcome or inspect every historical report body.
+
+The next report-click admission fails before any CUA click or capture. The last
+successful postcheck has 23.596 seconds left in the 120-second UI_TERMINAL phase
+and 133.761 seconds left in overall acceptance. The next admission refuses the
+20-second observation minimum; no exact refusal-time remaining-budget claim is
+made. No report observation, UI_TERMINAL or native-acceptance file follows. The
+original INVALID/STOP and guardian's insufficient-observation-budget failure are
+retained. No retry, replacement receipt or longer phase is used. Earlier guarded
+observations remain bounded evidence, not a passing full scenario.
+
+The named-profile canonical ID, title, transcript and usage were independently
+snapshotted read-only before any Open. It is a genuinely preexisting nonempty Bot
+Chat, distinct from default parent, side chat and child. It is never opened in
+this trial, so native reopening remains an acceptance gate. The accepted wide
+Error report from round181 and complete narrow Stop from185 remain prior coverage;
+this trial does not alter their results or supply its own report acceptance.
+
+Original PID/birth/executable/window UUID/URL/lifecycle, single-use five-second
+admission receipts, CUA20/ACK1, freshness30, 120-second active reserve, 335/360
+acceptance/overall deadlines, 25-second cleanup reserve and Local/network guards
+stay unchanged. No new observer process, DOM observer, host adapter, preload
+capability, query/SQL seeding, manual Refresh or UI lifecycle write.
+
+Guardian exits 1 because of the admission failure, with gateway/model-server
+shutdown confirmed and zero survivors. Native elapsed 208.989 seconds; sampled
+peak four product non-OS/seven total children and 1,003,831,296 bytes including
+guardian. External CUA/advisor/build setup are excluded; no whole-task RAM bound,
+billing or savings claim. All 29 remembered PID generations are closed; owned
+paths/HOME and Desktop SSH are zero. Five configs restore byte-exact, window-state
+absence restores, and eleven source hashes remain unchanged. Cleanup journals
+352,393,439 logical scratch bytes before deletion; physical reclaim is unmeasured.
+
+Private labelled same-generation images:
+`../evidence/bot-monitor-recorded-issue-search-20261117`. Raw evidence:
+`../uitest-v090-c2q4iijp/bots-r186{,-error}/evidence`. This docs-only item records
+completed observations and their limits; no product/patch, version/tag/release,
+owner-app adoption or remote connection change. Next prefer a focused canonical
+reopen trial; retain this failed scenario explicitly during feature-batch review.
+
 # Native narrow Stop acceptance and nonempty worker controls — unreleased
 
 **The fresh narrow Stop scenario passes, including its final native ACK.**
