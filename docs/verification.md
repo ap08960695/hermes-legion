@@ -1,36 +1,55 @@
 # Native Monitor lifecycle integration — unreleased
 
-`tests/gateway/test_bot_monitor_native_lifecycle.py` follows one actual native
-delegation through the public gateway lifecycle and authenticated private-control
-ticket/WebSocket API. It creates the named Bot Chat, submits the parent turn,
-identifies its one real subagent, checks persisted `read_file` output, observes a
-normal durable heartbeat, and releases the bounded model reply. The same child
-ends successfully; its native async ledger settles and is delivered, and the
-canonical roster exposes the matching delegation/task, goal, result and time.
-Canonical token fields reconcile with that parent row, rather than worker sums.
-Native parent completion is persisted too. No SQL seed, status/heartbeat write,
-terminal repair or ledger fabrication supplies this task's evidence.
+`tests/gateway/test_bot_monitor_native_lifecycle.py` follows three actual native
+delegations through the public gateway lifecycle and authenticated private-control
+ticket/WebSocket API. Each creates the named Bot Chat, submits its parent turn,
+identifies one real subagent and checks persisted `read_file` output while its
+next model reply waits. Completion, provider rejection and explicit Stop all
+reach native terminal records, async ledger delivery, parent acknowledgement,
+and the same canonical report consumed by Monitor. No main-task SQL seed,
+status/heartbeat write, terminal repair or ledger fabrication supplies evidence.
 
-Independent side-chat and sibling Bot Chat turns produce nonempty transcripts
-through the same API. While the child runs, their identities and report scopes
-stay separate; the sibling cannot borrow the worker or its settled report.
-An unknown profile remains refused. The single 180-second deadline starts at
-main-task submission and covers heartbeat, terminal/report and parent delivery.
+- Success retains the normal durable heartbeat and completed task/report.
+- A scoped HTTP400 `invalid_request_error` after the active read produces a native
+  failed task with error exit reason and the rejection text in the Error report.
+- Authenticated `subagent.list` identifies the target delegation; owned
+  `subagent.interrupt` returns found. The child ends before its held reply is
+  released. After the reply handler finishes, ended-at/API count are unchanged
+  and no successful worker result is persisted. Task/report remain interrupted
+  (Stopped), distinct from Error. Both negative single-child units record batch
+  error; the per-task result, not that unit label, determines the report.
 
-The test passes using the canonical per-file engine, one worker and zero retries,
-with repository fixtures/guards and task-owned scratch/output retention. This
-is not a full shell-wrapper/CI-parity result. The gateway runs inside
-the test process; public lifecycle/readiness references only coordinate startup
-and shutdown. Contract operations use real sockets and persistence reads.
-Model content, timing and usage are loopback fixtures, not a provider, invoice or
-model-quality measurement. No CLI daemon boot/signals, subprocess boundary,
-native window/layout or on-screen progress claim follows from this check.
+Nonempty side-chat and sibling Bot Chat controls persist through the same API.
+Their identities/transcripts/report scopes remain independent before and after
+settlement. Canonical token fields match the stored parent row; no worker sums.
+An unknown profile stays refused. Each 180-second deadline starts at its main
+submission and covers outcome, parent delivery and report; negative cases omit
+the unchanged 60-second heartbeat wait.
 
-Scoped Ruff and code health pass. One new test section applies/hashes/reverses
-against the pinned base; the current kit has1098targets and retains unrelated
-sections. The prior renderer/source results below are historical, not rerun.
-Native CUA target selection remains unavailable; no launch retry, feature
-release or daily-app adoption is included in this development step.
+All three parameters pass serially together in one canonical per-file process,
+with repository fixtures/guards, one worker, zero automatic file retries and
+scoped scratch/output retention. Final result: 3 passed and 5 existing WebSocket
+and uvicorn deprecation warnings in 75.33 seconds. Submission-to-receipt times:
+61.896s success, 2.513s rejection, 2.470s interrupted; 21 loopback model requests.
+Sampled maximum: 3 processes including observer and 473,399,296 bytes RSS, under
+the unchanged limit of 3 children plus observer, less than 3.5GiB, and a 180s
+outer deadline. These are sampled test resources, not continuous OS peaks,
+production memory savings or provider usage. No full shell-wrapper/CI-parity
+claim. The gateway shares the pytest interpreter, imports, environment and event loop. Model
+content/timing/usage are loopback fixtures, not billing or model-quality proof.
+Task-only OS fences deny auxiliary login-shell execution; the real regular-file
+fast path still reads its marker. This is not shell-tool, CLI daemon boot/signals,
+subprocess-boundary, native layout or on-screen progress acceptance.
+
+Development checks retained: individual success/rejection passes; one stopped
+startup refused by the unchanged process limit before cancellation; one combined
+run exposed conftest's fixed DB-path pin. Existing multiplex-test dynamic-path
+setup corrects the fixture without changing product code or weakening guards.
+The final complete-file run establishes cohabitation; isolated passes alone do
+not. No runtime/API/renderer/dependency change. Scoped Ruff and code health pass.
+One changed section applies/hashes/reverses against the pinned base; 1,098 targets,
+selection and unrelated sections retained. Native target selection and Monitor
+visual/progress/settlement acceptance remain open; no feature release.
 
 # Recorded task reports in Bot Monitor — unreleased
 

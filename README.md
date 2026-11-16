@@ -22,10 +22,11 @@ separate; these are recorded row values, not lifetime totals. Missing facts stay
 unavailable. Recent reports now opens recorded task outcomes and bounded report/
 error excerpts, with local outcome filters and recorded-stalled/Stopped/Unknown
 labels. Historical issues stay separate from current work. A native gateway
-regression follows real delegation, file reading, heartbeat and settlement into
-those reports, with independent side-chat/profile controls. Model replies and
-usage are fixtures; native visual acceptance remains open. The latest released
-version is v0.33.8. No daily-app adoption is included.
+regression follows real delegation and file reading into completed, rejected and
+explicitly stopped task reports, including stale-reply protection and independent
+side-chat/profile controls. The successful case retains a real heartbeat. Model
+replies and usage are fixtures; native visual acceptance remains open. The latest
+released version is v0.33.8. No daily-app adoption is included.
 
 ## What is included
 

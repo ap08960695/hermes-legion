@@ -12,18 +12,21 @@ Python and Desktop selection. No dependency or lockfile change is included.
 
 ## Native Monitor lifecycle integration (unreleased)
 
-One new gateway regression runs the public gateway lifecycle in its isolated
-per-file test process. Authenticated private-control tickets and the real
-WebSocket API create a named Bot Chat, dispatch one native child, execute
-`read_file`, observe a normal durable heartbeat, and follow that same task into
-terminal worker rows and canonical reports. Native code owns every lifecycle
-and ledger write. Nonempty side-chat and sibling-profile controls stay distinct.
+One selected gateway regression runs three native outcomes through the public
+lifecycle and authenticated private-control/WebSocket API: successful completion,
+post-read model rejection, and owned per-child Stop. All execute real `read_file`
+and follow the same task into terminal ledger/delivery and canonical reports;
+the successful case also observes the normal durable heartbeat. Stopped reply
+release cannot restore success. Nonempty side-chat/profile controls stay scoped.
 
-Only loopback model replies, timing and usage are fixtures. The full chain passes
-within the 180-second submission deadline. This adds one test section and one
-selection entry; unrelated patch sections are retained. It does not prove CLI
-daemon launch, process-boundary isolation, native UI layout, real billing or model
-quality. CUA target selection remains blocked, so the feature stays unreleased.
+Native code owns lifecycle and ledger writes; only loopback model content,
+timing and usage are fixtures. All three parameters pass together in one per-file
+process, each within its own 180-second submission deadline. This extends one
+existing test section; selection and unrelated sections stay unchanged. The task
+sandbox prevents auxiliary shell snapshots, so this proves the regular-file
+fast path, not shell tools. It does not prove CLI daemon launch, process-boundary
+isolation, native UI layout, real billing or model quality. Native target selection
+remains blocked, so the feature stays unreleased.
 [Verification](verification.md#native-monitor-lifecycle-integration--unreleased).
 
 ## Recorded task reports (unreleased)

@@ -167,9 +167,14 @@ progress/settlement and feature-release acceptance remain open.
 The lifecycle-to-report boundary now has one repeatable integration regression.
 It uses the public gateway lifecycle, real private-control tickets and WebSocket
 API, native agents/delegation, a real fixture-file read, durable heartbeat,
-terminal ledger and the same canonical report consumed by Monitor. Nonempty
-side-chat and sibling-profile controls cannot substitute for the task. No test
-code seeds or repairs the main task's sessions, progress or ledger.
+terminal ledger and the same canonical report consumed by Monitor. Three native
+outcomes now share the scenario: successful completion, provider rejection after
+the file read, and authenticated per-child Stop while its model reply is held.
+The stopped child ends before release; the stale successful reply cannot replace
+its terminal record or result. Failed/interrupted task states normalize to
+Error/Stopped reports even though both single-child batches record unit error.
+Nonempty side-chat and sibling-profile controls cannot substitute for the task.
+No test code seeds or repairs the main task's sessions, progress or ledger.
 
 Model responses, timing and usage come from a bounded loopback fixture. The
 gateway shares the isolated per-file pytest process; this does not cover CLI
