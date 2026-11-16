@@ -10,6 +10,15 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Monitor Open chat integration contract (unreleased)
+
+A selected rendered integration test connects actual Monitor gestures to real
+roster actions, canonical title lookup and source routing. Bot/worker controls
+open the returned local lineage tip, never a worker/side/snapshot id. Disabled
+foreign source and failed registry cases cannot open/create a conversation.
+SDK effects are mocked; native navigation remains unproven.
+[Verification boundaries](verification.md#monitor-open-chat-contract--unreleased).
+
 ## Monitor roster-query settlement regression (unreleased)
 
 The selected real useRoster test now protects canonical parent/child/report and

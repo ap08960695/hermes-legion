@@ -284,3 +284,23 @@ builds, but execution is unrun and integration unproven: CUA native input return
 noWindowsAvailable and its browser host was unavailable. No gateway run was started
 without a supported UI surface. Live useRoster, Electron and navigation gates
 remain open. This completed development step does not release the feature.
+
+
+## Monitor Open chat integration contract
+
+Next offline seam renders actual Monitor with the same onOpen wrapper as the
+workspace, then runs real openRosterBot, canonical registry resolution and routing.
+Only SDK machine/RPC boundaries are mocked. Same-name bots on distinct sources,
+an unavailable foreign source and distinct canonical/worker/latest-side ids guard
+against wrong-owner navigation. Bot and worker controls must resolve that owner's
+existing Bot Chat by exact title, then open its returned lineage tip. Rejected
+registry reads must notify without opening, creating, prompting or claiming success.
+No product behavior or new API; this cannot prove actual desktop navigation.
+
+The offline integration contract passes: bot and worker controls resolve the
+local owner's fresh registry tip, excluding stale snapshot/side/worker identities;
+the foreign same-name action stays disabled. Registry failure notifies without
+open, draft, create, prompt or success claim. Actual data/routing/canonical/action
+modules run; SDK machine/RPC effects are mocked. This closes a test seam only.
+Current CUA inventory still has no browser host, so no input/app launch retry or
+live navigation acceptance was attempted.

@@ -1,3 +1,28 @@
+# Monitor Open chat contract — unreleased
+
+New monitor-open.test.tsx renders actual Monitor with the workspace's onOpen
+wrapper and runs real openRosterBot, prepareBotSource, canonical lookup and
+requestForBot routing. No action/canonical/data/routing modules are mocked; SDK
+RPC/navigation/workspace boundaries are synthetic. Fresh locale/atoms and restored
+host spies isolate cases. Same-name local/foreign rows, an unavailable foreign
+source, worker, latest side chat and stale canonical tip have distinct identities.
+
+Bot and worker actions each make one exact local title/hidden registry lookup
+and open its fresh returned tip with the captured route/workspace owner. No
+boundary call occurs before gesture; disabled foreign action is inert. Ambient
+RPC, activation and draft spies refuse calls; exact one session.list excludes
+create/prompt. Registry rejection settles with an explicit error notification,
+no desktop open/draft/claim and no fallback to a worker or side conversation.
+Three new cases and nearby Monitor/row-action/registry suites pass; scoped ESLint
+passes. This is an offline rendered integration contract, not actual SDK desktop
+open, browser visuals, live gateway or Electron navigation proof.
+
+One new patch section applies/hashes/reverses against pinned upstream;1,100targets
+and all prior sections remain. Test selection appends this file only. No product
+source/API/dependency/locale/version change. CUA inventory still reports browser
+host unavailable; no native/Chrome input retry, task window, model/gateway/server
+or owner Hermes launch. Existing live useRoster/Electron/navigation gates remain.
+
 # Monitor roster-query settlement — unreleased
 
 One added case in existing data.roster.test.tsx runs actual useRoster and a real

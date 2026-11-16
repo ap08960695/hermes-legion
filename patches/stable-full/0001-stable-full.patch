@@ -30378,6 +30378,127 @@ index 0000000000000000000000000000000000000000..0ce5f40b62f258024a578911e13627a3
 +    counts: (bots, workers) => `Bots: ${bots} · Observaciones actuales de trabajadores: ${workers}`
 +  }
 +} satisfies Record<keyof typeof CANONICAL_GROUP_LOCALES, MonitorMessages>
+diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-open.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-open.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..ca825bb1af032b49468bb51de7de003888965427
+--- /dev/null
++++ b/apps/desktop/src/plugins/hermes-bots/monitor-open.test.tsx
+@@ -0,0 +1,115 @@
++import { host } from '@hermes/plugin-sdk'
++import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
++import { afterEach, beforeEach, expect, it, vi } from 'vitest'
++
++// eslint-disable-next-line no-restricted-imports
++import { registerPluginLocales } from '@/i18n/plugin-i18n'
++
++import { $openBotChat, $pendingBotOpen, $selectedBot, $selectedRosterKey } from './bot-state'
++import { $botMeta, botSourceStatus } from './data'
++import { $groupChatWorkspace } from './group-chat'
++import { BOTS_LOCALES } from './i18n'
++import { BotMonitor } from './monitor'
++import { openRosterBot } from './roster-actions'
++import { botWorkingMood } from './row-helpers'
++import { bumpBotOpenGeneration } from './shared'
++import type { RosterRow } from './types'
++
++const route = { connectionId: 'local', mode: 'local' as const, profile: 'writer', targetProfile: 'writer' }
++let dispose: () => void
++
++beforeEach(() => {
++  dispose = registerPluginLocales('hermes-bots', BOTS_LOCALES)
++  $openBotChat.set(null)
++  $selectedBot.set('')
++  $selectedRosterKey.set('')
++  $botMeta.set({})
++  $groupChatWorkspace.set(null)
++  vi.spyOn(host, 'request').mockRejectedValue(new Error('Ambient requests forbidden'))
++  vi.spyOn(host, 'ensureAgent').mockRejectedValue(new Error('Source activation forbidden'))
++  vi.spyOn(host, 'newChat').mockImplementation(() => { throw new Error('Draft creation forbidden') })
++  vi.spyOn(host, 'setWorkspaceScope').mockReturnValue(true)
++  vi.spyOn(host, 'focusOpenWorkspaceSession').mockImplementation((_owner, _probe, allowed) =>
++    allowed?.includes('latest-side') ? 'latest-side' : null)
++  vi.spyOn(host, 'openSession').mockResolvedValue(undefined)
++  vi.spyOn(host, 'notify').mockReturnValue(undefined)
++  vi.spyOn(host, 'requestProfile').mockResolvedValue({ sessions: [
++    { id: 'canonical-root', resolved_id: 'fresh-canonical-tip', title: 'Bot Chat', message_count: 4 }
++  ] })
++})
++
++afterEach(() => {
++  cleanup()
++  dispose()
++  bumpBotOpenGeneration()
++  $openBotChat.set(null)
++  $selectedBot.set('')
++  $selectedRosterKey.set('')
++  $botMeta.set({})
++  $groupChatWorkspace.set(null)
++  vi.restoreAllMocks()
++})
++
++function openMonitor() {
++  const now = Date.now()
++  const side = { id: 'latest-side', last_active: now / 1000, preview: 'Newer side conversation' }
++  const local: RosterRow = { name: 'writer', display_name: 'Writer', connectionId: 'local',
++    connectionKind: 'local', connectionLabel: 'Local fixture', sourceScoped: true, sourceReachable: true, route,
++    canonical_session: { id: 'canonical-root', resolved_id: 'old-snapshot-tip', preview: 'Canonical preview' },
++    last_session: side, worker_sessions: [{ id: 'live-worker', title: 'Current fixture worker', last_active: now / 1000 }] }
++  const foreign: RosterRow = { name: 'writer', display_name: 'Writer', connectionId: 'other-fixture',
++    connectionKind: 'remote', connectionLabel: 'Unavailable fixture', sourceScoped: true, sourceReachable: false,
++    canonical_session: { id: 'foreign-canonical', preview: 'Foreign preview' } }
++  const rows = [local, foreign].map(bot => ({ bot, name: 'Writer', needsAttention: false, attentionHint: '',
++    source: botSourceStatus(bot), working: botWorkingMood(bot, null, false, 'local', now) !== 'idle' }))
++  render(<BotMonitor now={now} onOpen={async bot => { await openRosterBot(bot) }} rows={rows} />)
++
++  return {
++    bot: within(screen.getByText('Canonical preview').closest('tr')!).getByRole('button', { name: 'Open chat · Writer' }),
++    worker: screen.getByRole('button', { name: 'Open chat · Writer · Current fixture worker' }),
++    foreign: within(screen.getByText('Foreign preview').closest('tr')!).getByRole('button', { name: 'Open chat · Writer' })
++  }
++}
++
++it.each(['bot', 'worker'] as const)('opens the selected owner’s registry tip from the Monitor %s action', async action => {
++  const buttons = openMonitor()
++  expect(host.requestProfile).not.toHaveBeenCalled()
++  expect(host.openSession).not.toHaveBeenCalled()
++  expect((buttons.foreign as HTMLButtonElement).disabled).toBe(true)
++  fireEvent.click(buttons.foreign)
++  expect(host.requestProfile).not.toHaveBeenCalled()
++  fireEvent.click(buttons[action])
++  await waitFor(() => expect(host.openSession).toHaveBeenCalledTimes(1))
++  await waitFor(() => expect($pendingBotOpen.get()).toBeNull())
++  expect(host.requestProfile).toHaveBeenCalledExactlyOnceWith(route, 'session.list', {
++    profile: 'writer', title: 'Bot Chat', include_hidden: true, limit: 200
++  }, undefined, { spawnPriority: 'foreground' })
++  expect(host.openSession).toHaveBeenCalledWith('fresh-canonical-tip', expect.objectContaining({
++    route, profile: 'writer', intent: 'in-place', workspaceMode: 'bots', workspaceOwnerKey: 'bot:local::writer',
++    tabTitle: 'Bot Chat', forceResume: true, awaitHydration: true
++  }))
++  expect($openBotChat.get()).toEqual({ key: 'local::writer', openedRegistryId: 'canonical-root', openedSessionId: 'fresh-canonical-tip' })
++  expect(host.request).not.toHaveBeenCalled()
++  expect(host.ensureAgent).not.toHaveBeenCalled()
++  expect(host.newChat).not.toHaveBeenCalled()
++  expect(host.notify).not.toHaveBeenCalled()
++})
++
++it('reports a failed registry read without opening or creating a conversation', async () => {
++  vi.mocked(host.requestProfile).mockRejectedValue(new Error('Registry unavailable'))
++  fireEvent.click(openMonitor().bot)
++  await waitFor(() => expect(host.notify).toHaveBeenCalledWith(expect.objectContaining({
++    kind: 'error', title: 'Could not open Writer’s chat', message: 'Try again.',
++    detail: expect.stringContaining('Registry unavailable')
++  })))
++  await waitFor(() => expect($pendingBotOpen.get()).toBeNull())
++  expect(host.requestProfile).toHaveBeenCalledTimes(1)
++  expect(vi.mocked(host.requestProfile).mock.calls[0].slice(0, 3)).toEqual([route, 'session.list', {
++    profile: 'writer', title: 'Bot Chat', include_hidden: true, limit: 200
++  }])
++  expect(host.openSession).not.toHaveBeenCalled()
++  expect(host.newChat).not.toHaveBeenCalled()
++  expect(host.request).not.toHaveBeenCalled()
++  expect(host.ensureAgent).not.toHaveBeenCalled()
++  expect($openBotChat.get()).toBeNull()
++})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-reports.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-reports.tsx
 new file mode 100644
 index 0000000000000000000000000000000000000000..0c62786d2b8bbc259ace49d84a8d92e8a7c090b5
