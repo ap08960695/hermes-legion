@@ -10,6 +10,26 @@ shows tables.
 | TUI (terminal) | yes | yes | shown as Unicode | not rendered; the hint steers the model to tables or indented sketches |
 | Web dashboard session viewer | yes (new) | yes, with a language label (new) | no | shown as labelled source |
 
+## Read and enlarge Desktop charts (v0.32.0)
+
+Click a valid chart to open the existing pan/zoom viewer. Its full view includes
+title, unit and legend. Below the inline chart, **Details** opens a semantic table
+with every validated category, series and parsed value. Full labels, repeated
+category names, decimals, zero and negative values stay distinct. The table is
+created only while open and scrolls within its own bounded area.
+
+Dense Cartesian axes show at most four category ticks; all plotted data and the
+full table remain. Existing parser bounds and text escaping stay in place.
+The table does not round numeric values, but JSON/JavaScript precision lost
+during parsing cannot be restored. This adds no data fetch, model request or
+saved-text mutation. The shared viewer registers its opener through the normal Dialog/Trigger
+contract. In the native shell, Close and Escape return to Chat with the composer
+focused.
+
+Apply the source kit and rebuild Desktop. Existing translations provide Open
+preview, Details and Category; viewer toolbar language behavior stays unchanged.
+[Verification and limits](release-notes-v0.32.0.md).
+
 ## Native Local Mac acceptance (2026-11-16, after v0.29.0)
 
 The existing Desktop renderer passed a bounded native Mac walkthrough:

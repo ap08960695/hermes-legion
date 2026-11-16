@@ -1,3 +1,33 @@
+# v0.32.0 — Read and enlarge chat charts
+
+Native Local before/after actual Send displayed the same controlled reply with
+Markdown table, dense nine-category/two-series bar chart and Mermaid. The final
+renderer exposes chart full view, Zoom in/Reset/Close/Escape and a Details table
+with all full labels, duplicates, zero, negatives and unrounded parsed decimals.
+Collapse removes the rows. Mermaid still opens/closes. Native Reload, New chat,
+History and same-report reopen retained formats and values; stored messages
+stayed exact after the native terminal-newline trim. One model request per
+accepted run; no seeded lifecycle rows, no production model/usage-quality claim.
+Native shell focus after Close/Escape is the composer; opener restoration is a
+shared-component unit contract, not whole-app acceptance.
+
+Original chart red5/7controls and shared focus red2/17controls preceded the fixes;
+final19nearest pass across three files. Lint/types/build pass; inherited dynamic-
+import warning remains. Four scoped sections pass apply/hash/reverse on the
+pinned base;1085targets and existing test selection retained. No full source,
+unchanged mock or broad native sweep repeated. Table DOM exists only while open;
+no new fetch/poll/model request/backend/schema/prompt/context/dependency change.
+
+Accepted before/final gates actual60sSSH0/max4sampledHermes/<4GiB.1183/1917samples,
+observer-inclusiveRSSmax1186381824/1365884928B, not production savings. Preparatory
+startup stopped before CUA/Send because two app-owned OS probe shells were counted
+as workers. Exact executable/argv/stable-parent controls classify those utilities,
+retain their RSS/descendants and still reject five actual Hermes; no bound raised.
+All three cohorts closed, ports/modelthreads ended, original313bundle/hash/strict
+signature/configs restored. Raw rejected run retained. No owner/otherhost/stop
+mutation. Native wide bar workflow only; line/pie unit proof, other formats and
+adoption limits in [release notes](release-notes-v0.32.0.md).
+
 # v0.31.1 — Separate same-goal delegation cards
 
 Fresh native Local homes ran two real delegated calls with the exact same goal

@@ -10,6 +10,16 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Readable chat charts (v0.32.0)
+
+Chart fences reuse the house full-view pan/zoom controls and offer an on-demand
+Details table from the same validated spec. Full labels and unrounded parsed
+values remain available even when dense axes omit category ticks. The shared
+viewer registers its opening button with the Dialog root for focus restoration.
+Four existing source/test sections change; 1085 targets and the test selection
+stay unchanged. Apply the kit and rebuild Desktop.
+[Adoption, checks and limits](release-notes-v0.32.0.md).
+
 ## Separate same-goal delegation cards (v0.31.1)
 
 Chat cards use the native receipt's existing child IDs before any legacy match.

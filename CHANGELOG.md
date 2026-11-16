@@ -5,6 +5,18 @@ supported update or Desktop rebuild path. This kit does not install a rebuilt
 Hermes.app. Linked notes identify opt-in memory settings and admission guards
 that apply after adoption. Each entry states its adoption and verification limits.
 
+## v0.32.0 — Read and enlarge chat charts
+
+Click a chart to enlarge it with the house pan/zoom viewer. Open **Details** to
+read full category and series names, units and unrounded parsed values, including
+zero and negatives. Dense axes show fewer labels; every category remains in the
+table. Details mounts its table only while open. Close or Escape returns to Chat.
+
+Apply the source kit and rebuild Desktop. The native Local report workflow
+covers Markdown table, chart and Mermaid together using controlled loopback
+content. Number precision already lost during parsing cannot be recovered.
+[Checks and limits](docs/release-notes-v0.32.0.md).
+
 ## v0.31.1 — Keep same-goal delegation cards separate
 
 Two delegated calls with the same task name now show their own native child.
