@@ -33,6 +33,12 @@ a browser adapter also follows a real native worker from Working/step into its
 completed report. Electron visual acceptance remains open. The latest
 released version is v0.33.8. No daily-app adoption is included.
 
+The [agent-desktop diagnostics slice](docs/design-agent-desktop.md) is also
+unreleased: `hermes computer-use status --backend agent-desktop` finds an existing
+installation and reports permission states. Configure a binary/release directory
+with `hermes config set computer_use.agent_desktop.path /path/to/agent-desktop`.
+This does not select a runtime provider or establish snapshot/action support.
+
 ## What is included
 
 - [v0.33.8: keep attachment size edits when closing Settings](docs/release-notes-v0.33.8.md), saves the focused preview limit before Escape closes the page.

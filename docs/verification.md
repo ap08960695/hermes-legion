@@ -1,3 +1,34 @@
+# Agent-desktop discovery and status — unreleased
+
+The explicit CLI status flag discovers an installed agent-desktop and reads its
+status without registering/selecting a runnable provider. Config path takes
+precedence and invalid/ambiguous paths fail closed. PATH, local npm ancestry and
+source installs, configured/global npm prefixes, Homebrew and extracted release
+paths are covered. Windows npm shims resolve to native architecture executables.
+The existing default/plugin status route and explicit cua contract checks remain.
+
+Thirty new cases plus two adjacent CLI cases pass. The initial CLI regression
+fails before implementation on the unrecognized flag. Windows shim and config
+exception cases fail before their corrections. A config roundtrip first showed
+that custom keys already save; strengthening it exposed the misleading unknown-
+key notice, fixed by registering the optional default path. Tests also cover
+ambiguous directories, independent permission states, bounded/scrubbed probes,
+invalid/oversized/wrong-command output and no raw output/exception leakage.
+
+The actual Hermes CLI runs config-set then status against the installed workspace
+binary with isolated HOME/config and OS network/write/SSH fences. It reports
+binary version1.3.1, Accessibility granted, Screen Recording denied and Automation
+unknown. Backend cua and an unrelated memory value survive. No guide, snapshot,
+app target, permission change, model/provider request or remote operation occurs.
+Sampled checks stay below171MiB including their observer; not a product benchmark.
+
+Four changed source sections apply/hash/reverse against pinned bf0203a; all
+unrelated patch sections are retained byte-for-byte. The new regression is
+selected. No unchanged source sweep, GUI build or lifecycle retry. Companion,
+tracked-copy and secret gates are separate receipts. No version/tag/release or
+owner-app adoption. The runtime provider, act/ref loop, native target observation
+and Monitor terminal UI acceptance remain unfinished.
+
 # Native Monitor delegated-worker activity — unreleased
 
 The full production renderer/main/preload/SDK/query now displays a worker created

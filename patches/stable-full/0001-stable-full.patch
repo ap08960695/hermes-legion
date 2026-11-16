@@ -43534,7 +43534,7 @@ index cc90cbb213f6fe92a64679b37395b39b7da85c26..6255d1886094e705b1e5761d8bf07b65
 +
  def load_newest_good_backup(config_path: Path) -> Optional[dict]:
 diff --git a/hermes_cli/config_defaults.py b/hermes_cli/config_defaults.py
-index 63ff490ee732eca4f4d604c29d221f4704b5969c..abb237b858522e12b4c1aae921a32a44fa457600 100644
+index 63ff490ee732eca4f4d604c29d221f4704b5969c..0939e5b4a68953325dccc3de22f0ef91010803e0 100644
 --- a/hermes_cli/config_defaults.py
 +++ b/hermes_cli/config_defaults.py
 @@ -34,2 +34,3 @@ DEFAULT_CONFIG = {
@@ -43636,6 +43636,10 @@ index 63ff490ee732eca4f4d604c29d221f4704b5969c..abb237b858522e12b4c1aae921a32a44
 +        # False keeps the local dashboard cold until its first request; auth-required preload still wins.
 +        "dashboard_warmup": True,
          "unmanaged_idle_exit_seconds": 600,  # client-auto-started gateway only; 0 disables
+@@ -2554,2 +2576,3 @@ DEFAULT_CONFIG = {
+     "computer_use": {
++        "agent_desktop": {"path": ""},
+         # cua-driver's upstream PostHog telemetry defaults ON; Hermes sets
 diff --git a/hermes_cli/config_effective.py b/hermes_cli/config_effective.py
 index ac32724b3908508cf18f2787eba33f414920a904..651733a87888936533687f63c57ccbd2fe4e6cc2 100644
 --- a/hermes_cli/config_effective.py
@@ -50470,6 +50474,28 @@ index a25c6cd5cf87cc3e30dd52a3b92a027bbc70a7ea..a28839f04b99cec84b9d798b1c5458f7
 +    if len(_cache) > _CACHE_MAX_ENTRIES:
 +        del _cache[next(iter(_cache))]
      return label
+diff --git a/hermes_cli/subcommands/computer_use.py b/hermes_cli/subcommands/computer_use.py
+index b6a73406111cd2dfe8b69f0311ee55e012cb3d20..357ff0be7f3196f6915927fb33cff3d8805c863b 100644
+--- a/hermes_cli/subcommands/computer_use.py
++++ b/hermes_cli/subcommands/computer_use.py
+@@ -34,3 +34,8 @@ def _cu_install(args) -> int:
+ def _cu_status(args) -> int:
+-    _exit_if_plugin_backend()
++    backend = getattr(args, "backend", None)
++    if backend == "agent-desktop":
++        from tools.computer_use.agent_desktop import print_agent_desktop_status
++        return print_agent_desktop_status()
++    if backend is None:
++        _exit_if_plugin_backend()
+     import os as _os
+@@ -148,3 +153,6 @@ def build_computer_use_parser(subparsers) -> None:
+         help="Reconcile cua-driver with Hermes' pinned PM package and repair host setup.")
+-    computer_use_sub.add_parser("status", help="Check the selected cua-driver and its runtime contract")
++    computer_use_status = computer_use_sub.add_parser("status", help="Check the selected backend or explicit driver diagnostics")
++    computer_use_status.add_argument(
++        "--backend", choices=("cua", "agent-desktop"),
++        help="Probe this driver's diagnostics without changing the configured runtime backend.")
+     computer_use_doctor = computer_use_sub.add_parser(
 diff --git a/hermes_cli/subcommands/gateway.py b/hermes_cli/subcommands/gateway.py
 index 2ecf5016fa40618d2f3c31e7af8c8b5b7db1b123..bcf9c349a2a321300b79bcc6c2d7a70e7cb2f969 100644
 --- a/hermes_cli/subcommands/gateway.py
@@ -63249,6 +63275,281 @@ index 0000000000000000000000000000000000000000..c351774589bc9cde32e237fe23c7f70c
 +    session = CodexAppServerSession(cwd=str(tmp_path), model='gpt-6.1-sol',client_factory=lambda **kw: client)
 +    assert session.ensure_started() == 't-public'
 +    assert client.calls == ['thread/start']
+diff --git a/tests/computer_use/test_agent_desktop_status.py b/tests/computer_use/test_agent_desktop_status.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..dcb3d0be7e85d132392889bf97c7985f37cebdff
+--- /dev/null
++++ b/tests/computer_use/test_agent_desktop_status.py
+@@ -0,0 +1,269 @@
++"""Explicit agent-desktop diagnostics: discovery, privacy and CLI compatibility."""
++import argparse
++import json
++from pathlib import Path
++import subprocess
++import sys
++from types import SimpleNamespace
++
++import pytest
++
++
++def executable(path):
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text('fixture binary, never executed')
++    path.chmod(0o700)
++    return str(path.resolve())
++
++
++def payload(**changes):
++    value = {'ok': True, 'command': 'status', 'version': '2.6', 'data': {
++        'version': '1.3.1', 'platform': 'macos', 'permissions': {
++            'accessibility': {'state': 'granted'}, 'screen_recording': {'state': 'denied'},
++            'automation': {'state': 'unknown'}}, 'private_snapshot': 'PRIVATE_DESKTOP_CONTENT'}}
++    value.update(changes)
++    return json.dumps(value)
++
++
++@pytest.fixture
++def desktop(monkeypatch, tmp_path):
++    import tools.computer_use.agent_desktop as module
++    monkeypatch.chdir(tmp_path)
++    (tmp_path / 'home').mkdir()
++    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
++    for key in ['NPM_CONFIG_PREFIX', 'npm_config_prefix', 'HOMEBREW_PREFIX', 'APPDATA']:
++        monkeypatch.delenv(key, raising=False)
++    monkeypatch.setattr(module, '_SOURCE_ROOT', tmp_path / 'hermes')
++    monkeypatch.setattr(module, '_HOMEBREW_PREFIXES', ())
++    monkeypatch.setattr(module, 'load_config_readonly', lambda: {})
++    monkeypatch.setattr(module.shutil, 'which', lambda name: None)
++    return module
++
++
++def test_cli_explicit_agent_desktop_dispatch_preserves_default_plugin_path(monkeypatch):
++    from hermes_cli.subcommands import computer_use
++    calls = []
++    monkeypatch.setitem(sys.modules, 'tools.computer_use.agent_desktop', SimpleNamespace(
++        print_agent_desktop_status=lambda: calls.append('agent-desktop') or 7))
++    parser = argparse.ArgumentParser()
++    computer_use.build_computer_use_parser(parser.add_subparsers())
++    args = parser.parse_args(['computer-use', 'status', '--backend', 'agent-desktop'])
++    monkeypatch.setattr(computer_use, '_exit_if_plugin_backend', lambda: pytest.fail('selected a runtime provider'))
++    assert args.func(args) == 7 and calls == ['agent-desktop']
++    class DefaultPath(Exception):
++        pass
++    def default_path():
++        raise DefaultPath
++    monkeypatch.setattr(computer_use, '_exit_if_plugin_backend', default_path)
++    args = parser.parse_args(['computer-use', 'status'])
++    with pytest.raises(DefaultPath):
++        args.func(args)
++
++
++def test_cli_explicit_cua_keeps_the_existing_contract_diagnostic(monkeypatch, capsys):
++    from hermes_cli.subcommands import computer_use
++    from hermes_cli import tools_config_cua
++    from tools.computer_use import cua_backend_driver
++    monkeypatch.setattr(computer_use, '_exit_if_plugin_backend', lambda: pytest.fail('selected a configured plugin'))
++    monkeypatch.setattr(cua_backend_driver, 'resolve_cua_driver_cmd', lambda: '/fixture/cua-driver')
++    monkeypatch.setattr(tools_config_cua, '_cua_driver_contract_status', lambda path: {
++        'ready': False, 'version': '', 'reason': 'Fixture contract missing'})
++    parser = argparse.ArgumentParser()
++    computer_use.build_computer_use_parser(parser.add_subparsers())
++    args = parser.parse_args(['computer-use', 'status', '--backend', 'cua'])
++    assert args.func(args) == 1
++    assert 'Fixture contract missing' in capsys.readouterr().out
++
++
++def test_config_binary_wins_over_path_and_invalid_override_never_falls_back(desktop, monkeypatch, tmp_path):
++    selected = executable(tmp_path / 'release with spaces/agent-desktop')
++    fallback = executable(tmp_path / 'path/agent-desktop')
++    config = {'computer_use': {'agent_desktop': {'path': selected}}}
++    monkeypatch.setattr(desktop, 'load_config_readonly', lambda: config)
++    monkeypatch.setattr(desktop.shutil, 'which', lambda name: fallback)
++    assert desktop.resolve_agent_desktop() == selected
++    config['computer_use']['agent_desktop']['path'] = str(tmp_path / 'missing')
++    with pytest.raises(ValueError):
++        desktop.resolve_agent_desktop()
++
++
++def test_config_cli_sets_path_without_changing_backend_or_unrelated_settings(tmp_path, capsys):
++    from hermes_cli import config
++    from hermes_cli.subcommands.config import build_config_parser
++    from hermes_constants import set_hermes_home_override, reset_hermes_home_override
++    import hermes_yaml as yaml
++    home = tmp_path / 'profile'
++    home.mkdir()
++    path = home / 'config.yaml'
++    path.write_text(json.dumps({'computer_use': {'backend': 'cua'}, 'memory': {'memory_char_limit': 3127}}))
++    token = set_hermes_home_override(str(home))
++    try:
++        parser = argparse.ArgumentParser()
++        build_config_parser(parser.add_subparsers(), cmd_config=config.config_command)
++        selected = str(tmp_path / 'my release/agent-desktop')
++        args = parser.parse_args(['config', 'set', 'computer_use.agent_desktop.path', selected])
++        args.func(args)
++        assert 'not a recognized config key' not in capsys.readouterr().out
++        saved = yaml.safe_load(path.read_text())
++        assert saved['computer_use']['agent_desktop']['path'] == selected
++        assert saved['computer_use']['backend'] == 'cua'
++        assert saved['memory']['memory_char_limit'] == 3127
++    finally:
++        reset_hermes_home_override(token)
++
++
++def test_release_directory_requires_one_distinct_executable(desktop, monkeypatch, tmp_path):
++    root = tmp_path / 'release'
++    one = executable(root / 'bin/agent-desktop')
++    monkeypatch.setattr(desktop, 'load_config_readonly', lambda: {
++        'computer_use': {'agent_desktop': {'path': str(root)}}})
++    assert desktop.resolve_agent_desktop() == one
++    (root / 'agent-desktop').symlink_to(one)
++    assert desktop.resolve_agent_desktop() == one
++    (root / 'agent-desktop').unlink()
++    executable(root / 'agent-desktop')
++    with pytest.raises(ValueError):
++        desktop.resolve_agent_desktop()
++
++
++@pytest.mark.parametrize('config', [
++    {'computer_use': []}, {'computer_use': {'agent_desktop': 'bad'}},
++    {'computer_use': {'agent_desktop': {'path': 42}}}])
++def test_invalid_config_is_reported_without_probe_or_raw_values(desktop, monkeypatch, capsys, config):
++    monkeypatch.setattr(desktop, 'load_config_readonly', lambda: config)
++    monkeypatch.setattr(desktop, 'bounded_probe_run', lambda *a, **kw: pytest.fail('unexpected probe'))
++    assert desktop.print_agent_desktop_status() == 2
++    assert 'computer_use.agent_desktop.path' in capsys.readouterr().out
++
++
++def test_path_discovery_does_not_probe_npm(desktop, monkeypatch, tmp_path):
++    found = executable(tmp_path / 'path/agent-desktop')
++    monkeypatch.setattr(desktop.shutil, 'which', lambda name: found if name == 'agent-desktop' else None)
++    monkeypatch.setattr(desktop, 'bounded_probe_run', lambda *a, **kw: pytest.fail('unexpected npm probe'))
++    assert desktop.resolve_agent_desktop() == found
++
++
++@pytest.mark.parametrize('location', ['ancestor', 'source', 'npm-env', 'brew'])
++def test_filesystem_install_locations(desktop, monkeypatch, tmp_path, location):
++    if location == 'ancestor':
++        expected = executable(tmp_path / 'node_modules/agent-desktop/bin/agent-desktop')
++        child = tmp_path / 'project/work'
++        child.mkdir(parents=True)
++        monkeypatch.chdir(child)
++    elif location == 'source':
++        expected = executable(desktop._SOURCE_ROOT / 'node_modules/agent-desktop/bin/agent-desktop')
++    elif location == 'npm-env':
++        monkeypatch.setenv('NPM_CONFIG_PREFIX', str(tmp_path / 'npm'))
++        expected = executable(tmp_path / 'npm/lib/node_modules/agent-desktop/bin/agent-desktop')
++    else:
++        monkeypatch.setenv('HOMEBREW_PREFIX', str(tmp_path / 'brew'))
++        expected = executable(tmp_path / 'brew/bin/agent-desktop')
++    monkeypatch.setattr(desktop, 'bounded_probe_run', lambda *a, **kw: pytest.fail('unexpected prefix process'))
++    assert desktop.resolve_agent_desktop() == expected
++
++
++def test_custom_npm_global_prefix_uses_bounded_scrubbed_probe(desktop, monkeypatch, tmp_path):
++    prefix = tmp_path / 'custom npm'
++    expected = executable(prefix / 'lib/node_modules/agent-desktop/bin/agent-desktop')
++    monkeypatch.setenv('OPENAI_API_KEY', 'PRIVATE_PROVIDER_KEY')
++    monkeypatch.setattr(desktop.shutil, 'which', lambda name: '/fixture/npm' if name == 'npm' else None)
++    def probe(argv, **kw):
++        assert argv == ['/fixture/npm', 'prefix', '-g']
++        assert 0 < kw['timeout'] <= 5 and 'OPENAI_API_KEY' not in kw['env']
++        return subprocess.CompletedProcess(argv, 0, str(prefix) + '\n', '')
++    monkeypatch.setattr(desktop, 'bounded_probe_run', probe)
++    assert desktop.resolve_agent_desktop() == expected
++
++
++def test_windows_native_npm_binary_is_found_without_shell_shim(desktop, monkeypatch, tmp_path):
++    monkeypatch.setattr(desktop, '_PLATFORM', 'win32')
++    monkeypatch.setenv('APPDATA', str(tmp_path / 'Roaming'))
++    expected = executable(tmp_path / 'Roaming/npm/node_modules/agent-desktop/bin/agent-desktop.exe')
++    assert desktop.resolve_agent_desktop() == expected
++
++
++@pytest.mark.parametrize('machine,arch', [('AMD64', 'x64'), ('ARM64', 'arm64')])
++def test_windows_path_npm_shim_resolves_the_packaged_native_exe(desktop, monkeypatch, tmp_path, machine, arch):
++    monkeypatch.setattr(desktop, '_PLATFORM', 'win32')
++    monkeypatch.setattr(desktop, '_MACHINE', machine.lower(), raising=False)
++    prefix = tmp_path / 'npm'
++    shim = executable(prefix / 'agent-desktop.cmd')
++    expected = executable(prefix / f'node_modules/agent-desktop/bin/agent-desktop-win32-{arch}.exe')
++    monkeypatch.setattr(desktop.shutil, 'which', lambda name: shim if name == 'agent-desktop' else None)
++    monkeypatch.setattr(desktop, 'bounded_probe_run', lambda *a, **kw: pytest.fail('must not execute a shell shim'))
++    assert desktop.resolve_agent_desktop() == expected
++
++
++def test_config_loader_exception_does_not_escape_into_output(desktop, monkeypatch, capsys):
++    def invalid_config():
++        raise RuntimeError('PRIVATE_CONFIG_CONTENT')
++    monkeypatch.setattr(desktop, 'load_config_readonly', invalid_config)
++    assert desktop.print_agent_desktop_status() == 2
++    assert 'PRIVATE' not in capsys.readouterr().out
++
++
++def test_status_executes_once_and_keeps_permissions_independent(desktop, monkeypatch, tmp_path, capsys):
++    selected = executable(tmp_path / 'tool/agent-desktop')
++    monkeypatch.setattr(desktop, 'resolve_agent_desktop', lambda: selected)
++    monkeypatch.setenv('OPENAI_API_KEY', 'PRIVATE_PROVIDER_KEY')
++    calls = []
++    def probe(argv, **kw):
++        calls.append(argv)
++        assert argv == [selected, 'status']
++        assert 0 < kw['timeout'] <= 12 and 'OPENAI_API_KEY' not in kw['env']
++        return subprocess.CompletedProcess(argv, 0, payload(), 'PRIVATE_STDERR')
++    monkeypatch.setattr(desktop, 'bounded_probe_run', probe)
++    assert desktop.print_agent_desktop_status() == 0
++    output = capsys.readouterr().out
++    assert len(calls) == 1 and '1.3.1' in output and '2.6' not in output
++    assert 'Accessibility: granted' in output and 'Screen Recording: denied' in output
++    assert 'not verified' in output and 'PRIVATE' not in output
++
++
++def test_missing_accessibility_only_prints_guide(desktop, monkeypatch, tmp_path, capsys):
++    selected = executable(tmp_path / 'with spaces/agent-desktop')
++    data = json.loads(payload())
++    data['data']['permissions']['accessibility']['state'] = 'denied'
++    monkeypatch.setattr(desktop, 'resolve_agent_desktop', lambda: selected)
++    calls = []
++    def probe(argv, **kw):
++        calls.append(argv)
++        return subprocess.CompletedProcess(argv, 0, json.dumps(data), '')
++    monkeypatch.setattr(desktop, 'bounded_probe_run', probe)
++    assert desktop.print_agent_desktop_status() == 0
++    assert calls == [[selected, 'status']]
++    assert 'permissions --guide' in capsys.readouterr().out
++
++
++def test_unknown_permission_and_invalid_version_are_not_echoed(desktop, monkeypatch, capsys):
++    data = json.loads(payload())
++    data['data']['version'] = 'PRIVATE_VERSION\nPRIVATE_KEY'
++    data['data']['permissions']['accessibility'] = {'state': 'PRIVATE_STATE'}
++    monkeypatch.setattr(desktop, 'resolve_agent_desktop', lambda: '/fixture/agent-desktop')
++    monkeypatch.setattr(desktop, 'bounded_probe_run', lambda *a, **kw:
++                        subprocess.CompletedProcess([], 0, json.dumps(data), ''))
++    assert desktop.print_agent_desktop_status() == 0
++    output = capsys.readouterr().out
++    assert 'Accessibility: unknown' in output and 'PRIVATE' not in output
++
++
++@pytest.mark.parametrize('reply', [None,
++    subprocess.CompletedProcess([], 1, 'PRIVATE_OUTPUT', 'PRIVATE_STDERR'),
++    subprocess.CompletedProcess([], 0, 'PRIVATE_NOT_JSON', ''),
++    subprocess.CompletedProcess([], 0, '[]', ''),
++    subprocess.CompletedProcess([], 0, payload(ok=1), ''),
++    subprocess.CompletedProcess([], 0, payload(command='snapshot'), ''),
++    subprocess.CompletedProcess([], 0, payload(data={'platform': 'macos', 'permissions': []}), ''),
++    subprocess.CompletedProcess([], 0, 'PRIVATE' * 12000, '')])
++def test_failed_or_wrong_protocol_never_echoes_payload(desktop, monkeypatch, capsys, reply):
++    monkeypatch.setattr(desktop, 'resolve_agent_desktop', lambda: '/fixture/agent-desktop')
++    monkeypatch.setattr(desktop, 'bounded_probe_run', lambda *a, **kw: reply)
++    assert desktop.print_agent_desktop_status() == 2
++    assert 'PRIVATE' not in capsys.readouterr().out
++
++
++def test_missing_install_does_not_invoke_any_driver(desktop, monkeypatch, capsys):
++    monkeypatch.setattr(desktop, 'resolve_agent_desktop', lambda: None)
++    monkeypatch.setattr(desktop, 'bounded_probe_run', lambda *a, **kw: pytest.fail('unexpected driver'))
++    assert desktop.print_agent_desktop_status() == 1
++    assert 'not installed' in capsys.readouterr().out
 diff --git a/tests/conftest.py b/tests/conftest.py
 index 56422616f6a517a7995c7298b0213f9a9e407ed1..1ef258494a56495f1db16a4514a7f667b8771a46 100644
 --- a/tests/conftest.py
@@ -95028,6 +95329,172 @@ index 0000000000000000000000000000000000000000..44026e593e129829b02562d1e12bc69f
 +        finally:
 +            fcntl.flock(stream,fcntl.LOCK_UN)
 +
+diff --git a/tools/computer_use/agent_desktop.py b/tools/computer_use/agent_desktop.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..727a2a4aa16a55bf232e25b47710ff7baaf0aff8
+--- /dev/null
++++ b/tools/computer_use/agent_desktop.py
+@@ -0,0 +1,160 @@
++"""Read-only discovery/status for agent-desktop; not a runtime provider."""
++from __future__ import annotations
++
++import json
++import os
++from pathlib import Path
++from platform import machine
++import re
++import shlex
++import shutil
++import subprocess
++from sys import platform as _PLATFORM
++
++from hermes_cli._subprocess_compat import bounded_probe_run, resolve_node_command
++from hermes_cli.config import load_config_readonly
++
++_SOURCE_ROOT = Path(__file__).resolve().parents[2]
++_MACHINE = machine().lower()
++_HOMEBREW_PREFIXES = (Path('/opt/homebrew'), Path('/usr/local'), Path('/home/linuxbrew/.linuxbrew'))
++
++
++def _environment():
++    from tools.environments.local import hermes_subprocess_env
++    return hermes_subprocess_env(inherit_credentials=False)
++
++
++def _executable(path):
++    try:
++        path = Path(path).expanduser().resolve()
++        if _PLATFORM == 'win32' and path.suffix.lower() != '.exe':
++            return None
++        if path.is_file() and (_PLATFORM == 'win32' or os.access(path, os.X_OK)):
++            return str(path)
++    except (OSError, RuntimeError):
++        pass
++    return None
++
++
++def _prefix_candidates(prefix, name):
++    prefix = Path(prefix).expanduser()
++    names = [name]
++    if _PLATFORM == 'win32':
++        arch = {'amd64': 'x64', 'x86_64': 'x64', 'x64': 'x64', 'arm64': 'arm64', 'aarch64': 'arm64'}.get(_MACHINE)
++        if arch:
++            names.append(f'agent-desktop-win32-{arch}.exe')
++    directories = (prefix / 'bin', prefix / 'node_modules/agent-desktop/bin',
++                   prefix / 'lib/node_modules/agent-desktop/bin', prefix)
++    return tuple(directory / item for directory in directories for item in names)
++
++
++def resolve_agent_desktop() -> str | None:
++    """An explicit path is authoritative; discovery never installs or selects a provider."""
++    config = load_config_readonly()
++    if config is None:
++        config = {}
++    if not isinstance(config, dict):
++        raise ValueError('Invalid computer-use config')
++    section = config.get('computer_use')
++    if section is None:
++        section = {}
++    if not isinstance(section, dict):
++        raise ValueError('Invalid computer-use config')
++    settings = section.get('agent_desktop')
++    if settings is None:
++        settings = {}
++    if not isinstance(settings, dict):
++        raise ValueError('Invalid agent-desktop config')
++    explicit = settings.get('path')
++    if explicit is not None and not isinstance(explicit, str):
++        raise ValueError('Invalid agent-desktop path')
++    name = 'agent-desktop.exe' if _PLATFORM == 'win32' else 'agent-desktop'
++    if explicit and explicit.strip():
++        path = Path(explicit.strip()).expanduser()
++        candidates = (path / name, path / 'bin' / name) if path.is_dir() else (path,)
++        matches = {value for candidate in candidates if (value := _executable(candidate))}
++        if len(matches) != 1:
++            raise ValueError('Missing or ambiguous agent-desktop path')
++        return matches.pop()
++    if found := shutil.which('agent-desktop'):
++        if resolved := _executable(found):
++            return resolved
++        if _PLATFORM == 'win32':
++            directory = Path(found).parent
++            for prefix in (directory, directory.parent.parent):
++                for candidate in _prefix_candidates(prefix, name):
++                    if resolved := _executable(candidate):
++                        return resolved
++    cwd = Path.cwd()
++    for root in (cwd, *cwd.parents, _SOURCE_ROOT):
++        for candidate in (root / 'node_modules/agent-desktop/bin' / name,
++                          root / 'node_modules/.bin' / name):
++            if found := _executable(candidate):
++                return found
++    prefixes = [os.environ.get(key, '') for key in ('NPM_CONFIG_PREFIX', 'npm_config_prefix', 'HOMEBREW_PREFIX')]
++    if _PLATFORM == 'win32':
++        if os.environ.get('APPDATA'):
++            prefixes.append(str(Path(os.environ['APPDATA']) / 'npm'))
++    else:
++        prefixes.extend(_HOMEBREW_PREFIXES)
++    for prefix in prefixes:
++        if prefix:
++            for candidate in _prefix_candidates(prefix, name):
++                if found := _executable(candidate):
++                    return found
++    if shutil.which('npm'):
++        result = bounded_probe_run(resolve_node_command('npm', ['prefix', '-g']), timeout=3, env=_environment())
++        if result is not None and result.returncode == 0:
++            prefix = result.stdout.strip()
++            if len(prefix) <= 4096 and len(prefix.splitlines()) == 1 and Path(prefix).is_absolute():
++                for candidate in _prefix_candidates(prefix, name):
++                    if found := _executable(candidate):
++                        return found
++    return None
++
++
++def print_agent_desktop_status() -> int:
++    """Print allowlisted status facts only; never echo external error/output payloads."""
++    try:
++        binary = resolve_agent_desktop()
++    except Exception:
++        print('agent-desktop: check computer_use.agent_desktop.path (one executable or extracted release directory).')
++        return 2
++    if not binary:
++        print('agent-desktop: not installed or not found.')
++        print('  Install agent-desktop, add it to PATH or set computer_use.agent_desktop.path; keep its helper beside it.')
++        return 1
++    try:
++        result = bounded_probe_run([binary, 'status'], timeout=10, env=_environment())
++        if result is None or result.returncode != 0 or len(result.stdout) > 65536:
++            raise ValueError('Status probe failed')
++        envelope = json.loads(result.stdout)
++        if not isinstance(envelope, dict) or envelope.get('ok') is not True or envelope.get('command') != 'status':
++            raise ValueError('Wrong status envelope')
++        data = envelope.get('data')
++        if not isinstance(data, dict) or data.get('platform') not in {'macos', 'windows', 'linux'}:
++            raise ValueError('Wrong status data')
++        permissions = data.get('permissions')
++        if not isinstance(permissions, dict):
++            raise ValueError('Wrong permission data')
++    except Exception:
++        print('agent-desktop: status failed, timed out or returned an invalid response; no desktop operation was verified.')
++        print('  Check the binary and keep the release helper beside it.')
++        return 2
++    version = data.get('version')
++    if not isinstance(version, str) or re.fullmatch(r'[A-Za-z0-9.+_-]{1,80}', version) is None:
++        version = 'unknown'
++    print(f'agent-desktop: {version} at {binary}')
++    print(f'  Platform: {data["platform"]}')
++    states = {}
++    for key, label in [('accessibility', 'Accessibility'), ('screen_recording', 'Screen Recording'), ('automation', 'Automation')]:
++        entry = permissions.get(key)
++        state = entry.get('state') if isinstance(entry, dict) else None
++        states[key] = state if state in ('granted', 'denied', 'unknown', 'not_required', 'unsupported') else 'unknown'
++        print(f'  {label}: {states[key]}')
++    if data['platform'] == 'macos' and states['accessibility'] == 'denied':
++        argv = [binary, 'permissions', '--guide']
++        command = subprocess.list2cmdline(argv) if _PLATFORM == 'win32' else shlex.join(argv)
++        print(f'  Accessibility guide (owner action): {command}')
++    print('  Diagnostics only; snapshot/action support is not verified.')
++    return 0
 diff --git a/tools/derived_cache.py b/tools/derived_cache.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..1340e2b44239c5bcc5ab9d3bd8ae131051951a47
