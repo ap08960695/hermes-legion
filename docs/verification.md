@@ -1,3 +1,29 @@
+# Native Local profile Settings persistence — v0.33.3 follow-up
+
+Actual Mac UI edits save default Memory Budget from 3111 to 3333 while ambient
+scope-b remains 4222, then save scope-b from 4222 to 4333 while default stays 3333.
+Native file assertions compare complete config mappings against the originals
+plus only the requested budget. The untouched profile stays byte exact after the
+first edit. Profile switch and Settings close/reopen retain 3333.
+
+All first-cohort processes and the gateway port end before new app/gateway
+identities reuse the same home/profile paths and exact diagnostic build. The
+second UI reads A=3333 and B=4333 without edits; both config hashes match the
+pre-restart snapshots. Both native session stores remain empty. No Send, model
+request or direct config seeding after launch supplies these results.
+
+Both cohorts close normally and pass actual 60-second SSH-zero gates. Sampled
+maxima: four Hermes each; observer-inclusive RSS 907,018,240 / 874,299,392 bytes.
+These are bounded samples, without a continuous-peak, physical RAM or saving
+claim. Original config bytes/modes and the original 313-entry trial bundle with
+strict signature restore after every writer/watchdog ends. Retained private
+evidence includes input-selection corrections and a rejected restart preparation;
+neither is represented as a product regression or a clean first attempt.
+
+Runtime, patch, test selection and build remain unchanged. Required companion,
+release inventory and secret gates apply to this documentation follow-up.
+See [journey and limits](settings-autosave.md#local-profile-persistence-acceptance-v0333-follow-up).
+
 # v0.33.3 — Scope Settings config actions
 
 Native Local before/after: ambient scope-b has budget4222, displayed default has

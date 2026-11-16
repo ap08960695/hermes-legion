@@ -68,6 +68,29 @@ reopened-value checks passed.
 - No GPU devices were available to the Linux test. No worker or model request
   ran, and the production Gateway was not restarted.
 
+## Local profile persistence acceptance (v0.33.3 follow-up)
+
+On the Mac, the native shared editor saved Memory Budget for two Local profiles
+independently: default from 3111 to 3333 while scope-b was active, then scope-b
+from 4222 to 4333. Disk readback after each edit showed the intended profile
+changed and all other config values preserved. The untouched profile stayed byte
+exact after the first edit. Switching back and reopening Settings showed 3333.
+
+The first app, gateway, helpers and watchdog all stopped before new processes
+opened the same task home and profile files, retained in place. The new app read
+3333 and 4333 through Settings without editing; both config hashes matched the
+pre-restart snapshots. Both session stores stayed empty; no Send or inference ran.
+Native saves tightened the synthetic files from 0644 to 0600 as designed; original
+bytes and modes were restored after the last writer stopped.
+
+Both Local launches passed actual 60-second SSH-zero gates, sampled at most four
+Hermes processes, and closed normally. Observer-inclusive sampled RSS maxima were
+907,018,240 and 874,299,392 bytes, without a memory-saving claim. The original
+313-entry trial bundle and strict signature were restored. This follow-up adds
+acceptance evidence, with no runtime change or new release. It does not establish
+immediate-switch/quit flushing, failure recovery, crash durability, selector
+persistence, other settings pages or remote behavior.
+
 ## Limits
 
 All config operations share one ordered queue because legacy aliases and registry
