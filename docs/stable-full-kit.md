@@ -10,6 +10,15 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Recorded issue context in Monitor (unreleased)
+
+The existing recorded issue badge now includes its task, stored time and a short
+plain-text error/report excerpt directly in the dashboard. This makes a recorded
+problem identifiable before opening Recent reports. History remains separate
+from current work; report owner, bounded window and captured dialog behavior stay
+intact. Missing data stays unavailable. Source/rendered checks pass; native input
+still blocks visual acceptance. [Checks and limits](verification.md#monitor-recorded-issue-context--unreleased).
+
 ## Native Error/Stopped reaches Monitor (unreleased)
 
 Two separate native Local outcomes now reach the actual roster query and Monitor:

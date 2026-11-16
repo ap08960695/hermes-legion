@@ -1,3 +1,49 @@
+# Monitor recorded issue context — unreleased
+
+The existing Last recorded issue block now shows the selected recorded task,
+its stored timestamp and a short error excerpt directly in the dashboard's
+report cell. It still selects only the first Error or Recorded stalled task in
+the canonical Bot Chat's existing20report window; a later success does not erase
+that recorded issue. It never fills worker rows, promotes history into current
+attention/Working or borrows another source/side chat. No new request, poller,
+store, dependency, wire field, locale key or navigation action.
+
+Task text is whitespace-normalized and bounded to120characters; detail uses a
+trimmed nonblank error or summary fallback, normalizes whitespace and stays
+within160characters. Both render as escaped plain text with two-line clamps.
+Existing nine-catalog labels identify the recorded issue/error/report excerpt.
+The stored timestamp is shown under its issue without a completion/success label
+for stalled tasks; missing/invalid time and task remain Not reported. Empty detail
+adds no fabricated error. Recent reports still opens its full bounded captured
+snapshot, independent of later inline data updates.
+
+Test-first:25existing cases pass and4affected assertions fail on original source
+because inline task context is absent. Minimal report-component change adds the
+context. Monitor29cases pass, including canonical owner/order, error/stalled
+history versus current attention, worker exclusion, summary fallback for blank
+error, invalid/absent time, clipping/escaped guest text and synchronized inline
+refresh while an open dialog preserves its captured task/time/body. Nearby actual
+query2and canonical Open integration3cases pass with the same product source.
+An initial new filter selector used Attention rather than the existing Needs
+attention label; corrected only that test. Renderer typecheck caught an undefined
+fixture timestamp outside the number|null wire contract; changed it to null and
+reran the affected fixture, scoped lint and renderer typecheck successfully.
+Renderer build passes; existing ineffective dynamic-import warnings remain.
+
+Exactly two changed source/test sections apply, match after hashes, reverse and
+match pinned before hashes. Other1099sections,1101targets and Desktop170file
+selection stay unchanged. Required companion/inventory/secret gates follow in the
+round receipts. This remains a development source slice, with no version/tag or
+release note until the Bot Monitor capability batch is ready.
+
+CUA browser host is unavailable. Native Chrome AX and screenshot read worked,
+but a profile AX click changed nothing; one bounded coordinate fallback returned
+server-10005noWindowsAvailable. CUA ended immediately; no Guest/server/native
+gateway was started, no owner image saved as acceptance, no lock state inferred.
+No paint/layout, browser actual-query/degraded-refresh, Electron transport or
+canonical desktop navigation claim. Those release gates remain open; no owner
+Hermes/data, ai/other-host or ESTOP/pause/timer action.
+
 # Native Error and Stopped reports through production query — component acceptance
 
 Two more native outcomes now pass through the real roster query and Monitor:

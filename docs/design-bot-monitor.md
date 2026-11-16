@@ -425,3 +425,33 @@ existing process/RAM/time/network/write guards. Browser host is still unavailabl
 this closes negative outcome data-flow acceptance only. Actual browser query and
 degraded-refresh paint, Electron host inventory/transport and canonical navigation
 remain the batch release gates. [Evidence scope](verification.md#native-error-and-stopped-reports-through-production-query--component-acceptance).
+
+
+## Recorded issue context in the dashboard
+
+The existing Last recorded issue badge names only Error or Recorded stalled.
+Add the same captured issue's task, stored report timestamp and short error
+excerpt in that existing report cell, so the user can identify the problem before
+opening Recent reports. Keep context in that cell: a new column widens the
+already scrollable dashboard, while dialog-only detail keeps the problem hidden.
+Use the existing canonical bounded report list and first error/stalled selection;
+a later success does not erase its history. This does not
+establish a current blockage or attention state and never fills worker rows.
+
+Task text is bounded to120characters; the error (or summary fallback) is plain
+escaped text, whitespace-normalized and bounded to160characters. Existing labels
+identify the recorded issue and error/report excerpt in all nine catalogs. Show
+the stored timestamp with that issue, without calling a stalled task completed. Missing
+text/time remains unavailable; no extra request, store, dependency or authority.
+The dialog still opens its own captured full bounded snapshot and keeps focus
+identity. Tests cover owner/order, history versus current work, fallback/absence,
+clipping/escaping and refresh versus captured dialog. Current CUA input failure
+prevents paint acceptance; keep this source slice unreleased.
+
+
+Recorded issue context source slice is implemented. Three added cases plus the
+strengthened captured-snapshot case fail against the prior source and pass with
+the change. Monitor29and nearby query/open5cases pass; the corrected nullable
+fixture, scoped lint, renderer types/build and two-section roundtrip pass. Native
+Chrome reads are available but input still returns noWindowsAvailable; no Guest
+or gateway launch, visual proof or feature release this round.
