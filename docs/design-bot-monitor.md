@@ -487,3 +487,20 @@ the selected filter/query and removes resolved window entries without claiming
 lifetime issue resolution. Scoped lint/types/build and four-section roundtrip
 pass. Native input/browser-host conditions still block visual acceptance; no
 feature release or owner-app adoption.
+
+
+## Native acceptance of preselected issue controls
+
+The latest context/filter/search now passes one fresh native failure through the
+existing actual-query/Workspace/JSDOM bridge. Controls selected while canonical
+reports are empty keep the mounted Monitor/query/cache intact; natural settlement
+then matches the same bot's recorded error. Inline task/error/time and the full
+captured report match native authority, while unused summary search does not
+match. The original test alone owns lifecycle, ledger/delivery and independent
+controls; observer acknowledgment is a read-return barrier after lock release.
+
+One native and one component case pass with five core source hashes unchanged,
+within existing process/RAM/time/network/write fences. Saved replay remains
+labelled and separate. No product behavior or feature release this round; browser
+paint/degraded-refresh visuals, Electron transport/inventory and canonical native
+navigation remain open. The previous UI blocker was not retried/refreshed.

@@ -1,3 +1,57 @@
+# Native failure reaches preselected issue controls — component acceptance
+
+One fresh native Local failure now verifies the145issue context and146dashboard
+filter/search together. Actual BotsWorkspace/useRoster/provider/query client first
+shows the same active child across a natural five-second interval, elapsed7s->12s.
+Its canonical reports are still empty. Select Recorded issues and enter the known
+local rejection marker: Monitor remains mounted, query success and cached parent/
+active child remain intact, while the filtered view correctly has no matches.
+These local controls add no request and never claim the native worker stopped.
+
+Only then acknowledge the existing diagnostic barrier. The observer has released
+its WebSocket receive lock; acknowledgment changes wrapper return timing only.
+The unchanged original native test owns fixture-model reply release, rejection,
+terminal ledger/delivery and parent settlement. The next natural query keeps the
+selected filter/search and reveals exactly that canonical bot and inline recorded
+Error task/error/time. Worker/step and independent profile are absent from the
+filtered table; source-qualified raw identities stay separate in the query cache.
+
+The native report's unused summary actually contains the negative-search marker,
+while its selected error does not. Searching that marker has no matches; restoring
+the error query restores the same bot. Recent reports then opens exactly one full
+captured Error report with raw multiline summary/error matching native receipts.
+The inline issue uses the stored report timestamp. No manual refetch, cache
+injection, prop replacement, second socket or observer lifecycle/SQL write.
+
+Original native real file read, ledger/result, parent response/admissions/delivery,
+unchanged isolated config and nonempty independent side/profile/refusal assertions
+pass. Seven loopback model replies/usage are fixtures, including the400rejection;
+SDK local state/inventory and avatar presentation remain simulated. This short
+negative case makes no heartbeat-advance, production billing or RAM-saving claim.
+
+One native attempt passes1case/2deselected; one JSDOM consumer passes10.237s
+(17.40sNode runner). Native main18.045s, bounded per-file runner23.72s. Three
+successful component roster reads/five captured main-roster reads; helper-scoped
+control reads are additional. Peak sampled summedRSS1,410,383,872B including
+observer/excluding outer controller, max4sampled processes including observer.
+Existing3child+observer/<3.5GiB/180s/loopback/SSH/shell/write fences stay unchanged.
+These are guard samples, not continuous peaks or production memory measurements.
+
+Changed-consumer saved-native replay passes plus six HTTP refusal controls. First
+replay assertion incorrectly matched the Unavailable filter button as an error
+screen; it now checks the Monitor heading plus query success and cached identity.
+No native launch preceded the passing replay. Saved fields/retimed active stamps
+remain explicitly replay data and are excluded from native proof. Five core source
+hashes and frozen private fixture bytes match before/after the sole fresh run.
+Product/patch/selection stay unchanged; only acceptance docs/inventory change.
+
+No GUI inventory/input/app retry this round; the prior146browser-host/input
+blocker was not refreshed and is not claimed as a new observation. No owner
+Hermes/data, ai/other host or ESTOP/pause/timer action. Native-to-production-query-
+to-JSDOM acceptance does not prove browser paint/layout, Electron host transport/
+inventory or canonical desktop navigation. Those still gate the Monitor batch
+release; no version/tag/release/adoption.
+
 # Find recorded issues across bots — unreleased
 
 Monitor adds a Recorded issues dashboard filter and includes each bot's displayed

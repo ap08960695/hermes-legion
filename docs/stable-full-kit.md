@@ -10,6 +10,15 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Native failure reaches recorded issue controls (unreleased)
+
+A fresh native Local case now keeps Recorded issues and an error search selected
+while the worker is still active. Normal query polling then shows the same bot's
+recorded failure, inline context and exact full report. The empty filtered view
+never stands in for cancellation, and unused summary text cannot create a match.
+This validates the recent source slices with native data; browser/Electron/
+navigation remain open. [Proof and limits](verification.md#native-failure-reaches-preselected-issue-controls--component-acceptance).
+
 ## Find recorded issues across bots (unreleased)
 
 A Recorded issues filter now finds bots with stored Error/Stalled task reports.
