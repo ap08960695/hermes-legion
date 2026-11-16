@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1088-path** Legion source, interface and optimization alternative
+This is the complete **1091-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,20 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Bot Monitor dashboard (unreleased)
+
+Bots → Monitor gathers the current roster and bounded worker observations into a
+single table, with local search, status filters and Name/Elapsed/Tokens sorting.
+Only explicit Open chat actions use the existing source-qualified bot route.
+Reported task, tool, step, elapsed and token facts remain distinct from missing
+metrics; cost is unavailable and the model column names the configured bot route.
+Cards and Manage team remain accessible. No new API, polling, storage key or
+dependency is introduced. Seven source/test sections change, including three new
+files: 1091 targets. The Desktop selection appends the rendered Monitor regression
+while retaining prior entries and metadata. This is development work toward one
+feature batch, with no runtime version bump or daily-app adoption.
+[Design, scope and remaining acceptance](design-bot-monitor.md).
 
 ## Keep the attachment size draft (v0.33.8)
 

@@ -24,6 +24,12 @@ Do not commit local scan reports containing paths or matches, production evidenc
   config/Bots/Chat walkthroughs, bot monitoring and live tables/charts/Mermaid.
   This policy does not authorize connecting to ai or bypassing controls.
 
+Commit completed development steps without a version number. Keep the working
+inventory marked `unreleased` while a capability set is in progress; do not bump
+versions, tag, or write release notes for individual fixes or sub-steps. Cut a
+release when a meaningful batch is ready: a completed feature plus related fixes
+as one minor, or a pure bug-fix batch as one patch.
+
 Each new release needs a plain-language entry in [CHANGELOG.md](CHANGELOG.md)
 describing what users will notice, adoption steps, evidence and tradeoffs; keep
 `RELEASE-MANIFEST.json` coherent. Annotate its `vX.Y.Z` Git tag on the exact release

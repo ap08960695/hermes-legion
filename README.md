@@ -11,6 +11,14 @@ Historical source comments and release payloads received [privacy maintenance](d
 Read the [changelog](CHANGELOG.md) for improvements grouped by capability and
 the [release policy](CONTRIBUTING.md#release-policy) for future versioning.
 
+## Development work
+
+The working branch includes an [unreleased Bot Monitor dashboard](docs/design-bot-monitor.md):
+Bots → Monitor gathers current bot/worker observations into one searchable,
+sortable table. Cost and unsupported facts remain unavailable. The full feature
+and live lifecycle acceptance are in progress; the latest released version is
+v0.33.8. No daily-app adoption is included.
+
 ## What is included
 
 - [v0.33.8: keep attachment size edits when closing Settings](docs/release-notes-v0.33.8.md), saves the focused preview limit before Escape closes the page.

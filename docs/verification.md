@@ -1,3 +1,47 @@
+# Bot Monitor first dashboard slice — unreleased
+
+Bots → Monitor now gathers visible bots and current worker observations into one
+searchable table, with status filters and Name/Elapsed/Tokens sorts. Worker rows
+show reported task/signal, tool, step, elapsed and token facts; explicit Open chat
+uses the captured parent bot's existing source-qualified canonical action. Cost
+is not reported, the model is explicitly configured, and missing/invalid counters
+remain distinct from reported zero. Cards and Manage team remain accessible.
+Successful roster refresh timestamps re-evaluate age even when data is identical;
+no extra request, timer, dependency, storage key or backend authority is added.
+
+Nine rendered Monitor regressions pass, alongside 31 nearby workspace, worker
+and row-helper checks: 40 tests in five files. The initial eight failed before the
+control existed; a ninth reproduced stale work after an identical refresh before
+the timestamp dependency was added. Final scoped lint, renderer types, code health
+and bounded renderer build pass. Seven changed patch sections apply, match their
+after hashes, reverse and match the pinned base; unrelated sections are retained.
+The kit has 1091 targets and appends the Monitor test to its existing selection.
+
+Two isolated native Mac Local attempts used the earlier dashboard artifact before
+the refresh-age follow-up. The first captured Connecting while AX reached Bots.
+Adding disable-gpu in the second changed the initial captured surface to the
+connected New session page, but later Bots navigation and native Raise still left
+that old surface in the screenshot while AX showed Bots and two synthetic worker
+observations. No native Monitor visual acceptance, before/after dashboard pair,
+real worker lifecycle, production paint fix or final-artifact live proof is claimed.
+Load milestones without observed fail/crash events do not establish painting;
+capture versus presentation remains unresolved. No Reload or restart retry chain.
+
+Both actual 60-second gates reported zero app SSH attempts/executions, with at most
+four Hermes processes. Sampled observer-inclusive RSS maxima were 884,506,624 and
+1,075,200,000 bytes; these are bounded samples, not continuous peak/physical RAM or
+savings measurements. Synthetic SessionDB observations ran inside the existing
+gateway process, without inference or worker processes. All owned processes,
+ports and Computer Use ended; the original 313-entry trial bundle/signature and
+fixture config baselines were preserved/restored. Owner app/data, other hosts,
+ESTOP, pauses and timers were untouched. Existing unrelated external SSH sessions
+were left intact; the zero-link claim is scoped to Hermes Desktop.
+
+This completed source slice stays unreleased under the batched release policy.
+Cost/error/stuck authority, report navigation, native layout/live lifecycle proof,
+daily-app adoption, Linux/ai and the full feature remain open.
+[Design and next steps](design-bot-monitor.md).
+
 # Native Mac Projects preference persistence — v0.33.8 follow-up
 
 In **Settings → Workspace → Projects & discovery**, default's Working Directory
