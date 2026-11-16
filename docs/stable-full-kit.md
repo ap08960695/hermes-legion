@@ -10,6 +10,14 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Monitor report keyboard focus (unreleased)
+
+Escape and Close return focus to the same report button, so keyboard users can
+continue in the table. Uses the existing SDK trigger with captured reports intact.
+Rendered regressions cover same-name bots from distinct sources; actual-component
+browser before/after proves the dismissal flow. Native Monitor acceptance remains
+open. [Evidence scope](verification.md#monitor-report-focus--unreleased).
+
 ## Monitor model readability (unreleased)
 
 Model cells retain a 12rem minimum width and keep long-route wrapping inside the

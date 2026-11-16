@@ -207,3 +207,21 @@ stayed on an older dialog despite newer AX state; those images do not establish
 Stopped-report visual acceptance. Escape dismissed the dialog but focus was
 observed on the HTML document, so focus return needs follow-up. These remain
 open alongside native progress/settlement acceptance before a feature release.
+
+
+## Report focus restoration
+
+The report dialog now keeps its controlled Dialog root mounted and wraps the
+existing snapshot-capturing button in the SDK DialogTrigger. Radix can restore
+focus to that exact source-qualified opener on Escape or Close. Snapshot capture,
+local outcome filtering and canonical chat actions keep their existing semantics.
+No manual focus handler, timeout, global primitive change or new dependency.
+
+Two rendered dismissal regressions fail against the original component with BODY
+focused and pass with the trigger, across same-name bots from two sources.
+Existing snapshot, filter, privacy and no-navigation checks remain green. A fresh
+1140×620 Chrome Guest fixture with actual component/production CSS also reproduces
+original Escape focus loss and verifies fixed Escape/Close focus; stored Stopped
+report pixels match AX this round. These resolve the browser follow-ups above,
+not the unsupported native selector or on-screen native progress/settlement gates.
+If a roster change removes the opener, there is no mounted target to restore.

@@ -1,3 +1,39 @@
+# Monitor report focus — unreleased
+
+Original `BotMonitorReports` conditionally mounted a Dialog without a Trigger.
+Escape and Close removed the dialog but left keyboard focus on BODY. The existing
+SDK DialogTrigger now wraps the snapshot-capturing button inside a persistent
+controlled Dialog root. Radix restores its trigger ref; no manual focus callback,
+timer, global primitive, request, dependency or routing change is involved.
+
+Two added rendered tests fail on the original component at the exact focus
+assertion, then pass after. Each dismissal checks the precise source-qualified
+opener for two bots both named Writer, dialog removal and no chat/refetch calls.
+Monitor21 plus31 nearby tests pass, 52 total; scoped ESLint, renderer TypeScript
+and full renderer production build pass. Existing snapshot/filter tests remain.
+
+A private Chrome Guest preview uses actual Monitor/Reports, SDK primitives and
+production CSS, saved synthetic native134 snapshots plus labelled layout props.
+Before build substitutes the backed-up original report module at Vite transform;
+after build consumes final source. No product source swap while processes run.
+At 1140×620, original Escape leaves BODY focused. Fixed Escape returns focus to
+native-completed's report button; Close returns it to native-interrupted's button.
+Fresh AX focus and the fixture's read-only DOM focus receipt agree. Matched
+unaltered screenshots under `../evidence/local-ui-20261116/` are
+`r136-browser-escape-before.jpg` / `r136-browser-escape-after.jpg`;
+`r136-browser-close-after.jpg` records the second opener. Stored Stopped report
+pixels match AX in `r136-browser-stopped-report.jpg`, replacing the prior round's
+unaccepted stale capture with new browser evidence. Raw image/source identities,
+red/green output and closure receipts are private round evidence.
+
+Browser fixture has no Electron bridge/backend and refuses network requests via
+CSP and explicit client guards; its static server binds only 127.0.0.1. Guest
+closed to the original profile picker, owned server stopped. No owner profile or
+Hermes app opened. Missing opener after actual row removal remains a natural
+limit. Native selection/progress/settlement still gate the Monitor feature batch.
+Only two changed patch sections were apply/hash/reverse checked; selection and
+1,098 targets retained. Unchanged backend/native/mock suites were not rerun.
+
 # Monitor browser layout — unreleased
 
 Actual `BotMonitor`/`BotMonitorReports`, SDK primitives, i18n and production CSS
