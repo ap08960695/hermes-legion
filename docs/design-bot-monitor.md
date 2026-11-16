@@ -562,3 +562,21 @@ degraded-refresh paint, narrow-window layout or canonical navigation. Open-chat
 input hit native CUA elementHasNoFrame/noWindowsAvailable; no successful open or
 product defect is inferred. Keep the feature unreleased. No product source change
 was justified by this walkthrough. [Scope and limits](verification.md#full-native-monitor-static-walkthrough--unreleased).
+
+## Native delegated-worker bridge
+
+The full native application now visibly displays a genuinely delegated worker:
+its owning bot, Working status, step, elapsed value, recorded model and fixture
+tokens. The private scenario uses the existing native model/RPC/read helpers;
+native lifecycle and the real canonical query remain authoritative. Independent
+side-chat and sibling-profile controls prevent substituting another conversation.
+Heartbeat, terminal ledger/delivery and matching Completed report are recorded
+in the backend, while only the model responses/timing/usage are simulated.
+
+The active-view bridge is complete; the full native acceptance scenario is not.
+Terminal pixels remained old and the observation timed out, so the scenario's
+exit 1 stays a failure. A scoped agent-desktop fallback found no matching window;
+a fresh trial's renderer-accounting denial also stopped that attempt. Resolve
+target observation/accounting before another lifecycle run; never relax either
+or infer a production fix from these failures. Native terminal paint and the
+remaining feature gates still precede a batch release.

@@ -1,3 +1,49 @@
+# Native Monitor delegated-worker activity — unreleased
+
+The full production renderer/main/preload/SDK/query now displays a worker created
+by real native delegation, not a seeded roster or host adapter. A private Local
+scenario reuses the committed native lifecycle model, RPC and read helpers;
+scenario orchestration and bounded observation waits are private test code.
+Native RPC creates a named Bot Chat, an independent nonempty side chat and a
+distinct nonempty sibling-profile Bot Chat. The parent delegates one real local
+file read. Only loopback model responses, timing and usage are simulated.
+
+Matched native CUA pixels and AX show the owning default bot and its Working
+worker, step 1/250, elapsed 11s, recorded worker model and fixture token values.
+The independent sibling stays separate; the side-chat preview cannot replace
+the canonical parent's preview. The completed sub-item is this real active-worker
+bridge. It does not establish advancing elapsed pixels or another completed UI
+interaction. A private assertion audit rejects wrong source/step and idle input.
+
+The native scenario subsequently records an advancing heartbeat, ended child,
+completed terminal ledger, accounted delivery and matching canonical Completed
+report. Independent side/profile transcript and report checks remain intact.
+Read-only inspection of the retained real database agrees with these receipts.
+These are recorded backend assertions, not a passing full native UI scenario.
+The terminal UI observation times out: later pixels stay on an older worker and
+partial AX changes cannot establish current presentation. The scenario exits 1;
+no UI_TERMINAL acknowledgment or full acceptance receipt is manufactured. A
+Working-filter attempt likewise does not establish matched visual acceptance.
+
+The trial passes its 60-second Local gate and closes its gateway and known owned
+processes. Sampled peaks: 4 Hermes workload processes, 8 including OS probes,
+1,059,045,376 bytes (about 1010 MiB) including observed children and the observer.
+This is fixture size, not a product memory improvement. Guarded terminal startup
+probes are refused; the admitted native file read still completes. A later
+fallback trial aborts on a renderer psutil.AccessDenied; accounting is not relaxed
+and that trial is not accepted. All owned runtime instances are finally closed.
+
+GOAL12's workspace-only agent-desktop fallback is installed with isolated state.
+Status reports Accessibility granted and Screen Recording denied; no permission
+or system setting is changed. Scoped name/bundle snapshots return WINDOW_NOT_FOUND.
+Installation does not prove UI operation. The private runtime, generated bundles
+and installer cache are removed after evidence; the reusable workspace tool stays.
+
+Native terminal/report paint, elapsed advancement, canonical navigation, degraded
+refresh, narrow layout and the feature release remain open. No product code,
+patch, version, tag, release or owner-app adoption changes. No remote/ai access,
+owner state changes, paid model call or unchanged mock-suite rerun.
+
 # Full native Monitor static walkthrough — unreleased
 
 A fresh full production renderer and entry/main/preload run against a real
