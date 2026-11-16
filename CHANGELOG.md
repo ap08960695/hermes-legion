@@ -5,6 +5,16 @@ supported update or Desktop rebuild path. This kit does not install a rebuilt
 Hermes.app. Linked notes identify opt-in memory settings and admission guards
 that apply after adoption. Each entry states its adoption and verification limits.
 
+## v0.33.5 — Keep list edits when closing Settings
+
+Pressing Escape after editing a comma-separated list now saves it before closing
+Settings. Previously that focused draft could disappear. Enter and moving focus
+retain their existing behavior; empty entries and trailing commas use the same
+parser. Apply the source kit and rebuild Desktop. Lost edits from an older build
+are not recovered. Native Local before/after disk and reopen checks pass; the
+after cohort required one Reload before the test, so cold startup remains open.
+[Checks and limits](docs/release-notes-v0.33.5.md).
+
 ## v0.33.4 — Nudge compression ratios precisely
 
 Compression Threshold and Compression Target arrows now move by 0.01, one

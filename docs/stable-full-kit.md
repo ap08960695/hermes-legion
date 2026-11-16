@@ -10,6 +10,15 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## List drafts survive Escape (v0.33.5)
+
+Shared ListField handles a non-composing Escape through the existing synchronous
+blur/parse/commit path before the overlay closes. Enter, draft-only typing,
+parsing and unrelated unmounts retain their behavior. No writer, schema, API,
+locale or dependency change. Apply the kit and rebuild Desktop. Two existing
+sections change; 1086 targets and selection remain.
+[Checks and native limits](release-notes-v0.33.5.md).
+
 ## Fractional compression stepping (v0.33.4)
 
 One shared ConfigField input attribute gives the two known compression-ratio

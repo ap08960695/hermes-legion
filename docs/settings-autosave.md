@@ -21,6 +21,16 @@ From v0.8.15, the shared merge also [preserves nested edits followed by a null
 section](settings-null-sections.md), matching the native API rather than dropping
 those edits during coalescing.
 
+## Lists commit before Escape closes Settings (v0.33.5)
+
+Focused comma-separated lists now commit through their existing blur handler
+before Escape closes Settings. For example, an added Environment Passthrough
+entry survives closing and reopening the page. Typing remains a local draft
+until commit; Enter, ordinary blur, trimming and empty-list parsing retain their
+existing behavior. IME cancellation does not trigger the new Escape commit.
+This does not add a general save-on-unmount or crash-recovery mechanism.
+[Checks and limits](release-notes-v0.33.5.md).
+
 ## Fractional compression arrows (v0.33.4)
 
 Under **Memory & Context → Context & compression**, Threshold and Target arrows

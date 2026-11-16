@@ -1,3 +1,30 @@
+# v0.33.5 — Keep list edits when closing Settings
+
+Native Mac Local before/after: a focused comma-separated Environment Passthrough
+draft adds a second entry and trailing comma. Before, Escape closes Settings but
+disk and reopened UI retain only the original entry. After, the same flow saves
+both entries and reopening reads them without another file change. All other
+primary config values and the other profile's bytes are preserved. Both native
+session stores remain empty; no Send, model request or terminal tool runs.
+
+Regression uses the actual OverlayView and focused list control: Escape itself
+must cause one parsed callback before teardown, without manually firing blur.
+Genuine red: three failures/27 passes. Final nearest: 73 passes across six files,
+including Enter, ordinary blur, raw drafts, unrelated unmounts and IME controls.
+Scoped lint/types/build pass; inherited dynamic-import warning remains. Two
+scoped pinned-base sections apply/hash/reverse correctly; 1086 targets and test
+selection remain. No unchanged source/mock/transport sweep.
+
+Both normal closures pass actual 60-second SSH-zero gates, sample at most four
+Hermes processes and restore original config bytes/modes plus the 313-entry trial
+bundle and strict signature. Observer-inclusive sampled RSS maxima are
+958,857,216 / 1,006,927,872 bytes, without a saving or continuous-peak claim.
+The after cohort needed one native Reload to leave Connecting before the list
+flow. Its cause is unestablished; cold startup is not accepted. A capture failure
+recovered with a fresh read and no repeated mutation. Native IME, crash, all-page,
+daily-app and remote/ai/Linux acceptance remain open.
+[Release notes and limits](release-notes-v0.33.5.md).
+
 # Native Settings search and leaving the page — v0.33.4 follow-up
 
 Actual Mac Local Settings search matched `compression.threshold`; Down/Enter
