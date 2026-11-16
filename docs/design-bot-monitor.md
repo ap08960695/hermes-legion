@@ -616,8 +616,10 @@ and Open stays enabled without a stored-snapshot notice. No Open was attempted.
 
 The shared roster fetch must not downgrade a previously observed active source
 to an ambient legacy row when route inventory rejects. If a nonghost, scoped
-active-source row was already published, fail the query before the compatibility
-read. Existing query-error UI retains names/source/canonical history, hides
+active-source row exists in that exact query cache, fail before the compatibility
+read. Both the mounted query and imperative prime capture their own prior cache
+snapshot before starting IPC; the sidebar publisher is not required. Existing
+query-error UI retains names/source/canonical history, hides
 current workers, marks the snapshot stale and disables Open until an authoritative
 refresh succeeds. Cold unscoped legacy hosts keep their existing fallback; a
 healthy route read with only aggregate-inventory failure keeps its prior behavior.
@@ -627,3 +629,24 @@ legacy compatibility. The visible native reproduction is before the fix only;
 no second UI attempt, recovery or canonical navigation is claimed. Native
 after-fix degraded presentation, nonempty reports and terminal worker paint
 remain feature-release gates. No new capability, store, request or poller.
+
+
+## Standalone Monitor owns its previous query snapshot
+
+A fresh native run of the initial route guard passes baseline Chat/Bots/Monitor,
+then reproduces the same lost source labels, unknown status and enabled Open
+under labelled inventory faults. AX and pixels agree after settlement. The
+standalone workspace does not mount the sidebar publisher: its query cache is
+populated while the global roster stays empty. The prior integration mounted an
+extra publisher, masking this boundary. No recovery or Open is attempted; native
+input ends and the isolated runtime closes without retry.
+
+The guard now consumes the previous snapshot from the exact query context's
+client and key in both useRoster and primeRoster. It never borrows another
+connection's entry or makes a failed route authoritative. Existing compatibility,
+connection-change and healthy-route/aggregate-failure behavior remain intact.
+Two further real-SDK/preload regressions fail on the prior source and pass after
+the correction: standalone failure/recovery and imperative cached refresh without
+a publisher. All 31 relevant cases pass, with clean scoped lint and renderer
+types. No new store, hook, API or poller. Native degraded paint after this
+correction and canonical navigation/report/terminal progress remain open.

@@ -16,8 +16,8 @@ owned native PID generation closes. Prior observation failures stay failed.
 
 The shared fetch swallowed the route error and read ambient profiles, then
 returned a successful partially unscoped snapshot after aggregate failure. It
-now rejects before that compatibility read when a previously published nonghost,
-nonremote scoped row belongs to this active connection. Existing query-error
+now rejects before that compatibility read when its exact query cache holds a
+nonghost, nonremote scoped row belonging to this active connection. Existing query-error
 handling preserves the old source/canonical snapshot, marks work unavailable,
 hides active workers and disables Open. Successful authoritative refresh clears
 the stale state. Initially unscoped legacy hosts remain usable; healthy route
@@ -31,13 +31,26 @@ hidden worker, disabled Open, no ambient/activation/navigation request and fresh
 recovery. A second case proves absent legacy capabilities still work. The first
 green run reaches recovery but finds duplicate source labels on bot/worker rows;
 scoping its assertion to the canonical bot row corrects only that test selector.
-Four relevant source files pass 29 cases; scoped lint has zero warnings and
-renderer TypeScript passes. No unchanged Monitor mock sweep or post-fix native
-renderer rebuild is run.
+The next fresh native run contains that first guard, yet repeats the settled
+fault: standalone Monitor has a populated query cache and an empty sidebar-owned
+global roster. The earlier regression mounted an extra publisher. Native input
+stops; recovery, canonical Open and another UI attempt are not performed.
+
+The shared fetch now receives the previous snapshot from its exact query
+context client/key, captured before IPC, in both useRoster and primeRoster.
+Two added real-SDK/preload regressions fail on the old source: standalone loses
+the stale notice; primeRoster incorrectly reports success. After correction,
+standalone retains the identical cache/source/canonical preview, hides workers,
+disables Open and recovers through an authoritative Refresh; primeRoster retains
+its cache in error without ambient reads or activation/navigation. Four relevant
+source files pass 31 cases; scoped lint has zero warnings and renderer TypeScript
+passes. No unchanged Monitor mock sweep, post-correction renderer rebuild or live
+retry is run.
 
 Two source sections apply, match after hashes and reverse against the pinned
 upstream. All unrelated cumulative patch bytes stay unchanged; 1,119 targets,
-existing test selection retained. Native images prove the pre-fix behavior only.
+existing test selection retained. Native images prove the initial global-roster
+guard failure only; they do not prove the query-cache correction.
 Native after-fix degraded paint, canonical navigation, nonempty reports and live
 terminal progress still gate the Bot Monitor batch release. No version/release,
 owner app/data, remote host/ai, ESTOP, pause, timer or permission change.
