@@ -1,3 +1,75 @@
+# Guarded native narrow Stop observations — final ACK refused, unreleased
+
+**Visual observations and DB readback match; the scenario remains INVALID/STOP.**
+This record completes only the guarded observation slice. It is not full native
+scenario acceptance, a release or owner-app adoption.
+
+A fresh production renderer plus source-built main/preload development bundle
+from kit `d0d5fbc` includes the narrow table's one-class correction. Supported
+persisted 480×620 geometry matches actual native bounds/content size. Eleven
+relevant source hashes remain exact; the production preload is unchanged.
+Original PID/birth/executable, window UUID generation, URL and lifecycle receipts
+bind each CUA action/capture. The existing guardian performs read-only admission
+inside each CUA call, consuming a fresh single-use five-second receipt before
+the API; no extra Python process is started. Operations receive explicit app and
+receipt arguments, callbacks use those arguments, and failures latch STOP.
+One full paired AX/pixel baseline passes after the 60-second Local/zero-SSH gate.
+
+Actual public RPC delegation reads the fixture file. Vertical scrolling reveals
+the real worker in the native narrow table, with Working, task and step 1/250
+matching AX and pixels. Only then is the generation/parent/worker-bound active
+acknowledgment written. The scenario uses authenticated subagent.interrupt,
+checks ended child state before releasing the held reply, and verifies interrupted
+result, durable ledger and accounted delivery. Seven unique loopback reply kinds
+are used, rejecting duplicates; replies/timing/usage are fixtures, not production
+billing. Held server-handler completion does not prove canceled-client handler
+arrival, which remains unproven.
+
+After automatic roster reads, AX/pixels show zero workers, no old step, and the
+canonical parent's MONITOR_PARENT_INTERRUPTED preview. A right-scroll request
+does not visibly expose the report button; its cause is unconfirmed. Activating
+the exact semantic Recent reports button for default/UI Local184Stopped opens
+a visible Stopped dialog at the same 480×620 size, with the exact goal, recorded
+time and nonempty Operation interrupted summary. No manual Refresh, DOM observer,
+appended preload capability, host adapter, query/SQL seeding or UI lifecycle write
+is used. Independent read-only DB checks confirm matching canonical parent,
+child end/API count, delegation/result/summary/delivery and separate nonempty
+side-chat and sibling-profile controls. Four paired capture generations match.
+
+The final terminal ACK fails a private observer budget check. Its writer calls
+the same read_check default of 20 seconds used before a new observation, although
+this step performs no CUA operation. The report postcheck records 26.095 seconds
+left. The refusal follows 18.027 seconds later, at approximately 8.096 seconds
+remaining, using the retained launch wall/monotonic mapping rather than an original
+monotonic sample at refusal. Other ACK checks are not re-executed after that first
+failure. Separate image metadata and DB readback establish the observed result;
+they do not create a successful ACK. No UI_TERMINAL or native-acceptance file is
+written. The original INVALID/STOP remains, with no retry or receipt rewrite.
+
+Future-only ack-next.py changes the non-observing ACK minimum to one second.
+Offline controls show the old 20-second policy refuses eight seconds; one second
+admits eight only with the existing identity/liveness checks satisfied. Dead,
+closed, foreign, insufficient and expired cases refuse. Deadline/freshness/reserve
+checks and the CUA admission minimum remain unchanged. This proposal is not run
+against the retained failed trial or validated through another live scenario.
+
+An immutable 360-second launch limit reserves 25 seconds for cleanup; acceptance
+ends by 335 seconds. Readiness/active phase caps reserve terminal time before
+work is released; the active ACK requires 120 seconds left for interruption and
+terminal verification. The controlled native runtime closes without survivors
+after 230.192 seconds, sampling four product non-OS/eight total children and
+975,077,376 bytes including guardian. External CUA/advisors/setup are outside
+that sample; it is not a whole-task memory bound or a savings result. Exit zero
+establishes cleanup, not scenario acceptance.
+
+Private before/active/removal/Stopped frames are under
+`../evidence/bot-monitor-narrow-stopped-20261117`; the labelled before-fix frame is
+from the separately owned failed round181 fixture, not this generation. Raw
+receipts remain in `../uitest-v090-c2q4iijp/bots-r184{,-stopped}/evidence`.
+This docs-only item records guarded native observations and their exact limits.
+The failed final ACK, unproven native panning and nonempty-control checks remain
+open before the feature-batch release. Earlier failed attempts stay failed.
+
 # Native narrow readiness timeout and release-gate audit — unreleased
 
 A fresh production renderer and source-built main/preload development bundle
