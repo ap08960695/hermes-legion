@@ -504,3 +504,23 @@ within existing process/RAM/time/network/write fences. Saved replay remains
 labelled and separate. No product behavior or feature release this round; browser
 paint/degraded-refresh visuals, Electron transport/inventory and canonical native
 navigation remain open. The previous UI blocker was not retried/refreshed.
+
+
+## Desktop SDK/preload contract
+
+The remaining transport acceptance is split at its actual authority boundary.
+Render Workspace/Monitor with real useRoster, SDK host methods, profile refresh,
+route request dispatch, connection/profile atoms and the native preload. Mount
+the existing roster publisher hook against that same query, as BotsPane does;
+do not populate its cache or shared roster by hand. Substitute Electron IPC
+responses and gateway I/O; keep avatar placeholders and activation/navigation
+refusal traps. Use a local canonical/worker snapshot and a same-name
+dormant saved SSH source. Explicit Refresh must preserve exact local ownership
+without activating or opening the foreign source. An inventory IPC rejection must
+retain its previously published row as unavailable, not erase it or substitute an
+ambient gateway. A wrong preload channel must fail on the missing visible row.
+
+This extends the earlier query contract, which substituted host.profileRoutes,
+host.agents and host.requestProfile. It does not execute Electron main handlers,
+native IPC serialization, the real gateway pool or native navigation. Those and
+browser paint remain release gates; no test-only product API or behavior change.

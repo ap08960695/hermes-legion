@@ -29983,6 +29983,201 @@ index abe8afb7e670b207a192ac15fb797fb8dfed168e..2b2824a97bb7cfd9d21057f4efdfd811
 +              </SelectTrigger>
 +            </Tip>
              <SelectContent>
+diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-desktop-bridge.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-desktop-bridge.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..4b7dd6981c0c71e71cf4abc5c15673007a85d6ac
+--- /dev/null
++++ b/apps/desktop/src/plugins/hermes-bots/monitor-desktop-bridge.test.tsx
+@@ -0,0 +1,189 @@
++import { host } from '@hermes/plugin-sdk'
++import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
++import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
++import { afterEach, beforeEach, expect, it, vi } from 'vitest'
++
++// eslint-disable-next-line no-restricted-imports
++import * as profilesApi from '@/api/profiles'
++// eslint-disable-next-line no-restricted-imports
++import { registerPluginLocales } from '@/i18n/plugin-i18n'
++// eslint-disable-next-line no-restricted-imports
++import * as gateway from '@/store/gateway'
++// eslint-disable-next-line no-restricted-imports
++import { $activeGatewayProfile, $profiles } from '@/store/profile'
++// eslint-disable-next-line no-restricted-imports
++import { $connection } from '@/store/session'
++
++import { $botAttention, $botMeta, $lastRoster, ROSTER_KEY, useRoster } from './data'
++import { BOTS_LOCALES } from './i18n'
++import { $botManagementOpen } from './management'
++import { $lastSources, usePublishRosterSnapshot } from './roster-pane-lifecycle'
++import { indexAliasRoutes } from './routing'
++import { BotsWorkspace } from './workspace'
++
++// Real SDK, preload, query, routing and Monitor; only native IPC/gateway I/O
++// are substituted. This does not exercise Electron main or a native window.
++const electron = vi.hoisted(() => ({
++  contextBridge: { exposeInMainWorld: vi.fn((name: string, bridge: unknown) => {
++    Object.defineProperty(window, name, { value: bridge, configurable: true, writable: true })
++  }) },
++  ipcRenderer: { invoke: vi.fn(), on: vi.fn(), removeListener: vi.fn(), send: vi.fn(), sendSync: vi.fn(() => ({})) },
++  webFrame: {}, webUtils: {}
++}))
++
++vi.mock('electron', () => electron)
++vi.mock('./avatar', () => ({
++  botAppearance: () => ({}), avatarColor: () => null, BotFace: () => <span aria-hidden="true">Avatar</span>
++}))
++
++const originalDesktop = window.hermesDesktop
++const originalConnection = $connection.get()
++const originalProfile = $activeGatewayProfile.get()
++const originalProfiles = $profiles.get()
++const localRoute = { connectionId: 'local', mode: 'local', primary: true, profile: 'default', targetProfile: 'default' }
++
++const remoteRoute = { connectionId: 'dormant-fixture', mode: 'remote', connectOnDemand: true,
++  profile: 'writer', targetProfile: 'writer' }
++
++const inventory = { primaryConnectionId: 'local', agents: [
++  { connectionId: 'local', connectionKind: 'local', connectionLabel: 'Bridge local', profile: 'writer', handle: 'writer-local' },
++  { connectionId: 'dormant-fixture', connectionKind: 'ssh', connectionLabel: 'Dormant saved source', profile: 'writer', handle: 'writer-remote' }
++], sources: [
++  { connectionId: 'local', kind: 'local', label: 'Bridge local', reachable: true },
++  { connectionId: 'dormant-fixture', kind: 'ssh', label: 'Dormant saved source', reachable: false, connectOnDemand: true }
++] }
++
++let client: QueryClient
++let dispose: () => void
++let rejectInventory: boolean
++
++beforeEach(async () => {
++  dispose = registerPluginLocales('hermes-bots', BOTS_LOCALES)
++  client = new QueryClient({ defaultOptions: { queries: {
++    retry: false, refetchOnWindowFocus: false, refetchOnReconnect: false
++  } } })
++  rejectInventory = false
++  electron.ipcRenderer.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
++    if (channel === 'hermes:plugin-profile-routes') {
++      expect(args).toEqual([['default']])
++
++      return structuredClone([localRoute, remoteRoute])
++    }
++
++    if (channel === 'hermes:agents:roster') {
++      expect(args).toEqual([])
++
++      if (rejectInventory) {throw new Error('Native inventory unavailable')}
++
++      return structuredClone(inventory)
++    }
++
++    throw new Error(`Unexpected native capability: ${channel}`)
++  })
++  // Preload belongs to Electron's separate tsconfig, not the renderer's.
++  const preloadModule = '../../../electron/preload'
++  await import(preloadModule)
++  window.hermesDesktop = electron.contextBridge.exposeInMainWorld.mock.calls[0][1] as typeof originalDesktop
++  $connection.set({ connectionId: 'local', mode: 'local' } as typeof originalConnection)
++  $activeGatewayProfile.set('default')
++  $botManagementOpen.set(false)
++  $botAttention.set({})
++  $botMeta.set({})
++  $lastRoster.set([])
++  vi.spyOn(profilesApi, 'getProfiles').mockResolvedValue({ profiles: [{ name: 'default', has_env: false,
++    is_default: true, model: null, path: '/fixture/default', provider: null, skill_count: 0 }] })
++  vi.spyOn(host, 'request').mockRejectedValue(new Error('Ambient request forbidden'))
++  vi.spyOn(host, 'ensureAgent').mockRejectedValue(new Error('Activation forbidden'))
++  vi.spyOn(host, 'openSession').mockRejectedValue(new Error('Navigation forbidden'))
++  vi.spyOn(host, 'traceIdentityChange').mockReturnValue(undefined)
++  vi.spyOn(gateway, 'requestGatewayForAgent').mockImplementation(async (connectionId, profile, method, params) => {
++    expect([connectionId, profile, method, params]).toEqual(['local', 'default', 'profiles.list', {}])
++
++    return { bot_mode_protocol: true, profiles: [{ name: 'writer', display_name: 'Writer',
++      canonical_session: { id: 'bridge-parent', preview: 'Bridge canonical preview', delegation_reports: [] },
++      last_session: { id: 'side-chat', preview: 'Wrong side-chat preview' },
++      worker_sessions: [{ id: 'bridge-child', title: 'Bridge worker task', last_active: Date.now() / 1000,
++        started_at: Date.now() / 1000 - 30, iteration: 2, max_iterations: 8 }] }] }
++  })
++})
++
++afterEach(() => {
++  cleanup()
++  client.clear()
++  dispose()
++  $botManagementOpen.set(false)
++  $botAttention.set({})
++  $botMeta.set({})
++  $lastRoster.set([])
++  $lastSources.set([])
++  indexAliasRoutes([])
++  $connection.set(originalConnection)
++  $activeGatewayProfile.set(originalProfile)
++  $profiles.set(originalProfiles)
++  window.hermesDesktop = originalDesktop
++  vi.restoreAllMocks()
++  electron.ipcRenderer.invoke.mockReset()
++})
++
++function RosterPublisher() {
++  const query = useRoster()
++  const live = query.data?.profiles ?? null
++  const roster = live ?? []
++  usePublishRosterSnapshot({ data: query.data, live, roster, allMeta: {},
++    activeSourceRoster: roster.filter(bot => bot.connectionId === 'local') })
++
++  return null
++}
++
++async function openMonitor() {
++  render(<QueryClientProvider client={client}><RosterPublisher /><BotsWorkspace /></QueryClientProvider>)
++  fireEvent.click(screen.getByRole('button', { name: 'Monitor' }))
++  await screen.findByText('Bridge worker task')
++  await screen.findByText('Dormant saved source')
++  await waitFor(() => expect($lastRoster.get()).toHaveLength(2))
++}
++
++it('refreshes source-scoped Monitor facts through the Desktop bridge without waking a dormant source', async () => {
++  await openMonitor()
++  const worker = within(screen.getByText('Bridge worker task').closest('tr')!)
++  expect(worker.getByText('Working')).toBeTruthy()
++  expect(worker.getByText('step 2/8')).toBeTruthy()
++  expect(screen.queryByText('Wrong side-chat preview')).toBeNull()
++  const remote = within(screen.getByText('Dormant saved source').closest('tr')!)
++  expect((remote.getByRole('button', { name: /Open chat/ }) as HTMLButtonElement).disabled).toBe(true)
++  fireEvent.click(remote.getByRole('button', { name: /Open chat/ }))
++  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
++  await waitFor(() => expect(gateway.requestGatewayForAgent).toHaveBeenCalledTimes(2))
++  await waitFor(() => expect(electron.ipcRenderer.invoke.mock.calls.filter(([channel]) => channel === 'hermes:agents:roster')).toHaveLength(2))
++  expect(electron.ipcRenderer.invoke.mock.calls.map(([channel]) => channel)).toEqual([
++    'hermes:plugin-profile-routes', 'hermes:agents:roster',
++    'hermes:plugin-profile-routes', 'hermes:agents:roster'
++  ])
++  const cached = client.getQueryData<{ profiles: { connectionId: string; name: string; canonical_session?: { id: string } }[] }>([...ROSTER_KEY, 'local'])!
++  expect(cached.profiles.map(bot => [bot.connectionId, bot.name, bot.canonical_session?.id])).toEqual([
++    ['local', 'writer', 'bridge-parent'], ['dormant-fixture', 'writer', undefined]
++  ])
++  expect(client.getQueryData([...ROSTER_KEY, 'dormant-fixture'])).toBeUndefined()
++  expect(host.request).not.toHaveBeenCalled()
++  expect(host.ensureAgent).not.toHaveBeenCalled()
++  expect(host.openSession).not.toHaveBeenCalled()
++  expect(host.state.connectionId.get()).toBe('local')
++  expect(host.state.profile.get()).toBe('default')
++})
++
++it('retains unavailable foreign rows when the Desktop inventory IPC rejects', async () => {
++  await openMonitor()
++  rejectInventory = true
++  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
++  await waitFor(() => expect(electron.ipcRenderer.invoke.mock.calls.filter(([channel]) => channel === 'hermes:agents:roster')).toHaveLength(2))
++  await waitFor(() => expect(client.isFetching()).toBe(0))
++  const remote = within(screen.getByText('Dormant saved source').closest('tr')!)
++  expect(remote.getByText('Unavailable')).toBeTruthy()
++  expect((remote.getByRole('button', { name: /Open chat/ }) as HTMLButtonElement).disabled).toBe(true)
++  expect(screen.getByText('Bridge canonical preview')).toBeTruthy()
++  expect(screen.getByText('Bridge worker task')).toBeTruthy()
++  expect(gateway.requestGatewayForAgent).toHaveBeenCalledTimes(2)
++  expect(host.request).not.toHaveBeenCalled()
++  expect(host.ensureAgent).not.toHaveBeenCalled()
++  expect(host.openSession).not.toHaveBeenCalled()
++})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-locales.ts b/apps/desktop/src/plugins/hermes-bots/monitor-locales.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..3c6cbc600baa928027ff53e2ad62f52bbb950f8d

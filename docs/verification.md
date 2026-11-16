@@ -1,3 +1,47 @@
+# Monitor Desktop SDK/preload contract — unreleased
+
+Two new rendered integration cases use actual SDK host methods, native preload,
+profile refresh, profile request dispatch, real connection/profile atoms,
+useRoster, the roster publisher hook and BotsWorkspace/Monitor. Only Electron IPC
+responses and gateway I/O supply synthetic facts. Avatars use a placeholder;
+activation/navigation actions are refusal traps. No direct query cache or shared-
+roster population. The local source owns a named canonical parent and current worker;
+a saved, dormant SSH source exposes a distinct same-name bot. Explicit Refresh
+preserves the local canonical/worker facts and keeps foreign Open disabled, with
+no remote route request, source activation, ambient fallback or chat open. Native
+inventory IPC rejection retains the previously published foreign row as
+Unavailable while local facts remain usable.
+
+The earlier query regression substituted three SDK host methods. This closes
+their renderer-to-preload glue seam, including actual profile-name IPC arguments
+and actual descriptor dispatch. It does not execute Electron main handlers,
+native IPC serialization, the real gateway pool, a real backend or navigation.
+No new product behavior, dependency, capability, setting, storage or version.
+
+A wrong agent-roster preload channel fails on the missing visible foreign row;
+the preload is restored byte-for-byte afterward. The final new cases pass, and
+five nearest automatic-query/retention/canonical-open cases pass (seven cases
+in total). Scoped lint and renderer types pass. A direct typed preload import
+initially pulled Electron's separately configured sources into renderer checking;
+runtime test import preserves that compilation boundary. An initial retention
+fixture omitted the publisher; mounting its real hook corrects the setup without
+seeding state. No product fix was inferred from either fixture error.
+
+One new patch section applies, matches its after hash and reverses against the
+pinned upstream base. All 1,101 prior patch sections remain byte-for-byte;
+the manifest now lists 1,102 targets and selection includes the new test. No
+unchanged source sweep or renderer rebuild. Bounded checks used one Node process
+plus their observer, sampled below 2.44 GiB, with no surviving owned children.
+Companion tests, tracked-only release-copy verification and both secret scans
+are recorded separately in the round receipts.
+
+Fresh Computer Use inventory reports unavailable browser access host. Native
+Chrome selection then fails SCStreamError -3811 before AX/input; its CUA part
+ends immediately with a completion summary. No lock/permission diagnosis, retry,
+trial/owner Hermes launch or screenshot acceptance. Native paint, Electron main,
+real transport/inventory and actual canonical navigation still gate the Bot
+Monitor batch release. No owner data, remote host/ai, ESTOP, pause or timer change.
+
 # Native failure reaches preselected issue controls — component acceptance
 
 One fresh native Local failure now verifies the145issue context and146dashboard
