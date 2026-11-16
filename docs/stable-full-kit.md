@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1093-path** Legion source, interface and optimization alternative
+This is the complete **1094-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,24 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Canonical bot usage (unreleased)
+
+Bot rows show recorded tokens, estimates, provider-reported amounts and model
+from their named Bot Chat's resolved row. Configured model stays separately
+labelled. Worker values remain separate, and token sorting uses the same source
+as the displayed values. Missing usage stays unavailable; zero stays zero.
+These are stored row values, not lifetime totals, worker sums or a current model
+binding. Elapsed/tool/step remain worker-only.
+
+The existing shared row projection and scoped canonical readers supply five
+optional fields without new queries, providers, timers or storage changes.
+Eleven changed sections roundtrip against the pinned base; unrelated sections
+are retained. The kit now has 1094 targets and appends one Python regression,
+keeping prior test selection metadata and order. Forty-eight focused Python
+and 45 UI cases pass. Native acceptance remains blocked under unchanged capture
+conditions; no new trial or release is claimed.
+[Design and limits](design-bot-monitor.md#canonical-bot-usage-slice).
 
 ## Recorded Monitor usage (unreleased)
 

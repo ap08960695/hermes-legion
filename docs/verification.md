@@ -1,3 +1,47 @@
+# Canonical Bot Monitor usage — unreleased
+
+Bot rows now display tokens, recorded estimates/provider-reported amounts and
+model from the resolved named Bot Chat row. They keep configured model separate.
+One selected usage source drives display and token sorting; workers never borrow
+missing fields from the canonical row. No side-chat fallback, root/tip addition
+or worker rollup. Stored usage does not establish current work or lifetime totals;
+elapsed/tool/step remain worker-only. Ordinary latest-session summaries retain
+their prior shape; a canonical alias may share its own enriched summary.
+
+The five existing usage fields share one projection. Both canonical readers use
+already-selected rows, with optional Python/TypeScript/generated OpenRPC contracts.
+No added query, provider, polling, timer, dependency or storage/schema migration.
+Eight new Python cases had seven expected missing-field failures and one passing
+absence case before implementation. All eight then pass with 34 shared usage/
+worker checks; six nearby canonical read cases pass separately: 48 total. Real
+temporary SessionDB stores and read-only attachments cover compressed/uncompressed
+chats, separate homes, recency/worker decoys, ordinary summaries, absent/zero,
+legacy/unified parity, older contracts and subject privacy without config leakage.
+
+The unchanged canonical per-file engine uses task-local scratch redirection,
+repository conftest/guards, one worker and no retry, reusing the preceding round's
+tool-only pytest environment and Ruff. This is actual pytest with that runner
+adaptation, not shell-wrapper/CI parity or a full source suite. One wider run was
+stopped by the conservative process guard when a mixed read/control file spawned
+an extra descendant; all owned children ended. Its partial successes are not a
+passing full run. Final four usage files pass 42 cases, and the six read cases
+pass separately without relaxing the guard. No full mixed control-file claim.
+
+Three new rendered scenarios failed before implementation; final 14 Monitor
+plus 31 nearby UI cases pass in five files. They cover source selection, token
+sorting, missing versus zero, model labels, unchanged opening and no invented
+work/elapsed. Scoped ESLint, renderer types, bounded build, generator check and
+code health (zero findings) pass. Eleven changed sections apply/hash/reverse
+against the pinned base; unrelated sections stay exact. The kit has 1094 targets
+and appends only the new Python test, preserving prior selection order/metadata.
+
+No native app or Computer Use trial was started: the previous noWindowsAvailable
+control/capture failure has no changed condition. Prior evidence and rollback
+remain. No new native visual/layout/lifecycle, 60-second launch, billing or RAM
+savings proof is claimed. Owner app/data, other hosts, ESTOP, pauses and timers
+were untouched. Full Monitor stays partial/unreleased, with error/stuck/report
+and native acceptance next. [Design](design-bot-monitor.md#canonical-bot-usage-slice).
+
 # Recorded Bot Monitor usage — unreleased
 
 Monitor worker rows now display recorded USD estimates and recorded provider-

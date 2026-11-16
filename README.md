@@ -16,8 +16,10 @@ the [release policy](CONTRIBUTING.md#release-policy) for future versioning.
 The working branch includes an [unreleased Bot Monitor dashboard](docs/design-bot-monitor.md):
 Bots → Monitor gathers current bot/worker observations into one searchable,
 sortable table. It now shows recorded worker estimates/provider-reported amounts
-separately, with a partial-coverage hint, and distinguishes recorded worker model
-from configured bot model. Missing facts stay unavailable. Full feature and live
+separately, with a partial-coverage hint. Bot rows now show their stored Bot Chat
+tokens/cost and recorded model beside the configured bot model. Worker usage stays
+separate; these are recorded row values, not lifetime totals. Missing facts stay
+unavailable. Full feature and live
 lifecycle acceptance remain in progress; the latest released version is
 v0.33.8. No daily-app adoption is included.
 

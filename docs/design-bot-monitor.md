@@ -91,3 +91,25 @@ parity and rendered UI checks. Native final-artifact verification stopped when
 the single titlebar coordinate probe returned noWindowsAvailable; focus was
 unconfirmed, so no Monitor visual acceptance is claimed. Source slice remains
 unreleased; error/stuck/report and native layout/lifecycle work follow.
+
+## Canonical bot usage slice
+
+Bot rows consume the resolved named Bot Chat row's recorded tokens, estimate,
+provider-reported amount and model. Extract the existing five usage fields into
+a shared projection; worker progress delegates to it unchanged, and canonical
+readers use their already-selected compression-tip row. Ordinary latest-session
+summaries stay unchanged; a canonical alias may share its own summary. No new
+query or billing/routing authority.
+
+Each UI entry selects worker or canonical usage once for both display and token
+sorting. Never select newest side-chat usage, add workers to the bot, combine
+root/tip totals or fill missing worker fields from canonical data. Keep configured
+bot route and recorded Bot Chat model separately labelled. Canonical usage does
+not prove current work: elapsed/tool/iteration remain worker-only. Visible hint
+names stored Bot Chat values, not lifetime totals/worker sums/live model binding.
+
+Real temporary/read-only DB parity covers named identity, compression, distinct
+homes, ordinary summaries, missing/zero and privacy; rendered tests cover source
+selection, token sorting, no false activity/elapsed and exact canonical opening.
+Native conditions have not changed since the CUA noWindowsAvailable failure;
+no blind retry or live/release claim this round. Full Monitor stays unreleased.
