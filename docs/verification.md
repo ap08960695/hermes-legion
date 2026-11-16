@@ -1,3 +1,33 @@
+# Native Monitor observation preflight — unreleased
+
+A static full native Local fixture reproduces observation divergence without a
+worker or model generation. CUA Chat-to-Monitor images visibly advance; an initial
+app-scoped agent-desktop1.3.1 AX snapshot succeeds for that isolated window.
+Later, read-only native diagnostics record document visibility=hidden while
+BrowserWindow remains visible/not minimized. DOM and CUA AX show an empty filter
+result, but the CUA image still shows All/two rows. The later same-app AX snapshot
+returns WINDOW_NOT_FOUND while the same main/renderer PID generations continue.
+No product, lock, permission or window-destruction root cause is established.
+
+The private assertion audit validates these authority/timing boundaries and
+rejects four controls: wrong app, wrong PID generation, absent hidden transition
+and absent matching AX result. It explicitly records full observation preflight
+and terminal UI acceptance as false. Pixel content is reviewed separately; a
+changed image hash or advancing callback clock cannot certify correct paint.
+Five native source inputs stay unchanged. No product patch is justified here.
+
+The guardian exits cleanly after174.61s, passing its60sLocal/zeroSSH gate; sampled
+peak4Hermes/8including OS probes,937787392B including guardian and sampled native
+children. External short-lived diagnostic controllers are outside that RSS
+sample, so it is not an all-process benchmark or memory-savings result. Final
+PID-generation/task-path closure finds no owned survivors; DesktopSSH0. Fixture
+configs are restored and generated runtime/bundles removed. No owner data,
+permission change, other host, lifecycle retry, version/release or adoption.
+
+Completed scope is observation diagnosis. Native terminal/report presentation
+and the remaining feature gates remain open; next preflight needs scoped baseline
+observations before attaching diagnostics. Prior failed lifecycle remains failed.
+
 # Agent-desktop discovery and status — unreleased
 
 The explicit CLI status flag discovers an installed agent-desktop and reads its

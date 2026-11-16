@@ -580,3 +580,27 @@ a fresh trial's renderer-accounting denial also stopped that attempt. Resolve
 target observation/accounting before another lifecycle run; never relax either
 or infer a production fix from these failures. Native terminal paint and the
 remaining feature gates still precede a batch release.
+
+## Static native observation diagnosis
+
+A fresh static Local run separates observation from worker lifecycle. Production
+renderer/main/preload and the real canonical gateway show Chat, then Monitor;
+native CUA images visibly change, and an initial app-scoped agent-desktop AX
+snapshot resolves this exact isolated fixture. No worker or model generation is
+needed to reproduce the later observation problem.
+
+Read-only fixture diagnostics subsequently report document visibility changing
+from visible to hidden while BrowserWindow still reports visible and not
+minimized. DOM and CUA AX then agree on an empty filter result, but the native
+image still shows All and two rows. A later identically app-scoped agent-desktop
+snapshot returns WINDOW_NOT_FOUND while the same main/renderer PID generations
+continue producing diagnostic reads. This narrows the blocker; it establishes
+neither a product defect nor a screen-lock, permission or window-destruction cause.
+
+The guardian closes cleanly after its 60-second Local gate, with complete sampled
+native-tree accounting and no owned survivors. This is a completed diagnostic
+slice, not passing full observation or terminal/report acceptance. Keep lifecycle
+retry gated. Next compare supported scoped observations around one transition,
+with baseline evidence before attaching the diagnostic observer, to distinguish
+capture timing, observer effects and window lookup. Preserve existing isolation,
+resource and ownership guards; no production rendering workaround is justified.
