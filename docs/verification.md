@@ -1,3 +1,46 @@
+# Native Monitor worker completion and nonempty report pass — unreleased
+
+A fresh full production renderer/main/preload/SDK/query displays a real native
+child through active work, advancing elapsed time, completion and its canonical
+report. The private Local scenario reuses the committed native lifecycle model,
+RPC and read helpers. Only loopback model replies, timing and usage are simulated;
+seven unique fixture calls complete, with duplicate/extra calls rejected. No
+external model service or paid fallback is used.
+
+Public RPC creates the canonical parent plus independent nonempty side-chat and
+sibling-profile controls. Actual delegation reads the fixture file. CUA AX and
+pixels agree on one Working worker, step 1/250, elapsed 17s then 32s, recorded
+worker model and fixture token amounts. The canonical parent's preview and the
+independent profile remain separate. Current-tool data is absent and stays absent.
+Fresh generation/parent/worker acknowledgments follow those observations; they
+do not write lifecycle or SQL. The scenario owns heartbeat/reply release and
+completion. Durable child end, completed ledger, accounted delivery and matching
+canonical report assertions all pass, including the independent transcripts.
+
+After successful automatic roster reads, native AX and pixels agree on zero
+current workers, no stale step, parent completion preview and one Recent report.
+Opening that exact default/source-qualified report shows its task, Completed
+status, completion time and nonempty MONITOR_WORKER_DONE excerpt. The sibling
+profile still has zero reports. The terminal acknowledgment binds the same
+parent, worker, delegation ID and summary, and only follows matching pixels.
+Read-only retained-database checks independently confirm the ledger/delivery and
+transcript separation. This closes the completed-worker native paint/report gate;
+earlier failed terminal observations remain failed.
+
+The 60-second Local/zero-SSH gate precedes CUA interaction. No DOM observer,
+appended preload capability, host adapter, query injection or manual Refresh is
+used. Guardian exit is clean after 204.135 seconds; sampled peaks are four non-OS
+children, seven total children and 978,321,408 bytes including the guardian.
+Build/setup and external CUA/advisor are outside that figure; it proves neither
+full-task RAM nor production billing/savings. Five fixture configs restore and
+eight relevant source hashes remain unchanged.
+
+Private active/advancing/terminal/report captures are under
+`../evidence/bot-monitor-worker-completion-20261117`; raw receipts remain under
+`../uitest-v090-c2q4iijp/bots-r180/evidence`. Native Error/Stopped presentation,
+narrow layout and final feature acceptance/release audit remain separate. This
+round changes documentation/inventory only; no product/patch/API or release.
+
 # Native Monitor stale recovery and canonical navigation pass — unreleased
 
 A fresh production renderer/main/preload built from the committed query-cache

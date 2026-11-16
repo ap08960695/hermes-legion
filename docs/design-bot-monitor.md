@@ -673,3 +673,26 @@ This closes the native degraded/recovery gate left open by the prior source
 correction. Nonempty reports and terminal worker progress remain required before
 the feature batch can ship. Owner adoption and the first ai connection still
 require the lead/owner; this walkthrough used only the isolated Local instance.
+
+
+## Native completed-worker acceptance
+
+The actual standalone Monitor now follows one real delegated file-read worker
+through Working, step 1/250 and elapsed time advancing from 17s to 32s, then
+removes the worker/step after native completion. No manual Refresh or adapter drives the view. CUA AX and
+pixels agree with fresh production-query data throughout. The default canonical
+parent, independent side chat and nonempty sibling-profile chat stay distinct.
+
+The scenario owns the durable heartbeat, held-reply release, terminal ledger and
+delivery. Only model replies, timing and usage are loopback fixtures, bounded to
+seven unique calls. The exact source-qualified Recent reports dialog opens the
+Completed task with its matching nonempty result. Fresh UI acknowledgments bind
+round/generation/parent/worker/report IDs and do not mutate lifecycle or SQL.
+Read-only retained DB checks agree with native completion and transcript controls.
+
+Private active/advancing/terminal/report images are under
+`../evidence/bot-monitor-worker-completion-20261117`. This closes the completed-
+worker progress/settlement and nonempty report paint gate left open by prior
+runs. Earlier terminal capture failures remain failed; there is no observer-cause
+claim. Native Error/Stopped presentation, narrow layout and final batch acceptance
+still need review before the feature release. No product change or release here.
