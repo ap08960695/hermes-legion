@@ -196,6 +196,29 @@ output rendering, persistence before 550 ms, crash recovery, every Chat control,
 all Settings pages, selector persistence or remote behavior. Previous startup
 paint symptoms remain unresolved. [Detailed evidence](verification.md#native-mac-chat-behavior-persistence--v0337-follow-up).
 
+## Native Mac Workspace preference persistence (v0.33.7 follow-up)
+
+In **Settings → Workspace → Shell environment**, Persistent Shell was switched
+off for default while scope-c was selected for new chats. In **Files & execution**,
+File Read Limit changed from 100000 to 120001. Navigation went directly from the
+focused number input to Shell environment, without Enter or a separate blur step.
+Returning showed the saved limit. Switching Settings to scope-b showed its
+unchanged on/100000 values; default retained off/120001.
+
+Native comparison found only `terminal.persistent_shell` and `file_read_max_chars`
+changed in default. Every other default value and both other profile files were
+preserved. After all first writers and the guardian ended, fresh app/gateway
+processes reopened the same home, app data and exact signed bundle. Both profiles
+showed their previous values without another edit; all three config files matched
+their saved bytes and modes.
+
+Both launches passed actual 60-second Local SSH-zero gates. All owned processes
+and ports ended before original configs/modes and the trial bundle/signature were
+restored. No runtime change or release was needed. This accepts saving and reading
+these two preferences. No terminal, SSH backend or file-read tool executed; their
+effects, numeric boundaries, persistence before 550 ms, crash durability, Projects
+controls and the rest of Settings remain unverified. [Detailed evidence](verification.md#native-mac-workspace-preference-persistence--v0337-follow-up).
+
 ## Limits
 
 All config operations share one ordered queue because legacy aliases and registry

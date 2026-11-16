@@ -1,3 +1,32 @@
+# Native Mac Workspace preference persistence — v0.33.7 follow-up
+
+In **Settings → Workspace**, default's Persistent Shell was switched off, and
+File Read Limit changed from 100000 to 120001. The focused number edit was followed
+directly by navigation to Shell environment, without Enter or a separate blur.
+Returning to Files & execution retained 120001. Settings profile switches read
+scope-b on/100000 and default off/120001 without another edit. The new-chat profile
+remained scope-c during this first flow.
+
+Native comparison found only default's `terminal.persistent_shell` and
+`file_read_max_chars` changed; all unrelated values and both other profile files
+were preserved. All first writers and the guardian ended before fresh app/gateway
+processes reopened the same home, app data and exact signed bundle. Both profiles
+showed their saved values, and all three config hashes and modes matched the
+checkpoint. Session, message, delegation and hosted-room counts stayed zero.
+
+Actual Local SSH-zero gates lasted 60.053 and 60.124 seconds. Across 1029 and 902
+samples, at most four Hermes processes were observed; observer-inclusive RSS
+maxima were 922,025,984 and 893,829,120 bytes. These are bounded samples, without
+continuous-peak or savings claims. All owned processes/ports and Computer Use ended
+before original config baselines and the 313-entry trial bundle/signature restored.
+Owner app/data, other hosts, ESTOP, pauses and timers were untouched.
+
+This records existing v0.33.7 preference persistence, with no source/build change
+or new runtime release. No terminal, SSH backend, file-read tool or model ran.
+Their behavior, numeric boundaries, crash durability, persistence before 550 ms,
+Projects controls, all Settings, daily-app adoption and Linux/ai remain unverified.
+Earlier startup paint symptoms remain unresolved. [Scope and limits](settings-autosave.md#native-mac-workspace-preference-persistence-v0337-follow-up).
+
 # Native Mac Chat behavior persistence — v0.33.7 follow-up
 
 The existing Reasoning Blocks switch in **Settings → Chat → Behavior** saved off
