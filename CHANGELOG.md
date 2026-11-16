@@ -5,6 +5,14 @@ supported update or Desktop rebuild path. This kit does not install a rebuilt
 Hermes.app. Linked notes identify opt-in memory settings and admission guards
 that apply after adoption. Each entry states its adoption and verification limits.
 
+## v0.33.6 — Announce compact bot work correctly
+
+Compact bot buttons and name tooltips now say Working when an available bot has
+eligible work, instead of saying Ready during a running task. When work clears,
+the existing connection status returns. Unavailable sources keep their status;
+conversation previews and click destinations stay intact. Apply the consolidated
+stable source kit and rebuild Desktop. [Checks and limits](docs/release-notes-v0.33.6.md).
+
 ## v0.33.5 — Keep list edits when closing Settings
 
 Pressing Escape after editing a comma-separated list now saves it before closing

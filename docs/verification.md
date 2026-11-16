@@ -1,3 +1,35 @@
+# v0.33.6 — Announce compact bot work correctly
+
+The retained unchanged native before build names a compact bot Ready while its
+real child runs. Final rebuilt native Local UI names it Working, retains Working
+across the normal heartbeat and Refresh, then returns Ready after native child
+completion and parent delivery. One Send/one child/four controlled loopback model
+calls; no seeded activity. Independent DB snapshots and 26 actual default-to-sibling
+reads correlate child and canonical parent IDs. Clicking the row reopens that
+same parent; its preview remains separate from worker activity.
+
+BotRow reuses its existing mood and translated Working label for an available
+source; unavailable wins and other source labels remain. The shared accessible
+name/name tooltip changes, without a new query, poll, state, API or lifecycle rule.
+Real rendered regressions fail 2 with 12 controls before the fix; final nearest 46
+across 4 files pass, including all-ended/stale, another eligible worker, exact-source
+group activity, unavailable and canonical preview/open controls. Scoped official
+health comparison: 0 blocking/0 advisory; lint/types/build pass. Inherited act and dynamic-
+import warnings remain. Two scoped pinned-base sections apply/hash/reverse;
+1086 targets and test selection retained. No unchanged broad source/mock sweep.
+
+Final trial required one native Reload to recover Not connected before any Send
+or session/model call. Cause unresolved; cold startup is not accepted. After that,
+the same final process/build passes the status journey. Actual 60.083-second SSH-zero gate passes;
+1,923 bounded samples stay within four Hermes processes and observer-inclusive
+RSS reaches 1,217,249,280 bytes. Intermediate trial also
+closed normally; its proof is kept distinct. All owned identities/ports/model
+threads end and original config bytes/modes and the 313-entry bundle/signature restore. No owner
+app/data, other host, ESTOP/pause/timer changes. Native AX names/screenshots checked;
+spoken VoiceOver, independent tooltip interaction, providers, legacy/managed
+subprocess, daily-app, remote/ai and Linux remain open. Required companion,
+tracked-copy release and exact secret gates apply. [Release notes](release-notes-v0.33.6.md).
+
 # Native compact Bots acceptance — v0.33.5 follow-up
 
 Actual Local **Bots → Open chat** creates scope-b's native canonical Bot Chat.

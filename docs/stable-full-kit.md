@@ -10,6 +10,14 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Compact work names (v0.33.6)
+
+BotRow's shared accessible name/name tooltip uses the existing translated Working
+label for an available, non-idle bot mood; other source labels remain. Activity
+eligibility, canonical chat identity, previews, polling and backend lifecycle are
+unchanged. Two existing source/test sections change; 1086 targets and selection
+remain. Apply the kit and rebuild Desktop. [Checks and limits](release-notes-v0.33.6.md).
+
 ## List drafts survive Escape (v0.33.5)
 
 Shared ListField handles a non-composing Escape through the existing synchronous

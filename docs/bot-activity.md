@@ -1,5 +1,15 @@
 # Bot activity
 
+## Compact work names (v0.33.6)
+
+In **Bots → Manage team**, compact button names and name tooltips use the same
+existing work state as the bot face. Available bots with eligible foreground,
+group or worker activity say Working. Other rows keep their connection status;
+an unavailable source cannot be labeled Working by group state. Ended or stale
+workers stop contributing, while another eligible worker can keep the status.
+No new activity rule, polling or request. Apply the consolidated stable source
+kit and rebuild Desktop. [Checks and native limits](release-notes-v0.33.6.md).
+
 ## Parallel observed workers (v0.33.0)
 
 Full Bots cards now list recent observed workers with individual task titles
