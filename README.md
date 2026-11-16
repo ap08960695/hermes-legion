@@ -32,9 +32,10 @@ before/after checks cover this layout. Closing reports with Escape or Close now
 returns keyboard focus to the report button. Model replies and usage are fixtures;
 a browser adapter also follows a real native worker from Working/step into its
 completed report. Native wide Completed/Error reports and failed-refresh recovery
-now pass. Guarded narrow worker removal and a Stopped report are now visually
-recorded, but the final scenario ACK was refused; native horizontal panning and
-nonempty control coverage remain open; see the [release gate audit](docs/design-bot-monitor.md#release-gate-audit--2026-11-17).
+now pass. A fresh native narrow Stop scenario also passes its final ACK, with
+nonempty worker search/Working filtering, elapsed sorting and keyboard reach to
+hidden actions. Nonempty Error/Stalled filtering and existing nonempty canonical
+chat reopening remain open; see the [release gate audit](docs/design-bot-monitor.md#release-gate-audit--2026-11-17).
 The latest released version is v0.33.8. No daily-app adoption is included.
 
 The [agent-desktop diagnostics slice](docs/design-agent-desktop.md) is also

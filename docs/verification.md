@@ -1,3 +1,75 @@
+# Native narrow Stop acceptance and nonempty worker controls — unreleased
+
+**The fresh narrow Stop scenario passes, including its final native ACK.**
+The prior round184 INVALID/STOP remains unchanged. This closes that scenario's
+acceptance gap; Bot Monitor is still an unreleased feature batch.
+
+One new isolated Local instance uses the production renderer and source-built
+main/preload development bundle from kit `8080af9`. Supported persisted 480×620
+geometry matches native content bounds. Eleven relevant source hashes remain
+unchanged; the production preload stays byte-exact. Original PID/birth/executable,
+window UUID, URL and lifecycle checks bind each action/capture. Existing guardian
+admission supplies single-use five-second receipts inside each CUA call; no extra
+observer process, DOM observer, host adapter, query injection or SQL seeding.
+
+Before launch, the private non-observing ACK writer adopts the existing one-second
+minimum proposal. UI observation admission still requires 20 seconds. Identity,
+freshness (30 seconds), monotonic phase/335-second acceptance/360-second overall
+deadlines, 25-second cleanup reserve and 120-second active reserve stay unchanged.
+Offline controls distinguish CUA20 refusal at eight seconds from ACK1 admission,
+with expired/insufficient ACKs refused. The live terminal ACK uses this path with
+ample budget: its report is 10.330 seconds old and the capture's postcheck has
+89.470 seconds left. This is not a live one-second-boundary timing experiment.
+
+After the 60-second Local/zero-SSH gate, public RPC creates canonical, independent
+side-chat and sibling-profile controls and delegates an actual fixture-file read.
+CUA AX/pixels show these native interactions:
+
+- Searching `Subagent` leaves only the real Working worker, task and step 1/250;
+  vertical scrolling reveals that result at the narrow size.
+- Clearing search restores the rows. Working excludes the idle sibling profile.
+  Elapsed sorting moves the real worker before its parent; name sorting restores
+  parent/worker/sibling order. AX establishes full order; pixels show the first
+  sorted task/elapsed value and the selected column's arrow.
+- Two Tab presses from the elapsed-sort header focus the worker's Open chat and
+  visibly reveal the rightmost column. This proves native keyboard horizontal
+  reach. It does not prove wheel/trackpad panning or open a chat.
+- Search/filter/sort are explicitly reset. Vertical scrolling reveals the actual
+  worker, Working and step 1/250 before the active ACK. Authenticated interrupt
+  ends that child before releasing the held server reply.
+- Automatic roster reads remove the worker/old step and show the canonical
+  interruption preview. The exact default/source-qualified Recent reports action
+  opens Stopped, matching task/time and a nonempty 74.3-second interruption summary.
+  The final generation/parent/worker/delegation/summary-bound ACK is accepted.
+
+Read-only DB, durable ledger, accounted delivery and independent transcripts
+agree with the visual observations. Seven unique loopback model reply kinds are
+fixtures; timing/usage are simulated. No external model service or paid fallback.
+Held server-handler completion still does not prove canceled-client handler
+arrival. No manual Refresh or UI lifecycle/SQL writes drive the transition.
+
+Recorded issues returns an empty result for this Stopped-only history, as the
+existing shared selector deliberately includes only Error/Recorded stalled.
+That exclusion is a negative control, not a defect or nonempty issue acceptance.
+Nonempty Error/Stalled filtering/search, and native reopening of an existing
+nonempty canonical chat, remain distinct gates before final feature-batch review.
+
+Native closure takes 195.056 seconds, sampling four product non-OS/eight total
+children and 1,009,860,608 bytes including guardian. It records no failure or
+survivors and confirms gateway/model-server shutdown. External CUA/advisor/build
+setup are outside that sample; no whole-task memory bound, billing or savings
+claim. All 25 remembered PID generations are closed, owned paths/HOME and Desktop
+SSH are zero. Five configs are restored byte-exact and window-state absence is
+restored. Eleven source hashes remain unchanged. Scratch removal journals
+352,393,457 logical bytes before deletion; physical reclaim is unmeasured.
+
+Private before/after and control images:
+`../evidence/bot-monitor-narrow-acceptance-20261117`. The before-fix image belongs
+to the separately owned failed round181, not the new generation. Raw evidence:
+`../uitest-v090-c2q4iijp/bots-r185{,-stopped}/evidence`. Earlier failed trials remain
+failed. This records a completed native acceptance slice, with no product/patch,
+version/tag/release, owner-app adoption or remote connection change.
+
 # Guarded native narrow Stop observations — final ACK refused, unreleased
 
 **Visual observations and DB readback match; the scenario remains INVALID/STOP.**

@@ -6,8 +6,8 @@ this the current feature project. The existing v0.33.8 release remains historica
 
 ## Release gate audit — 2026-11-17
 
-**Not ready to release.** Product code is based on kit `2706aab`; later guarded
-observations below use unchanged source. This audit separates existing coverage
+**Not ready to release.** Product code is based on kit `2706aab`; later native
+acceptance below uses unchanged source. This audit separates existing coverage
 from failed full-scenario results. The narrow-table source fix and its browser
 regression are included.
 
@@ -15,20 +15,20 @@ regression are included.
 |---|---|---|
 | Bot/worker activity, step and elapsed time | Native completed-worker journey shows Working, step 1/250, elapsed 17s → 32s, then worker removal and a nonempty Completed report. | Observations come from the existing roster, not an OS process census. At most the newest 20 observations per bot are eligible, with the existing 150-second liveness window. |
 | Tokens, cost and model | Existing DB/reader/rendered checks cover recorded fields, invalid/missing values and independent bot/worker amounts. Native worker tokens/model are displayed. | Model replies/timing/usage are fixtures. Amounts have partial coverage, are not summed or treated as invoices; configured and recorded models do not establish a live binding. |
-| Recorded task outcomes and issues | Actual-query/component cases cover Error and Stopped; native wide Error report shows task/time/nonempty summary and the recorded rejection. Completed report also passes natively. | A guarded native narrow Stopped report is now visually observed with matching DB readback, but the final scenario ACK is refused and full-scenario acceptance remains open. Recorded stalled/Unknown stay explicit historical facts, never inferred from age or an empty report list. |
-| Local search, filters and sort | Current Monitor/open/workspace source checks pass 40 cases. Native idle-profile search and an empty Recorded issues result pass in the static walkthrough. | Native controls with a nonempty worker/issue and sorting are not yet demonstrated as one complete journey. Search uses current signals and the displayed latest issue, not every historical report body. |
+| Recorded task outcomes and issues | Actual-query/component cases cover Error and Stopped; native wide Error report shows task/time/nonempty summary and the recorded rejection. Completed report also passes natively. | A fresh native narrow Stopped report now passes its final scenario ACK and matching DB readback. Prior184 remains INVALID/STOP; no canceled-client handler-arrival claim. Recorded stalled/Unknown stay explicit historical facts, never inferred from age or an empty report list. |
+| Local search, filters and sort | Current Monitor/open/workspace source checks pass 40 cases. Native idle-profile search and an empty Recorded issues result pass in the static walkthrough. | Native nonempty worker search/Working filtering and elapsed sorting now pass within the narrow Stop journey. Nonempty Error/Stalled filtering/search remains open; Stopped is deliberately excluded. Search uses current signals and the displayed latest issue, not every historical report body. |
 | Source-qualified canonical opening | Native named-profile Open creates an empty Bot Chat whose URL matches that profile's persisted canonical-title row; default profile remains empty. Source integration checks cover the existing registry action. | This native proof does not establish reopening a pre-existing nonempty transcript. Worker Open uses its parent bot's canonical chat, not a worker-session browser. |
 | Failed refresh and recovery | Native route-read fault preserves source labels and stale notice, hides current workers, disables Open; explicit successful Refresh recovers. | The read fault is simulated. The aggregate fault is configured but not reached after the route shortcircuit; no real outage/reconnect claim. |
-| Narrow table and report access | Actual component/production CSS at 480×620 fails before the one-class fix and passes afterward: outer vertical scroll reveals the last row; horizontal pan reveals the last column. | Native vertical scrolling now reveals the fixed table and actual worker; the exact Stopped dialog is visible at 480×620. Final scenario ACK failed, and the requested native horizontal pan did not visibly expose the report action. Full narrow interaction acceptance remains open. |
+| Narrow table and report access | Actual component/production CSS at 480×620 fails before the one-class fix and passes afterward: outer vertical scroll reveals the last row; horizontal pan reveals the last column. | Fresh native vertical scrolling reveals the actual worker; its exact Stopped report and final ACK pass at 480×620. Keyboard Tab reveals the rightmost worker action. Wheel/trackpad panning remains unproven; the earlier pan request remains unconfirmed. |
 | Report keyboard behavior | Existing rendered/browser checks restore focus to the report trigger after Escape/Close; the table region remains focusable. | No spoken screen-reader audit or blanket accessibility certification. |
 | Local-only operation and adoption | Earlier P0 fan-out work has scoped local/mock evidence; recent controlled Local walkthroughs use backed-up isolated homes and zero-SSH gates. | No first ai connection or owner-app adoption is authorized here. Round182's replacement default-Electron generation falls outside its ended guardian's RAM/network measurement. |
 
-The next controlled native journey must visibly show the fixed narrow table,
-its actual worker/step, and the source-qualified Stopped report after authenticated
-interrupt. Include a nonempty local search/filter/sort check while the real child
-is held; clear controls explicitly before opening its terminal report. Bind
-observations to the original process/window and current native receipts. Preserve
-first-failure stop, Local/SSH fences and the overall resource/time limits.
+The fresh narrow native journey now passes actual worker/step, nonempty worker
+search/Working filtering, elapsed sorting, keyboard horizontal reach and the
+source-qualified Stopped report after authenticated interrupt, including its final
+ACK. Controls are explicitly reset. Original process/window, Local/SSH fences and
+resource/deadline guards remain. Next close nonempty Error/Stalled filtering and
+native reopening of an existing nonempty canonical chat before final batch review.
 
 Late server-response completion is not proof that a canceled client's completion
 handler ran. Existing stopped-state assertions after the held server handler
@@ -801,3 +801,26 @@ Native panning and nonempty search/filter/sort remain open. Do not treat this
 observation record as release, adoption or late-client response-race proof.
 Private labelled frames: `../evidence/bot-monitor-narrow-stopped-20261117`.
 [Detailed scope](verification.md#guarded-native-narrow-stop-observations--final-ack-refused-unreleased).
+
+
+## Native narrow lifecycle and worker-control acceptance
+
+A fresh 480×620 Local run now passes the complete narrow Stop scenario and final
+ACK. Search selects only the actual worker; Working excludes the idle profile;
+elapsed sorting moves the worker before its parent, and name sorting restores
+order. Keyboard Tab reaches the hidden worker Open chat column without opening
+a chat. Reset controls precede authenticated interrupt, worker/step removal and
+the exact nonempty Stopped report. AX/pixels and independent DB/ledger/delivery/
+transcript readback agree. Prior184's failed ACK is retained unchanged.
+
+The private ACK writer uses the predeclared one-second non-observing minimum;
+CUA20, identity/freshness/deadline/resource guards remain unchanged. Final ACK
+passes with ample budget, not a live near-expiry experiment. All owned processes
+close, five configs/window-state absence restore and source hashes stay exact.
+Model replies/timing/usage are loopback fixtures. Images are private under
+`../evidence/bot-monitor-narrow-acceptance-20261117`.
+
+Recorded issues correctly excludes the Stopped-only history. A nonempty Error/
+Stalled filter/search and existing nonempty canonical chat reopen remain open
+before final feature-batch review/release handoff. No product change or release.
+[Detailed acceptance](verification.md#native-narrow-stop-acceptance-and-nonempty-worker-controls--unreleased).
