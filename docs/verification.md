@@ -1,3 +1,33 @@
+# Monitor automatic workspace polling — unreleased
+
+monitor-query.test.tsx renders actual BotsWorkspace once, selects Monitor through
+its button and lets actual useRoster/TanStack scheduling issue the second roster
+read on the unchanged 5000ms interval. No manual refetch, invalidation, setQueryData
+or prop update. SDK atoms/routes/agents/requestProfile and avatar presentation
+are synthetic; workspace/data/routing/mood/Monitor/report modules remain real.
+Focus/reconnect refetches are disabled. Only the exact local default route and
+profiles.list with empty params are admitted; two request timestamps must be
+at least4900ms apart. The condition wait is bounded to8000ms.
+
+The initial current child shows Working, step2/8 and30s elapsed. The next snapshot
+ends that same child and supplies the named parent's Completed report: worker and
+step disappear, parent reports no active work and exact source/goal/result open.
+Same-name unavailable foreign bot remains separate and disabled, lacks canonical
+report data and never gains its own query cache. Unrelated side preview is absent;
+input stays unchanged. Ambient RPC, activation, chat open and draft calls stay zero.
+One connected case passes in5.144s (12.49s runner), scoped ESLint exits0. Initial
+failures were incorrect expected idle-label literals, corrected to existing
+"No active work reported"; no product behavior was changed to satisfy the test.
+
+Only the new section is apply/after-hash/reverse/absence checked against pinned
+bf0203a upstream;1,101targets retain all prior1,100sections. Desktop selection
+appends this file only (170files); other selection fields stay exact. No product
+API/dependency/locale/version/tag/release change or unchanged source/mock sweep.
+This proves offline connected automatic reconciliation, not native gateway/UI,
+Electron, real SDK navigation, provider billing or production resource savings.
+CUA inventory still reports unavailable browser host; no input/app launch retry,
+task browser/server/gateway/model or owner Hermes launch. Live gates remain open.
+
 # Monitor Open chat contract — unreleased
 
 New monitor-open.test.tsx renders actual Monitor with the workspace's onOpen

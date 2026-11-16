@@ -304,3 +304,22 @@ open, draft, create, prompt or success claim. Actual data/routing/canonical/acti
 modules run; SDK machine/RPC effects are mocked. This closes a test seam only.
 Current CUA inventory still has no browser host, so no input/app launch retry or
 live navigation acceptance was attempted.
+
+
+## Automatic query-to-workspace reconciliation
+
+The connected offline regression renders actual BotsWorkspace under an isolated
+TanStack client/provider, selects Monitor and waits for the unchanged five-second
+useRoster interval. The first source-qualified response carries a working child;
+the next ends that child and adds its canonical parent's recorded report. No
+manual refetch, invalidation, cache injection or prop replacement drives the view.
+Working/step/elapsed appear, then the worker and step disappear; the exact local
+Completed report opens while a same-name unavailable foreign bot remains separate.
+
+Only SDK host state/route/inventory/RPC boundaries and avatar presentation are
+synthetic. Focus/reconnect refetches are disabled so they cannot impersonate the
+interval. The test refuses ambient RPC, activation, navigation and draft creation.
+Production workspace, query, merging, source/mood derivation and reports run.
+This connects the earlier manual-refetch and prop-driven tests; it does not prove
+actual gateway polling, Electron, browser paint or native navigation. Current CUA
+browser host remains unavailable, so live acceptance still gates the batch release.

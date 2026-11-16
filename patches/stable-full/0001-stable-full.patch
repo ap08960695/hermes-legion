@@ -30499,6 +30499,149 @@ index 0000000000000000000000000000000000000000..ca825bb1af032b49468bb51de7de0038
 +  expect(host.ensureAgent).not.toHaveBeenCalled()
 +  expect($openBotChat.get()).toBeNull()
 +})
+diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-query.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-query.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..a461c0b1d0720281c5bf4fd5423485e7f060e10c
+--- /dev/null
++++ b/apps/desktop/src/plugins/hermes-bots/monitor-query.test.tsx
+@@ -0,0 +1,137 @@
++import type * as PluginSDK from '@hermes/plugin-sdk'
++import { host } from '@hermes/plugin-sdk'
++import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
++import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
++import { afterEach, beforeEach, expect, it, vi } from 'vitest'
++
++// eslint-disable-next-line no-restricted-imports
++import { registerPluginLocales } from '@/i18n/plugin-i18n'
++
++import { $botAttention, $botMeta, $lastRoster, ROSTER_KEY } from './data'
++import { BOTS_LOCALES } from './i18n'
++import { $botManagementOpen } from './management'
++import { indexAliasRoutes } from './routing'
++import type { BotDelegationReport } from './types'
++import { BotsWorkspace } from './workspace'
++
++vi.mock('@hermes/plugin-sdk', async original => {
++  const sdk = await original<typeof PluginSDK>()
++
++  return { ...sdk, host: { ...sdk.host, state: { ...sdk.host.state,
++    connectionId: sdk.atom('local'), profile: sdk.atom('default'), busy: sdk.atom(false)
++  } } }
++})
++vi.mock('./avatar', () => ({
++  botAppearance: () => ({}), avatarColor: () => null, BotFace: () => <span aria-hidden="true">Avatar</span>
++}))
++
++let dispose: () => void
++let client: QueryClient
++const route = { connectionId: 'local', mode: 'local' as const, profile: 'default', targetProfile: 'default' }
++
++beforeEach(() => {
++  dispose = registerPluginLocales('hermes-bots', BOTS_LOCALES)
++  client = new QueryClient({ defaultOptions: { queries: {
++    retry: false, refetchOnWindowFocus: false, refetchOnReconnect: false
++  } } })
++  $botManagementOpen.set(false)
++  $botAttention.set({})
++  $botMeta.set({})
++  $lastRoster.set([])
++  vi.spyOn(host, 'request').mockRejectedValue(new Error('Ambient request forbidden'))
++  vi.spyOn(host, 'ensureAgent').mockRejectedValue(new Error('Activation forbidden'))
++  vi.spyOn(host, 'openSession').mockRejectedValue(new Error('Chat navigation forbidden'))
++  vi.spyOn(host, 'newChat').mockImplementation(() => { throw new Error('Draft creation forbidden') })
++  vi.spyOn(host, 'traceIdentityChange').mockReturnValue(undefined)
++  vi.spyOn(host, 'profileRoutes').mockResolvedValue([route])
++  vi.spyOn(host, 'agents').mockResolvedValue({ agents: [
++    { connectionId: 'local', connectionKind: 'local', connectionLabel: 'Polling local', profile: 'writer', handle: 'writer-local' },
++    { connectionId: 'foreign-fixture', connectionKind: 'remote', connectionLabel: 'Foreign unavailable', profile: 'writer', handle: 'writer-foreign' }
++  ], sources: [
++    { connectionId: 'local', kind: 'local', label: 'Polling local', reachable: true },
++    { connectionId: 'foreign-fixture', kind: 'remote', label: 'Foreign unavailable', reachable: false }
++  ] })
++})
++
++afterEach(() => {
++  cleanup()
++  client.clear()
++  dispose()
++  $botManagementOpen.set(false)
++  $botAttention.set({})
++  $botMeta.set({})
++  $lastRoster.set([])
++  indexAliasRoutes([])
++  vi.restoreAllMocks()
++})
++
++it('automatically settles a visible Monitor worker into its source-scoped canonical report', async () => {
++  const now = Date.now() / 1000
++
++  const report: BotDelegationReport = { delegation_id: 'polling-delegation', task_index: 0,
++    status: 'completed', completed_at: now + 1, goal: 'Polling task report', summary: 'Polling stored result', error: '' }
++
++  const active = { profiles: [{ name: 'writer', display_name: 'Writer',
++    canonical_session: { id: 'named-parent', preview: 'Canonical polling parent', delegation_reports: [] },
++    last_session: { id: 'unrelated-side', preview: 'Unrelated side preview' },
++    worker_sessions: [{ id: 'polling-child', title: 'Polling child task', last_activity_description: 'Waiting for model',
++      last_active: now, started_at: now - 30, iteration: 2, max_iterations: 8 }] }] }
++
++  const terminal = { profiles: [{ ...active.profiles[0],
++    canonical_session: { ...active.profiles[0].canonical_session, delegation_reports: [report] },
++    worker_sessions: [{ ...active.profiles[0].worker_sessions[0], ended_at: now + 1 }] }] }
++
++  const original = JSON.stringify(active)
++  const requests: number[] = []
++  vi.spyOn(host, 'requestProfile').mockImplementation(async (owner, method, params) => {
++    expect(owner).toEqual(route)
++    expect(method).toBe('profiles.list')
++    expect(params).toEqual({})
++    requests.push(Date.now())
++
++    return requests.length === 1 ? active : terminal
++  })
++
++  render(<QueryClientProvider client={client}><BotsWorkspace /></QueryClientProvider>)
++  fireEvent.click(screen.getByRole('button', { name: 'Monitor' }))
++  const worker = await screen.findByText('Polling child task')
++  const workerRow = within(worker.closest('tr')!)
++  expect(workerRow.getByText('Working')).toBeTruthy()
++  expect(workerRow.getByText('step 2/8')).toBeTruthy()
++  expect(workerRow.getByText('30s')).toBeTruthy()
++  expect(screen.queryByText('Unrelated side preview')).toBeNull()
++  expect(requests).toHaveLength(1)
++  const foreignRow = within(screen.getByText('Foreign unavailable').closest('tr')!)
++  expect(foreignRow.getByText('Unavailable')).toBeTruthy()
++  expect((foreignRow.getByRole('button', { name: /Open chat/ }) as HTMLButtonElement).disabled).toBe(true)
++  expect(foreignRow.queryByRole('button', { name: /Recent reports/ })).toBeNull()
++
++  // No manual refetch, invalidation, prop update or cache write: production polling must settle the view.
++  await waitFor(() => expect(screen.queryByText('Polling child task')).toBeNull(), { timeout: 8000 })
++  expect(screen.queryByText('step 2/8')).toBeNull()
++  expect(requests).toHaveLength(2)
++  expect(requests[1] - requests[0]).toBeGreaterThanOrEqual(4900)
++  const table = within(screen.getByRole('table', { name: 'Monitor' }))
++  expect(table.getAllByRole('row')).toHaveLength(3)
++  const parentRow = within(table.getByText('Canonical polling parent').closest('tr')!)
++  expect(parentRow.getByText('No active work reported')).toBeTruthy()
++  expect(parentRow.queryByText('Working')).toBeNull()
++  fireEvent.click(parentRow.getByRole('button', { name: 'Recent reports · Writer · Polling local' }))
++  const dialog = within(screen.getByRole('dialog'))
++  expect(dialog.getByText('Polling local')).toBeTruthy()
++  expect(dialog.getByText('writer')).toBeTruthy()
++  expect(dialog.getByText('Polling task report')).toBeTruthy()
++  expect(dialog.getByText('Completed')).toBeTruthy()
++  expect(dialog.getByText('Polling stored result')).toBeTruthy()
++  expect(dialog.queryByText('Foreign unavailable')).toBeNull()
++  const cached = client.getQueryData<{ profiles: { name: string; connectionId: string; canonical_session?: { id?: string } }[] }>([...ROSTER_KEY, 'local'])!
++  expect(cached.profiles.map(bot => [bot.connectionId, bot.name, bot.canonical_session?.id])).toEqual([
++    ['local', 'writer', 'named-parent'], ['foreign-fixture', 'writer', undefined]
++  ])
++  expect(client.getQueryData([...ROSTER_KEY, 'foreign-fixture'])).toBeUndefined()
++  expect(JSON.stringify(active)).toBe(original)
++  expect(host.request).not.toHaveBeenCalled()
++  expect(host.ensureAgent).not.toHaveBeenCalled()
++  expect(host.openSession).not.toHaveBeenCalled()
++  expect(host.newChat).not.toHaveBeenCalled()
++})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-reports.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-reports.tsx
 new file mode 100644
 index 0000000000000000000000000000000000000000..0c62786d2b8bbc259ace49d84a8d92e8a7c090b5

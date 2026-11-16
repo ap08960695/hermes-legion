@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1098-path** Legion source, interface and optimization alternative
+This is the complete **1101-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,15 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Monitor automatic workspace polling regression (unreleased)
+
+A selected integration test connects actual BotsWorkspace, useRoster and its
+existing five-second interval to Monitor settlement and canonical reports. It
+checks visible work before polling, removed progress afterward, separate same-name
+unavailable source and no ambient/activation/chat effects. Host responses remain
+synthetic; live query/Electron/navigation acceptance stays open.
+[Proof boundaries](verification.md#monitor-automatic-workspace-polling--unreleased).
 
 ## Monitor Open chat integration contract (unreleased)
 
