@@ -604,3 +604,26 @@ retry gated. Next compare supported scoped observations around one transition,
 with baseline evidence before attaching the diagnostic observer, to distinguish
 capture timing, observer effects and window lookup. Preserve existing isolation,
 resource and ownership guards; no production rendering workaround is justified.
+
+
+## Route-inventory failure keeps source authority
+
+A fresh native walkthrough passes baseline Chat, Bots and Monitor with matching
+CUA AX/pixels, production renderer/main/preload and two real Local profiles.
+A controlled rejection of both native inventory reads then exposes a source
+fallback bug: rows remain, but source labels disappear, status becomes unknown,
+and Open stays enabled without a stored-snapshot notice. No Open was attempted.
+
+The shared roster fetch must not downgrade a previously observed active source
+to an ambient legacy row when route inventory rejects. If a nonghost, scoped
+active-source row was already published, fail the query before the compatibility
+read. Existing query-error UI retains names/source/canonical history, hides
+current workers, marks the snapshot stale and disables Open until an authoritative
+refresh succeeds. Cold unscoped legacy hosts keep their existing fallback; a
+healthy route read with only aggregate-inventory failure keeps its prior behavior.
+
+Two added actual-SDK/preload/component regressions cover failure/recovery and
+legacy compatibility. The visible native reproduction is before the fix only;
+no second UI attempt, recovery or canonical navigation is claimed. Native
+after-fix degraded presentation, nonempty reports and terminal worker paint
+remain feature-release gates. No new capability, store, request or poller.

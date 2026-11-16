@@ -1,3 +1,47 @@
+# Monitor route-inventory failure preserves scoped snapshots — unreleased
+
+A fresh isolated Local full production renderer/main/preload and real canonical
+gateway pass CUA AX/pixel baseline, Bots and Monitor navigation. Both actual
+empty profiles show their Local source and configured model. The fixture uses
+no DOM executeJavaScript observer or appended preload capability. Metadata-only
+loopback catalog responses are synthetic; no model generation or worker runs.
+
+A labelled native IPC fault rejects route and aggregate inventory reads. After
+Refresh and subsequent query polling, AX and pixels agree on two retained rows
+with lost source labels, Status unknown and enabled Open, without a stale notice.
+This reproduces a product fallback bug under a simulated transport failure;
+it does not prove a real gateway outage. No Open/recovery is attempted. CUA ends,
+the guardian stops cleanly after its 60-second Local/zeroSSH gate, and every
+owned native PID generation closes. Prior observation failures stay failed.
+
+The shared fetch swallowed the route error and read ambient profiles, then
+returned a successful partially unscoped snapshot after aggregate failure. It
+now rejects before that compatibility read when a previously published nonghost,
+nonremote scoped row belongs to this active connection. Existing query-error
+handling preserves the old source/canonical snapshot, marks work unavailable,
+hides active workers and disables Open. Successful authoritative refresh clears
+the stale state. Initially unscoped legacy hosts remain usable; healthy route
+inventory plus aggregate failure still retains unavailable foreign rows while
+current active-source facts remain fresh. No SDK, schema or new state is added.
+
+The real-SDK/preload integration reproduces the missing stale notice on old
+source, including an ambient reply that would overwrite canonical facts. After
+the fix it proves the unchanged cached snapshot, source labels/canonical preview,
+hidden worker, disabled Open, no ambient/activation/navigation request and fresh
+recovery. A second case proves absent legacy capabilities still work. The first
+green run reaches recovery but finds duplicate source labels on bot/worker rows;
+scoping its assertion to the canonical bot row corrects only that test selector.
+Four relevant source files pass 29 cases; scoped lint has zero warnings and
+renderer TypeScript passes. No unchanged Monitor mock sweep or post-fix native
+renderer rebuild is run.
+
+Two source sections apply, match after hashes and reverse against the pinned
+upstream. All unrelated cumulative patch bytes stay unchanged; 1,119 targets,
+existing test selection retained. Native images prove the pre-fix behavior only.
+Native after-fix degraded paint, canonical navigation, nonempty reports and live
+terminal progress still gate the Bot Monitor batch release. No version/release,
+owner app/data, remote host/ai, ESTOP, pause, timer or permission change.
+
 # Native provider capture and interaction-directory diagnosis — unreleased
 
 The actual common tool and selected provider parse a complete macOS native

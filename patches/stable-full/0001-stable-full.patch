@@ -28906,6 +28906,19 @@ index 2592db925346d092a4d3800abbab2c50a910e3d5..8ee0947be88f7fc8e4376f88348edeaa
 +    hostMock.profileRoutes = undefined
 +  }
 +})
+diff --git a/apps/desktop/src/plugins/hermes-bots/data.ts b/apps/desktop/src/plugins/hermes-bots/data.ts
+index 46c90a0a39c3ce9f35181ef3b0d04d3f88ffe159..d9c00350fc7c27225942f5cdffd448cae4d007d5 100644
+--- a/apps/desktop/src/plugins/hermes-bots/data.ts
++++ b/apps/desktop/src/plugins/hermes-bots/data.ts
+@@ -787,3 +787,7 @@ async function fetchRosterSnapshot(activeConnectionId: null | string | undefined
+     } catch {
+-      /* keep the previous alias index */
++      // An observed source owner cannot silently become an ambient legacy row.
++      if ($lastRoster.get().some(row => row?.sourceScoped && !row.ghost && !row.remoteSource && row.connectionId === activeConnectionId)) {
++        throw new Error('Bot source route inventory unavailable')
++      }
++      /* keep the previous alias index for an unscoped legacy host */
+     }
 diff --git a/apps/desktop/src/plugins/hermes-bots/dialog-parts.tsx b/apps/desktop/src/plugins/hermes-bots/dialog-parts.tsx
 index 05bd1586895a3d8cd23007d811dc0e8139cacdf7..96018b336f4cf28c672d830872635765e244e3b0 100644
 --- a/apps/desktop/src/plugins/hermes-bots/dialog-parts.tsx
@@ -29985,10 +29998,10 @@ index abe8afb7e670b207a192ac15fb797fb8dfed168e..2b2824a97bb7cfd9d21057f4efdfd811
              <SelectContent>
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-desktop-bridge.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-desktop-bridge.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..4b7dd6981c0c71e71cf4abc5c15673007a85d6ac
+index 0000000000000000000000000000000000000000..3cf0fbd773b26000320dcc754112458235338856
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-desktop-bridge.test.tsx
-@@ -0,0 +1,189 @@
+@@ -0,0 +1,246 @@
 +import { host } from '@hermes/plugin-sdk'
 +import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 +import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -30047,6 +30060,7 @@ index 0000000000000000000000000000000000000000..4b7dd6981c0c71e71cf4abc5c1567300
 +let client: QueryClient
 +let dispose: () => void
 +let rejectInventory: boolean
++let rejectRoutes: boolean
 +
 +beforeEach(async () => {
 +  dispose = registerPluginLocales('hermes-bots', BOTS_LOCALES)
@@ -30054,9 +30068,12 @@ index 0000000000000000000000000000000000000000..4b7dd6981c0c71e71cf4abc5c1567300
 +    retry: false, refetchOnWindowFocus: false, refetchOnReconnect: false
 +  } } })
 +  rejectInventory = false
++  rejectRoutes = false
 +  electron.ipcRenderer.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
 +    if (channel === 'hermes:plugin-profile-routes') {
 +      expect(args).toEqual([['default']])
++
++      if (rejectRoutes) {throw new Error('Native routes unavailable')}
 +
 +      return structuredClone([localRoute, remoteRoute])
 +    }
@@ -30175,6 +30192,59 @@ index 0000000000000000000000000000000000000000..4b7dd6981c0c71e71cf4abc5c1567300
 +  expect(screen.getByText('Bridge worker task')).toBeTruthy()
 +  expect(gateway.requestGatewayForAgent).toHaveBeenCalledTimes(2)
 +  expect(host.request).not.toHaveBeenCalled()
++  expect(host.ensureAgent).not.toHaveBeenCalled()
++  expect(host.openSession).not.toHaveBeenCalled()
++})
++
++it('retains scoped Monitor authority when route inventory fails instead of reading ambient facts', async () => {
++  await openMonitor()
++  const prior = client.getQueryData([...ROSTER_KEY, 'local'])
++  vi.mocked(host.request).mockResolvedValue({ profiles: [{ name: 'writer',
++    canonical_session: { id: 'wrong-ambient', preview: 'Wrong ambient replacement' } }] })
++  rejectRoutes = true
++  rejectInventory = true
++  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
++  await waitFor(() => expect(screen.getByText(/Refresh failed\. Showing a stored snapshot/)).toBeTruthy(), { timeout: 5000 })
++  expect(client.getQueryData([...ROSTER_KEY, 'local'])).toBe(prior)
++  expect(screen.getByText('Bridge local')).toBeTruthy()
++  expect(screen.getByText('Dormant saved source')).toBeTruthy()
++  expect(screen.getByText('Bridge canonical preview')).toBeTruthy()
++  expect(screen.queryByText('Bridge worker task')).toBeNull()
++  expect(screen.queryByText('Wrong ambient replacement')).toBeNull()
++
++  for (const button of screen.getAllByRole('button', { name: /Open chat/ })) {
++    expect((button as HTMLButtonElement).disabled).toBe(true)
++    fireEvent.click(button)
++  }
++
++  expect(host.request).not.toHaveBeenCalled()
++  expect(host.ensureAgent).not.toHaveBeenCalled()
++  expect(host.openSession).not.toHaveBeenCalled()
++  expect(gateway.requestGatewayForAgent).toHaveBeenCalledTimes(1)
++
++  rejectRoutes = false
++  rejectInventory = false
++  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
++  await screen.findByText('Bridge worker task')
++  await waitFor(() => expect(screen.queryByText(/Refresh failed\. Showing a stored snapshot/)).toBeNull())
++  const local = within(screen.getByText('Bridge canonical preview').closest('tr')!)
++  expect((local.getByRole('button', { name: /Open chat/ }) as HTMLButtonElement).disabled).toBe(false)
++  expect(gateway.requestGatewayForAgent).toHaveBeenCalledTimes(2)
++  expect(host.request).not.toHaveBeenCalled()
++})
++
++it('keeps an initially unscoped legacy roster usable without Desktop inventory capabilities', async () => {
++  const legacy = { ...window.hermesDesktop }
++  Reflect.deleteProperty(legacy, 'getProfileRoutes')
++  Reflect.deleteProperty(legacy, 'getAgentRoster')
++  window.hermesDesktop = legacy as typeof originalDesktop
++  vi.mocked(host.request).mockResolvedValue({ profiles: [{ name: 'legacy', display_name: 'Legacy bot',
++    canonical_session: { id: 'legacy-parent', preview: 'Legacy canonical preview' } }] })
++  render(<QueryClientProvider client={client}><RosterPublisher /><BotsWorkspace /></QueryClientProvider>)
++  fireEvent.click(screen.getByRole('button', { name: 'Monitor' }))
++  await screen.findByText('Legacy canonical preview')
++  expect(screen.queryByText(/Refresh failed\. Showing a stored snapshot/)).toBeNull()
++  expect((screen.getByRole('button', { name: 'Open chat · Legacy bot' }) as HTMLButtonElement).disabled).toBe(false)
 +  expect(host.ensureAgent).not.toHaveBeenCalled()
 +  expect(host.openSession).not.toHaveBeenCalled()
 +})
