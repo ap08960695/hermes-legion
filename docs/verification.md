@@ -1,3 +1,46 @@
+# Monitor browser layout — unreleased
+
+Actual `BotMonitor`/`BotMonitorReports`, SDK primitives, i18n and production CSS
+were built into a loopback-only offline preview and operated through CUA in
+Chrome Guest. The iframe viewports were 1140×620 and 480×620 CSS pixels, including
+report portals. Saved synthetic native134 outcome rows and separately labelled
+layout fixtures supply props. The explicit locale client supplies English only
+and refuses saves; no Electron bridge or backend behavior is invented.
+
+The model-column defect reproduced after correcting the fixture's Tailwind source
+scan: actual cell widths were 60.89px and normal model labels broke into fragments.
+Adding only `min-w-48` to the model cell preserves a 12rem minimum, its existing
+long-token wrapping and local horizontal scrolling. The browser geometry assertion
+(`width >= 160`) fails before and passes after: all seven model cells measure
+192px at both viewports. Matched images and the horizontally revealed narrow
+model view confirm readable text; this is not a CSS-class mirror assertion.
+
+Private unaltered CUA images under `../evidence/local-ui-20261116/`:
+`r135-browser-wide-red.jpg` / `r135-browser-wide-green.jpg`,
+`r135-browser-narrow-red.jpg` / `r135-browser-narrow-green.jpg`, and
+`r135-browser-narrow-readable-models.jpg`. Image hashes, tool-result identities,
+fixture source/row hashes and geometry/action receipts are retained with the
+round evidence. The earlier `invalid-css-fixture` image is excluded from the
+product reproduction: it lacked generated utilities and was a harness defect.
+
+Observed controls include empty search, Working filter and token-sort action.
+The narrow long report wraps Thai and unbroken text within its dialog; the
+Completed outcome filter gives the expected empty snapshot. Escape dismisses it.
+Focus was then observed on the HTML document rather than the opener; follow-up
+remains. Later AX showed the saved native Stopped report while screenshots still
+showed an older dialog, even after fresh screenshot/Raise. Those stale pixels do
+not count as report visual acceptance. No broad focus/layout/accessibility pass.
+
+Existing Monitor19 plus31 adjacent rendered tests pass, 50 total. Scoped ESLint,
+renderer TypeScript and full production renderer build pass. Only one source
+class changes; no new dependency, locale, field, request, routing or worker policy.
+One changed patch section applies/hashes/reverses; selection and 1,098-target
+inventory remain unchanged. Native/backend regressions are unchanged and were
+not rerun. No live worker, real chat navigation, auto-refresh, billing or native
+Electron proof follows from this offline fixture. The task Guest tab and owned
+asset server are closed; no owner profile or Hermes app was opened. Feature
+release remains pending native Monitor progress/settlement acceptance.
+
 # Native Monitor lifecycle integration — unreleased
 
 `tests/gateway/test_bot_monitor_native_lifecycle.py` follows three actual native

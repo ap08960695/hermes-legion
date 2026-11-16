@@ -182,3 +182,28 @@ daemon launch, subprocess isolation or native UI paint. Native visual and
 on-screen progress/settlement acceptance still gate the feature release. With
 CUA returning `Invalid app` for the uniquely identified trial, another native
 launch needs changed supported target-selection evidence first.
+
+
+## Browser layout acceptance
+
+The actual component with production CSS exposed a model-column defect in an
+offline Chrome Guest preview: table layout squeezed model cells to 60.89 CSS
+pixels, splitting ordinary labels into short fragments. The model cell now uses
+the existing `min-w-48` utility, retaining `break-all` for long routes. This gives
+it a 12rem minimum within the existing horizontal scroll region. No columns,
+fields, data authority, sorting, filtering or routing behavior changed.
+
+The same browser geometry assertion fails before and passes after at 1140×620
+and 480×620 iframe viewports: 60.89px becomes 192px in that fixture. Matched images
+and the horizontally revealed narrow view show readable configured/recorded
+models. The fixture uses saved synthetic native outcomes from the prior native
+integration, separately labelled simulated layout workers and an explicit local
+locale client; it has no Electron bridge or backend. It proves component layout,
+not an installed-app launch or live work. No class-mirror test or new framework.
+
+Search, current-status controls and report filtering were exercised through CUA.
+The initial long Thai/plain-text report painted correctly. Later report pixels
+stayed on an older dialog despite newer AX state; those images do not establish
+Stopped-report visual acceptance. Escape dismissed the dialog but focus was
+observed on the HTML document, so focus return needs follow-up. These remain
+open alongside native progress/settlement acceptance before a feature release.

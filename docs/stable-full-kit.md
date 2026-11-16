@@ -10,6 +10,14 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Monitor model readability (unreleased)
+
+Model cells retain a 12rem minimum width and keep long-route wrapping inside the
+existing horizontal scroll region. The actual component and production CSS pass
+an offline browser geometry check and matched wide/narrow before/after images.
+This is browser fixture evidence; native app and live progress/settlement still
+gate the feature release. [Scope and limits](verification.md#monitor-browser-layout--unreleased).
+
 ## Native Monitor lifecycle integration (unreleased)
 
 One selected gateway regression runs three native outcomes through the public

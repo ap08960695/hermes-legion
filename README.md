@@ -25,7 +25,10 @@ labels. Historical issues stay separate from current work. A native gateway
 regression follows real delegation and file reading into completed, rejected and
 explicitly stopped task reports, including stale-reply protection and independent
 side-chat/profile controls. The successful case retains a real heartbeat. Model
-replies and usage are fixtures; native visual acceptance remains open. The latest
+columns now keep a readable minimum width instead of squeezing labels into a few
+letters; narrow tables keep their existing horizontal scroll. Browser fixture
+before/after checks cover this layout. Model replies and usage are fixtures;
+native visual acceptance remains open. The latest
 released version is v0.33.8. No daily-app adoption is included.
 
 ## What is included
