@@ -99,6 +99,26 @@ acceptance evidence, with no runtime change or new release. It does not establis
 immediate-switch/quit flushing, failure recovery, crash durability, selector
 persistence, other settings pages or remote behavior.
 
+## Native keyboard and leave-page acceptance (v0.33.4 follow-up)
+
+On the Mac, Settings search for `compression.threshold` returned the exact
+Compression Threshold field. Down selected the result; Enter opened **Memory &
+Context → Context & compression** and focused its highlighted row. Tab entered
+the number control. ArrowUp changed 0.50 to 0.51, followed by navigation to
+Persistent memory; returning showed 0.51.
+
+Shift-Tab from that number control focused Auto-Compression. Space switched it
+off, then Escape closed Settings. Independent native file readback showed only
+the intended threshold and enabled changes, with all other values preserved and
+the other profile's file byte exact. Reopening Settings showed 0.51 and the switch
+off without another config change. Both session stores stayed empty; no Send,
+model request or compression execution ran.
+
+This verifies search routing, keyboard access and saved values after navigation
+and closure. It does not establish that disk persistence completed before the
+550 ms debounce deadline, crash durability, every Settings page or remote
+behavior. The current v0.33.4 runtime was reused without a source or build change.
+
 ## Limits
 
 All config operations share one ordered queue because legacy aliases and registry

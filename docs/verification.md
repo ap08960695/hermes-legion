@@ -1,3 +1,28 @@
+# Native Settings search and leaving the page — v0.33.4 follow-up
+
+Actual Mac Local Settings search matched `compression.threshold`; Down/Enter
+opened Context & compression and focused the highlighted threshold row. Tab
+entered the input. ArrowUp saved 0.50→0.51 across navigation to Persistent memory
+and back. Shift-Tab focused Auto-Compression; Space switched it off and Escape
+closed Settings. Native disk comparisons show only those two primary values
+changed, with all other values preserved and the other profile byte exact.
+Settings reopen reads 0.51/off without another file change. Session stores stay
+empty; no Send, inference or compression execution occurs.
+
+One normal cohort passed the actual 60.022-second SSH-zero gate, sampled at most
+four Hermes processes, and reached observer-inclusive RSS 969,981,952 bytes.
+These are bounded samples, without a continuous-peak or memory-saving claim.
+All owned identities and ports ended before original synthetic config bytes and
+modes were restored. The original 313-entry trial bundle and strict signature
+restored; no owner app/data, other host, ESTOP, pause or timer changed.
+
+Native event-to-disk timing was not measured: this proves eventual durability
+after leaving, not persistence before
+the 550 ms deadline. Crash, all-page, daily-app and remote acceptance remain open.
+No runtime, patch, test selection, dependency or build change; no version bump.
+Required companion, tracked-copy release and secret gates apply to this follow-up.
+[Journey and limits](settings-autosave.md#native-keyboard-and-leave-page-acceptance-v0334-follow-up).
+
 # v0.33.4 — Nudge compression ratios precisely
 
 Native Local before/after confirms one ArrowUp on Threshold 0.5 and Target 0.2
