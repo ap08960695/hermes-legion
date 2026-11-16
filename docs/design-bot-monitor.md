@@ -455,3 +455,35 @@ the change. Monitor29and nearby query/open5cases pass; the corrected nullable
 fixture, scoped lint, renderer types/build and two-section roundtrip pass. Native
 Chrome reads are available but input still returns noWindowsAvailable; no Guest
 or gateway launch, visual proof or feature release this round.
+
+
+## Find recorded issues across bots
+
+Add a Recorded issues dashboard filter and include the existing visible issue
+context in local text search. This lets the user find which bot recorded an Error
+or Stalled task without opening every report dialog. Keep Needs attention tied to
+current signals; stored problems never establish a current blockage or worker.
+Keep the existing segmented filter: a second dashboard or server-side search adds
+state/requests, while dialog-only filtering cannot find the bot across the team.
+
+Reuse one small canonical issue projection in monitor-reports for both consumers:
+first error/stalled in the existing20report window, normalized120goal/160excerpt,
+nonblank error before summary. Search those exact displayed fields only; no
+hidden report, unused summary, side chat, text beyond the bounds or worker-row
+inheritance. Bot rows carry the issue; worker rows do not. Other filters/sort,
+source availability, captured dialog and existing query/Refresh stay authoritative.
+Retained/offline history may match but never activates a source or enables Open.
+One Recorded issues label covers all nine catalogs; no new request, dependency,
+store, wire field or control. Test the actual Workspace/Monitor before/after with
+scoped owners, missing/nonissue history, search, refresh and query-error retention.
+This is an unreleased source slice; visual/Electron/navigation gates remain open.
+
+
+The filter/search source slice is implemented. Three new rendered cases fail on
+prior source and pass afterward;32Monitor+5nearby query/open cases pass. Shared
+bounded values prevent matching hidden reports/excerpt tails or copying history
+to workers. Retained/error snapshots remain locally filterable; fresh data keeps
+the selected filter/query and removes resolved window entries without claiming
+lifetime issue resolution. Scoped lint/types/build and four-section roundtrip
+pass. Native input/browser-host conditions still block visual acceptance; no
+feature release or owner-app adoption.

@@ -10,6 +10,15 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Find recorded issues across bots (unreleased)
+
+A Recorded issues filter now finds bots with stored Error/Stalled task reports.
+Search also matches the same bounded task/excerpt shown in each bot's issue cell.
+Current attention/work remain separate; workers do not inherit a parent's history,
+and retained/offline sources keep their Open restrictions. No extra request or
+source activation. Rendered/source checks pass; visual/Electron/navigation gates
+still prevent a feature release. [Checks and limits](verification.md#find-recorded-issues-across-bots--unreleased).
+
 ## Recorded issue context in Monitor (unreleased)
 
 The existing recorded issue badge now includes its task, stored time and a short

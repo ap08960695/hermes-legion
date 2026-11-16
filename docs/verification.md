@@ -1,3 +1,50 @@
+# Find recorded issues across bots — unreleased
+
+Monitor adds a Recorded issues dashboard filter and includes each bot's displayed
+recorded issue task/excerpt in its existing text search. This finds the bot across
+the team before opening a report dialog. Error/Stalled history remains distinct
+from current Needs attention or Working; stopped/unknown/completed-only history
+and missing reports do not become recorded issues. Worker rows never inherit the
+parent's issue. Retained/offline reports remain eligible with their original
+source/Open restrictions. No extra request, query policy, store, wire field,
+dependency or navigation action; one label covers all nine existing catalogs.
+
+Monitor and Reports share the existing bounded canonical selection/normalization
+through botRecordedIssue. Select the first error/stalled record within the first
+20before matching; preserve order and trimmed-error-before-summary precedence.
+The same normalized120character task and160character excerpt feed both JSX and
+search. Hidden older reports, unused summary, record21, side-chat reports and
+text beyond those bounds cannot create a search match. Local search and this
+filter compose; current filters/sort and captured report dialog keep their rules.
+
+Test-first against prior source:29existing Monitor cases pass,3new cases fail on
+missing filter/unsearchable issue text. After the change, Monitor32plus actual
+query2and canonical Open integration3pass,37total25.35sVitest/25.76srunner. Cases
+cover same-name owners, canonical error/stalled selection, nonissue/missing/
+record21 exclusion, worker noninheritance, local historical versus current filters,
+normalized/case-insensitive search, clipped/hidden-field exclusion, clearing search,
+retained/query-error report reading, disabled Open and filter/query persistence
+through fresh data and issue removal. Roster input stays unchanged; no explicit
+search/filter action requests a refetch or chat open. SDK/roster boundaries in
+these rendered tests remain simulated; no native runtime or paint is implied.
+
+Scoped lint0errors; four new padding warnings fixed in test formatting, leaving
+only the same two pre-existing padding warnings from145. Renderer types/build
+pass; existing ineffective-dynamic-import warning remains. Final export reflects
+only those harmless padding changes after the semantic checks. Four changed
+sections apply/hash/reverse against the pinned base; all1097unrelated sections,
+1101targets and Desktop170file selection stay unchanged. Required companion,
+tracked-copy and secret-scan gates are recorded in the round receipts. No release,
+version, tag or per-step CHANGELOG entry; Bot Monitor stays a development batch.
+
+CUA inventory still reports unavailable browser host. Its inventory-only part
+ended with a completion summary; no blind native input/app/Guest retry after145's
+noWindowsAvailable result, no task server/gateway/model or owner Hermes launch.
+No screen-lock inference, screenshot/layout, browser actual-query/degraded-refresh,
+Electron host transport/inventory or canonical desktop navigation acceptance.
+Those release gates remain open. No owner app/data, ai/other machine or ESTOP/
+pause/timer action.
+
 # Monitor recorded issue context — unreleased
 
 The existing Last recorded issue block now shows the selected recorded task,
