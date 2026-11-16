@@ -524,3 +524,23 @@ This extends the earlier query contract, which substituted host.profileRoutes,
 host.agents and host.requestProfile. It does not execute Electron main handlers,
 native IPC serialization, the real gateway pool or native navigation. Those and
 browser paint remain release gates; no test-only product API or behavior change.
+
+
+## Native inventory IPC acceptance
+
+The two inventory reads now execute through a fresh production entry/main/preload
+bundle in an isolated Electron runtime and a real canonical Local gateway. A
+minimal diagnostic renderer calls getProfileRoutes and getAgentRoster; an
+append-only preload capability returns its receipt. Observers preserve actual
+handler and gateway reader results. Default and one named profile come from
+real fixture profile definitions, without sessions, synthetic workers or model
+responses. Native handler results, renderer replies and gateway profile names
+agree; both Local identities survive the actual IPC boundary.
+
+The trial retains Local-only connection data, normal Chromium sandbox/proxy,
+main-process Node guards and OS guards on the gateway and spawned helpers. It
+holds for 60 seconds and closes all owned processes. Exact known OS read probes
+remain in RAM accounting but do not count as Hermes processes. No installed app
+or owner state is adopted. This is a dev bundle with source metadata dependencies,
+not production packaging proof. Full Monitor query/lifecycle, actual canonical
+navigation and on-screen layout/progress/degraded-refresh acceptance remain open.

@@ -1,3 +1,52 @@
+# Native Desktop profile inventory IPC — unreleased
+
+A fresh bundle from the production Electron entry/main/preload runs in a private
+runtime copy with isolated HOME, app-data and a Local-only connection registry.
+A real canonical gateway serves two actual fixture profile definitions: default
+and monitor-ipc-164. There are no seeded sessions, workers, reports or model
+responses. A minimal diagnostic renderer invokes the existing getProfileRoutes
+and getAgentRoster methods. The production preload bytes are unchanged before an
+append-only diagnostic receipt export; main handler observers return the original
+results. The real gateway profile reader is observed without replacing its result.
+
+Both native handler returns match the renderer's deserialized replies. Two real
+gateway profile reads occur inside the handler intervals and return exactly the
+two names; routes and agents keep Local ownership. The route handler also sees
+non-string/duplicate fallback inputs without publishing extra identities. All
+sources are Local and the only source is reachable. The runtime remains alive
+for the required 60 seconds, with no SSH attempts or Node network/filesystem
+refusal records, then
+stops its gateway and all recorded owned processes. Core source input hashes and
+both fixture configs remain unchanged after the trial.
+
+Final trial sampled peaks: 4 Hermes processes; 6 total including exact known
+OS read probes; sampled RSS including every observed child and the observer is
+622,247,936 bytes (about 593.4 MiB). The classifier checks executable, parent and
+arguments for the startup shell/license probes; pure negative controls keep
+actual Electron/Python processes counted. This is workload size, not a measured
+product memory improvement. Main uses Node network/process/filesystem guards;
+Chromium keeps its normal sandbox and verified loopback-only proxy. The gateway
+and Node-spawned helpers retain the OS network/write/SSH boundary.
+An auxiliary startup ps read is refused by that OS boundary; both accepted
+inventory calls still correlate with the actual gateway reader. Wider startup
+health is outside this acceptance.
+
+Setup failures are retained separately: the test-only interpreter lacked anyio;
+dev metadata copies lost their relative dependency tree; a stricter outer OS
+sandbox prevented Chromium sandbox initialization; the first process counter
+included OS probes. The final run uses the existing full interpreter read-only,
+real-path source metadata dependencies and the documented split guard layout.
+Only the private runtime copy was signed locally; the cached runtime and owner's
+app were unchanged. A failed attempt's immediate helper-survivor sample is kept;
+a bounded follow-up confirms zero survivors before another launch.
+
+This closes native transport/inventory for these two reads only. It does not
+exercise the full Monitor query/work lifecycle, SDK canonical navigation, native
+paint/layout, shipped packaging, installed-app adoption or provider billing. No
+product code, patch, version, tag or release changes; the Bot Monitor batch stays
+unreleased. Existing SDK/preload/query checks are prior results, not repeated
+here. Required companion/release-copy and secret-scan gates are separate receipts.
+
 # Monitor Desktop SDK/preload contract — unreleased
 
 Two new rendered integration cases use actual SDK host methods, native preload,
