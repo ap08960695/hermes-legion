@@ -1,3 +1,64 @@
+# Recorded Bot Monitor usage — unreleased
+
+Monitor worker rows now display recorded USD estimates and recorded provider-
+reported amounts separately, with a persistent partial-coverage/not-invoice hint.
+They are never added together. The existing SessionDB row projection sends
+positive finite recorded amounts even after unknown/included latest pricing;
+storage-default zero stays null unless the matching pricing status supports a
+recorded zero. Missing, negative and nonfinite values stay unavailable. Tiny
+positive amounts do not round to zero; signed zero displays as zero.
+
+Recorded worker model and configured bot model carry distinct labels; a missing
+worker model never borrows the bot route. This is stored metadata, not a live
+binding or an invoice reconciliation. Optional Python/TypeScript contracts and
+generated TypeScript/OpenRPC agree, including the already-declared parallel
+observations. Both unified and legacy readers reuse the existing bounded row
+read/cache; no added query, pricing lookup, provider call, timer, dependency or
+storage/schema migration.
+
+Twenty-four new Python cases first failed on missing fields, then passed with
+26 nearby activity/roster checks: 50 tests in five files. They use real temporary
+SessionDB stores, read-only attachments, legacy/unified parity, separate homes,
+old optional contracts, invalid/default/known-zero/partial costs and bounded
+model metadata without config canaries. The canonical shell wrapper could not
+run here: pytest was absent, then its fixed /var/tmp scratch violated owner write
+scope. Tool-only pytest/asyncio and pinned Ruff were installed under the isolated
+work folder. The unchanged canonical per-file engine ran with task-local scratch
+redirection, repository conftest/guards, one worker and no retry. This is real
+pytest proof with that runner adaptation, not an unqualified shell/CI-parity or
+full Hermes suite claim. Owner runtime environment was borrowed read-only.
+
+Two new rendered scenarios first failed on missing cost/model UI. Final 11
+Monitor tests plus 31 nearby tests pass; signed zero was separately reproduced
+before normalization. Scoped ESLint, renderer types, code health (zero findings)
+and bounded build pass. Twelve changed patch sections apply/hash/reverse against
+the pinned base; unrelated sections remain. The kit has 1093 targets and appends
+two Python test files while retaining prior selection order and metadata.
+
+One final-artifact native Local trial tested the previously unobserved foreground
+boundary with passive focus telemetry and baseline GPU flags. CUA read AX and an
+inactive New session screenshot, but the single observed-titlebar coordinate
+click returned noWindowsAvailable. Action completion and foreground focus were
+not established; no Bots/Monitor navigation followed. The bounded probe stopped
+without further activation, Reload or restart. No native dashboard visual,
+before/after layout, actual worker lifecycle or production paint fix is claimed.
+The capture/presentation/control boundary remains unresolved.
+
+The actual Local SSH-zero gate lasted 60.042 seconds; across 824 samples at most
+four Hermes processes were observed, with observer-inclusive RSS maximum
+885,653,504 bytes. These are bounded samples, not a continuous peak/physical RAM
+or savings measurement. Synthetic worker costs/models and one canonical fixture
+message are not actual usage, billing, tool execution or worker activity. All
+owned processes, ports and Computer Use ended; the original 313-entry trial
+bundle/strict signature restored and three fixture config byte/mode baselines
+were preserved. Owner daily app/data, other hosts, ESTOP, pauses and timers stayed
+untouched. Existing unrelated external SSH sessions were left intact; SSH-zero
+is scoped to Hermes Desktop.
+
+This completes the recorded-usage source slice, still unreleased. Error/stuck/
+report authorities, native layout/live lifecycle acceptance and full Monitor
+remain open. [Design](design-bot-monitor.md#recorded-worker-usage-slice).
+
 # Bot Monitor first dashboard slice — unreleased
 
 Bots → Monitor now gathers visible bots and current worker observations into one

@@ -65,5 +65,29 @@ ready as an unreleased development commit, not as the completed Bot Monitor
 capability. Native attempts were blocked by stale captured presentation; neither
 the initial nor software-GPU comparison established visible Monitor acceptance.
 [Verification scope](verification.md#bot-monitor-first-dashboard-slice--unreleased).
-Next finish supported cost/error/stuck/report facts and obtain native layout and
+Next finish error/stuck/report facts and obtain native layout and
 actual progress/settlement proof before the single feature release.
+
+## Recorded worker usage slice
+
+Expose the SessionDB row's existing recorded estimate, recorded provider-reported
+amount and recorded model through the bounded roster read. Extend the shared
+projection used by unified/legacy readers and optional wire contracts; no extra
+query/provider call. Positive finite amounts survive an unknown/included latest
+pricing status. Zero estimate requires latest estimated status; zero reported
+amount requires latest actual status. Other missing/default/invalid values stay
+null. Display both amounts separately as recorded USD, with a persistent partial
+coverage/not-invoice hint; never sum them or infer whole-session free usage.
+Worker model is a recorded route, distinct from the configured bot model and from
+a live binding. Existing current-worker eligibility and canonical opening stay.
+
+A separate usage request would duplicate the roster read; pricing in the renderer
+would invent authority and network work. This extends existing rows only. Real
+temporary DB legacy/unified parity plus rendered regressions prove the slice;
+error/stuck/report authorities and full native acceptance remain later work.
+
+Recorded usage slice is now implemented with real temporary-DB legacy/unified
+parity and rendered UI checks. Native final-artifact verification stopped when
+the single titlebar coordinate probe returned noWindowsAvailable; focus was
+unconfirmed, so no Monitor visual acceptance is claimed. Source slice remains
+unreleased; error/stuck/report and native layout/lifecycle work follow.

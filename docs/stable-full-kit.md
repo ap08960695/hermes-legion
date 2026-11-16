@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1091-path** Legion source, interface and optimization alternative
+This is the complete **1093-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,23 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Recorded Monitor usage (unreleased)
+
+Worker rows show recorded USD estimates and provider-reported amounts separately,
+with a persistent partial-coverage/not-invoice hint. Positive recorded amounts
+survive unknown/included latest pricing; storage-default zero stays unavailable
+unless the corresponding pricing status supports a recorded zero. The model
+column distinguishes stored worker routes from configured bot models. Missing,
+negative and nonfinite amounts stay unavailable; positive sub-cent amounts never
+round to zero. No new query/provider call, polling, storage or dependency.
+
+The existing shared row projection reaches both legacy and unified roster reads;
+optional wire fields and generated TypeScript/OpenRPC artifacts agree, including
+already-declared parallel observations. Twelve changed source/test sections,
+1093 targets; two Python regressions append to the existing selection. This is
+unreleased source work toward the same Monitor batch, with no runtime version
+bump or daily-app adoption. [Design and limits](design-bot-monitor.md#recorded-worker-usage-slice).
 
 ## Bot Monitor dashboard (unreleased)
 

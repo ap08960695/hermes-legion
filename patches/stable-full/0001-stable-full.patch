@@ -3672,15 +3672,16 @@ index 0000000000000000000000000000000000000000..438d199072adc13faa4ab7558e257e4c
 +            agent._wire_reasoning_config = {'enabled': effort != 'none', 'effort': effort}
 +    return result
 diff --git a/agent/session_activity.py b/agent/session_activity.py
-index 5e26a4b7c8a62f7d868058256e35fc3272ea647d..5eedba708039344c6cf65f42d54a4b4f006f0eb0 100644
+index 5e26a4b7c8a62f7d868058256e35fc3272ea647d..6ac309babd61c361b3f440920d40667ee4ac607b 100644
 --- a/agent/session_activity.py
 +++ b/agent/session_activity.py
-@@ -6,2 +6,4 @@ from __future__ import annotations
- 
+@@ -6,2 +6,5 @@ from __future__ import annotations
+
 +import json
++import math
 +import re
  import sys
-@@ -81,2 +83,10 @@ def format_iteration_progress(api_call_count: Any, max_iterations: Any) -> str:
+@@ -81,2 +84,10 @@ def format_iteration_progress(api_call_count: Any, max_iterations: Any) -> str:
      """
 +    cap = bounded_iteration_cap(max_iterations)
 +    if cap is None:
@@ -3691,7 +3692,7 @@ index 5e26a4b7c8a62f7d868058256e35fc3272ea647d..5eedba708039344c6cf65f42d54a4b4f
 +def bounded_iteration_cap(max_iterations: Any) -> Optional[int]:
 +    """The iteration cap as an int, or ``None`` when unset/unbounded (``sys.maxsize`` means unlimited)."""
      try:
-@@ -84,6 +94,41 @@ def format_iteration_progress(api_call_count: Any, max_iterations: Any) -> str:
+@@ -84,6 +95,56 @@ def format_iteration_progress(api_call_count: Any, max_iterations: Any) -> str:
      except (TypeError, ValueError):
 -        cap = sys.maxsize
 -    if cap >= sys.maxsize:
@@ -3719,6 +3720,16 @@ index 5e26a4b7c8a62f7d868058256e35fc3272ea647d..5eedba708039344c6cf65f42d54a4b4f
 +    return n if n >= 0 else None
 +
 +
++def _recorded_cost(value: Any, status: Any, zero_status: str) -> Optional[float]:
++    if isinstance(value, bool) or not isinstance(value, (int, float)):
++        return None
++    try:
++        valid = math.isfinite(value) and (value > 0 or value == 0 and status == zero_status)
++    except OverflowError:
++        return None
++    return value if valid else None
++
++
 +def session_row_progress(row: Mapping[str, Any]) -> dict[str, Any]:
 +    """Bounded "what is it doing now" fields read off a SessionDB row already in hand (no extra reads)."""
 +    config = row.get("model_config")
@@ -3728,6 +3739,7 @@ index 5e26a4b7c8a62f7d868058256e35fc3272ea647d..5eedba708039344c6cf65f42d54a4b4f
 +        except ValueError:
 +            config = None
 +    started = row.get("started_at")
++    model = row.get("model")
 +    return {
 +        "current_tool": current_tool_from_description(row.get("last_activity_description")),
 +        "iteration": _non_negative_int(row.get("api_call_count")),
@@ -3735,8 +3747,12 @@ index 5e26a4b7c8a62f7d868058256e35fc3272ea647d..5eedba708039344c6cf65f42d54a4b4f
 +        "started_at": float(started) if isinstance(started, (int, float)) else None,
 +        "input_tokens": _non_negative_int(row.get("input_tokens")),
 +        "output_tokens": _non_negative_int(row.get("output_tokens")),
++        # Storage zeros lack pricing evidence; latest status does not establish total coverage.
++        "estimated_cost_usd": _recorded_cost(row.get("estimated_cost_usd"), row.get("cost_status"), "estimated"),
++        "actual_cost_usd": _recorded_cost(row.get("actual_cost_usd"), row.get("cost_status"), "actual"),
++        "model": (model.strip()[:256] or None) if isinstance(model, str) else None,
 +    }
- 
+
 diff --git a/agent/shared_prompt_cache.py b/agent/shared_prompt_cache.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..10b9b4a53b36fe36a51b4b4a3a2813c256e19958
@@ -29907,10 +29923,10 @@ index abe8afb7e670b207a192ac15fb797fb8dfed168e..2b2824a97bb7cfd9d21057f4efdfd811
              <SelectContent>
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-locales.ts b/apps/desktop/src/plugins/hermes-bots/monitor-locales.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..1d05bd2509fa845f9811d2cab2b8d48ca378a6e8
+index 0000000000000000000000000000000000000000..8f687bfa4eda55e2ae88a2372b324a64d8340072
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-locales.ts
-@@ -0,0 +1,115 @@
+@@ -0,0 +1,165 @@
 +import type { CANONICAL_GROUP_LOCALES } from './canonical-group-locales'
 +
 +export interface MonitorMessages {
@@ -29932,6 +29948,11 @@ index 0000000000000000000000000000000000000000..1d05bd2509fa845f9811d2cab2b8d48c
 +  sortElapsed: string
 +  sortTokens: string
 +  counts: (bots: number, workers: number) => string
++  costHint: string
++  recordedEstimate: (amount: string) => string
++  recordedActual: (amount: string) => string
++  configuredModel: (model: string) => string
++  recordedModel: (model: string) => string
 +}
 +
 +export const BOT_MONITOR_LOCALES = {
@@ -29939,99 +29960,144 @@ index 0000000000000000000000000000000000000000..1d05bd2509fa845f9811d2cab2b8d48c
 +    title: 'Monitor',
 +    hint: 'Recent worker observations, up to 20 per bot. Missing or stale data does not prove inactivity. Uses the existing roster refresh.',
 +    search: 'Search bots, workers and tasks', entity: 'Bot / worker', status: 'Status',
-+    activity: 'Task / latest signal', elapsed: 'Elapsed', tokens: 'Tokens', cost: 'Cost',
-+    model: 'Configured bot model', attention: 'Last reported bot attention', worker: 'Worker',
++    activity: 'Task / latest signal', elapsed: 'Elapsed', tokens: 'Tokens', cost: "Recorded cost (USD)",
++    model: "Model", attention: 'Last reported bot attention', worker: 'Worker',
 +    missing: 'Not reported', retained: 'Retained snapshot', sortName: 'Sort by name',
 +    sortElapsed: 'Sort by elapsed time', sortTokens: 'Sort by reported tokens',
++    costHint: "Recorded amounts may cover only some calls. They are separate, not added together, and are not an invoice.",
++    recordedEstimate: amount => `Recorded estimate: ${amount}`,
++    recordedActual: amount => `Recorded provider-reported amount: ${amount}`,
++    configuredModel: model => `Configured bot model: ${model}`,
++    recordedModel: model => `Recorded worker model: ${model}`,
 +    counts: (bots, workers) => `Bots: ${bots} · Current worker observations: ${workers}`
 +  },
 +  ja: {
 +    title: 'モニター',
 +    hint: 'ボットごとに最大20件の最近のワーカー観測です。情報の欠落や古さは停止の証拠ではありません。既存の名簿更新を使用します。',
 +    search: 'ボット・ワーカー・タスクを検索', entity: 'ボット / ワーカー', status: '状態',
-+    activity: 'タスク / 最新の情報', elapsed: '経過時間', tokens: 'トークン', cost: '費用',
-+    model: 'ボットの設定モデル', attention: '最後に報告されたボットの注意事項', worker: 'ワーカー',
++    activity: 'タスク / 最新の情報', elapsed: '経過時間', tokens: 'トークン', cost: "記録済み費用 (USD)",
++    model: "モデル", attention: '最後に報告されたボットの注意事項', worker: 'ワーカー',
 +    missing: '未報告', retained: '保持されたスナップショット', sortName: '名前で並べ替え',
 +    sortElapsed: '経過時間で並べ替え', sortTokens: '報告されたトークン数で並べ替え',
++    costHint: "記録額は一部の呼び出しのみを含む場合があります。別々の金額であり、合算値でも請求額でもありません。",
++    recordedEstimate: amount => `記録済み見積額: ${amount}`,
++    recordedActual: amount => `記録済みプロバイダー報告額: ${amount}`,
++    configuredModel: model => `ボットの設定モデル: ${model}`,
++    recordedModel: model => `ワーカーの記録済みモデル: ${model}`,
 +    counts: (bots, workers) => `ボット: ${bots} · 現在のワーカー観測: ${workers}`
 +  },
 +  zh: {
 +    title: '监控',
 +    hint: '每个机器人最多显示20条近期工作进程观测。缺失或过时的数据不能证明没有活动。使用现有名单刷新。',
 +    search: '搜索机器人、工作进程和任务', entity: '机器人 / 工作进程', status: '状态',
-+    activity: '任务 / 最新信号', elapsed: '已用时间', tokens: '令牌', cost: '费用',
-+    model: '机器人配置的模型', attention: '最近报告的机器人注意事项', worker: '工作进程',
++    activity: '任务 / 最新信号', elapsed: '已用时间', tokens: '令牌', cost: "已记录费用 (USD)",
++    model: "模型", attention: '最近报告的机器人注意事项', worker: '工作进程',
 +    missing: '未报告', retained: '保留的快照', sortName: '按名称排序',
 +    sortElapsed: '按已用时间排序', sortTokens: '按报告的令牌数排序',
++    costHint: "记录金额可能仅涵盖部分调用。两项金额分别列出，不相加，也不代表账单。",
++    recordedEstimate: amount => `已记录估算金额：${amount}`,
++    recordedActual: amount => `已记录提供商报告金额：${amount}`,
++    configuredModel: model => `机器人配置的模型：${model}`,
++    recordedModel: model => `工作进程记录的模型：${model}`,
 +    counts: (bots, workers) => `机器人：${bots} · 当前工作进程观测：${workers}`
 +  },
 +  'zh-hant': {
 +    title: '監控',
 +    hint: '每個機器人最多顯示20筆近期工作程序觀測。缺失或過時的資料不能證明沒有活動。使用現有名冊重新整理。',
 +    search: '搜尋機器人、工作程序和工作', entity: '機器人 / 工作程序', status: '狀態',
-+    activity: '工作 / 最新訊號', elapsed: '經過時間', tokens: '權杖', cost: '費用',
-+    model: '機器人設定的模型', attention: '最近回報的機器人注意事項', worker: '工作程序',
++    activity: '工作 / 最新訊號', elapsed: '經過時間', tokens: '權杖', cost: "已記錄費用 (USD)",
++    model: "模型", attention: '最近回報的機器人注意事項', worker: '工作程序',
 +    missing: '未回報', retained: '保留的快照', sortName: '依名稱排序',
 +    sortElapsed: '依經過時間排序', sortTokens: '依回報的權杖數排序',
++    costHint: "記錄金額可能僅涵蓋部分呼叫。兩項金額分別列出，不相加，也不代表帳單。",
++    recordedEstimate: amount => `已記錄估算金額：${amount}`,
++    recordedActual: amount => `已記錄供應商回報金額：${amount}`,
++    configuredModel: model => `機器人設定的模型：${model}`,
++    recordedModel: model => `工作程序記錄的模型：${model}`,
 +    counts: (bots, workers) => `機器人：${bots} · 目前工作程序觀測：${workers}`
 +  },
 +  ar: {
 +    title: 'المراقبة',
 +    hint: 'ملاحظات حديثة للعاملين، بحد أقصى 20 لكل بوت. البيانات المفقودة أو القديمة لا تثبت عدم النشاط. تستخدم تحديث القائمة الحالي.',
 +    search: 'البحث في البوتات والعاملين والمهام', entity: 'البوت / العامل', status: 'الحالة',
-+    activity: 'المهمة / آخر إشارة', elapsed: 'الوقت المنقضي', tokens: 'الرموز', cost: 'التكلفة',
-+    model: 'نموذج البوت المضبوط', attention: 'آخر تنبيه مُبلّغ عنه للبوت', worker: 'عامل',
++    activity: 'المهمة / آخر إشارة', elapsed: 'الوقت المنقضي', tokens: 'الرموز', cost: "التكلفة المسجلة (USD)",
++    model: "النموذج", attention: 'آخر تنبيه مُبلّغ عنه للبوت', worker: 'عامل',
 +    missing: 'غير مُبلّغ عنه', retained: 'لقطة محفوظة', sortName: 'الترتيب حسب الاسم',
 +    sortElapsed: 'الترتيب حسب الوقت المنقضي', sortTokens: 'الترتيب حسب الرموز المُبلّغ عنها',
++    costHint: "قد تغطي المبالغ المسجلة بعض الاستدعاءات فقط. تُعرض منفصلة ولا تُجمع وليست فاتورة.",
++    recordedEstimate: amount => `التقدير المسجل: ${amount}`,
++    recordedActual: amount => `المبلغ المسجل المُبلغ عنه من المزوّد: ${amount}`,
++    configuredModel: model => `نموذج البوت المضبوط: ${model}`,
++    recordedModel: model => `نموذج العامل المسجل: ${model}`,
 +    counts: (bots, workers) => `البوتات: ${bots} · ملاحظات العاملين الحالية: ${workers}`
 +  },
 +  ru: {
 +    title: 'Монитор',
 +    hint: 'Недавние наблюдения за исполнителями: до 20 на бота. Отсутствующие или устаревшие данные не доказывают бездействие. Используется текущее обновление списка.',
 +    search: 'Поиск ботов, исполнителей и задач', entity: 'Бот / исполнитель', status: 'Состояние',
-+    activity: 'Задача / последний сигнал', elapsed: 'Прошло', tokens: 'Токены', cost: 'Стоимость',
-+    model: 'Настроенная модель бота', attention: 'Последнее замечание о боте', worker: 'Исполнитель',
++    activity: 'Задача / последний сигнал', elapsed: 'Прошло', tokens: 'Токены', cost: "Записанная стоимость (USD)",
++    model: "Модель", attention: 'Последнее замечание о боте', worker: 'Исполнитель',
 +    missing: 'Не сообщено', retained: 'Сохранённый снимок', sortName: 'Сортировать по имени',
 +    sortElapsed: 'Сортировать по времени', sortTokens: 'Сортировать по сообщённым токенам',
++    costHint: "Записанные суммы могут охватывать лишь часть вызовов. Они показаны отдельно, не складываются и не являются счётом.",
++    recordedEstimate: amount => `Записанная оценка: ${amount}`,
++    recordedActual: amount => `Записанная сумма от провайдера: ${amount}`,
++    configuredModel: model => `Настроенная модель бота: ${model}`,
++    recordedModel: model => `Записанная модель исполнителя: ${model}`,
 +    counts: (bots, workers) => `Боты: ${bots} · Текущие наблюдения исполнителей: ${workers}`
 +  },
 +  fr: {
 +    title: 'Moniteur',
 +    hint: 'Observations récentes des agents de travail, au plus 20 par bot. Des données absentes ou anciennes ne prouvent pas une inactivité. Utilise le rafraîchissement existant.',
 +    search: 'Rechercher des bots, agents et tâches', entity: 'Bot / agent de travail', status: 'État',
-+    activity: 'Tâche / dernier signal', elapsed: 'Durée', tokens: 'Jetons', cost: 'Coût',
-+    model: 'Modèle configuré du bot', attention: 'Dernière alerte signalée du bot', worker: 'Agent de travail',
++    activity: 'Tâche / dernier signal', elapsed: 'Durée', tokens: 'Jetons', cost: "Coût enregistré (USD)",
++    model: "Modèle", attention: 'Dernière alerte signalée du bot', worker: 'Agent de travail',
 +    missing: 'Non signalé', retained: 'Instantané conservé', sortName: 'Trier par nom',
 +    sortElapsed: 'Trier par durée', sortTokens: 'Trier par jetons signalés',
++    costHint: "Les montants enregistrés peuvent ne couvrir que certains appels. Ils restent séparés, ne sont pas additionnés et ne constituent pas une facture.",
++    recordedEstimate: amount => `Estimation enregistrée : ${amount}`,
++    recordedActual: amount => `Montant enregistré déclaré par le fournisseur : ${amount}`,
++    configuredModel: model => `Modèle configuré du bot : ${model}`,
++    recordedModel: model => `Modèle enregistré de l’agent : ${model}`,
 +    counts: (bots, workers) => `Bots : ${bots} · Observations actuelles des agents : ${workers}`
 +  },
 +  de: {
 +    title: 'Monitor',
 +    hint: 'Aktuelle Worker-Beobachtungen, bis zu 20 pro Bot. Fehlende oder veraltete Daten beweisen keine Inaktivität. Nutzt die vorhandene Listenaktualisierung.',
 +    search: 'Bots, Worker und Aufgaben suchen', entity: 'Bot / Worker', status: 'Status',
-+    activity: 'Aufgabe / letztes Signal', elapsed: 'Verstrichen', tokens: 'Tokens', cost: 'Kosten',
-+    model: 'Konfiguriertes Bot-Modell', attention: 'Zuletzt gemeldeter Bot-Hinweis', worker: 'Worker',
++    activity: 'Aufgabe / letztes Signal', elapsed: 'Verstrichen', tokens: 'Tokens', cost: "Erfasste Kosten (USD)",
++    model: "Modell", attention: 'Zuletzt gemeldeter Bot-Hinweis', worker: 'Worker',
 +    missing: 'Nicht gemeldet', retained: 'Gespeicherter Stand', sortName: 'Nach Namen sortieren',
 +    sortElapsed: 'Nach Laufzeit sortieren', sortTokens: 'Nach gemeldeten Tokens sortieren',
++    costHint: "Erfasste Beträge decken möglicherweise nur einige Aufrufe ab. Sie werden getrennt angezeigt, nicht addiert und sind keine Rechnung.",
++    recordedEstimate: amount => `Erfasste Schätzung: ${amount}`,
++    recordedActual: amount => `Erfasster Anbieterbetrag: ${amount}`,
++    configuredModel: model => `Konfiguriertes Bot-Modell: ${model}`,
++    recordedModel: model => `Erfasstes Worker-Modell: ${model}`,
 +    counts: (bots, workers) => `Bots: ${bots} · Aktuelle Worker-Beobachtungen: ${workers}`
 +  },
 +  es: {
 +    title: 'Monitor',
 +    hint: 'Observaciones recientes de trabajadores, hasta 20 por bot. Los datos ausentes o antiguos no prueban inactividad. Usa la actualización existente de la lista.',
 +    search: 'Buscar bots, trabajadores y tareas', entity: 'Bot / trabajador', status: 'Estado',
-+    activity: 'Tarea / última señal', elapsed: 'Tiempo transcurrido', tokens: 'Tokens', cost: 'Coste',
-+    model: 'Modelo configurado del bot', attention: 'Último aviso del bot comunicado', worker: 'Trabajador',
++    activity: 'Tarea / última señal', elapsed: 'Tiempo transcurrido', tokens: 'Tokens', cost: "Coste registrado (USD)",
++    model: "Modelo", attention: 'Último aviso del bot comunicado', worker: 'Trabajador',
 +    missing: 'No comunicado', retained: 'Instantánea conservada', sortName: 'Ordenar por nombre',
 +    sortElapsed: 'Ordenar por tiempo transcurrido', sortTokens: 'Ordenar por tokens comunicados',
++    costHint: "Los importes registrados pueden cubrir solo algunas llamadas. Se muestran por separado, no se suman y no son una factura.",
++    recordedEstimate: amount => `Estimación registrada: ${amount}`,
++    recordedActual: amount => `Importe registrado comunicado por el proveedor: ${amount}`,
++    configuredModel: model => `Modelo configurado del bot: ${model}`,
++    recordedModel: model => `Modelo registrado del trabajador: ${model}`,
 +    counts: (bots, workers) => `Bots: ${bots} · Observaciones actuales de trabajadores: ${workers}`
 +  }
 +} satisfies Record<keyof typeof CANONICAL_GROUP_LOCALES, MonitorMessages>
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..568ac03b9cbeec62b32cbc6019d6299af61f5a51
+index 0000000000000000000000000000000000000000..7c54992eeef4de95ffdada2fcb5546bdf9406d5a
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor.test.tsx
-@@ -0,0 +1,205 @@
+@@ -0,0 +1,247 @@
 +import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 +
@@ -30237,12 +30303,54 @@ index 0000000000000000000000000000000000000000..568ac03b9cbeec62b32cbc6019d6299a
 +  expect(within(table).queryByText('Working')).toBeNull()
 +  expect(io.refetch).not.toHaveBeenCalled()
 +})
++
++it('shows recorded estimates and provider amounts separately with coverage and model scope', () => {
++  io.rows[0].worker_sessions = [
++    { id: 'priced', title: 'Priced work', last_active: 2000, estimated_cost_usd: 1.25,
++      actual_cost_usd: .0046, model: 'worker-routed-model' },
++    { id: 'zero', title: 'Recorded zero', last_active: 2000, estimated_cost_usd: -0,
++      actual_cost_usd: null, model: null }
++  ]
++  openMonitor()
++  expect(screen.getByText('Recorded estimate: $1.25')).toBeTruthy()
++  expect(screen.getByText('Recorded provider-reported amount: $0.0046')).toBeTruthy()
++  expect(screen.getByText('Recorded estimate: $0.00')).toBeTruthy()
++  expect(screen.getByText('Recorded amounts may cover only some calls. They are separate, not added together, and are not an invoice.')).toBeTruthy()
++  expect(screen.getByText('Configured bot model: configured-model')).toBeTruthy()
++  expect(screen.getByText('Recorded worker model: worker-routed-model')).toBeTruthy()
++  const zero = screen.getByText('Recorded zero').closest('tr')!
++  expect(within(zero).getByText('Recorded worker model: Not reported')).toBeTruthy()
++  expect(within(zero).queryByText(/configured-model|provider-reported amount/)).toBeNull()
++  expect(io.refetch).not.toHaveBeenCalled()
++  expect(io.open).not.toHaveBeenCalled()
++})
++
++it('keeps missing or malformed costs unavailable and positive sub-cent amounts distinct from zero', () => {
++  io.rows[0].worker_sessions = [
++    { id: 'tiny', title: 'Tiny recorded amount', last_active: 2000,
++      estimated_cost_usd: .000001, actual_cost_usd: .00000001 },
++    { id: 'invalid-cost', title: 'Invalid recorded amount', last_active: 2000,
++      estimated_cost_usd: -1, actual_cost_usd: Number.POSITIVE_INFINITY },
++    { id: 'missing-cost', title: 'Missing recorded amount', last_active: 2000,
++      estimated_cost_usd: Number.NaN, actual_cost_usd: null }
++  ]
++  openMonitor()
++  const tiny = screen.getByText('Tiny recorded amount').closest('tr')!
++  expect(within(tiny).getByText('Recorded estimate: <$0.0001')).toBeTruthy()
++  expect(within(tiny).getByText('Recorded provider-reported amount: <$0.0001')).toBeTruthy()
++
++  for (const title of ['Invalid recorded amount', 'Missing recorded amount']) {
++    const row = screen.getByText(title).closest('tr')!
++    expect(within(row).queryByText(/Recorded estimate:|provider-reported amount:|\$0|NaN|Infinity/)).toBeNull()
++    expect(within(row).getAllByText('Not reported').length).toBeGreaterThan(0)
++  }
++})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor.tsx b/apps/desktop/src/plugins/hermes-bots/monitor.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..88f6f7adc6400ea54d694b8db1dfb309a5ca515d
+index 0000000000000000000000000000000000000000..77e88dfc4ba886ad1f4cf0e3e4cba215f0e78efe
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor.tsx
-@@ -0,0 +1,182 @@
+@@ -0,0 +1,208 @@
 +import { Button, Codicon, compactNumber, EmptyState, SearchField, SegmentedControl } from '@hermes/plugin-sdk'
 +import { useState } from 'react'
 +
@@ -30280,6 +30388,31 @@ index 0000000000000000000000000000000000000000..88f6f7adc6400ea54d694b8db1dfb309
 +
 +  return input == null && output == null ? b.monitor.missing
 +    : b.roster.workerTokens(input == null ? b.monitor.missing : compactNumber(input), output == null ? b.monitor.missing : compactNumber(output))
++}
++
++const recordedUsd = new Intl.NumberFormat('en-US', {
++  style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4
++})
++
++function formatRecordedUsd(amount: number): string {
++  return amount > 0 && amount < 0.00005 ? '<$0.0001' : recordedUsd.format(amount === 0 ? 0 : amount)
++}
++
++function monitorCost(worker: WorkerSession | null, b: BotsText) {
++  const estimate = reportedCounter(worker?.estimated_cost_usd), actual = reportedCounter(worker?.actual_cost_usd)
++
++  return <>
++    {estimate != null && <div>{b.monitor.recordedEstimate(formatRecordedUsd(estimate))}</div>}
++    {actual != null && <div>{b.monitor.recordedActual(formatRecordedUsd(actual))}</div>}
++    {estimate == null && actual == null && b.monitor.missing}
++  </>
++}
++
++function monitorModel(worker: WorkerSession | null, configured: RosterRow['model'], b: BotsText): string {
++  const recorded = typeof worker?.model === 'string' ? worker.model.trim().slice(0, 256) : ''
++
++  return worker ? b.monitor.recordedModel(recorded || b.monitor.missing)
++    : b.monitor.configuredModel(configured || b.workspace.modelUnknown)
 +}
 +
 +function monitorStatusLabel(row: BotMonitorProps['rows'][number], status: string, b: BotsText): string {
@@ -30343,6 +30476,7 @@ index 0000000000000000000000000000000000000000..88f6f7adc6400ea54d694b8db1dfb309
 +        <h2 className="text-lg font-semibold">{m.title}</h2>
 +        <p className="mt-1 text-xs text-muted-foreground">{m.hint}</p>
 +        <p className="mt-2 text-xs text-muted-foreground">{m.counts(rows.length, entries.length - rows.length)}</p>
++        <p className="mt-1 text-xs text-muted-foreground">{m.costHint}</p>
 +      </div>
 +      <div className="flex flex-wrap items-center gap-4">
 +        {rows.length > 0 && <SearchField aria-label={m.search} onChange={value => {
@@ -30405,8 +30539,8 @@ index 0000000000000000000000000000000000000000..88f6f7adc6400ea54d694b8db1dfb309
 +                    </td>
 +                    <td className="whitespace-nowrap p-3">{progress.elapsed || m.missing}</td>
 +                    <td className="p-3">{monitorTokens(worker, b)}</td>
-+                    <td className="p-3">{m.missing}</td>
-+                    <td className="break-all p-3">{row.bot.model || b.workspace.modelUnknown}</td>
++                    <td className="min-w-40 p-3">{monitorCost(worker, b)}</td>
++                    <td className="break-all p-3">{monitorModel(worker, row.bot.model, b)}</td>
 +                    <td className="p-3">{worker ? m.missing : row.attentionHint || m.missing}</td>
 +                    <td className="p-3">
 +                      <Button aria-label={`${b.workspace.open} · ${row.name}${worker ? ` · ${title || m.worker}` : ''}`}
@@ -30935,7 +31069,7 @@ index ec8bd2b691954433f7f2c519b54149fc753dca89..00dacc858d70be1a249f601ffc7eb61f
 +  return out
  }
 diff --git a/apps/desktop/src/plugins/hermes-bots/types.ts b/apps/desktop/src/plugins/hermes-bots/types.ts
-index 860445748c4b9b68b9e6349e6bf26df3c9ad9e85..d311f5442fab35607c1910562ef5399068efe210 100644
+index 860445748c4b9b68b9e6349e6bf26df3c9ad9e85..5fb8ad45620c1d5506b14d975457ab14e68eb9f1 100644
 --- a/apps/desktop/src/plugins/hermes-bots/types.ts
 +++ b/apps/desktop/src/plugins/hermes-bots/types.ts
 @@ -28,2 +28,3 @@ export interface ProfileRoute {
@@ -30948,7 +31082,7 @@ index 860445748c4b9b68b9e6349e6bf26df3c9ad9e85..d311f5442fab35607c1910562ef53990
 +  model?: string | null
 +  provider?: string | null
    canonical_session?: CanonicalSession | null
-@@ -133,3 +137,20 @@ export interface RosterRow {
+@@ -133,3 +137,23 @@ export interface RosterRow {
    ui_meta_revisions?: Record<string, number>
 -  worker_session?: { last_active?: number } | null
 +  worker_session?: WorkerSession | null
@@ -30957,6 +31091,9 @@ index 860445748c4b9b68b9e6349e6bf26df3c9ad9e85..d311f5442fab35607c1910562ef53990
 +}
 +
 +export interface WorkerSession {
++  estimated_cost_usd?: null | number
++  actual_cost_usd?: null | number
++  model?: null | string
 +  id?: string
 +  source?: string
 +  current_tool?: null | string
@@ -37772,7 +37909,7 @@ index 0000000000000000000000000000000000000000..48fb2a357fec113ea6d7fb268b1af5b0
 +  return Object.fromEntries(entries)
 +}
 diff --git a/apps/shared/src/gateway-contract.generated.ts b/apps/shared/src/gateway-contract.generated.ts
-index 57a5f6d6774588963334c22dccc5a7101a80b7ed..1e9b8e3b6b2a1d3ad369046a3c1ad05be8dd0c04 100644
+index 57a5f6d6774588963334c22dccc5a7101a80b7ed..a07d2ce82f32ce6c00748d26e21aec39ac21a4ca 100644
 --- a/apps/shared/src/gateway-contract.generated.ts
 +++ b/apps/shared/src/gateway-contract.generated.ts
 @@ -812,2 +812,26 @@ export interface SharedMetricsDesktopDailyResult {
@@ -37808,12 +37945,16 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..1e9b8e3b6b2a1d3ad369046a3c1ad05b
 +  contract?: GoalContractSnapshot | null
 +  expected_revision?: string | null
  }
-@@ -2082,3 +2109,3 @@ export interface ProfileSessionPreview {
+@@ -2067,2 +2094,3 @@ export interface ProfileRow {
+   worker_session?: ProfileWorkerSession | null
++  worker_sessions?: ProfileWorkerSession[] | null
+   canonical_session?: ProfileCanonicalSession | null
+@@ -2082,3 +2110,3 @@ export interface ProfileSessionPreview {
  }
 -/** Newest kanban/tool worker row, so rosters can show a profile as working. */
-+/** Newest kanban/tool worker row, so rosters can show a profile as working (and what it is doing). */
++/** Observed worker metadata, separate from human-facing conversation previews. */
  export interface ProfileWorkerSession {
-@@ -2088,2 +2115,10 @@ export interface ProfileWorkerSession {
+@@ -2088,2 +2116,13 @@ export interface ProfileWorkerSession {
    last_active?: number
 +  last_activity_description?: string
 +  ended_at?: number | null
@@ -37823,8 +37964,11 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..1e9b8e3b6b2a1d3ad369046a3c1ad05b
 +  started_at?: number | null
 +  input_tokens?: number | null
 +  output_tokens?: number | null
++  estimated_cost_usd?: number | null
++  actual_cost_usd?: number | null
++  model?: string | null
  }
-@@ -2433,2 +2468,41 @@ export interface SubagentTailResult {
+@@ -2433,2 +2472,41 @@ export interface SubagentTailResult {
  }
 +export interface ProfileWorkflowGetParams {
 +  profile?: string | null
@@ -37866,41 +38010,45 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..1e9b8e3b6b2a1d3ad369046a3c1ad05b
 +  effort?: string
 +}
  /** ``methods_projects._projects_payload``: every project (archived included) + the active id. */
-@@ -6057,2 +6131,4 @@ export type ConnectorErrorReason = 'INVALID_PARAMS' | 'NOT_OWNER' | 'UNSUPPORTED
+@@ -5288,2 +5366,3 @@ export interface CanonicalProfileRow {
+   worker_session?: ProfileWorkerSession | null
++  worker_sessions?: ProfileWorkerSession[] | null
+   canonical_session?: ProfileCanonicalSession | null
+@@ -6057,2 +6136,4 @@ export type ConnectorErrorReason = 'INVALID_PARAMS' | 'NOT_OWNER' | 'UNSUPPORTED
  export interface RpcMethods {
 +  /** Read per-account quota snapshots. Only refresh=true queries readonly credential-scoped quota endpoints. */
 +  'account.usage': { params: AccountUsageParams; result: AccountUsageResult }
    /** Registry-wide background process summary for ``/agents``. */
-@@ -6353,2 +6429,6 @@ export interface RpcMethods {
+@@ -6353,2 +6434,6 @@ export interface RpcMethods {
    'profiles.set_asset': { params: ProfilesSetAssetParams; result: ProfilesSetAssetResult }
 +  /** Role-specific THINK/ACTION configuration; linkage is not dispatch readiness. */
 +  'profiles.workflow.configure': { params: ProfileWorkflowConfigureParams; result: ProfileWorkflowResult }
 +  /** Role-specific THINK/ACTION configuration; linkage is not dispatch readiness. */
 +  'profiles.workflow.get': { params: ProfileWorkflowGetParams; result: ProfileWorkflowResult }
    /** Structured project facts for a cwd so UIs don't re-sniff the workspace. */
-@@ -6576,2 +6656,3 @@ export type RpcMethod = keyof RpcMethods
+@@ -6576,2 +6661,3 @@ export type RpcMethod = keyof RpcMethods
  export const RPC_METHODS = [
 +  'account.usage',
    'agents.list',
-@@ -6724,2 +6805,4 @@ export const RPC_METHODS = [
+@@ -6724,2 +6810,4 @@ export const RPC_METHODS = [
    'profiles.set_asset',
 +  'profiles.workflow.configure',
 +  'profiles.workflow.get',
    'project.facts',
-@@ -6872,2 +6955,6 @@ export interface CanonicalRpcMethods {
+@@ -6872,2 +6960,6 @@ export interface CanonicalRpcMethods {
    'profiles.list': { params: CanonicalProfilesParams; result: CanonicalProfilesResult }
 +  /** Profile-scoped bot workflow configuration with an expected-revision fence. */
 +  'profiles.workflow.configure': { params: ProfileWorkflowConfigureParams; result: ProfileWorkflowResult }
 +  /** Profile-scoped bot workflow configuration with an expected-revision fence. */
 +  'profiles.workflow.get': { params: ProfileWorkflowGetParams; result: ProfileWorkflowResult }
    /** Retire a still-queued admission; a started one is unaffected. */
-@@ -6941,2 +7028,4 @@ export const CANONICAL_RPC_METHODS = [
+@@ -6941,2 +7033,4 @@ export const CANONICAL_RPC_METHODS = [
    'profiles.list',
 +  'profiles.workflow.configure',
 +  'profiles.workflow.get',
    'prompt.cancel',
 diff --git a/apps/shared/src/gateway-contract.openrpc.json b/apps/shared/src/gateway-contract.openrpc.json
-index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..8114b9dd4b1cd6b03eb857bfa803fbf68438af00 100644
+index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..1a99f2897c2aa2a3eca5a0add12a53a077f20e62 100644
 --- a/apps/shared/src/gateway-contract.openrpc.json
 +++ b/apps/shared/src/gateway-contract.openrpc.json
 @@ -8,2 +8,20 @@
@@ -38243,12 +38391,50 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..8114b9dd4b1cd6b03eb857bfa803fbf6
 +        "type": "object"
 +      },
        "BrowserAction": {
-@@ -29583,3 +29908,3 @@
+@@ -9474,2 +9799,18 @@
+           },
++          "worker_sessions": {
++            "anyOf": [
++              {
++                "items": {
++                  "$ref": "#/components/schemas/ProfileWorkerSession"
++                },
++                "maxItems": 20,
++                "type": "array"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Worker Sessions"
++          },
+           "canonical_session": {
+@@ -29471,2 +29812,18 @@
+           },
++          "worker_sessions": {
++            "anyOf": [
++              {
++                "items": {
++                  "$ref": "#/components/schemas/ProfileWorkerSession"
++                },
++                "maxItems": 20,
++                "type": "array"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Worker Sessions"
++          },
+           "canonical_session": {
+@@ -29583,3 +29940,3 @@
          "additionalProperties": false,
 -        "description": "Newest kanban/tool worker row, so rosters can show a profile as working.",
-+        "description": "Newest kanban/tool worker row, so rosters can show a profile as working (and what it is doing).",
++        "description": "Observed worker metadata, separate from human-facing conversation previews.",
          "properties": {
-@@ -29610,2 +29935,97 @@
+@@ -29610,2 +29967,136 @@
              "title": "Last Active"
 +          },
 +          "last_activity_description": {
@@ -38345,8 +38531,47 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..8114b9dd4b1cd6b03eb857bfa803fbf6
 +            ],
 +            "default": null,
 +            "title": "Output Tokens"
++          },
++          "estimated_cost_usd": {
++            "anyOf": [
++              {
++                "minimum": 0,
++                "type": "number"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Estimated Cost Usd"
++          },
++          "actual_cost_usd": {
++            "anyOf": [
++              {
++                "minimum": 0,
++                "type": "number"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Actual Cost Usd"
++          },
++          "model": {
++            "anyOf": [
++              {
++                "maxLength": 256,
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Model"
            }
-@@ -29618,2 +30038,145 @@
+@@ -29618,2 +30109,145 @@
        },
 +      "ProfileWorkflowConfigureParams": {
 +        "additionalProperties": false,
@@ -38492,7 +38717,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..8114b9dd4b1cd6b03eb857bfa803fbf6
 +        "type": "object"
 +      },
        "ProfilesConfigureApplied": {
-@@ -36096,2 +36659,37 @@
+@@ -36096,2 +36730,37 @@
              "title": "Index"
 +          },
 +          "title": {
@@ -38530,7 +38755,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..8114b9dd4b1cd6b03eb857bfa803fbf6
 +            "default": null,
 +            "title": "Expected Revision"
            }
-@@ -48131,2 +48729,38 @@
+@@ -48131,2 +48800,38 @@
      },
 +    {
 +      "name": "profiles.workflow.configure",
@@ -39729,7 +39954,7 @@ index 65887575dec12b3ddb9f859ebe56156264ea120e..b9d01891079d9487b9aa85628194e8f5
 +            # Our own home: the scope is implicit for strict session/relay verbs, which refuse
              # unknown keys; every other handler validates ``profile`` itself.
 diff --git a/gateway/session_group_controls.py b/gateway/session_group_controls.py
-index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..12b938d7c5c74985b6d31d637202ae2b487e89df 100644
+index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..3ab5126cfa6ffe18da93501586c52226f952fe46 100644
 --- a/gateway/session_group_controls.py
 +++ b/gateway/session_group_controls.py
 @@ -97,3 +97,4 @@ def _group(authority, actor, method, params, *, host_scope=False):
@@ -39751,7 +39976,7 @@ index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..12b938d7c5c74985b6d31d637202ae2b
 +        fields: dict = {'last_session': None, 'worker_session': None, 'canonical_session': None,
 +                        'worker_sessions': []}
          # The named registry is not a recency window and canonical chats are hidden.
-@@ -356,14 +360,21 @@ def _read_bot_sessions(db, subject, operator):
+@@ -356,14 +360,22 @@ def _read_bot_sessions(db, subject, operator):
              fields['last_session'] = summary(latest)
 -        # The profile's freshest worker (#90268, #140977): workers are deny-listed out of every
 -        # conversation listing, so a roster row that only carried conversation fields read "idle"
@@ -39772,6 +39997,7 @@ index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..12b938d7c5c74985b6d31d637202ae2b
 +        workers = conn.execute(
 +            "SELECT id, source, title, started_at, ended_at, last_activity_description, "
 +            "api_call_count, model_config, input_tokens, output_tokens, "
++            "model, estimated_cost_usd, actual_cost_usd, cost_status, "
 +            "COALESCE(last_activity_at, started_at) AS last_active FROM sessions "
 +            f"WHERE COALESCE(source,'') IN ({hidden_sources},?) AND archived=0 AND hidden=0 "
 +            "ORDER BY last_active DESC LIMIT 20", (*INTERNAL_LISTING_SOURCES, SUBAGENT_SOURCE)).fetchall()
@@ -39783,12 +40009,12 @@ index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..12b938d7c5c74985b6d31d637202ae2b
 +        if fields['worker_sessions']:
 +            fields['worker_session'] = fields['worker_sessions'][0]
      return fields
-@@ -392,3 +403,3 @@ def _profiles(authority, actor, home, params, siblings=()):
+@@ -392,3 +404,3 @@ def _profiles(authority, actor, home, params, siblings=()):
      ``_roster_siblings``' snapshot; a sibling with a reader carries the same session fields."""
 -    from hermes_cli.profiles import _profile_info
 +    from hermes_cli.profiles import _profile_info, _read_config_model
      import hermes_yaml as yaml
-@@ -424,5 +435,8 @@ def _profiles(authority, actor, home, params, siblings=()):
+@@ -424,5 +436,8 @@ def _profiles(authority, actor, home, params, siblings=()):
          seen.add(target.resolve())
 +        # The configured route is the config.yaml model block, memoised on the file's signature, so
 +        # a 5 s poll does not re-parse it; the card shows it as configured, not as a live binding.
@@ -39799,7 +40025,7 @@ index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..12b938d7c5c74985b6d31d637202ae2b
 +                 'model': model or '', 'provider': provider or '', 'description': '',
 +                 'display_name': configured, 'skill_count': 0}
          if include_sessions and reach is not None:
-@@ -432,2 +446,3 @@ def _profiles(authority, actor, home, params, siblings=()):
+@@ -432,2 +447,3 @@ def _profiles(authority, actor, home, params, siblings=()):
              entry['display_name'] = str(meta.get('display_name') or configured)
 +            entry['description'] = str(meta.get('description') or '').strip()
              if isinstance(meta.get('ui_meta'), dict):
@@ -60315,6 +60541,46 @@ index 0000000000000000000000000000000000000000..7681227bcf10ac3124a76a28821e82a9
 +    assert snapshot['effort_limit'] == 'high'
 +    assert snapshot['requested_effort'] == 'max'
 +    assert 'max' in snapshot['supported_efforts']
+diff --git a/tests/agent/test_session_row_usage.py b/tests/agent/test_session_row_usage.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..ede5d426988b6016c77584042a325629a5333e84
+--- /dev/null
++++ b/tests/agent/test_session_row_usage.py
+@@ -0,0 +1,34 @@
++"""Recorded usage projections do not turn storage defaults into known zero cost."""
++import pytest
++
++from agent.session_activity import session_row_progress
++
++
++@pytest.mark.parametrize('status,estimate,reported,expected', [
++    (None, None, None, (None, None)),
++    (None, 0, 0, (None, None)),
++    ('unknown', 0, 0, (None, None)),
++    ('included', 0, 0, (None, None)),
++    ('estimated', 0, 0, (0, None)),
++    ('actual', 0, 0, (None, 0)),
++    ('unknown', 1.25, .7, (1.25, .7)),
++    ('included', .004, .003, (.004, .003)),
++    ('estimated', -1, -2, (None, None)),
++    ('actual', float('nan'), float('inf'), (None, None)),
++    ('estimated', '1.2', '2.3', (None, None)),
++    ('actual', True, False, (None, None)),
++    ('estimated', 10**500, object(), (None, None)),
++])
++def test_recorded_amounts_keep_unknown_zero_and_partial_coverage_distinct(status, estimate, reported, expected):
++    result = session_row_progress({'cost_status': status, 'estimated_cost_usd': estimate,
++                                   'actual_cost_usd': reported})
++    assert (result['estimated_cost_usd'], result['actual_cost_usd']) == expected
++
++
++@pytest.mark.parametrize('model,expected', [(None, None), ('', None), (3, None),
++                                           ('  worker-route  ', 'worker-route'), ('x' * 300, 'x' * 256)])
++def test_recorded_model_is_bounded_without_borrowing_configured_route(model, expected):
++    result = session_row_progress({'model': model, 'model_config': {'model': 'not-the-recorded-model',
++                                                                  'api_key': 'private-config-canary'}})
++    assert result['model'] == expected
++    assert 'private-config-canary' not in str(result)
 diff --git a/tests/agent/test_shared_cache_routing.py b/tests/agent/test_shared_cache_routing.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..6384ee22e6ae467f87468b44fdae55af6f21c5d8
@@ -63228,6 +63494,59 @@ index daeeece18ae7a6663844b8d24da1a7950dc43ffd..f341aa7b806c2138f8b2e32e3c010e2e
 +        finally:
 +            assert runner._shutdown_executor(drain_timeout=5) == 0
 
+diff --git a/tests/gateway/test_bot_monitor_usage.py b/tests/gateway/test_bot_monitor_usage.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..cb18989acd2765a66d7dee42a7f9561439d9bd35
+--- /dev/null
++++ b/tests/gateway/test_bot_monitor_usage.py
+@@ -0,0 +1,47 @@
++"""Legacy and unified roster reads expose recorded usage from the same owned row."""
++import pytest
++
++from gateway.session_group_controls import _read_bot_sessions
++from hermes_state import SessionDB
++import tui_gateway.server as srv
++from tui_gateway.contracts.profiles_vault_complete_foreign_subagents import ProfileWorkerSession
++
++
++@pytest.mark.parametrize('status,amounts,expected', [
++    (None, (0, 0), (None, None)),
++    ('estimated', (0, 0), (0, None)),
++    ('actual', (0, 0), (None, 0)),
++    ('included', (.004, .003), (.004, .003)),
++    ('unknown', (1.25, .7), (1.25, .7)),
++])
++def test_existing_roster_read_keeps_recorded_usage_and_profile_identity(tmp_path, status, amounts, expected):
++    for profile, model, values in [('alpha', 'alpha-recorded-model', amounts),
++                                    ('beta', 'beta-recorded-model', (2.5, 1.1))]:
++        home = tmp_path / profile
++        home.mkdir()
++        with SessionDB(db_path=home / 'state.db') as db:
++            db.create_session(profile + '-worker', 'kanban', model=model,
++                              model_config={'max_iterations': 8, 'api_key': 'private-route-canary'})
++            db.set_session_title(profile + '-worker', profile + ' worker')
++            db.update_token_counts(profile + '-worker', input_tokens=123, output_tokens=4,
++                                   api_call_count=1, estimated_cost_usd=values[0], actual_cost_usd=values[1],
++                                   cost_status=status, absolute=True, source='kanban')
++            db.touch_session_activity(profile + '-worker', description='executing tool: read_file')
++        with SessionDB(db_path=home / 'state.db', read_only=True) as reader:
++            native = _read_bot_sessions(reader, 'uid:desk', True)
++            legacy_human, legacy_workers = srv._latest_profile_session_rows(reader)
++            worker = native['worker_session']
++            assert legacy_human is None
++            assert native['last_session'] is None and native['canonical_session'] is None
++            assert native['worker_sessions'] == legacy_workers == [worker]
++            assert worker['id'] == profile + '-worker' and worker['model'] == model
++            assert (worker['estimated_cost_usd'], worker['actual_cost_usd']) == (expected if profile == 'alpha' else values)
++            assert worker['input_tokens'] == 123 and worker['current_tool'] == 'read_file'
++            assert 'private-route-canary' not in str(worker)
++            assert 'model_config' not in worker and 'cost_status' not in worker
++            assert ProfileWorkerSession.model_validate(worker).model_dump()['model'] == model
++
++
++def test_optional_usage_contract_accepts_an_older_worker():
++    result = ProfileWorkerSession.model_validate({'id': 'older-worker'})
++    assert result.model is None and result.estimated_cost_usd is None and result.actual_cost_usd is None
 diff --git a/tests/gateway/test_bot_relay_profile_selector.py b/tests/gateway/test_bot_relay_profile_selector.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..d7c418f16a5aebc23b418dd5e14adace40d6703f
@@ -63325,23 +63644,24 @@ index 0000000000000000000000000000000000000000..d7c418f16a5aebc23b418dd5e14adace
 +    assert reply.get('error', {}).get('message') == reason, reply
 +    assert all(not relay_root(home).exists() for home in homes)
 diff --git a/tests/gateway/test_bot_roster_worker_session.py b/tests/gateway/test_bot_roster_worker_session.py
-index deedad1bca4c4a300755c8ba3c0a53005130a56f..cc74dc267081ddf22ff957b99b94673b21770f38 100644
+index deedad1bca4c4a300755c8ba3c0a53005130a56f..d519537627a9b5443f70e82e8840744c89428c15 100644
 --- a/tests/gateway/test_bot_roster_worker_session.py
 +++ b/tests/gateway/test_bot_roster_worker_session.py
-@@ -63,6 +63,10 @@ def test_the_newest_live_worker_is_reported_with_the_contract_fields(db):
+@@ -63,6 +63,11 @@ def test_the_newest_live_worker_is_reported_with_the_contract_fields(db):
      assert fields['worker_session'] == {'id': 'work-new', 'source': 'kanban',
 -                                        'title': 'Task 9', 'last_active': 3000}, fields['worker_session']
 +                                        'title': 'Task 9', 'last_active': 3000,
 +                                        'last_activity_description': '', 'ended_at': None,
 +                                        'started_at': 3000, 'current_tool': None, 'iteration': 0,
 +                                        'max_iterations': None, 'input_tokens': 0,
-+                                        'output_tokens': 0}, fields['worker_session']
++                                        'output_tokens': 0, 'estimated_cost_usd': None,
++                                        'actual_cost_usd': None, 'model': None}, fields['worker_session']
      # The conversation fields keep their own contract: the worker never becomes the last session.
      assert (fields['last_session'] or {}).get('id') != 'work-new'
 -    assert [key for key in fields] == ['last_session', 'worker_session', 'canonical_session']
 +    assert [key for key in fields] == ['last_session', 'worker_session', 'canonical_session', 'worker_sessions']
 
-@@ -75,2 +79,24 @@ def test_a_profile_without_workers_reports_none(db):
+@@ -75,2 +80,24 @@ def test_a_profile_without_workers_reports_none(db):
 
 +@pytest.mark.parametrize('ended', [None, 2100])
 +def test_monitor_progress_and_terminal_boundary_reach_own_and_sibling_rows(db, ended):
@@ -63366,7 +63686,7 @@ index deedad1bca4c4a300755c8ba3c0a53005130a56f..cc74dc267081ddf22ff957b99b94673b
 +
 +
  def test_the_own_row_and_a_host_scoped_sibling_row_both_carry_the_worker(db, tmp_path):
-@@ -88 +114,66 @@ def test_the_own_row_and_a_host_scoped_sibling_row_both_carry_the_worker(db, tmp
+@@ -88 +115,66 @@ def test_the_own_row_and_a_host_scoped_sibling_row_both_carry_the_worker(db, tmp
      assert _sibling_sessions(authority, READER) == {}
 +
 +
@@ -96346,7 +96666,7 @@ index a7346e3f0a6d57a6ea1eeb0a05517eb943b737d0..da2738697b6257c235c147bd6f5b3662
 +    expected_revision: str | None = None
  
 diff --git a/tui_gateway/contracts/profiles_vault_complete_foreign_subagents.py b/tui_gateway/contracts/profiles_vault_complete_foreign_subagents.py
-index 79519693dd5fba61c15cb2f19cfef03bd64f647f..178cd9f510c16982926e7a70db912d25816eebaa 100644
+index 79519693dd5fba61c15cb2f19cfef03bd64f647f..bf6d0846223580a97220aae41d80290edbff6b78 100644
 --- a/tui_gateway/contracts/profiles_vault_complete_foreign_subagents.py
 +++ b/tui_gateway/contracts/profiles_vault_complete_foreign_subagents.py
 @@ -18,3 +18,3 @@ from .common import OpenModel, ProfileParams, SessionParams, SubagentStatus
@@ -96359,7 +96679,7 @@ index 79519693dd5fba61c15cb2f19cfef03bd64f647f..178cd9f510c16982926e7a70db912d25
 -    """Newest kanban/tool worker row, so rosters can show a profile as working."""
 +    """Observed worker metadata, separate from human-facing conversation previews."""
 
-@@ -134,2 +134,10 @@ class ProfileWorkerSession(Result):
+@@ -134,2 +134,13 @@ class ProfileWorkerSession(Result):
      last_active: float | int = 0
 +    last_activity_description: str = ""
 +    ended_at: float | int | None = None
@@ -96369,12 +96689,15 @@ index 79519693dd5fba61c15cb2f19cfef03bd64f647f..178cd9f510c16982926e7a70db912d25
 +    started_at: float | int | None = None
 +    input_tokens: int | None = None
 +    output_tokens: int | None = None
++    estimated_cost_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
++    actual_cost_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
++    model: str | None = Field(default=None, max_length=256)
 
-@@ -164,2 +172,3 @@ class ProfileRow(Result):
+@@ -164,2 +175,3 @@ class ProfileRow(Result):
      worker_session: ProfileWorkerSession | None = None
 +    worker_sessions: list[ProfileWorkerSession] | None = Field(default=None, max_length=20)
      canonical_session: ProfileCanonicalSession | None = None
-@@ -700 +709,51 @@ method("subagent.tail", params=SubagentIdParams, result=SubagentTailResult,
+@@ -700 +712,51 @@ method("subagent.tail", params=SubagentIdParams, result=SubagentTailResult,
         doc="Last 16KB of an owned child's live transcript.")
 +
 +
