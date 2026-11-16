@@ -10,6 +10,15 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Acknowledged Settings imports (v0.33.1)
+
+The shared config editor returns its existing current save acknowledgement;
+Import waits before announcing success. Cancelled, failed and superseded imports
+cannot report success, and non-object JSON cannot submit write intent. Apply the
+kit and rebuild Desktop. Two existing source/test sections change; 1085 targets
+and test selection remain unchanged. Native Local cancellation, real permission
+refusal, retry and reopen passed. [Checks and limits](release-notes-v0.33.1.md).
+
 ## Parallel observed bot work (v0.33.0)
 
 Full Bots cards list bounded worker observations with their own titles/activity/

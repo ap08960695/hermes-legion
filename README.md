@@ -13,6 +13,7 @@ the [release policy](CONTRIBUTING.md#release-policy) for future versioning.
 
 ## What is included
 
+- [v0.33.1: confirm config imports after saving](docs/release-notes-v0.33.1.md), removes premature success on cancelled or failed Settings imports.
 - [v0.33.0: see parallel bot work](docs/release-notes-v0.33.0.md), lists observed workers and their progress, with consistent activity counts and status when one stops.
 
 - [v0.32.0: read and enlarge chat charts](docs/release-notes-v0.32.0.md), opens charts in the existing pan/zoom viewer and exposes full labels and parsed values through Details.

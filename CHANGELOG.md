@@ -5,6 +5,18 @@ supported update or Desktop rebuild path. This kit does not install a rebuilt
 Hermes.app. Linked notes identify opt-in memory settings and admission guards
 that apply after adoption. Each entry states its adoption and verification limits.
 
+## v0.33.1 — Confirm config imports after saving
+
+Settings says **Config imported** after the current native save succeeds.
+Cancelling toolset removal or failing to save no longer reports success.
+Non-object JSON is refused before editing. Restore write access and import again
+after a save failure. Apply the source kit and rebuild Desktop.
+
+Native Local cancellation, real permission refusal, retry, disk readback and
+Settings reopen passed. Partial imports can still temporarily show omitted fields
+as empty until reopen; their disk values remain preserved.
+[Checks and limits](docs/release-notes-v0.33.1.md).
+
 ## v0.33.0 — See parallel bot work
 
 Full Bots cards list recent observed workers with their own titles and progress.

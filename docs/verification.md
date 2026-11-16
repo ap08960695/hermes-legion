@@ -1,3 +1,26 @@
+# v0.33.1 — Confirm config imports after saving
+
+Native Local Import previously showed success while removal confirmation was
+still cancellable. The rebuilt renderer waits for its existing native save
+acknowledgement. Cancellation and a real test-home permission refusal show no
+success; the latter displays actionable Autosave failed guidance and preserves
+disk bytes. Restored access permits retry, saving both imported fields while
+retaining unrelated keys. Settings reopen reads Memory Budget 2901 and original
+unrelated values. The short success toast was captured on a repeated import.
+
+Eight new cases fail before; the final nearest selection passes 68 tests.
+Scoped lint, types and build pass with existing act/dynamic-import warnings.
+Two changed sections pass pinned-base apply/hash/reverse; 1085 targets and test
+selection remain. No unchanged source/mock sweep was repeated.
+
+Final native run passed an actual 60-second SSH-zero gate, <=4 sampled Hermes
+processes and 928,481,280 bytes observer-inclusive sampled RSS; no savings claim.
+No Send/model request occurred. Processes, port, config/modes and original trial
+bundle were closed/restored. Baseline guardian was absent on resume; independent
+recorded-identity/port/config checks preceded its restoration. Native ai/Linux,
+daily-app adoption and partial-import draft display remain open.
+[Release notes and detailed limits](release-notes-v0.33.1.md).
+
 # v0.33.0 — See parallel bot work
 
 Fresh native Local before/after UI Send created two real delegated children in
