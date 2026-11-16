@@ -240,6 +240,32 @@ This accepts cap persistence only. Actual attachment rejection, uploads, native
 IME, Image Attachments mode effects, crash durability and write-failure reporting
 remain outside this proof. [Checks and limits](release-notes-v0.33.8.md).
 
+## Native Mac Projects preference persistence (v0.33.8 follow-up)
+
+In **Settings → Workspace → Projects & discovery**, default's Working Directory,
+Automatic Repository Discovery, Repository Discovery Roots and Excluded Repository
+Paths were edited while scope-c remained the profile for new chats. Discovery
+was confirmed off in the native config before changing either path list. Every
+cwd, root and exclusion stayed inside the isolated trial's synthetic directories.
+The final exclusion edit was followed directly by navigation to Shell environment,
+without Enter or a separate blur step. Returning retained all four values.
+
+Settings profile switches showed scope-b and scope-c's distinct original paths
+and on/off values; default retained its edits. Native comparison found only the
+four intended default keys changed. All unrelated default values and both other
+profile files were preserved. After every first writer and guardian ended, fresh
+processes reopened the same home, app data and exact signed bundle. All three
+profiles showed their saved values without another edit; saved config bytes and
+modes matched the checkpoint.
+
+Both actual 60-second Local SSH-zero gates passed. All owned processes/ports and
+Computer Use ended before original config bytes/modes and the trial bundle/signature
+were restored. No runtime change or version bump was needed. This accepts saving
+and reading the four named preferences. Repository discovery results, empty-root
+home scanning, cwd effects on tool execution, invalid paths, pending-save profile
+races, crash recovery, daily-app adoption and Linux/ai remain unverified.
+[Detailed evidence](verification.md#native-mac-projects-preference-persistence--v0338-follow-up).
+
 ## Limits
 
 All config operations share one ordered queue because legacy aliases and registry

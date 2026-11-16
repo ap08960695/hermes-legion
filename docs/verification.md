@@ -1,3 +1,35 @@
+# Native Mac Projects preference persistence — v0.33.8 follow-up
+
+In **Settings → Workspace → Projects & discovery**, default's Working Directory
+changed to a synthetic trial folder, discovery was switched off, roots changed
+to two bounded folders and the exclusion list changed to a child path. The native
+off flag was confirmed before either list edit. The final focused exclusion edit
+went directly to Shell environment without Enter or a separate blur; returning
+retained all four values. The new-chat profile stayed scope-c during this flow.
+
+Settings switches read scope-b and scope-c's distinct original paths and on/off
+values, then default's edits. Parsed native comparison found only `terminal.cwd`,
+`desktop.repo_scan_enabled`, `desktop.repo_scan_roots` and
+`desktop.repo_scan_exclude_paths` changed. All unrelated default values and both
+other profile files were preserved. Every first app/gateway/helper and guardian
+ended before fresh processes reopened the same home, app data and exact signed
+diagnostic bundle. All three profiles showed their previous values without another
+edit; all three saved config hashes and modes matched. Session, message,
+delegation and hosted-room counts stayed zero.
+
+Actual Local SSH-zero gates lasted 60.068 and 60.082 seconds. Across 1291 and 841
+samples, at most four Hermes processes were observed; observer-inclusive RSS
+maxima were 929,218,560 and 865,173,504 bytes. These are bounded samples, without
+continuous-peak or savings claims. All owned processes/ports and Computer Use ended
+before original config baselines and the 313-entry trial bundle/signature restored.
+Owner app/data, other hosts, ESTOP, pauses and timers were untouched.
+
+This is named preference acceptance on v0.33.8, without a source/build change or
+new release. No Send, inference or terminal/file tool ran. Actual discovery
+results, empty-root home scanning, cwd effects, invalid paths, pending-save races,
+crash durability, all Settings pages, daily-app adoption and Linux/ai remain open.
+Earlier startup paint symptoms remain unresolved. [Scope and limits](settings-autosave.md#native-mac-projects-preference-persistence-v0338-follow-up).
+
 # Native Mac attachment cap Escape persistence — v0.33.8
 
 In **Settings → Chat → Attachments**, a focused 1 MB draft followed by Escape
