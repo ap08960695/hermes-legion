@@ -13,6 +13,7 @@ the [release policy](CONTRIBUTING.md#release-policy) for future versioning.
 
 ## What is included
 
+- [v0.33.8: keep attachment size edits when closing Settings](docs/release-notes-v0.33.8.md), saves the focused preview limit before Escape closes the page.
 - [v0.33.7: report group membership save failures](docs/release-notes-v0.33.7.md), keeps a failed membership change visible and offers explicit Retry.
 - [v0.33.6: announce compact bot work correctly](docs/release-notes-v0.33.6.md), aligns row names and name tooltips with existing work state.
 - [v0.33.5: keep list edits when closing Settings](docs/release-notes-v0.33.5.md), preserves a focused comma-separated list when Escape closes Settings.

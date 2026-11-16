@@ -5,6 +5,16 @@ supported update or Desktop rebuild path. This kit does not install a rebuilt
 Hermes.app. Linked notes identify opt-in memory settings and admission guards
 that apply after adoption. Each entry states its adoption and verification limits.
 
+## v0.33.8 — Keep attachment size edits when closing Settings
+
+In **Settings → Chat → Attachments**, pressing Escape after editing Max preview /
+image load size now saves the focused draft before closing Settings. Previously
+the edit could disappear, leaving the old limit. Enter, moving focus, normalization
+and IME handling retain their existing rules. The limit belongs to this device;
+it is shared across profiles. Apply the source kit and rebuild Desktop. Native
+Local before/after and fresh-process readback pass; actual attachment rejection,
+uploads and crash durability remain unverified. [Checks and limits](docs/release-notes-v0.33.8.md).
+
 ## v0.33.7 — Report group membership save failures
 
 Per-Bot Manage groups now warns when Hermes explicitly fails to save a membership.

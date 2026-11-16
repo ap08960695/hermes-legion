@@ -1,3 +1,30 @@
+# Native Mac attachment cap Escape persistence — v0.33.8
+
+In **Settings → Chat → Attachments**, a focused 1 MB draft followed by Escape
+reopened as 16 MB on the before build, with no saved cap file. The final build
+writes the device-wide 1 MB cap before closing; reopening and a Settings profile
+switch show 1 MB. Fresh app/gateway processes reopen the same home, app data and
+exact signed diagnostic bundle and read 1 MB without another edit. Saved cap
+bytes/mode and all three unchanged native profile configs match.
+
+The real rendered overlay regression fails four cases on backed production bytes
+with 29 controls passing; the fix passes all 33. Nearest selection totals 76
+passing cases, with no new act-warning headers. Scoped lint, renderer types,
+bounded renderer build, health and changed-section base/apply/hash/reverse checks
+pass. Prior test selection and unrelated patch sections are retained.
+
+All three actual Local SSH-zero gates pass. The first final observer was
+interrupted before final statistics; its raw 60-second gate remains, and recovery
+verified recorded process/guardian/port closure before fresh launch. Completed
+before/reopened observers record at most four Hermes processes. Session, message,
+delegation and hosted-room counts stay zero. All owned processes/ports and Computer
+Use end before original cap absence and the 313-entry trial bundle/signature
+restore. No owner data, ai/other host, ESTOP, pause or timer change.
+
+This proves saving/reading the named cap, with no actual attachment-limit, upload,
+native IME, crash-durability, memory-savings or whole-Settings acceptance claim.
+The daily app is not rebuilt. [Implementation and limits](release-notes-v0.33.8.md).
+
 # Native Mac Workspace preference persistence — v0.33.7 follow-up
 
 In **Settings → Workspace**, default's Persistent Shell was switched off, and

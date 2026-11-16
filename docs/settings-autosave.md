@@ -219,6 +219,27 @@ these two preferences. No terminal, SSH backend or file-read tool executed; thei
 effects, numeric boundaries, persistence before 550 ms, crash durability, Projects
 controls and the rest of Settings remain unverified. [Detailed evidence](verification.md#native-mac-workspace-preference-persistence--v0337-follow-up).
 
+## Attachment size drafts on Escape (v0.33.8)
+
+In **Settings → Chat → Attachments**, Escape now commits a focused Max preview /
+image load size draft before closing the overlay. It uses the existing blur
+commit and normalization. Empty input resets to 16 MB; below-minimum values use
+the 1 MB floor. Enter and moving focus retain their behavior. IME compositions
+do not trigger the new Escape save; unrelated unmounts do not save drafts.
+
+This cap belongs to the device, despite the page's profile selector. Native
+before/after checks reproduced 16 → 1 → Escape losing the draft before the fix
+and retaining it afterward. Another profile showed the same 1 MB. Fresh processes
+reopened the exact signed build with the same home and app data and read 1 MB
+without another edit. Cap bytes/mode and all three unchanged profile configs
+matched. All writers ended before original cap absence and trial bundle/signature
+were restored. The first final observer was interrupted; its final resource
+statistics are unavailable, and recovery verified closure before restart.
+
+This accepts cap persistence only. Actual attachment rejection, uploads, native
+IME, Image Attachments mode effects, crash durability and write-failure reporting
+remain outside this proof. [Checks and limits](release-notes-v0.33.8.md).
+
 ## Limits
 
 All config operations share one ordered queue because legacy aliases and registry

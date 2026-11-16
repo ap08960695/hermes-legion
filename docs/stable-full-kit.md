@@ -10,6 +10,14 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Keep the attachment size draft (v0.33.8)
+
+The device-wide preview/image limit blurs on non-composing Escape before the
+Settings overlay closes, reusing its existing normalization and IPC commit.
+No cleanup save, propagation change, API, schema or dependency is added. Two
+existing source/test sections change; 1088 targets and test selection remain.
+Apply the kit and rebuild Desktop. [Checks and native limits](release-notes-v0.33.8.md).
+
 ## Confirm group membership saves (v0.33.7)
 
 Per-Bot Manage groups consumes the existing save outcome, serializes its three
