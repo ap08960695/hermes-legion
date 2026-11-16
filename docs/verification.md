@@ -1,3 +1,37 @@
+# v0.33.7 — Confirm per-Bot membership saves
+
+Unchanged native before: Create & join checks a membership and clears the name
+while profile.yaml stays absent in a write-denied target folder. No failure warning.
+Final native build: the same denial retains the name, shows the local-only warning
+and Retry. Restoring folder write access alone does not create metadata; explicit
+Retry saves it. A second denied removal preserves native bytes and the bot's other
+group; Retry confirms the intended removal. Remove-all clears only that bot.
+
+All first writers/guardian stop before new app/gateway identities reopen the same
+home, app data and exact signed artifact. Retained memberships remain checked;
+removed memberships remain unchecked. Native metadata/config bytes and modes
+match for all three profiles. Sessions/messages/delegations/hosted rooms stay empty;
+no Send, model fixture, inference or dispatch. This is the existing per-Bot legacy
+metadata path, not canonical-room roster editing or cross-device acceptance.
+
+Initial rendered red4/2 controls; explicit Retry/sticky-failure red2/5 controls;
+final nearest34 pass, including pending, fallback, removal, later draft and Japanese
+feedback. Types/build and scoped health0/0 pass. Lint adds zero diagnostics to six
+errors/one warning reproduced against backed baseline bytes. Vite's existing
+deprecation/dynamic-import warnings remain. Five pinned-base sections apply/hash/
+reverse correctly;1088 targets and one selected Desktop test addition. No unchanged
+broad source/mock sweep. [Adoption and limits](release-notes-v0.33.7.md).
+
+Actual SSH-zero gates:60.056/60.058/60.123 seconds for before/final/reopened cohorts.
+1148/1644/1119 bounded samples stay at most four Hermes processes; observer-inclusive
+RSS maxima895795200/913227776/886013952 bytes, without continuous-peak/saving claims.
+All owned processes/ports/CUA end; original profile/config baselines, denied folder
+modes and313-entry bundle/strict signature restore. Owner app/data, other hosts,
+ESTOP/pauses/timers unchanged. These final launches need no Reload; previous startup
+paint cause remains unresolved. Canonical/standalone room member editing, actual
+sync/dispatch, providers, daily-app/Linux/ai, spoken a11y and narrow windows remain
+unverified. Required companion, tracked-copy release and exact secret gates apply.
+
 # Native Local startup diagnostic — v0.33.6 follow-up
 
 A fresh isolated Local launch's first Computer Use observation reported Not

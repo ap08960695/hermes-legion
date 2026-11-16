@@ -5,6 +5,16 @@ supported update or Desktop rebuild path. This kit does not install a rebuilt
 Hermes.app. Linked notes identify opt-in memory settings and admission guards
 that apply after adoption. Each entry states its adoption and verification limits.
 
+## v0.33.7 — Report group membership save failures
+
+Per-Bot Manage groups now warns when Hermes explicitly fails to save a membership.
+The change stays visible on this device; Retry repeats it when requested. Failed
+joins keep their name, and overlapping changes wait. Older gateways keep the
+existing local fallback. Apply the consolidated source kit and rebuild Desktop.
+Native denied-save/recovery and fresh-process membership readback pass locally;
+cross-device sync and canonical room membership editing are not established.
+[Checks and limits](docs/release-notes-v0.33.7.md).
+
 ## v0.33.6 — Announce compact bot work correctly
 
 Compact bot buttons and name tooltips now say Working when an available bot has

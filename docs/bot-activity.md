@@ -1,5 +1,20 @@
 # Bot activity
 
+## Confirm per-Bot group saves (v0.33.7)
+
+In **Bots → Manage team**, right-click a bot and open **Manage groups**. An explicit
+save failure now stays visible in the dialog. The local selection is retained;
+**Retry** repeats that captured change without clearing a different group name
+entered afterward. A failed join keeps its name. Controls wait for the pending
+save, and successful feedback follows settlement. There is no automatic retry.
+
+Native Local checks cover denied joins/removals, explicit recovery, preserving
+another group, Remove from all groups, and retained/removed memberships after
+fresh processes reopen the same state. This is the per-Bot legacy metadata door;
+it does not add canonical hosted-room membership editing or establish cross-device
+transport. Apply the source kit and rebuild Desktop. Older gateways retain their
+local fallback. [Checks and limits](release-notes-v0.33.7.md).
+
 ## Compact work names (v0.33.6)
 
 In **Bots → Manage team**, compact button names and name tooltips use the same
