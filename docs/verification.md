@@ -1,3 +1,37 @@
+# Native Local startup diagnostic — v0.33.6 follow-up
+
+A fresh isolated Local launch's first Computer Use observation reported Not
+connected; its saved JPEG showed CONNECTING. During subsequent window activation
+and observation, the same process/build showed This device / scope-b / Connected
+without Reload, Send or a new WebSocket. The first saved full AX tree was already
+Connected; the initial AX result is an observed tool result, not a retained raw AX
+file. This is a diagnostic observation, not a startup fix or reliability claim.
+
+Sparse native main/ASGI traces show the renderer published its Local/scope-b
+route about four seconds after app process birth. Its sole WebSocket was accepted,
+and the first 36 RPCs received successful responses before eight seconds. The
+same socket continued heartbeats and answered all 52 observed numbered RPCs;
+no second handshake or authentication recovery occurred. These are instrumented
+main/backend intervals, not a user-visible paint deadline. Window hide/show events
+also occurred; renderer atom consumption and the actual foreground paint were not
+traced. Visibility, paint scheduling and stale UI state remain hypotheses. The
+previous Reload-dependent observations are not explained by this cohort.
+
+Task-only observers exclude tokens and request/result bodies. IPC controls
+preserve receiver, arguments, return/Promise identity, synchronous throws and
+unrelated handlers; ASGI controls preserve message/result/exception identity.
+Observation can change timing. No product code, renderer build, dependency, test
+selection, patch or runtime version changed; unchanged broad suites were skipped.
+
+The actual 60.146-second SSH-zero gate passes. Across 967 bounded samples, Hermes
+count stays at most four and observer-inclusive RSS reaches 886,996,992 bytes,
+without a continuous-peak or saving claim. All owned identities/ports end; original
+config bytes/modes and the 313-entry trial bundle/signature restore. Both session
+stores stay empty. No owner app/data, other host, ESTOP, pause or timer changed.
+Required companion, tracked-copy release and secret gates apply. Cold startup
+acceptance remains open; the next useful observation is renderer state and paint
+across window visibility, rather than another speculative connection retry.
+
 # v0.33.6 — Announce compact bot work correctly
 
 The retained unchanged native before build names a compact bot Ready while its
