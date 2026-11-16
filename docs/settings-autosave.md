@@ -151,6 +151,28 @@ needed. This covers failed application Quit and explicit retry; title-bar close,
 crash, disk-full, network-failure and persistence-before-550-ms behavior remain
 outside this native check. [Detailed evidence](verification.md#native-mac-settings-quit-recovery--v0335-follow-up).
 
+## Native Mac title-bar close recovery (v0.33.5 follow-up)
+
+With minimize-to-tray disabled, the native window close button was tested
+separately from application Quit. Settings applied to default while scope-b was
+selected for new chats. Memory Budget changed from 3111 to 3456 in an isolated
+home that refused writes. After autosave failed, clicking the native close button
+caused a new native flush failure and retained the same window, draft and
+write-access guidance. The file stayed at 3111; the other profile stayed byte exact.
+
+Restoring write access and clicking close again, without another edit, saved 3456
+and destroyed the window before test cleanup. The Mac application remained alive;
+this was a window close, with no application Quit. After all writers and the first
+guardian ended, fresh processes reopened the same home, app data and build.
+Settings read 3456 and the file matched its post-close bytes. Complete mapping
+checks preserved unrelated settings. Both session stores stayed empty.
+
+Both actual 60-second Local SSH-zero gates passed. All owned processes and ports
+ended before original config bytes/modes and the trial bundle/signature were
+restored. No runtime change or version bump was needed. This does not establish
+zero writes on reopen, persistence before 550 ms, crash durability, disk-full or
+network-failure recovery. [Detailed evidence](verification.md#native-mac-title-bar-close-recovery--v0335-follow-up).
+
 ## Limits
 
 All config operations share one ordered queue because legacy aliases and registry

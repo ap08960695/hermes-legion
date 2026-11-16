@@ -1,3 +1,33 @@
+# Native Mac title-bar close recovery — v0.33.5 follow-up
+
+With minimize-to-tray explicitly disabled, actual Local Settings changes default's
+Memory Budget 3111→3456 while the isolated home refuses writes; scope-b remains
+the new-chat selection. After autosave fails, clicking the native window close
+button adds a new config permission failure (1→2) and flush failure (0→1).
+The same native app/window retains draft 3456 and write-access guidance; the
+primary file stays at 3111 and the other profile stays byte exact. Passive native
+events record the close and its prevented state after dispatch, with no CLOSED
+or application Quit event. The observer never changes the event.
+
+Restore only the owned folder mode, then click close again without editing.
+Native CLOSED and complete saved mapping 3456 are proved before guardian cleanup,
+while the Mac app remains alive. This distinguishes destroyed-window acceptance
+from hiding to tray or application Quit. All first-cohort writers and the guardian
+end before fresh app/gateway identities reopen the same home, app data and build.
+Settings reads 3456; config bytes match the post-close file, without a zero-write
+claim. Unrelated mapping and the other profile are preserved. Both native session
+stores stay empty; no Send/model/tool runs.
+
+Both actual SSH-zero gates pass (60.141 / 60.084 seconds); 2,175 / 811 bounded
+samples stay within four Hermes processes. Observer-inclusive RSS maxima are
+898,891,776 / 883,294,208 bytes, without continuous-peak or saving claims. All
+owned identities/ports end before original config bytes/modes, folder mode and
+the 313-entry trial bundle with strict signature are restored. No owner app/data,
+other host, ESTOP, pause or timer changes. No runtime, build, dependency, selection
+or version change. Crash, disk-full, network failure, persistence before 550 ms,
+daily-app, remote/ai and Linux acceptance remain open. Required companion,
+tracked-copy release and secret gates apply. [Journey](settings-autosave.md#native-mac-title-bar-close-recovery-v0335-follow-up).
+
 # Native Mac Settings Quit recovery — v0.33.5 follow-up
 
 Actual Local Settings, applying to default with ambient scope-b, changes Memory

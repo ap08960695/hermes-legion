@@ -43,3 +43,8 @@ explicit retry and same-home cold-readback evidence. The failed quit retains the
 draft; restoring write access and quitting again saves it without another edit.
 No runtime change or version bump was needed. See the [journey and remaining
 limits](settings-autosave.md#native-mac-failed-quit-and-recovery-v0335-follow-up).
+
+The separate [native title-bar close check](settings-autosave.md#native-mac-title-bar-close-recovery-v0335-follow-up)
+also retains the draft after a new close-triggered permission failure. Restoring
+write access and closing again saves the value, destroys the window while the Mac
+app remains alive, and preserves the value through a same-home cold reopen.
