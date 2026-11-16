@@ -1,7 +1,8 @@
 # Agent-desktop computer use
 
-Status: unreleased development. GOAL12 adds this after Bot Monitor. Native
-Monitor terminal presentation remains an independent acceptance blocker.
+Status: unfinished, opt-in development, excluded from v0.34.0 runtime-readiness
+claims. GOAL12 makes this the capability set after Bot Monitor. Monitor Local
+acceptance is now recorded separately; the native mutation boundary below remains.
 
 ## First source slice: discovery and read-only status
 

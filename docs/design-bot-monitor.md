@@ -1,15 +1,17 @@
 # Bot Monitor
 
-Status: development, not a released capability. Owner goal addenda 10/10b make
-this the current feature project. The existing v0.33.8 release remains historical.
+Status: scoped Local capability accepted for the v0.34.0 source-kit handoff.
+Commit/tag/publication and owner-app adoption remain separate actions. Historical
+development records below retain their original limits; [release scope](release-notes-v0.34.0.md) is current.
 
 
 ## Release gate audit — 2026-11-17
 
-**Not ready to release.** Product code is based on kit `2706aab`; later native
-acceptance below uses unchanged source. This audit separates existing coverage
-from failed full-scenario results. The narrow-table source fix and its browser
-regression are included.
+**Ready for the scoped v0.34.0 source-kit handoff.** Product code is based on
+kit `2706aab`; later native acceptance uses unchanged source. Separate passed
+runs cover separate capabilities. Round186 remains failed, with its earlier
+observations qualified; untested runtime limits remain explicit. The narrow-table
+source fix and its browser regression are included.
 
 | Capability | Evidence and coverage | Remaining boundary |
 |---|---|---|
@@ -30,18 +32,18 @@ ACK. Controls are explicitly reset. Original process/window, Local/SSH fences an
 resource/deadline guards remain. Guarded recorded-issue Error membership/search
 observations now supplement those controls, but their trial stops at
 report-click admission. A focused native trial now passes existing nonempty
-canonical reopening. Proceed to final feature-batch review, retaining round186
-as failed rather than promoting its qualified observations to a scenario pass.
+canonical reopening. The scoped feature-batch review retains round186 as failed
+rather than promoting its qualified observations to a scenario pass.
 
 Late server-response completion is not proof that a canceled client's completion
 handler ran. Existing stopped-state assertions after the held server handler
 finishes retain that narrower coverage; no late-client race-safety claim is made.
 
-After those native gates pass, finish the single feature-batch release review:
-plain-language notes/screenshots, inventory and CHANGELOG consistency, then the
-version/tag handoff under the normal lead workflow. This audit adds no version,
-release, adoption, product behavior, polling or dependency. Native evidence and
-limits are detailed in [verification](verification.md); the round182 failure is
+The feature-batch review now prepares one v0.34.0 source inventory with grouped
+plain-language notes, private before/after capture references and CHANGELOG entry.
+Driver commit/annotated tag and lead publication follow the normal workflow; no
+owner adoption, remote connection or production billing claim is made. Native
+evidence and limits are detailed in [verification](verification.md); round182 is
 [recorded separately](verification.md#native-narrow-readiness-timeout-and-release-gate-audit--unreleased).
 
 

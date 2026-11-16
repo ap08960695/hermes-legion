@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1101-path** Legion source, interface and optimization alternative
+This is the complete **1120-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,20 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Bot Monitor capability batch — v0.34.0
+
+Bots → Monitor combines current worker observations, recorded bot/worker usage,
+local search/filter/sort, recorded issue/report context and canonical chat actions.
+This source inventory is prepared for driver commit/tag handoff. Separate native
+Local runs cover progress/settlement, Completed/Error/Stopped reports, retained
+read-failure recovery, narrow keyboard access and existing canonical reopening.
+Round186 remains failed after its qualified Error-control observations; no combined
+scenario or production/ai/adoption claim is made. Agent-desktop stays unfinished
+and opt-in, with `cua` still default. [Grouped release notes and capture references](release-notes-v0.34.0.md).
+
+The following sections preserve the earlier development records and their original
+unreleased labels; the v0.34.0 notes define the current scoped capability set.
 
 ## Native failure reaches recorded issue controls (unreleased)
 

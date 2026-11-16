@@ -1,3 +1,20 @@
+# v0.34.0 — Bot Monitor source-release review
+
+The capability batch is accepted for the scoped source-kit handoff described in
+[release notes](release-notes-v0.34.0.md), using separate matching native runs:
+round179 recovery/source authority, round180 progress/Completed, round181 Error,
+round185 narrow Stop/worker controls/keyboard reach, and round187 existing nonempty
+canonical reopening. Round186 is
+corroborating recorded-issue observation only; its INVALID/STOP/noACK is unchanged.
+No all-capabilities-in-one-run, paid-provider, ai, adoption or agent-desktop runtime
+readiness claim. Runtime-untested paths remain listed in the release notes.
+
+This review changes documentation and release inventory only. The 1120-target source
+manifest, patch and test selection remain unchanged; their per-slice regression/
+patch evidence is reused. Companion unit, tracked-copy release and both secret
+gates are the fresh handoff checks. No new UI launch or owner config access.
+Historical records below retain their original acceptance/failure boundaries.
+
 # Native existing canonical Bot Chat reopening — accepted, unreleased
 
 **Named-profile Monitor Open reopens the existing nonempty Bot Chat.** This

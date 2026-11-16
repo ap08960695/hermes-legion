@@ -11,9 +11,9 @@ Historical source comments and release payloads received [privacy maintenance](d
 Read the [changelog](CHANGELOG.md) for improvements grouped by capability and
 the [release policy](CONTRIBUTING.md#release-policy) for future versioning.
 
-## Development work
+## Bot Monitor source kit — v0.34.0
 
-The working branch includes an [unreleased Bot Monitor dashboard](docs/design-bot-monitor.md):
+This source kit includes the [Bot Monitor dashboard](docs/design-bot-monitor.md):
 Bots → Monitor gathers current bot/worker observations into one searchable,
 sortable table. It now shows recorded worker estimates/provider-reported amounts
 separately, with a partial-coverage hint. Bot rows now show their stored Bot Chat
@@ -40,10 +40,11 @@ A separate focused native trial now reopens the existing nonempty named Bot Chat
 matching its saved session/profile/transcript without creating a session or model
 call. Feature-batch review retains the failed Error-control scenario boundary;
 see the [release gate audit](docs/design-bot-monitor.md#release-gate-audit--2026-11-17).
-The latest released version is v0.33.8. No daily-app adoption is included.
+The source inventory is prepared as v0.34.0; commit/tag/publication remain driver
+handoff actions. No daily-app adoption is included. [Release notes](docs/release-notes-v0.34.0.md).
 
 The [agent-desktop diagnostics slice](docs/design-agent-desktop.md) is also
-unreleased: `hermes computer-use status --backend agent-desktop` finds an existing
+unfinished and opt-in: `hermes computer-use status --backend agent-desktop` finds an existing
 installation and reports permission states. Configure a binary/release directory
 with `hermes config set computer_use.agent_desktop.path /path/to/agent-desktop`.
 This does not select a runtime provider or establish snapshot/action support.
@@ -60,6 +61,7 @@ other input forms remain unverified or unimplemented; see the design note.
 
 ## What is included
 
+- [v0.34.0: Bot Monitor](docs/release-notes-v0.34.0.md), one dashboard for task/progress/usage, recorded issues/reports and source-qualified chat actions. Source release prepared for driver handoff.
 - [v0.33.8: keep attachment size edits when closing Settings](docs/release-notes-v0.33.8.md), saves the focused preview limit before Escape closes the page.
 - [v0.33.7: report group membership save failures](docs/release-notes-v0.33.7.md), keeps a failed membership change visible and offers explicit Retry.
 - [v0.33.6: announce compact bot work correctly](docs/release-notes-v0.33.6.md), aligns row names and name tooltips with existing work state.

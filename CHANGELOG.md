@@ -5,6 +5,22 @@ supported update or Desktop rebuild path. This kit does not install a rebuilt
 Hermes.app. Linked notes identify opt-in memory settings and admission guards
 that apply after adoption. Each entry states its adoption and verification limits.
 
+## v0.34.0 — Bot Monitor
+
+**Bots → Monitor** brings bot/worker activity into one searchable, sortable table:
+task/step, elapsed time, recorded tokens/model/cost, latest recorded issues and
+source-qualified chat/report actions. Missing facts stay unavailable; stored bot
+usage and workers stay separate. Reports show saved outcomes and bounded excerpts.
+Short windows keep rows and keyboard actions reachable, model labels stay readable,
+and closing reports restores focus. Failed roster reads retain a labelled stale
+snapshot and disable Open until recovery. Apply the consolidated source kit and
+rebuild Desktop; no daily-app adoption is included. Native Local progress,
+Completed/Error/Stopped reports, recovery and existing canonical reopening pass
+in separate scoped runs. Recorded-issue observations retain their failed trial's
+completion boundary. Agent-desktop remains unfinished opt-in work. Source inventory
+prepared; commit/annotated tag/publication remain driver handoff actions.
+[Evidence, before/after captures and limits](docs/release-notes-v0.34.0.md).
+
 ## v0.33.8 — Keep attachment size edits when closing Settings
 
 In **Settings → Chat → Attachments**, pressing Escape after editing Max preview /
