@@ -1,3 +1,38 @@
+# Native Mac Settings Quit recovery — v0.33.5 follow-up
+
+Actual Local Settings, applying to default with ambient scope-b, changes Memory
+Budget 3111→3456 while the isolated home refuses writes. Native autosave fails;
+CmdQ adds a new config permission failure (1→2) and a quit-flush failure (0→1).
+The same app/window remains open with draft 3456 and write-access guidance, while
+the primary file remains at 3111 and the other profile stays byte exact.
+
+Restoring only the folder's write access and issuing another CmdQ, without a new
+edit, saves 3456 and exits with native quit code 0. The process exit and native
+quit event are recorded before guardian cleanup. Its identity-bound exit marker
+can be armed only after the blocked-quit proof; a small admission self-check
+passes one positive and eight negative controls. The diagnostic hook observes
+events without preventing or changing them. Existing product queue/gates remain.
+
+After every first-cohort writer/helper and guardian ends, fresh app/gateway
+identities reopen the same home, app data and diagnostic build. Settings reads
+3456 with config bytes matching the post-Quit file. Complete mapping comparisons
+preserve unrelated values and the other profile. Both native session stores stay
+empty; no Send, model request or terminal tool runs. Byte equality does not prove
+zero writes. The second cohort ends through the guardian, separately from the
+first cohort's accepted native Quit.
+
+Both actual SSH-zero gates pass (60.029 / 60.127 seconds); 1,296 / 768 bounded
+samples stay within four Hermes processes. Observer-inclusive RSS maxima are
+915,914,752 / 877,035,520 bytes, without continuous-peak or saving claims. All
+owned identities/ports end before original config bytes/modes, folder mode and
+the 313-entry trial bundle with strict signature are restored. Finder capture
+initially returned cgWindowNotFound; the console was verified unlocked and the
+owned trial window worked. No owner app/data, other host, ESTOP, pause or timer
+changed. No source patch, renderer build, test selection, dependency or version
+change. Title-bar close, crash, disk-full, network failure, persistence before
+550 ms, daily-app, remote/ai and Linux acceptance remain open. Required companion,
+tracked-copy release and secret gates apply. [Journey](settings-autosave.md#native-mac-failed-quit-and-recovery-v0335-follow-up).
+
 # Native Local sibling Bots acceptance — v0.33.5 follow-up
 
 Actual UI Send in scope-b invokes native delegation and holds one child through

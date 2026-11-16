@@ -32,6 +32,14 @@ The backend and regression test were installed on Linux and ARM64 Mac before
 publication. The native Mac backend also passes an actual folder-permission
 failure, old-file preservation and successful retry under network/GPU restrictions.
 Desktop compiled assets are unchanged. Existing production Gateway
-processes and protected settings/credential files were preserved. This does not
-establish native disk-full injection, network failure recovery, crash durability,
-interactive Mac acceptance or production workload savings.
+processes and protected settings/credential files were preserved. Those earlier
+checks did not establish native disk-full injection, network failure recovery,
+crash durability, interactive Mac acceptance or production workload savings.
+
+## Native Mac Quit recovery follow-up
+
+The current v0.33.5 Local app now has interactive permission-failure, failed Quit,
+explicit retry and same-home cold-readback evidence. The failed quit retains the
+draft; restoring write access and quitting again saves it without another edit.
+No runtime change or version bump was needed. See the [journey and remaining
+limits](settings-autosave.md#native-mac-failed-quit-and-recovery-v0335-follow-up).

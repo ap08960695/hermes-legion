@@ -129,6 +129,28 @@ and closure. It does not establish that disk persistence completed before the
 550 ms debounce deadline, crash durability, every Settings page or remote
 behavior. The current v0.33.4 runtime was reused without a source or build change.
 
+## Native Mac failed Quit and recovery (v0.33.5 follow-up)
+
+With Settings applying to default while scope-b was selected for new chats,
+Memory Budget changed from 3111 to 3456. The isolated settings folder deliberately
+refused writes. Autosave showed write-access guidance; CmdQ caused another native
+save failure and kept the same app/window open with draft 3456. The file still
+contained 3111 and the other profile stayed byte exact.
+
+After restoring write access, a second CmdQ, without another edit, saved the
+retained value and exited normally. Native quit events and exit code 0 were
+recorded before the test guardian began cleanup. All writers/helpers and the
+first guardian ended before fresh processes reopened the same home and app data
+with the same build. Settings read 3456; native config bytes matched the saved
+file. This is byte preservation, not proof that no writes occurred on reopen.
+
+Both Local cohorts passed actual 60-second SSH-zero checks and kept session
+stores empty. Original config bytes/modes and the trial app bundle/signature
+were restored after the last writer ended. No runtime change or new version was
+needed. This covers failed application Quit and explicit retry; title-bar close,
+crash, disk-full, network-failure and persistence-before-550-ms behavior remain
+outside this native check. [Detailed evidence](verification.md#native-mac-settings-quit-recovery--v0335-follow-up).
+
 ## Limits
 
 All config operations share one ordered queue because legacy aliases and registry
