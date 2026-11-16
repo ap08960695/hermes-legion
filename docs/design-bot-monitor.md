@@ -159,5 +159,21 @@ checks and19Monitor+31nearby UI cases pass. Missing task status/index in a compl
 batch stays unknown/unbound instead of borrowing the unit or another task.
 Report/error text is labelled as excerpts. Redaction binds the owning store's
 home and restores the caller's context, preserving per-profile vault-value
-isolation without secret hydration or process-environment changes. Native layout, actual worker
+isolation without secret hydration or process-environment changes. Native layout, on-screen worker
 progress/settlement and feature-release acceptance remain open.
+
+## Native backend integration
+
+The lifecycle-to-report boundary now has one repeatable integration regression.
+It uses the public gateway lifecycle, real private-control tickets and WebSocket
+API, native agents/delegation, a real fixture-file read, durable heartbeat,
+terminal ledger and the same canonical report consumed by Monitor. Nonempty
+side-chat and sibling-profile controls cannot substitute for the task. No test
+code seeds or repairs the main task's sessions, progress or ledger.
+
+Model responses, timing and usage come from a bounded loopback fixture. The
+gateway shares the isolated per-file pytest process; this does not cover CLI
+daemon launch, subprocess isolation or native UI paint. Native visual and
+on-screen progress/settlement acceptance still gate the feature release. With
+CUA returning `Invalid app` for the uniquely identified trial, another native
+launch needs changed supported target-selection evidence first.

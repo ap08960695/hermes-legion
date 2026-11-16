@@ -1,3 +1,37 @@
+# Native Monitor lifecycle integration — unreleased
+
+`tests/gateway/test_bot_monitor_native_lifecycle.py` follows one actual native
+delegation through the public gateway lifecycle and authenticated private-control
+ticket/WebSocket API. It creates the named Bot Chat, submits the parent turn,
+identifies its one real subagent, checks persisted `read_file` output, observes a
+normal durable heartbeat, and releases the bounded model reply. The same child
+ends successfully; its native async ledger settles and is delivered, and the
+canonical roster exposes the matching delegation/task, goal, result and time.
+Canonical token fields reconcile with that parent row, rather than worker sums.
+Native parent completion is persisted too. No SQL seed, status/heartbeat write,
+terminal repair or ledger fabrication supplies this task's evidence.
+
+Independent side-chat and sibling Bot Chat turns produce nonempty transcripts
+through the same API. While the child runs, their identities and report scopes
+stay separate; the sibling cannot borrow the worker or its settled report.
+An unknown profile remains refused. The single 180-second deadline starts at
+main-task submission and covers heartbeat, terminal/report and parent delivery.
+
+The test passes using the canonical per-file engine, one worker and zero retries,
+with repository fixtures/guards and task-owned scratch/output retention. This
+is not a full shell-wrapper/CI-parity result. The gateway runs inside
+the test process; public lifecycle/readiness references only coordinate startup
+and shutdown. Contract operations use real sockets and persistence reads.
+Model content, timing and usage are loopback fixtures, not a provider, invoice or
+model-quality measurement. No CLI daemon boot/signals, subprocess boundary,
+native window/layout or on-screen progress claim follows from this check.
+
+Scoped Ruff and code health pass. One new test section applies/hashes/reverses
+against the pinned base; the current kit has1098targets and retains unrelated
+sections. The prior renderer/source results below are historical, not rerun.
+Native CUA target selection remains unavailable; no launch retry, feature
+release or daily-app adoption is included in this development step.
+
 # Recorded task reports in Bot Monitor — unreleased
 
 Recent reports opens a source-qualified local snapshot of recorded async task

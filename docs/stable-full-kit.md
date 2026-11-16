@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1097-path** Legion source, interface and optimization alternative
+This is the complete **1098-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,22 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Native Monitor lifecycle integration (unreleased)
+
+One new gateway regression runs the public gateway lifecycle in its isolated
+per-file test process. Authenticated private-control tickets and the real
+WebSocket API create a named Bot Chat, dispatch one native child, execute
+`read_file`, observe a normal durable heartbeat, and follow that same task into
+terminal worker rows and canonical reports. Native code owns every lifecycle
+and ledger write. Nonempty side-chat and sibling-profile controls stay distinct.
+
+Only loopback model replies, timing and usage are fixtures. The full chain passes
+within the 180-second submission deadline. This adds one test section and one
+selection entry; unrelated patch sections are retained. It does not prove CLI
+daemon launch, process-boundary isolation, native UI layout, real billing or model
+quality. CUA target selection remains blocked, so the feature stays unreleased.
+[Verification](verification.md#native-monitor-lifecycle-integration--unreleased).
 
 ## Recorded task reports (unreleased)
 
@@ -31,7 +47,7 @@ Twelve changed sections roundtrip;1097targets, unrelated patch sections exact.
 One new Python test appends, prior selection order/metadata retained.36focused
 Python and50UIcases pass, plus scoped lint/types/build/generated/health checks.
 No new provider/request/poll/timer/dependency/schema/control. This is unreleased
-source work; native layout/lifecycle acceptance and one feature batch follow.
+source work; native layout/on-screen lifecycle acceptance and one feature batch follow.
 [Design](design-bot-monitor.md#recorded-task-reports-slice).
 
 ## Canonical bot usage (unreleased)

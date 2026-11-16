@@ -64426,6 +64426,265 @@ index 0000000000000000000000000000000000000000..5c495cc372bda66dacc254c8f26c66c7
 +def test_older_canonical_contract_accepts_missing_usage():
 +    row = ProfileCanonicalSession.model_validate({'id': 'old', 'resolved_id': 'old'})
 +    assert all(getattr(row, key) is None for key in USAGE_KEYS)
+diff --git a/tests/gateway/test_bot_monitor_native_lifecycle.py b/tests/gateway/test_bot_monitor_native_lifecycle.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..17931a385f24095fdd1352c22432c64b69546fc6
+--- /dev/null
++++ b/tests/gateway/test_bot_monitor_native_lifecycle.py
+@@ -0,0 +1,253 @@
++"""Native delegation reaches Monitor reports; only loopback model replies are simulated."""
++import asyncio
++from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
++import json
++import os
++from pathlib import Path
++import sqlite3
++import sys
++import threading
++import time
++
++from websockets.asyncio.client import connect
++
++from tests.gateway.fixtures.local_recovery_probe import rpc
++from tests.gateway.test_normal_runtime_boot import control
++from tests.waiting import async_wait_until
++
++
++class _Model(BaseHTTPRequestHandler):
++    def log_message(self, *args):
++        pass
++
++    def do_POST(self):
++        if self.path == '/api/show':
++            self.send_error(404)
++            return
++        try:
++            assert self.path == '/v1/chat/completions'
++            size = int(self.headers['Content-Length'])
++            assert 0 < size < 2 * 1024 ** 2
++            body = json.loads(self.rfile.read(size))
++            messages = body['messages']
++            tools = [t['function']['name'] for t in body.get('tools', [])]
++            delivered = any(m['role'] == 'user' and str(m.get('content', '')).startswith(
++                '[ASYNC DELEGATION BATCH COMPLETE') for m in messages)
++            result = any(m['role'] == 'tool' for m in messages)
++            kind = ('delivery' if delivered else 'status' if result else 'delegate') if 'delegate_task' in tools else (
++                'after-read' if result else 'read')
++            last_user = next((m.get('content') for m in reversed(messages) if m['role'] == 'user'), '')
++            if last_user in {'INDEPENDENT_SIDE_CHAT', 'INDEPENDENT_PROFILE'}:
++                kind = 'side-control' if last_user == 'INDEPENDENT_SIDE_CHAT' else 'profile-control'
++            with self.server.lock:
++                self.server.calls.append(kind)
++                assert self.server.calls.count(kind) == 1 and len(self.server.calls) <= 7
++            message = {'role': 'assistant', 'content': 'MONITOR_PARENT_DONE' if kind == 'delivery' else (
++                'MONITOR_PARENT_WAITING' if kind == 'status' else 'MONITOR_WORKER_DONE')}
++            if kind in {'side-control', 'profile-control'}:
++                message['content'] = last_user
++            finish = 'stop'
++            if kind in {'delegate', 'read'}:
++                name, args = ('delegate_task', {'tasks': [{
++                    'goal': 'Read the local fixture once, then return MONITOR_WORKER_DONE.', 'toolsets': ['file']}]}) if kind == 'delegate' else (
++                        'read_file', {'path': str(self.server.path), 'offset': 1, 'limit': 5})
++                assert name in tools
++                message = {'role': 'assistant', 'content': None, 'tool_calls': [{
++                    'index': 0, 'id': 'monitor-' + kind, 'type': 'function',
++                    'function': {'name': name, 'arguments': json.dumps(args)}}]}
++                finish = 'tool_calls'
++            if kind == 'after-read':
++                assert any(m['role'] == 'tool' and 'MONITOR_NATIVE_FILE_CONTENT' in str(m.get('content'))
++                           for m in messages)
++                self.server.read_done.set()
++                assert self.server.release.wait(150), 'worker reply latch expired'
++            if kind == 'delivery':
++                assert any('status=completed' in str(m.get('content')) and 'MONITOR_WORKER_DONE' in str(m.get('content'))
++                           for m in messages)
++            frame = {'id': 'monitor-' + kind, 'model': 'loopback-fixture', 'choices': [{
++                'index': 0, 'delta' if body.get('stream') else 'message': message, 'finish_reason': finish}],
++                'usage': {'prompt_tokens': 17, 'completion_tokens': 5, 'total_tokens': 22}}
++            data = ('data: ' + json.dumps(frame) + '\n\ndata: [DONE]\n\n').encode() if body.get('stream') else json.dumps(frame).encode()
++            self.send_response(200)
++            self.send_header('Content-Type', 'text/event-stream' if body.get('stream') else 'application/json')
++            self.send_header('Content-Length', str(len(data)))
++            self.end_headers()
++            self.wfile.write(data)
++        except Exception as exc:
++            self.server.errors.append(repr(exc))
++            self.send_error(500)
++
++
++def _rows(home, sql, args=()):
++    with sqlite3.connect((home / 'state.db').as_uri() + '?mode=ro', uri=True) as db:
++        db.row_factory = sqlite3.Row
++        return [dict(row) for row in db.execute(sql, args)]
++
++
++def test_native_worker_settlement_becomes_its_bot_chat_report(tmp_path, monkeypatch):
++    home, user = tmp_path / 'state', tmp_path / 'user'
++    home.mkdir(mode=0o700)
++    user.mkdir()
++    monkeypatch.setenv('HOME', str(user))
++    monkeypatch.setenv('USERPROFILE', str(user))
++    monkeypatch.setenv('HERMES_HOME', str(home))
++    monkeypatch.setattr(Path, 'home', lambda: user)
++    monkeypatch.setenv('PATH', str(Path(sys.executable).parent) + os.pathsep + os.environ.get('PATH', ''))
++    path = tmp_path / 'native-file.txt'
++    path.write_text('MONITOR_NATIVE_FILE_CONTENT\n')
++    peer = ThreadingHTTPServer(('127.0.0.1', 0), _Model)
++    peer.path, peer.calls, peer.errors = path, [], []
++    peer.lock, peer.read_done, peer.release = threading.Lock(), threading.Event(), threading.Event()
++    thread = threading.Thread(target=peer.serve_forever, daemon=True)
++    thread.start()
++    url = f'http://127.0.0.1:{peer.server_port}/v1'
++    config = {'gateway': {'multiplex_profiles': True},
++              'model': {'provider': 'custom', 'default': 'loopback-fixture', 'base_url': url},
++              'auxiliary': {'title_generation': {'enabled': False}},
++              'platform_toolsets': {'cli': ['delegation', 'file'], 'local': ['delegation', 'file'],
++                                    'desktop': ['delegation', 'file']},
++              'delegation': {'max_concurrent_children': 1, 'max_spawn_depth': 1, 'orchestrator_enabled': False},
++              'telemetry': {'shared_metrics': {'enabled': False, 'send': False, 'offer_version': 2}}}
++    (home / 'config.yaml').write_text(json.dumps(config))
++    baseline = (home / 'config.yaml').read_bytes()
++    other = home / 'profiles/helper'
++    other.mkdir(parents=True)
++    (other / 'config.yaml').write_text(json.dumps(config))
++    monkeypatch.setenv('OPENAI_API_KEY', 'loopback-only')
++    monkeypatch.setenv('OPENAI_BASE_URL', url)
++
++    async def probe(desc):
++        grant = await asyncio.to_thread(control, home, 'session-ticket', {
++            'profile_id': str(home), 'instance_id': desc['instance_id'], 'purpose': 'interactive', 'scope': 'host'})
++        async with connect(desc['api_origin'].replace('http:', 'ws:') + '/api/ws', subprotocols=[
++                'hermes-gateway-v1', 'hermes-gateway-ticket.' + grant['ticket']]) as ws:
++            async def result(method, **params):
++                reply = await rpc(ws, method, **params)
++                assert 'result' in reply, reply
++                return reply['result']
++
++            async def roster(profile=None):
++                rows = (await result('profiles.list', **({'profile': profile} if profile else {})))['profiles']
++                return next(row for row in rows if row['path'] == str(other if profile else home))
++
++            parent = (await result('session.create', request_id='monitor-parent', source='gui',
++                                   cwd=str(tmp_path), title='Bot Chat', hidden=True))['session_id']
++            side = (await result('session.create', request_id='monitor-side', source='gui',
++                                 cwd=str(tmp_path), title='Side chat'))['session_id']
++            foreign = (await result('session.create', profile='helper', request_id='monitor-foreign',
++                                   source='gui', cwd=str(tmp_path), title='Bot Chat', hidden=True))['session_id']
++            for sid, profile, marker in [(side, None, 'INDEPENDENT_SIDE_CHAT'), (foreign, 'helper', 'INDEPENDENT_PROFILE')]:
++                await result('prompt.submit', **({'profile': profile} if profile else {}),
++                             session_id=sid, input_id=marker, text=marker)
++                store = other if profile else home
++                await async_wait_until(lambda: any(row['content'] == marker for row in _rows(
++                    store, "SELECT content FROM messages WHERE session_id=? AND role='assistant'", (sid,))),
++                    timeout=20, what='independent control transcript persisted')
++            async with asyncio.timeout(180):
++                submitted = time.monotonic()
++                admission = await result('prompt.submit', session_id=parent, input_id='monitor-native', text='Delegate the fixture read.')
++                assert admission['status'] == 'queued'
++                assert await asyncio.to_thread(peer.read_done.wait, 30), peer.errors
++                children = _rows(home, 'SELECT * FROM sessions WHERE parent_session_id=? AND source=?', (parent, 'subagent'))
++                assert len(children) == 1
++                child = children[0]
++                assert child['ended_at'] is None and json.loads(child['model_config'])['_delegate_from'] == parent
++                active = await roster()
++                assert active['canonical_session']['id'] == parent
++                assert active['canonical_session']['delegation_reports'] == []
++                observed = next(row for row in active['worker_sessions'] if row['id'] == child['id'])
++                assert observed['iteration'] == child['api_call_count'] >= 1
++                assert side not in {row['id'] for row in active['worker_sessions']}
++                tool_rows = _rows(home, "SELECT content FROM messages WHERE session_id=? AND role='tool'", (child['id'],))
++                assert any('MONITOR_NATIVE_FILE_CONTENT' in row['content'] for row in tool_rows)
++                side_view = await result('session.resume', session_id=side)
++                assert 'INDEPENDENT_SIDE_CHAT' in json.dumps(side_view['messages'])
++                foreign_view = await result('session.resume', profile='helper', session_id=foreign)
++                assert 'INDEPENDENT_PROFILE' in json.dumps(foreign_view['messages'])
++                foreign_roster = await roster('helper')
++                assert foreign_roster['canonical_session']['id'] == foreign
++                assert foreign_roster['canonical_session']['delegation_reports'] == []
++                assert child['id'] not in {row['id'] for row in foreign_roster['worker_sessions']}
++                first = child['last_activity_at'] or 0
++                await async_wait_until(lambda: (_rows(home, 'SELECT last_activity_at FROM sessions WHERE id=?', (child['id'],))[0]['last_activity_at'] or 0) > first,
++                                       timeout=85, interval=.2, what='native child heartbeat advances')
++                pulse = _rows(home, 'SELECT last_activity_at,ended_at FROM sessions WHERE id=?', (child['id'],))[0]
++                assert pulse['ended_at'] is None
++                peer.release.set()
++
++                def settled():
++                    rows = _rows(home, 'SELECT * FROM async_delegations WHERE parent_session_id=?', (parent,))
++                    return rows and rows[0]['state'] == 'completed' and rows[0]['completed_at'] is not None and rows[0]
++
++                ledger = await async_wait_until(settled, timeout=30, what='native delegation terminal ledger')
++                batch = json.loads(ledger['result_json'])['results']
++                assert len(batch) == 1 and batch[0]['task_index'] == 0 and batch[0]['status'] == 'completed'
++                assert batch[0]['summary'] == 'MONITOR_WORKER_DONE'
++                assert batch[0]['exit_reason'] == 'completed' and not batch[0]['truncated']
++                assert _rows(home, 'SELECT ended_at FROM sessions WHERE id=?', (child['id'],))[0]['ended_at'] is not None
++                await async_wait_until(lambda: any(row['content'] == 'MONITOR_PARENT_DONE' for row in _rows(
++                    home, "SELECT content FROM messages WHERE session_id=? AND role='assistant'", (parent,))),
++                    timeout=20, what='native parent completion persisted')
++                await async_wait_until(lambda: _rows(home, 'SELECT delivery_state FROM async_delegations WHERE delegation_id=?',
++                                                      (ledger['delegation_id'],))[0]['delivery_state'] == 'delivered',
++                                       timeout=20, what='native completion delivery accounted')
++                def parent_settled():
++                    rows = _rows(home, 'SELECT status FROM session_admissions WHERE target_session_id=?', (parent,))
++                    return rows and all(row['status'] == 'terminal' for row in rows)
++
++                await async_wait_until(parent_settled, timeout=20, what='parent admissions terminal before usage snapshot')
++                terminal = await roster()
++                current = next(row for row in terminal['worker_sessions'] if row['id'] == child['id'])
++                assert current['ended_at'] is not None
++                report, = terminal['canonical_session']['delegation_reports']
++                assert report['delegation_id'] == ledger['delegation_id'] and report['task_index'] == 0
++                assert report['status'] == 'completed' and report['summary'] == batch[0]['summary']
++                assert report['completed_at'] == ledger['completed_at']
++                assert terminal['canonical_session']['id'] == parent != side != foreign
++                stored_parent = _rows(home, 'SELECT input_tokens,output_tokens FROM sessions WHERE id=?', (parent,))[0]
++                assert terminal['canonical_session']['input_tokens'] == stored_parent['input_tokens']
++                assert terminal['canonical_session']['output_tokens'] == stored_parent['output_tokens']
++                assert report['goal'] == json.loads(ledger['task_json'])['goals'][0]
++                foreign_done = await roster('helper')
++                assert foreign_done['canonical_session']['id'] == foreign
++                assert foreign_done['canonical_session']['delegation_reports'] == []
++                denied = await rpc(ws, 'profiles.list', profile='another-profile')
++                assert denied['error']['message'] == 'profile_mismatch'
++                assert set(peer.calls) == {'side-control', 'profile-control', 'delegate', 'status', 'read', 'after-read', 'delivery'}
++                assert not peer.errors, peer.errors
++                print(json.dumps({'kind': 'native backend integration; model replies and usage are fixture',
++                                  'parent': parent, 'worker': child['id'], 'delegation': ledger['delegation_id'],
++                                  'submitted': admission, 'seconds': time.monotonic() - submitted,
++                                  'active': observed, 'terminal': current, 'report': report, 'model_calls': peer.calls,
++                                  'heartbeat_before': first, 'heartbeat_after': pulse['last_activity_at'],
++                                  'side_chat': side, 'foreign_bot_chat': foreign,
++                                  'foreign_readback': foreign_done['canonical_session']}))
++
++    async def run():
++        from gateway import run as gateway
++        task = asyncio.create_task(gateway.start_gateway())
++        runner = None
++        try:
++            def ready():
++                assert not task.done(), task.exception() if task.done() else None
++                value = gateway._gateway_runner_ref()
++                return value if value and value.session_runtime_descriptor.get('state') == 'ready' else None
++
++            runner = await async_wait_until(ready, timeout=30, what='native gateway descriptor ready')
++            desc = dict(runner.session_runtime_descriptor, api_origin=runner.session_api.api_origin)
++            await probe(desc)
++        finally:
++            peer.release.set()
++            if runner is not None:
++                await asyncio.wait_for(runner.stop(), 15)
++            await asyncio.wait_for(task, 15)
++
++    try:
++        asyncio.run(run())
++        assert (home / 'config.yaml').read_bytes() == baseline
++    finally:
++        peer.release.set()
++        peer.shutdown()
++        peer.server_close()
++        thread.join(5)
++        assert not thread.is_alive()
 diff --git a/tests/gateway/test_bot_monitor_usage.py b/tests/gateway/test_bot_monitor_usage.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..cb18989acd2765a66d7dee42a7f9561439d9bd35
