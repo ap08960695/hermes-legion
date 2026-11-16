@@ -38,6 +38,10 @@ unreleased: `hermes computer-use status --backend agent-desktop` finds an existi
 installation and reports permission states. Configure a binary/release directory
 with `hermes config set computer_use.agent_desktop.path /path/to/agent-desktop`.
 This does not select a runtime provider or establish snapshot/action support.
+An opt-in AX read-only provider is now included: select `computer_use.backend:
+agent-desktop`, then call `computer_use` capture with `mode=ax` and an explicit
+application name. It preserves host/sandbox placement boundaries; input and
+screenshots remain unimplemented. See the design note for current limits.
 
 ## What is included
 

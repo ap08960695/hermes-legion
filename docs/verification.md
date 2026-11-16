@@ -1,3 +1,42 @@
+# Agent-desktop AX read-only provider — unreleased
+
+The actual provider loader can now select `agent-desktop` explicitly while cua
+remains default. One supported operation is app-scoped `capture`, `mode=ax`;
+input, focus, listings, screenshots, coordinate scopes and bounded permissions
+refuse explicitly. Host reads are also refused for terminal/sandbox or unresolved
+placement, including after an already-started backend's placement changes.
+
+Thirty-five new cases plus30status and5provider compatibility cases pass through
+the existing source per-file runner. The provider-selection regression fails
+before registration. Later boundary reds expose UTF-8 byte limits, failed-start
+state retention and placement boundaries; corrections pass. Existing provider
+list/error expectations include the new option. Success uses synthetic native
+protocol2.6 data through CaptureResult and the real common computer_use handler.
+Tests cover scoped identity, complete/unique refs, bounded trees, fixed private
+errors, session separation, cheap no-spawn availability and unsupported operations.
+
+The real installed binary is invoked through the selected source provider/common
+tool under isolated HOME/config, sanitized environment and OS network/write/SSH
+fences, targeting only the stopped private fixture. Its missing-target failure
+becomes a fixed common-tool error without raw snapshot/stdout/stderr disclosure.
+Initial private live assertion omitted the common `capture failed:` prefix; that
+expectation was corrected and its failed receipt retained. This is real error-path
+proof, not a successful native snapshot or full backend acceptance. No model call.
+
+Before this source slice, one fresh full-native static Monitor baseline runs with
+the read-only observer gate disabled throughout. Native AX reaches Bots while
+pixels remain Connecting; exact app-scoped agent-desktop returns WINDOW_NOT_FOUND.
+Baseline fails before observer attachment; no observer-cause conclusion or product
+fix is inferred. Monitor diagnostics stop and lifecycle is not retried. Guardian
+81.52s,60sLocal/zeroSSH gate,4Hermes/8sampled processes,942686208B including guardian
+and sampled children/controllers; no savings or full UI acceptance claim.
+
+Six changed source sections apply/hash/reverse against the pinned upstream; prior
+unrelated patch sections remain byte-identical. New regression is selected. Source
+checks remain sequential and below existing process/RAM ceilings; no dependency,
+schema/common-tool/approval/lease change, owner app/data or permission change.
+The full act/ref/verify backend and native Monitor terminal UI remain unfinished.
+
 # Native Monitor observation preflight — unreleased
 
 A static full native Local fixture reproduces observation divergence without a

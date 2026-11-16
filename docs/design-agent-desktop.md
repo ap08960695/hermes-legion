@@ -42,10 +42,58 @@ configuration, failed/timeout probe or invalid protocol. Permission grants and
 operational readiness are separate. Windows npm shims resolve to the packaged
 native executable; Windows/Linux path cases are fixtures, not live OS proof.
 
+## Second source slice: explicit read-only AX provider
+
+The bounded read-only step registers `agent-desktop` through the existing provider
+loader. Selecting it is explicit; cua remains the default. Its label says AX
+read-only. Reuse discovery and bounded credential-stripped probes; availability
+checks may inspect paths/config but must not spawn npm or the driver. Full npm
+discovery remains available at start and through the explicit status command.
+When only the npm global probe locates a binary, set the discovered path explicitly
+so the cheap availability check can find it too.
+
+Support only `capture` with `mode=ax` and an explicit exact application name.
+Require complete protocol2.6 snapshot data for that same app and a valid window,
+with bounded payload/tree depth/count, unique snapshot-owned refs and no raw
+error disclosure. Map named AX nodes and native refs into existing CaptureResult/
+UIElement shapes, using a private namespace per backend session. No image is
+captured, saved or uploaded by this backend; snapshot data is returned to the
+existing authorized tool caller. Existing tool artifact/approval/lease policy
+still applies. Do not add public logging or store raw driver output on failures.
+
+Input, focus, app/window listings, coordinate modes and bounded-permission mode
+fail explicitly; no fallback, focus change or fake successful empty result. The
+provider currently runs on the gateway host only. It refuses terminal/sandbox or
+unresolved placement at start and again before every capture, so a configured
+sandbox can never silently become a host desktop read.
+It is an opt-in read-only development provider, not the full act/ref/verify backend.
+Registering actions prematurely would advertise work not implemented; keeping
+another standalone CLI path would bypass the actual provider/tool contracts.
+Standing delegation selects this scope after the native Monitor baseline failed
+before observer attachment. Advisor314 supports one read-only provider operation.
+Test selected/default provider behavior, a scoped AX result through the real tool,
+private refs/session isolation, unsupported operations and protocol/error bounds.
+
+Example after explicitly selecting `computer_use.backend: agent-desktop`:
+
+```json
+{"action":"capture","mode":"ax","app":"Your application name"}
+```
+
+Only protocol2.6 is accepted in this slice. Named AX nodes use the existing
+element/label response; native refs stay attached to their snapshot. Geometry is
+unknown, not a usable coordinate. Output is limited to1MiB UTF-8,2048nodes and
+64levels; incomplete/malformed/foreign-target responses fail with a fixed error.
+The limit is applied after the house probe captures output, not an OS output-memory
+quota. A successful transport does not prove that a visible UI painted correctly.
+Seventy focused source cases pass, including35new adapter cases. The real installed
+binary is reached only for a private stopped-fixture missing-target error check;
+successful capture/tool mapping uses synthetic protocol data. Native successful
+adapter capture and Windows/Linux runtime acceptance remain open.
+
 ## Remaining capability set
 
-Add the provider through the existing computer-use registry and backend contract,
-with native snapshot refs and verified act loops. Keep secret typing on stdin,
+Extend the provider with verified act loops using native snapshot refs. Keep secret typing on stdin,
 preserve ownership/approval gates, and keep private snapshots/screenshots out of
 public logs/uploads. Validate on supported platforms and the isolated native
 Hermes UI before one meaningful feature release. Discovery/status alone is not

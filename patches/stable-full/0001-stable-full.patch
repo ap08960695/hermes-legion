@@ -57469,6 +57469,47 @@ index 35ab62e06eda4ae463fa007b085a0059e7c1e1a2..1a8ae8c660ea6a19b3ad6ca1eecf4dd8
 +    unconfirmed_pause: "⚠️ 无法确认暂停。请检查对紧急停止文件的访问权限；新任务可能仍会启动。"
 +    unconfirmed_resume: "⚠️ 无法确认恢复。紧急停止文件仍然存在或无法检查。"
    queue:
+diff --git a/plugins/computer_use/agent-desktop/__init__.py b/plugins/computer_use/agent-desktop/__init__.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..d8fdaccca8876f0f5120db464909a560b63095fa
+--- /dev/null
++++ b/plugins/computer_use/agent-desktop/__init__.py
+@@ -0,0 +1,23 @@
++"""Opt-in agent-desktop provider; currently supports scoped AX reads only."""
++from tools.computer_use.backend import ComputerUseProvider
++
++
++class AgentDesktopProvider(ComputerUseProvider):
++    name = 'agent-desktop'
++    display_name = 'agent-desktop (AX read-only)'
++
++    def create_backend(self, *, permission_mode):
++        from tools.computer_use.agent_desktop_backend import AgentDesktopBackend
++        return AgentDesktopBackend(permission_mode=permission_mode)
++
++    def is_available(self):
++        from tools.computer_use.agent_desktop_backend import binary_available
++        return binary_available()
++
++    def doctor(self):
++        from tools.computer_use.agent_desktop import print_agent_desktop_status
++        return print_agent_desktop_status()
++
++
++def register(ctx):
++    ctx.register_computer_use_provider(AgentDesktopProvider())
+diff --git a/plugins/computer_use/agent-desktop/plugin.yaml b/plugins/computer_use/agent-desktop/plugin.yaml
+new file mode 100644
+index 0000000000000000000000000000000000000000..359956b963099809d12e6be0c05952535e522fb3
+--- /dev/null
++++ b/plugins/computer_use/agent-desktop/plugin.yaml
+@@ -0,0 +1,6 @@
++name: agent-desktop
++description: >-
++  agent-desktop — opt-in AX read-only provider. Requires an explicit application
++  name and mode=ax; screenshots and input are not implemented.
++version: 0.1.0
++author: Hermes Legion
 diff --git a/plugins/kanban/dashboard/dist/index.js b/plugins/kanban/dashboard/dist/index.js
 index 658ae11c5b9df1bb6c903055177c8bc27e1a24b4..566df6b1480724e4b6a22e36b478edd81f071431 100644
 --- a/plugins/kanban/dashboard/dist/index.js
@@ -63275,6 +63316,244 @@ index 0000000000000000000000000000000000000000..c351774589bc9cde32e237fe23c7f70c
 +    session = CodexAppServerSession(cwd=str(tmp_path), model='gpt-6.1-sol',client_factory=lambda **kw: client)
 +    assert session.ensure_started() == 't-public'
 +    assert client.calls == ['thread/start']
+diff --git a/tests/computer_use/test_agent_desktop_backend.py b/tests/computer_use/test_agent_desktop_backend.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..0ea410086045a85cd0e5ca4c5380980f07913471
+--- /dev/null
++++ b/tests/computer_use/test_agent_desktop_backend.py
+@@ -0,0 +1,232 @@
++"""Opt-in AX-only agent-desktop provider through the existing backend contract."""
++import json
++from types import SimpleNamespace
++
++import pytest
++
++
++def test_selected_provider_is_explicit_and_default_stays_cua(monkeypatch):
++    from hermes_cli import config
++    from plugins.computer_use import get_active_provider
++    settings = {'computer_use': {'backend': 'agent-desktop'}}
++    monkeypatch.setattr(config, 'load_config_readonly', lambda: settings)
++    provider = get_active_provider()
++    assert provider.name == 'agent-desktop' and 'read-only' in provider.display_name
++    backend = provider.create_backend(permission_mode='standard')
++    from tools.computer_use.backend import ComputerUseBackend
++    assert isinstance(backend, ComputerUseBackend)
++    settings.clear()
++    assert get_active_provider().name == 'cua'
++
++
++def snapshot():
++    return {'version': '2.6', 'ok': True, 'command': 'snapshot', 'data': {
++        'app': 'Fixture', 'complete': True, 'snapshot_id': 'snap', 'ref_count': 1,
++        'window': {'id': 'w-42', 'title': 'Fixture window'},
++        'tree': {'role': 'window', 'name': 'Fixture', 'children': [
++            {'role': 'text', 'name': 'Result', 'value': 'ready'},
++            {'role': 'button', 'name': 'Run', 'ref_id': '@snap:e1'}]}}}
++
++
++@pytest.fixture
++def adapter(monkeypatch):
++    from tools.computer_use import agent_desktop_backend as module
++    calls = []
++    monkeypatch.setattr(module.driver, 'resolve_agent_desktop', lambda **kwargs: '/fixture/agent-desktop')
++    monkeypatch.setattr(module.driver, '_environment', lambda: {'SAFE': 'yes'})
++    def probe(argv, **kwargs):
++        calls.append((argv, kwargs))
++        return SimpleNamespace(returncode=0, stdout=json.dumps(snapshot()), stderr='PRIVATE_DRIVER_OUTPUT')
++    monkeypatch.setattr(module.driver, 'bounded_probe_run', probe)
++    backend = module.AgentDesktopBackend(permission_mode='standard')
++    backend.start()
++    return module, backend, calls
++
++
++def test_capture_maps_complete_scoped_ax_without_pixels_or_raw_attributes(adapter):
++    _, backend, calls = adapter
++    result = backend.capture(mode='ax', app='Fixture')
++    assert result.mode == 'ax' and result.app == 'Fixture' and result.window_title == 'Fixture window'
++    assert result.png_b64 is None and (result.width, result.height) == (0, 0)
++    assert [(e.index, e.role, e.label) for e in result.elements] == [
++        (1, 'window', 'Fixture'), (2, 'text', 'Result: ready'), (3, 'button', 'Run')]
++    assert result.elements[2].element_token == '@snap:e1'
++    assert all(not e.attributes and e.bounds == (0, 0, 0, 0) for e in result.elements)
++    argv, kwargs = calls[0]
++    assert argv[:4] == ['/fixture/agent-desktop', 'snapshot', '--app', 'Fixture']
++    assert '--session' in argv and '--screenshot' not in argv and '--headed' not in argv
++    assert kwargs == {'timeout': 10, 'env': {'SAFE': 'yes'}}
++    assert 'read-only' in result.note
++
++
++def test_tool_capture_uses_selected_provider_and_preserves_standard_response(adapter, monkeypatch):
++    module, _, calls = adapter
++    from hermes_cli import config
++    from tools.computer_use import tool
++    monkeypatch.setattr(config, 'load_config_readonly', lambda: {'computer_use': {'backend': 'agent-desktop'}})
++    tool.reset_backend_for_tests()
++    try:
++        result = json.loads(tool.handle_computer_use({'action': 'capture', 'mode': 'ax', 'app': 'Fixture'}, session_id='read-test'))
++        assert result['mode'] == 'ax' and result['total_elements'] == 3
++        assert result['elements'][2]['label'] == 'Run' and result['elements'][2]['bounds'] is None
++        assert 'screenshot_path' not in result and len(calls) == 1
++    finally:
++        tool.reset_backend_for_tests()
++
++
++@pytest.mark.parametrize('kwargs', [{}, {'app': ''}, {'app': '   '}, {'app': 'Fixture\x00'},
++                                   {'app': 'Fixture', 'mode': 'som'}, {'app': 'Fixture', 'mode': 'vision'},
++                                   {'app': 'Fixture', 'pid': 12}, {'app': 'Fixture', 'window_id': 42}])
++def test_unsupported_capture_scope_never_invokes_driver(adapter, kwargs):
++    _, backend, calls = adapter
++    with pytest.raises((ValueError, RuntimeError)):
++        backend.capture(**{'mode': 'ax', **kwargs})
++    assert calls == []
++
++
++@pytest.mark.parametrize('change', [
++    lambda v: v.update(version='99.0'),
++    lambda v: v.update(command='click'),
++    lambda v: v.update(ok=False, error={'message': 'PRIVATE_DRIVER_OUTPUT'}),
++    lambda v: v['data'].update(app='Owner app'),
++    lambda v: v['data'].update(complete=False),
++    lambda v: v['data'].update(window={}),
++    lambda v: v['data'].update(ref_count=2),
++    lambda v: v['data']['tree']['children'][1].update(ref_id='@other:e1'),
++    lambda v: v['data']['tree']['children'].append({'role': 'button', 'ref_id': '@snap:e1'}),
++    lambda v: v['data']['tree'].update(children='PRIVATE_DRIVER_OUTPUT'),
++])
++def test_invalid_protocol_is_fixed_error_without_desktop_payload(adapter, monkeypatch, change):
++    module, backend, _ = adapter
++    value = snapshot()
++    change(value)
++    monkeypatch.setattr(module.driver, 'bounded_probe_run', lambda *a, **k: SimpleNamespace(
++        returncode=0, stdout=json.dumps(value), stderr='PRIVATE_DRIVER_OUTPUT'))
++    with pytest.raises(RuntimeError, match='agent-desktop AX snapshot failed') as error:
++        backend.capture(mode='ax', app='Fixture')
++    import traceback
++    assert 'PRIVATE_DRIVER_OUTPUT' not in ''.join(traceback.format_exception(error.value))
++
++
++@pytest.mark.parametrize('result', [None, SimpleNamespace(returncode=1, stdout='PRIVATE_DRIVER_OUTPUT'),
++                                  SimpleNamespace(returncode=0, stdout='PRIVATE_DRIVER_OUTPUT'),
++                                  SimpleNamespace(returncode=0, stdout='x' * (1024 * 1024 + 1))])
++def test_failed_timeout_and_oversized_probes_do_not_leak(adapter, monkeypatch, result):
++    module, backend, _ = adapter
++    monkeypatch.setattr(module.driver, 'bounded_probe_run', lambda *a, **k: result)
++    with pytest.raises(RuntimeError, match='agent-desktop AX snapshot failed'):
++        backend.capture(mode='ax', app='Fixture')
++
++
++def test_tree_bounds_fail_closed(adapter, monkeypatch):
++    module, backend, _ = adapter
++    value = snapshot()
++    value['data']['tree']['children'] = [{'role': 'text', 'name': 'item'}] * 2049
++    monkeypatch.setattr(module.driver, 'bounded_probe_run', lambda *a, **k: SimpleNamespace(returncode=0, stdout=json.dumps(value)))
++    with pytest.raises(RuntimeError, match='agent-desktop AX snapshot failed'):
++        backend.capture(mode='ax', app='Fixture')
++
++
++def test_payload_limit_counts_utf8_bytes(adapter, monkeypatch):
++    module, backend, _ = adapter
++    value = snapshot()
++    value['data']['tree']['name'] = 'ก' * 400000
++    text = json.dumps(value, ensure_ascii=False)
++    assert len(text) < 1024 * 1024 < len(text.encode('utf-8'))
++    monkeypatch.setattr(module.driver, 'bounded_probe_run', lambda *a, **k: SimpleNamespace(returncode=0, stdout=text))
++    with pytest.raises(RuntimeError, match='agent-desktop AX snapshot failed'):
++        backend.capture(mode='ax', app='Fixture')
++
++
++def test_start_and_probe_exceptions_hide_driver_details(adapter, monkeypatch):
++    module, backend, _ = adapter
++    def private_failure(*args, **kwargs):
++        raise OSError('PRIVATE_DRIVER_OUTPUT')
++    monkeypatch.setattr(module.driver, 'bounded_probe_run', private_failure)
++    with pytest.raises(RuntimeError) as error:
++        backend.capture(mode='ax', app='Fixture')
++    import traceback
++    assert 'PRIVATE_DRIVER_OUTPUT' not in ''.join(traceback.format_exception(error.value))
++    monkeypatch.setattr(module.driver, 'resolve_agent_desktop', private_failure)
++    assert backend.is_available() is False
++    with pytest.raises(RuntimeError, match='check computer_use.agent_desktop.path') as error:
++        backend.start()
++    assert 'PRIVATE_DRIVER_OUTPUT' not in ''.join(traceback.format_exception(error.value))
++    with pytest.raises(RuntimeError, match='not started'):
++        backend.capture(mode='ax', app='Fixture')
++
++
++def test_session_namespace_and_stop_do_not_reuse_private_refs(adapter):
++    module, backend, calls = adapter
++    other = module.AgentDesktopBackend(permission_mode='unrestricted')
++    other.start()
++    backend.capture(mode='ax', app='Fixture')
++    other.capture(mode='ax', app='Fixture')
++    def namespace(call):
++        argv = call[0]
++        return argv[argv.index('--session') + 1]
++    assert namespace(calls[0]) != namespace(calls[1])
++    backend.stop()
++    with pytest.raises(RuntimeError):
++        backend.capture(mode='ax', app='Fixture')
++    assert len(calls) == 2
++
++
++def test_read_only_provider_refuses_all_input_and_unimplemented_listings(adapter):
++    _, backend, calls = adapter
++    for action, args in [('click', {}), ('drag', {}), ('scroll', {'direction': 'down'}),
++                         ('type_text', {'text': 'PRIVATE_DRIVER_OUTPUT'}), ('key', {'keys': 'return'}),
++                         ('set_value', {'value': 'PRIVATE_DRIVER_OUTPUT'}), ('focus_app', {'app': 'Fixture'})]:
++        result = getattr(backend, action)(**args)
++        assert result.ok is False and result.code == 'unsupported_action' and result.action == action
++        assert 'PRIVATE_DRIVER_OUTPUT' not in result.message
++    for action in ('list_apps', 'list_windows'):
++        with pytest.raises(RuntimeError, match='read-only'):
++            getattr(backend, action)()
++    assert calls == []
++
++
++def test_bounded_permission_mode_is_never_downgraded(adapter):
++    module, _, calls = adapter
++    with pytest.raises(ValueError, match='bounded'):
++        module.AgentDesktopBackend(permission_mode='bounded')
++    assert calls == []
++
++
++def test_provider_availability_does_not_spawn_global_npm_probe(monkeypatch, tmp_path):
++    from tools.computer_use import agent_desktop as driver
++    from plugins.computer_use import load_computer_use_provider
++    monkeypatch.setattr(driver, 'load_config_readonly', lambda: {})
++    monkeypatch.setattr(driver, '_SOURCE_ROOT', tmp_path)
++    monkeypatch.setattr(driver, '_HOMEBREW_PREFIXES', ())
++    monkeypatch.chdir(tmp_path)
++    monkeypatch.setattr(driver.shutil, 'which', lambda name: '/fixture/npm' if name == 'npm' else None)
++    monkeypatch.setattr(driver, 'bounded_probe_run', lambda *a, **k: pytest.fail('availability spawned a process'))
++    for key in ('NPM_CONFIG_PREFIX', 'npm_config_prefix', 'HOMEBREW_PREFIX', 'APPDATA'):
++        monkeypatch.delenv(key, raising=False)
++    assert load_computer_use_provider('agent-desktop').is_available() is False
++
++
++@pytest.mark.parametrize('where', ['terminal', 'refused'])
++def test_provider_never_reads_host_for_a_sandbox_placement(adapter, monkeypatch, where):
++    module, backend, calls = adapter
++    from tools.bot_desktop import placement
++    monkeypatch.setattr(placement, 'resolve', lambda: SimpleNamespace(where=where))
++    assert backend.is_available() is False
++    with pytest.raises(RuntimeError, match='gateway-host placement'):
++        backend.capture(mode='ax', app='Fixture')
++    with pytest.raises(RuntimeError, match='gateway-host placement'):
++        module.AgentDesktopBackend().start()
++    assert calls == []
++
++
++def test_unresolved_placement_fails_closed_without_config_details(adapter, monkeypatch):
++    _, backend, calls = adapter
++    from tools.bot_desktop import placement
++    def unavailable():
++        raise ValueError('PRIVATE_DRIVER_OUTPUT')
++    monkeypatch.setattr(placement, 'resolve', unavailable)
++    assert backend.is_available() is False
++    with pytest.raises(RuntimeError, match='gateway-host placement'):
++        backend.capture(mode='ax', app='Fixture')
++    assert calls == []
 diff --git a/tests/computer_use/test_agent_desktop_status.py b/tests/computer_use/test_agent_desktop_status.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..dcb3d0be7e85d132392889bf97c7985f37cebdff
@@ -85321,6 +85600,20 @@ index 0000000000000000000000000000000000000000..95a2aebe06a446ca205dee853f991b35
 +    monkeypatch.setattr(mc,'_cache_path',lambda:a)
 +    monkeypatch.setattr(mc.time,'time',lambda:12)
 +    assert mc.get_cached_entry('s','same') is None
+diff --git a/tests/tools/test_computer_use_backend_plugins.py b/tests/tools/test_computer_use_backend_plugins.py
+index 1ff85375216a5dba3e9fbe637668e31174d499e7..07a0bbae80d337e4e393d189046c381f557ca3fe 100644
+--- a/tests/tools/test_computer_use_backend_plugins.py
++++ b/tests/tools/test_computer_use_backend_plugins.py
+@@ -86,3 +86,3 @@ def test_selected_plugin_receives_tool_calls_and_unselected_stays_dormant(tmp_pa
+         from hermes_cli.tools_config_providers import _computer_use_provider_rows  # `hermes tools` / Desktop rows
+-        assert [r["computer_use_backend"] for r in _computer_use_provider_rows()] == ["cu-alpha", "cu-beta"]
++        assert [r["computer_use_backend"] for r in _computer_use_provider_rows()] == ["agent-desktop", "cu-alpha", "cu-beta"]
+         assert "_hermes_user_computer_use.cu-alpha" not in sys.modules  # listing does not import either
+@@ -98,3 +98,3 @@ def test_unknown_backend_errors_naming_configured_and_available(tmp_path):
+         out = json.loads(handle_computer_use({"action": "list_apps"}, session_id="s1"))
+-        assert "'nope'" in out["error"] and "available: cua" in out["error"]
++        assert "'nope'" in out["error"] and "available: agent-desktop, cua" in out["error"]
+         assert "hint" not in out  # the cua-driver install hint would mislead here
 diff --git a/tests/tools/test_derived_cache_disk_pressure.py b/tests/tools/test_derived_cache_disk_pressure.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..7d65c42d594bee66ba2e91db9abb4e239815f9ae
@@ -95331,7 +95624,7 @@ index 0000000000000000000000000000000000000000..44026e593e129829b02562d1e12bc69f
 +
 diff --git a/tools/computer_use/agent_desktop.py b/tools/computer_use/agent_desktop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..727a2a4aa16a55bf232e25b47710ff7baaf0aff8
+index 0000000000000000000000000000000000000000..5f4f0a82734efaf57c8a6b426ca1e2a1e904fff7
 --- /dev/null
 +++ b/tools/computer_use/agent_desktop.py
 @@ -0,0 +1,160 @@
@@ -95385,7 +95678,7 @@ index 0000000000000000000000000000000000000000..727a2a4aa16a55bf232e25b47710ff7b
 +    return tuple(directory / item for directory in directories for item in names)
 +
 +
-+def resolve_agent_desktop() -> str | None:
++def resolve_agent_desktop(*, probe_npm: bool = True) -> str | None:
 +    """An explicit path is authoritative; discovery never installs or selects a provider."""
 +    config = load_config_readonly()
 +    if config is None:
@@ -95439,7 +95732,7 @@ index 0000000000000000000000000000000000000000..727a2a4aa16a55bf232e25b47710ff7b
 +            for candidate in _prefix_candidates(prefix, name):
 +                if found := _executable(candidate):
 +                    return found
-+    if shutil.which('npm'):
++    if probe_npm and shutil.which('npm'):
 +        result = bounded_probe_run(resolve_node_command('npm', ['prefix', '-g']), timeout=3, env=_environment())
 +        if result is not None and result.returncode == 0:
 +            prefix = result.stdout.strip()
@@ -95495,6 +95788,153 @@ index 0000000000000000000000000000000000000000..727a2a4aa16a55bf232e25b47710ff7b
 +        print(f'  Accessibility guide (owner action): {command}')
 +    print('  Diagnostics only; snapshot/action support is not verified.')
 +    return 0
+diff --git a/tools/computer_use/agent_desktop_backend.py b/tools/computer_use/agent_desktop_backend.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..b21cceccd1ec546a767f170db5d555d2132bee60
+--- /dev/null
++++ b/tools/computer_use/agent_desktop_backend.py
+@@ -0,0 +1,141 @@
++"""Scoped AX reads via agent-desktop; no native input, screenshots or logging."""
++from __future__ import annotations
++
++import json
++import re
++from uuid import uuid4
++
++from tools.computer_use import agent_desktop as driver
++from tools.computer_use.backend import ActionResult, CaptureResult, ComputerUseBackend, UIElement
++
++
++def _host_placement():
++    from tools.bot_desktop import placement
++    try:
++        return placement.resolve().where == placement.GATEWAY
++    except Exception:
++        return False
++
++
++def binary_available():
++    try:
++        return _host_placement() and bool(driver.resolve_agent_desktop(probe_npm=False))
++    except Exception:
++        return False
++
++
++class AgentDesktopBackend(ComputerUseBackend):
++    def __init__(self, *, permission_mode='standard'):
++        if permission_mode not in {'standard', 'unrestricted'}:
++            raise ValueError('agent-desktop AX provider does not implement bounded permissions')
++        self._binary = None
++        self._session = None
++
++    def start(self):
++        self.stop()
++        if not _host_placement():
++            raise RuntimeError('agent-desktop AX provider supports gateway-host placement only')
++        try:
++            binary = driver.resolve_agent_desktop()
++            if not binary:
++                raise ValueError('Missing binary')
++        except Exception:
++            raise RuntimeError('agent-desktop not found; check computer_use.agent_desktop.path') from None
++        self._binary = binary
++        self._session = 'hermes-' + uuid4().hex
++
++    def stop(self):
++        self._binary = self._session = None
++
++    def is_available(self):
++        return binary_available()
++
++    def capture(self, mode='som', app=None, pid=None, window_id=None):
++        if self._binary is None:
++            raise RuntimeError('agent-desktop AX backend is not started')
++        if not _host_placement():
++            raise RuntimeError('agent-desktop AX provider supports gateway-host placement only')
++        if mode != 'ax' or pid is not None or window_id is not None:
++            raise ValueError('agent-desktop AX read-only capture requires mode=ax and an application name')
++        if not isinstance(app, str) or not app.strip() or len(app) > 256 or '\x00' in app:
++            raise ValueError('agent-desktop AX capture requires an explicit application name')
++        app = app.strip()
++        try:
++            result = driver.bounded_probe_run(
++                [self._binary, 'snapshot', '--app', app, '--session', self._session],
++                timeout=10, env=driver._environment())
++            if result is None or result.returncode != 0 or len(result.stdout.encode('utf-8')) > 1024 * 1024:
++                raise ValueError('Probe failed')
++            envelope = json.loads(result.stdout)
++            if not isinstance(envelope, dict) or envelope.get('version') != '2.6' or envelope.get('ok') is not True or envelope.get('command') != 'snapshot':
++                raise ValueError('Invalid envelope')
++            data = envelope['data']
++            if data['app'] != app or data['complete'] is not True:
++                raise ValueError('Incomplete or wrong target')
++            window = data['window']
++            if not isinstance(window['id'], str) or not window['id'] or not isinstance(window['title'], str):
++                raise ValueError('Invalid window')
++            snapshot_id = data['snapshot_id']
++            if not isinstance(snapshot_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', snapshot_id):
++                raise ValueError('Invalid snapshot')
++            stack = [(data['tree'], 0)]
++            elements, refs = [], set()
++            count = 0
++            while stack:
++                node, depth = stack.pop()
++                count += 1
++                if count > 2048 or depth > 64 or not isinstance(node, dict):
++                    raise ValueError('Invalid tree')
++                role, name, value = node['role'], node.get('name', ''), node.get('value')
++                if not isinstance(role, str) or not role or len(role) > 128 or not isinstance(name, str):
++                    raise ValueError('Invalid node')
++                ref = node.get('ref_id')
++                if ref is not None:
++                    if not isinstance(ref, str) or not re.fullmatch('@' + re.escape(snapshot_id) + r':e[0-9]+', ref) or ref in refs:
++                        raise ValueError('Invalid ref')
++                    refs.add(ref)
++                label = name
++                if isinstance(value, str) and value and value != name:
++                    label = f'{name}: {value}' if name else value
++                if label or ref:
++                    elements.append(UIElement(index=len(elements) + 1, role=role, label=label, app=app, element_token=ref))
++                children = node.get('children', [])
++                if not isinstance(children, list):
++                    raise ValueError('Invalid children')
++                stack.extend((child, depth + 1) for child in reversed(children))
++            if type(data['ref_count']) is not int or data['ref_count'] != len(refs):
++                raise ValueError('Invalid ref count')
++            return CaptureResult(mode='ax', width=0, height=0, elements=elements, app=app,
++                                 window_title=window['title'], note='AX read-only; entries may be non-actionable. No screenshots or input supported.')
++        except Exception:
++            raise RuntimeError('agent-desktop AX snapshot failed; check target, permissions and protocol') from None
++
++    def _unsupported(self, action):
++        return ActionResult(ok=False, action=action, code='unsupported_action', message='agent-desktop AX read-only provider; input is not implemented.')
++
++    def click(self, **kwargs):
++        return self._unsupported('click')
++
++    def drag(self, **kwargs):
++        return self._unsupported('drag')
++
++    def scroll(self, **kwargs):
++        return self._unsupported('scroll')
++
++    def type_text(self, text, **kwargs):
++        return self._unsupported('type_text')
++
++    def key(self, keys, **kwargs):
++        return self._unsupported('key')
++
++    def set_value(self, value, element=None):
++        return self._unsupported('set_value')
++
++    def focus_app(self, app, raise_window=False):
++        return self._unsupported('focus_app')
++
++    def list_apps(self):
++        raise RuntimeError('agent-desktop AX read-only provider does not implement app listing')
++
++    def list_windows(self):
++        raise RuntimeError('agent-desktop AX read-only provider does not implement window listing')
 diff --git a/tools/derived_cache.py b/tools/derived_cache.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..1340e2b44239c5bcc5ab9d3bd8ae131051951a47
