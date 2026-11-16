@@ -10,6 +10,15 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Native work reaches the production Monitor query (unreleased)
+
+A connected native/component acceptance now follows real delegated work through
+the production roster interval into Monitor progress and its canonical report.
+The original native file/heartbeat/ledger/control checks remain intact; a private
+read-only adapter supplies the SDK host boundary. No product source change or
+feature release. Browser/Electron/navigation acceptance remains open.
+[Proof and limits](verification.md#native-gateway-through-production-query--component-acceptance).
+
 ## Monitor retains reports after refresh failure (unreleased)
 
 When a roster refresh fails, Monitor keeps the last successful snapshot and

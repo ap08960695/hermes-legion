@@ -359,3 +359,28 @@ Stored reports remain available through All/Unavailable. Existing row/filter
 lifetime still applies when a filter removes an opener; no global dialog owner
 is introduced. Thirty-one affected cases, scoped lint and renderer types/build
 pass. Native/browser acceptance remains open; no release or daily-app adoption.
+
+
+## Native gateway through actual query: component acceptance
+
+The next integration closes the data-flow seam without inventing another product
+feature: unchanged native delegation/read_file/heartbeat/terminal/ledger/report
+scenario -> one serialized authenticated gateway socket -> read-only loopback
+adapter -> actual useRoster/TanStack five-second interval -> actual BotsWorkspace
+and Monitor in JSDOM. Only SDK host state/route/inventory and avatar presentation
+are synthetic; native roster payloads pass through unchanged. No manual refetch,
+cache injection, prop replacement or component-controlled lifecycle completion.
+
+One bounded completed scenario passes. Rendered same-child Working/step1/250 and
+elapsed7s ->12s progress settle to removed worker/step and exact Completed report
+under the same named parent. Native real file read,60s heartbeat, true completion,
+durable delivery, parent terminal state and nonempty side/profile controls retain
+their original assertions. Four relevant source hashes remain exact. A Node
+thread-pool consumer runs in one PID after native helper exit, preserving resource
+limits; DOM acknowledgments pause only observer return after releasing its lock.
+
+This verifies real native-to-production-query-to-component reconciliation through
+a private transport adapter. It is complementary to137browser adapter paint proof,
+not their composition into browser/Electron acceptance. Actual browser query paint,
+degraded refresh visuals, Electron host inventory/transport and canonical desktop
+navigation still gate the Monitor batch release. Current CUA host is unavailable.

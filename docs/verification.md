@@ -1,3 +1,53 @@
+# Native gateway through production query — component acceptance
+
+One unchanged test_native_worker_settlement_becomes_its_bot_chat_report[completed]
+now runs with a private observer and a real-query component consumer. Canonical
+per-file Python runner starts the isolated pytest process/public start_gateway;
+no CLI daemon/subprocess isolation is claimed. Native agents/delegation/read_file,
+60s heartbeat, true successful outcome, ledger/delivery, parent admissions and
+nonempty side/profile controls remain real. Seven loopback model replies and
+usage are fixtures. No observer SQL or lifecycle writes.
+
+Observer reuses the test's one private-ticket-authenticated WebSocket and one
+RPC receive owner, serializing all reads with its lock. It releases that lock
+before waiting for the initial active/terminal DOM acknowledgment (up to40s each).
+This changes assertion timing, not lifecycle authority. After file-read helper
+exit it launches Node directly: Vitest threads/maxWorkers1 avoids another worker
+PID. Existing3children+observer/<3.5GiB/180s/loopback/SSH/shell/write fences remain.
+No budget increase, competing reader, native restart or second native attempt.
+
+Actual BotsWorkspace selects Monitor; actual useRoster/provider/client merges
+unchanged native profiles.list payloads via strict explicit-local SDK boundaries.
+SDK inventory/state and avatar presentation are simulated. Focus/reconnect refetch
+is disabled; existing five-second interval supplies12component reads, with14
+captured main-roster reads including the native test's own. No manual refetch,
+cache prefill/prop update, ambient request, activation, navigation or draft call.
+Same parent/child/source/cache and helper control identities match native receipts.
+Working/step1/250 and elapsed7s ->12s appear, then ended child/step disappear and
+exact goal/Completed/MONITOR_WORKER_DONE report opens under the same named parent.
+Report/delegation/heartbeat/side/helper identities are independently cross-checked.
+Raw input stays unchanged; adapter's loopback port closes after the run.
+
+Native1pass/2deselected in69.1s; component1pass55.52s (62.14s Node runner); native
+main scenario63.024s. At most4sampled processes including observer, peak summed
+RSS1,444,986,880B including observer/excluding outer controller. These are sampled
+guard values, not continuous peak/shared-page accounting or production RAM savings.
+Both component acknowledgments and all known PID/birth identities close normally.
+
+Labelled preflight first replays saved137native data with active timestamps retimed;
+its1case passes10.157s, six invalid HTTP path/Host/Origin/type/body controls pass.
+Initial replay-envelope KeyError was corrected before any native launch. Preflight
+is not native evidence. Raw receipts, fixture/guard identities and exact relevant
+source hashes are retained privately. No product/patch/manifest/test-selection
+change; unchanged mock/native negatives/types/build/source sweeps are not rerun.
+
+This is JSDOM component acceptance through a private adapter. It proves neither
+browser paint/layout nor actual Electron SDK inventory/transport, installed app
+launch, canonical desktop navigation, provider billing or managed-worker processes.
+CUA still reports unavailable browser host; no input/app/Guest retry, owner Hermes
+or ai connection. Browser actual-query paint and Electron/navigation gates remain
+open; Monitor is unreleased.
+
 # Monitor retained refresh failure — unreleased
 
 Workspace uses the existing cached roster on refresh error, passing optional
