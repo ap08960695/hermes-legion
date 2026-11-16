@@ -1,3 +1,30 @@
+# Native Local startup diagnostic — v0.33.5 follow-up
+
+One earlier cold launch stayed on Connecting until native Reload. One fresh,
+isolated Local launch with the same v0.33.5 renderer reached This device / scope-b /
+Connected without Reload; the earlier stall did not reproduce. Sparse buffered
+main-process markers showed the first descriptor claim ready in 1,801 ms and
+WebSocket mint completion 18 ms later. These are main-process intervals, not
+renderer receipt, publication or user-visible startup latency. No sanitized
+renderer warning/error or renderer-gone marker was captured in this repeat.
+
+Only the task diagnostic hook and compiled main had observation markers. IPC
+observer controls preserve receiver, arguments, return/Promise identity,
+synchronous throws and unrelated handlers; no Promise settlement observer was
+added. Instrumentation can alter timing and suppress a race. The previous stall's
+cause remains undetermined; this is neither a runtime fix nor a reliability claim.
+No runtime, patch, test selection, dependency, renderer build or version change.
+
+The actual 60.040-second SSH-zero gate passed. Across 759 bounded process samples,
+Hermes count stayed at most four and observer-inclusive RSS reached 891,846,656
+bytes, without a continuous-peak or saving claim. Both configs stayed byte exact,
+both native session stores stayed empty, and no Send/model/tool ran. All owned
+identities and the gateway port ended; original config bytes/modes and the
+313-entry trial bundle with strict signature were verified restored. No owner
+app/data, other host, ESTOP, pause or timer changed. Daily-app, remote/ai/Linux,
+crash and repeated cold-start acceptance remain open. Required companion,
+tracked-copy release and secret gates apply to this documentation follow-up.
+
 # v0.33.5 — Keep list edits when closing Settings
 
 Native Mac Local before/after: a focused comma-separated Environment Passthrough
