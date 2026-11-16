@@ -1,3 +1,24 @@
+# v0.33.2 — Keep untouched settings visible after import
+
+Native Local before/after uses two actual imports of the same memory-only file.
+Before, omitted switches show off and Profile Budget stays empty after repeating
+the import. After, those values stay on/1375 without reopening while Memory
+Budget becomes 2901. Disk stores only the requested override and preserves all
+original file keys. A following User Profile edit writes its intended additional
+value; Settings reopen reads correct values. No Send/model request occurs.
+
+Seven new cases fail before; final nearest selection passes 75 tests. Coverage
+includes held/rejected saves, empty/null-mapping imports, explicit values, next
+sparse edit and delayed read versus edit/unmount. Lint/types/build pass with
+existing act/dynamic-import warnings. Two-section pinned-base apply/hash/reverse
+passes; 1085 targets and test selection remain. No unchanged source/mock sweep.
+
+Both actual 60-second gates show SSH0/max4 sampled Hermes; observer-inclusive
+sampled RSS maxima 940,507,136/936,787,968 bytes, no savings claim. Both process
+sets/ports end and config, modes, original 313-entry bundle and signature restore.
+Native delayed-read/failure injection, full Settings, daily-app and ai/Linux
+acceptance are not claimed. [Release notes and limits](release-notes-v0.33.2.md).
+
 # v0.33.1 — Confirm config imports after saving
 
 Native Local Import previously showed success while removal confirmation was

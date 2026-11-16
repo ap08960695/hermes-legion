@@ -21,6 +21,17 @@ From v0.8.15, the shared merge also [preserves nested edits followed by a null
 section](settings-null-sections.md), matching the native API rather than dropping
 those edits during coalescing.
 
+## Partial imports preserve the form (v0.33.2)
+
+Import merges sparse JSON into the displayed record with the same section rules
+as the native writer. Untouched switches, budgets and other fields keep their
+values during pending, failed and repeated imports. A following ordinary edit
+still submits only its intended change. Empty imports preserve the form; explicit
+values retain the existing null/list semantics. A file read superseded by a
+newer edit or leaving the view is discarded; import again to apply it. Native
+Local first/repeated imports, next edit and reopen passed.
+[Checks and limits](release-notes-v0.33.2.md).
+
 ## Import acknowledgements (v0.33.1)
 
 Actions → Import config announces success only after the current native save
@@ -28,9 +39,8 @@ acknowledges it. Cancelling toolset removal, failing a save, leaving the view or
 superseding the import cannot produce a stale success toast. Save failures retain
 their existing guidance; restore write access and import again. Non-object JSON
 is refused before changing the draft. Admitted native saves retain their owner
-and cache behavior. Partial imports can temporarily paint omitted fields as empty
-until reopen; disk values remain preserved. Native Local cancellation, permission
-refusal, retry and reopened-value checks passed.
+and cache behavior. Native Local cancellation, permission refusal, retry and
+reopened-value checks passed.
 [Detailed checks and limits](release-notes-v0.33.1.md).
 
 ## Verification

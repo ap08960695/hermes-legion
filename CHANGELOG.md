@@ -5,6 +5,17 @@ supported update or Desktop rebuild path. This kit does not install a rebuilt
 Hermes.app. Linked notes identify opt-in memory settings and admission guards
 that apply after adoption. Each entry states its adoption and verification limits.
 
+## v0.33.2 — Keep untouched settings visible after import
+
+Partial config imports preserve untouched fields on screen, including switches
+and budgets. Repeating an import no longer requires reopening Settings to see
+correct values. A file read superseded by an edit or leaving the view is discarded;
+import again to apply it. Apply the source kit and rebuild Desktop.
+
+Native Local first/repeated imports, next field edit, sparse disk readback and
+Settings reopen passed. No native writer or backend change.
+[Checks and limits](docs/release-notes-v0.33.2.md).
+
 ## v0.33.1 — Confirm config imports after saving
 
 Settings says **Config imported** after the current native save succeeds.

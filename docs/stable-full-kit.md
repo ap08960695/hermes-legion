@@ -10,6 +10,16 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Complete partial-import drafts (v0.33.2)
+
+Import uses the house merge to preserve untouched displayed values, including
+after an identical import. Existing version/generation counters discard stale
+file reads after an edit or unmount. The shared native writer is unchanged.
+Apply the kit and rebuild Desktop. Two existing source/test sections change;
+1085 targets and test selection remain. Native Local same-page imports, next
+edit, sparse disk readback and reopen pass.
+[Checks and limits](release-notes-v0.33.2.md).
+
 ## Acknowledged Settings imports (v0.33.1)
 
 The shared config editor returns its existing current save acknowledgement;
