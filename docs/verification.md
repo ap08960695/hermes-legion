@@ -1,3 +1,41 @@
+# Native Monitor stale recovery and canonical navigation pass — unreleased
+
+A fresh production renderer/main/preload built from the committed query-cache
+correction passes the isolated Local walkthrough. The real gateway exposes two
+empty profiles. CUA accessibility and screenshots agree at baseline, degraded
+refresh, recovery and final Bot Chat navigation. No DOM observer or appended
+preload capability is used. The 60-second Local/zero-SSH gate passes first.
+
+A labelled inventory IPC fault actually rejects route reads. The guard stops
+before aggregate inventory, so that second configured fault is not exercised.
+After explicit Refresh and settled retries, both source labels remain, the
+stored-snapshot warning appears, rows say Retained snapshot and both Open buttons
+are disabled. Removing the fault and explicitly refreshing clears the warning
+and restores current status/Open. Successful native route/aggregate returns and
+real backend profile-reader receipts independently confirm recovery. The fault
+is simulated; this is not a real gateway-outage test.
+
+One Open click on the named profile reaches a Bot Chat tab. The first observation
+is intermediate; the later read-only observation shows the session URL and empty
+chat. That ID matches the sole persisted Bot Chat row in the named profile's
+state.db, with profile_name naming that profile. The default database remains
+empty. Both databases contain zero messages; the new row records zero model API
+calls and input/output tokens. No prompt is sent. This proves creation/navigation
+of an empty canonical chat, not reopening a pre-existing nonempty transcript.
+
+The native guardian closes without failure or survivors after 172.762 seconds.
+Sampled peaks: four non-OS children, eight total children and 942,440,448 bytes
+including the guardian. Build/check setup and external CUA/advisor are outside
+this measurement; no full-task RAM or savings claim. Five fixture configs restore,
+six relevant source hashes remain unchanged, and Desktop SSH stays zero.
+
+Private before/after captures are under
+`../evidence/bot-monitor-query-authority-20261117`; raw receipts remain under
+`../uitest-v090-c2q4iijp/bots-r179/evidence`. Earlier failed runs remain failed.
+This completes degraded-refresh/recovery and empty canonical navigation gates.
+Nonempty task reports and terminal worker progress still need native acceptance.
+No product/patch/API change, unchanged source-suite sweep or release is included.
+
 # Monitor route-inventory failure preserves scoped snapshots — unreleased
 
 A fresh isolated Local full production renderer/main/preload and real canonical

@@ -650,3 +650,26 @@ the correction: standalone failure/recovery and imperative cached refresh withou
 a publisher. All 31 relevant cases pass, with clean scoped lint and renderer
 types. No new store, hook, API or poller. Native degraded paint after this
 correction and canonical navigation/report/terminal progress remain open.
+
+
+## Native query-cache acceptance
+
+A fresh production build of the query-owned guard now passes the standalone
+Monitor path. Actual labelled route-read failures leave source labels intact,
+show the stored-snapshot warning and Retained snapshot rows, and disable Open.
+The aggregate fault is configured but not reached after the route shortcircuit.
+Removing the fault plus explicit Refresh restores current rows and Open, with
+successful inventory and real profile-reader receipts. CUA AX and pixels agree.
+
+One subsequent Open on the named Local profile reaches an empty Bot Chat. The
+native session URL matches that profile's persisted canonical-title row; the
+default profile remains empty. Zero messages and model API calls are recorded.
+The first observation was intermediate; no input retry was needed. This proves
+empty canonical creation/navigation, not a pre-existing transcript or worker
+report. Before/after images stay private under
+`../evidence/bot-monitor-query-authority-20261117`. No new product code or release.
+
+This closes the native degraded/recovery gate left open by the prior source
+correction. Nonempty reports and terminal worker progress remain required before
+the feature batch can ship. Owner adoption and the first ai connection still
+require the lead/owner; this walkthrough used only the isolated Local instance.
