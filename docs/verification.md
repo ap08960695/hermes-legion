@@ -1,3 +1,42 @@
+# Monitor roster-query settlement — unreleased
+
+One added case in existing data.roster.test.tsx runs actual useRoster and a real
+TanStack QueryClient/provider against host-boundary responses, without mocking
+the hook. It waits for successful active data, then performs real refetch and
+checks the same named parent, ended child, exact report, local route/source health
+and source-qualified cache key. One merged row, untouched input and no ambient
+request guard source attribution. Boundary responses are synthetic: this is no
+native or live browser claim. The file's backed-up input equals pinned upstream
+bf0203a794a07aac3ff764972ab9087baa4e4f4e. Its changed section applies/hashes/reverses.
+That existing test file is newly included in selected Desktop tests; all previous
+selections and patch sections remain. Source inventory becomes1,099targets.
+
+Query20 and Monitor24 checks pass,44total, with scoped test ESLint. An initial
+assertion was tightened to wait for query success before checking the active
+worker; final44checks pass13.77s. No product source/API/dependency/locale change.
+
+A task-private fixture replaces the earlier adapter poller with actual useRoster,
+shared queryClient/provider and dataUpdatedAt, plus explicit stable local/profile
+atoms and a narrow local host adapter. Only exact local profiles.list is routed
+to the pre-existing native test socket; simulated source inventory is labelled.
+Raw result stays unchanged, production hook owns merge/annotation/reconciliation.
+No fixture timer/cache prefill; unsupported ambient/chat actions are refused.
+The fixture builds, using the existing installed TanStack module after correcting
+its out-of-tree import resolution. Failed build output is retained separately.
+Build success does not establish runtime adapter/provider/cache behavior.
+
+Execution is unrun; integration remains unproven. Chrome AX/menu actions left UI
+unchanged, a bounded coordinate fallback returned Computer Use server-10005
+noWindowsAvailable, and listBrowsers reported access host unavailable. CUA part
+ended with completion summary; no Guest window, static service or native gateway
+was started. No screenshot/worker/refresh acceptance is claimed this round, and
+no alternative non-CUA automation or blind Hermes launch was used. Native selector,
+live useRoster and canonical navigation remain open before the feature release.
+Unchanged native lifecycle, full renderer/types and prior UI matrices were not
+rerun. Source/fixture/errors/build hashes are retained privately; no owner Hermes,
+ai/other host or ESTOP/pause/timer action. This is a completed offline regression
+step, not completed live acceptance or a release.
+
 # Monitor native-to-browser settlement — unreleased
 
 Actual Monitor, Reports, production CSS and production mood/source helpers ran

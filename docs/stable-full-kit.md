@@ -10,6 +10,14 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Monitor roster-query settlement regression (unreleased)
+
+The selected real useRoster test now protects canonical parent/child/report and
+source-qualified cache identity across active-to-ended refetch. It checks exact
+local routing, source health, one row, untouched input and no ambient request.
+The private actual-hook browser fixture builds but has not run; native input and
+browser access were unavailable. [Proof boundaries](verification.md#monitor-roster-query-settlement--unreleased).
+
 ## Monitor native-to-browser settlement (unreleased)
 
 The actual Monitor now has browser adapter proof over fresh native gateway

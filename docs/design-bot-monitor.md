@@ -257,3 +257,30 @@ in this held-after-read phase and stays absent. Helper status is Unknown because
 this adapter does not supply Electron source metadata. Three rendered settlement
 cases cover Completed/Error/Stopped with stale step/tool removal. Electron,
 useRoster and real navigation acceptance remain open before the feature release.
+
+
+## Production roster query acceptance
+
+Next bridge uses actual useRoster, the shared query client/provider and its
+existing refresh interval/dataUpdatedAt instead of a fixture poller. A private
+SDK host adapter supplies stable local/profile atoms, exact local route and
+source inventory mechanically from native names, and routes only profiles.list
+to the existing locked native socket. Raw results stay unchanged; the production
+hook performs merging, annotation and reconciliation. Electron inventory remains
+explicitly simulated. Other host work/chat capabilities are refused.
+
+Actual Monitor uses query dataUpdatedAt and production mood/source derivation.
+No cache prefill, manual refresh loop, product API/poller/dependency or fake work.
+Regression follows canonical parent/child/report/source through real hook refetch.
+Browser proves automatic native-to-query-to-Monitor flow; native Electron and
+canonical chat navigation remain separate acceptance gates.
+
+
+The source-query regression is complete: actual useRoster refetch preserves the
+named parent, ended child, exact recorded report, route/source health and local
+query key, without mutating the input or falling through to an ambient gateway.
+Query20+Monitor24 rendered checks pass. The private real-hook integration fixture
+builds, but execution is unrun and integration unproven: CUA native input returned
+noWindowsAvailable and its browser host was unavailable. No gateway run was started
+without a supported UI surface. Live useRoster, Electron and navigation gates
+remain open. This completed development step does not release the feature.
