@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1094-path** Legion source, interface and optimization alternative
+This is the complete **1097-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,30 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Recorded task reports (unreleased)
+
+Monitor bot rows offer Recent reports: recorded task outcomes, report/error
+excerpts, completion time and local outcome filters. The last recorded issue is
+separate from current work. Stopped and Unknown remain distinct; only the
+backend's recorded progress-detector result is labelled stalled. A historical
+failure or stalled report never makes the bot currently blocked or Working.
+
+One read-only helper uses the existing preferred Bot Chat compression chain and
+roster cache, excluding side-chats/forks/other profiles. Twenty ledger rows and
+20 emitted tasks are global bounds per canonical chat. JSON reads are bounded
+before decoding, existing forced redaction precedes text cuts, and only declared
+snapshot fields leave the helper. Vault-value scrubbing binds the store's own
+home and restores the caller context, including for sibling-profile reads. Missing/unreadable reports stay unavailable;
+empty/partial history never proves no failures. The local dialog renders escaped
+text and never activates a source or opens a chat. Canonical Open chat is unchanged.
+
+Twelve changed sections roundtrip;1097targets, unrelated patch sections exact.
+One new Python test appends, prior selection order/metadata retained.36focused
+Python and50UIcases pass, plus scoped lint/types/build/generated/health checks.
+No new provider/request/poll/timer/dependency/schema/control. This is unreleased
+source work; native layout/lifecycle acceptance and one feature batch follow.
+[Design](design-bot-monitor.md#recorded-task-reports-slice).
 
 ## Canonical bot usage (unreleased)
 

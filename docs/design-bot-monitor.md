@@ -113,3 +113,51 @@ homes, ordinary summaries, missing/zero and privacy; rendered tests cover source
 selection, token sorting, no false activity/elapsed and exact canonical opening.
 Native conditions have not changed since the CUA noWindowsAvailable failure;
 no blind retry or live/release claim this round. Full Monitor stays unreleased.
+
+
+## Recorded task reports slice
+
+Monitor bot rows offer a local Recent reports dialog from their named Bot Chat's
+durable async-delegation ledger. The existing preferred compression walker
+provides exact eligible chain ids; reuse it in place of the existing tip-only
+walk, preserving identity and excluding reset/branch/delegate forks. Both roster
+readers use the same read-only extraction and existing roster cache. Ordinary
+latest-session summaries and current-worker eligibility remain unchanged.
+
+At most20terminal ledger rows and20task snapshots per canonical conversation.
+Bound task/result JSON reads before decoding; malformed/oversized content never
+falls back to raw JSON. Force existing secret redaction before clipping goal256,
+summary2048 and error512characters. Only id/task index, normalized recorded
+status, completion time and those text fields leave the helper. No transcript
+paths/config, additional gateway request/poll/provider, storage or control API.
+
+Per-task statuses override unit completion (mixed batches can contain failures).
+Only explicit recorded successes are Completed; error/failed/timeout are Error,
+interrupted is Stopped, stalled is Recorded stalled, everything else Unknown.
+History cannot establish current blockage or Working; absent/partial records
+never prove no failures. Missing/legacy/read-error report data stays unavailable
+without losing canonical identity/usage. Empty readable history means only no
+reports in this bounded snapshot.
+
+Reports open only on explicit click, as escaped plain text in the existing
+Dialog primitive, with bot/source and stored-snapshot scope. No connection or
+chat navigation; canonical Open chat keeps its existing identity action. Task
+reports use the shared Select to filter locally by recorded outcome; current bot/worker filters
+still describe their existing current observations. All nine catalogs cover new
+chrome. Retained/offline history remains clearly captured/stored, not live proof.
+
+Approaches: badge-only is smaller but lacks durable task reports; a separate
+report request/poller duplicates existing roster authority. Shared bounded
+read-only snapshot plus local dialog is the smallest complete report slice.
+Owner's standing autonomy delegates this call; advisor264supports it. Source
+checks/DB parity and rendered UI prove this slice, not native/layout/billing.
+Native capture condition unchanged; no blind retry or feature release this round.
+
+
+Recorded-report source slice is implemented. Twelve new DB cases plus24nearby
+checks and19Monitor+31nearby UI cases pass. Missing task status/index in a completed
+batch stays unknown/unbound instead of borrowing the unit or another task.
+Report/error text is labelled as excerpts. Redaction binds the owning store's
+home and restores the caller's context, preserving per-profile vault-value
+isolation without secret hydration or process-environment changes. Native layout, actual worker
+progress/settlement and feature-release acceptance remain open.

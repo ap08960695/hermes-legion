@@ -1,3 +1,63 @@
+# Recorded task reports in Bot Monitor — unreleased
+
+Recent reports opens a source-qualified local snapshot of recorded async task
+outcomes, bounded report/error excerpts and completion times, with outcome
+filters. The main bot row names the last recorded issue in its bounded snapshot.
+Completed, Error, Recorded stalled, Stopped and Unknown stay distinct. A mixed
+completed batch may contain failed tasks; missing task status/index cannot borrow
+unit success or another task's identity. Historical outcomes never establish
+current work/blockage or change worker/attention eligibility. Canonical chat
+opening stays on the existing named bot action.
+
+The shared read-only helper uses exact preferred compression-chain ids from the
+existing walker (replacing the tip-only walk, not changing its policy). Both
+canonical readers use their existing scoped store/cache. Ordinary latest-session
+summaries keep their prior shape. At most20terminal ledger rows and20tasks per
+canonical chat; SQL bounds task JSON at16384characters and result JSON at65536
+before decoding. Existing forced redaction precedes goal256/summary2048/error512
+character cuts; no raw-JSON fallback. Only id/index, normalized status, timestamp
+and those text excerpts are projected. Malformed/oversized records can retain
+known unit failure but never imply successful batch tasks. Missing/legacy/read-
+error data omits reports without losing canonical usage/identity. Empty/partial
+snapshots are not proof of no failures. Redactor imports remain on demand.
+Nonempty report projection binds only the store's home ContextVar and restores
+it in finally; no new secret hydration or process-environment mutation. Two
+separate profile vault registries are tested under a different launch scope,
+without applying launch-profile values to the sibling's output.
+
+Ten new Python cases first produced9missing-field failures/1passing absence case,
+then all10passed. A later sparse/missing batch status/index probe correctly
+reproduced false unit-success/name borrowing and went red→green. A separate
+registered-vault-value probe reproduced scrubbing under the wrong launch home;
+red→green binds the store's home and restores the ambient caller context.
+Final12new+8canonical-usage+10worker-reader+6canonical-read cases =36pass. Real temporary
+SessionDB and read-only attachments cover preferred compression, branch/reset/
+delegate/tool/sidechat decoys, distinct homes, subject privacy, mixed batches,
+row/task bounds, malformed/oversized payloads, old wire data, failed reads,
+forced redaction before cuts, nonsecret text budgets and whitelisted output.
+The unchanged canonical per-file engine uses task-local scratch, repository
+conftest/guards,1worker/no retry and reused pytest/Ruff tooling. Not an unqualified
+shell-wrapper/CI-parity or full source/control-suite claim.
+
+Five new rendered report scenarios first failed as expected; the responsive
+shared-Select filter also reproduced its missing combobox before implementation.
+Final19Monitor+31nearby UI =50pass in5files. Explicit open/close, local filters,
+neutral stopped/unknown, absent versus empty, escaped guest text without links,
+same-name source isolation, retained data and captured snapshots across refresh
+are covered without refetch/chat navigation. All9catalogs cover new chrome.
+Scoped ESLint0warnings, renderer types/build, generated check and code health
+0blocking/0advisory pass. Build retains the unrelated ineffective-dynamic-import
+warning in profile-ops. Twelve changed sections apply/afterhash/reverse/beforehash
+against the pinned base;1097targets, unrelated sections exact. Only the new
+Python test appends; previous selection order/metadata retained.
+
+No native app/CUA trial: the prior noWindowsAvailable control/capture condition
+has not changed. No new native visual/layout, before/after pair, live worker,
+billing,60-second launch or RAM-saving proof. Owner app/data,otherhosts,ai,ESTOP,
+pauses and timers remain untouched. Full Monitor stays partial/unreleased until
+native layout/progress/settlement acceptance; no feature release or adoption.
+[Design](design-bot-monitor.md#recorded-task-reports-slice).
+
 # Canonical Bot Monitor usage — unreleased
 
 Bot rows now display tokens, recorded estimates/provider-reported amounts and

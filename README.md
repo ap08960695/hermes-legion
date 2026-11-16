@@ -19,7 +19,9 @@ sortable table. It now shows recorded worker estimates/provider-reported amounts
 separately, with a partial-coverage hint. Bot rows now show their stored Bot Chat
 tokens/cost and recorded model beside the configured bot model. Worker usage stays
 separate; these are recorded row values, not lifetime totals. Missing facts stay
-unavailable. Full feature and live
+unavailable. Recent reports now opens recorded task outcomes and bounded report/
+error excerpts, with local outcome filters and recorded-stalled/Stopped/Unknown
+labels. Historical issues stay separate from current work. Full feature and live
 lifecycle acceptance remain in progress; the latest released version is
 v0.33.8. No daily-app adoption is included.
 
