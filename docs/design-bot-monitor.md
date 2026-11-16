@@ -384,3 +384,26 @@ a private transport adapter. It is complementary to137browser adapter paint proo
 not their composition into browser/Electron acceptance. Actual browser query paint,
 degraded refresh visuals, Electron host inventory/transport and canonical desktop
 navigation still gate the Monitor batch release. Current CUA host is unavailable.
+
+
+## Retained native snapshot through a simulated read fault
+
+A second connected acceptance follows the retained-refresh feature through actual
+query failure and recovery over real native data. After initial active rendering,
+the private adapter returns503 for exactly one three-attempt read/retry cycle.
+These refusals send no gateway RPC and leave the native socket/lifecycle running.
+Actual query error retains its prior cache, marks Monitor unavailable for current
+work, hides worker/progress, disables chat Open and keeps captured reports readable.
+An empty native report snapshot remains explicitly empty, not a no-failures claim.
+
+Existing Refresh waits on a bounded diagnostic response barrier. Stale notice and
+Open restriction persist for at least one second; fresh successful native read
+restores the same worker, then original native heartbeat/completion/report settle
+normally. Read-only task-owned SQLite probes at error/pending acknowledgments
+confirm the child has no ended_at. No observer lifecycle writes or source change.
+
+One native and one JSDOM consumer case pass; four relevant source hashes stay
+exact. This proves retained/pending/recovery behavior with real native data plus
+simulated adapter fault/timing. It does not prove native gateway/socket failure,
+reconnect or browser/Electron behavior. Native Error/Stopped query report cases
+and remaining browser/Electron/navigation acceptance remain separate.

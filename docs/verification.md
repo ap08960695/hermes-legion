@@ -1,3 +1,53 @@
+# Retained native snapshot through adapter fault — component acceptance
+
+The unchanged completed native lifecycle scenario and actual-query JSDOM consumer
+now exercise141retained-refresh behavior together. After initial native active
+DOM acknowledgment, the private read-only HTTP adapter refuses exactly three
+requests in one natural fetch/retry cycle:503/503/503, with the unchanged5s
+interval and1s/2s retry delays. Each refusal returns before native RPC; native
+WebSocket, model worker and lifecycle stay running. Focus/reconnect refetches
+are disabled. This is simulated adapter failure, not a real gateway/socket drop.
+
+Actual query reaches error after retry exhaustion. Same cache object/content and
+child identity stay intact; no ended_at or fabricated completion is added. Monitor
+retained notice replaces current work, old worker/step disappear, chat Open is
+disabled, and local reports open the honest empty stored snapshot. Empty reports
+prove only that captured result, not nonempty native history retrieval/no failures.
+Read-only SQLite probes confined to this test's home find ended_at null and
+api_call_count1 at both error and pending-recovery acknowledgments. Original native
+heartbeat later advances, so UI unavailability never stands in for cancellation.
+
+Existing Refresh starts one pending read. An adapter release barrier (15s deadline)
+waits for component assertions; stale notice/cache/Open restriction persist for
+1004ms and server read waits1.007s. No automatic successful read can bypass that
+barrier. Successful fresh native read restores same worker/Open, elapsed7s->16s.
+Original native file read,60s heartbeat, true terminal ledger/delivery/report,
+parent admissions and nonempty side/helper/profile refusal checks all pass.
+Only model replies/usage, SDK state/inventory and adapter fault/timing are fixtures.
+No lifecycle mutation, extra native socket, manual completion or retry-policy change.
+
+Sole native attempt1pass/2deselected68.1s; component1pass54.67s (61.84s Node runner),
+native main62.830s. Eleven successful component roster reads/thirteen captured
+main-roster reads, plus three refused HTTP attempts that send zero native RPC.
+Report/parent/child/delegation/helper/cache/source and raw payload readbacks match.
+One Node thread-pool PID retains unchanged3child+observer/<3.5GiB/180s fences.
+Max4sampled processes inclobserver, summed peak1,446,084,608B inclobserver/excluding
+outer controller. These are guard samples, not production RAM/billing evidence.
+
+Labelled saved-native replay preflight plus six HTTP refusal controls pass. Initial
+barrier-only check was strengthened with one full second of pending assertions;
+final changed preflight1case19.283s. Replay active timestamps are retimed and no
+live DB probe occurs there; it is excluded from native proof. Raw versions kept.
+Four relevant source hashes remain exact; product/patch/manifest/test selection
+stay unchanged. Only acceptance docs/inventory change. No unchanged mock/type/
+build/native-negative sweep. Source141behavior remains unreleased.
+
+Current CUA browser host remains unavailable; no input/app/Guest retry or owner
+Hermes launch. JSDOM proof does not establish paint/layout, real Electron SDK
+transport/inventory, native gateway failure/reconnect, desktop navigation, managed
+workers or provider usage. Native Error/Stopped query report cases are deferred;
+browser/degraded-refresh visuals and Electron/navigation still gate batch release.
+
 # Native gateway through production query — component acceptance
 
 One unchanged test_native_worker_settlement_becomes_its_bot_chat_report[completed]

@@ -10,6 +10,14 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Retained Monitor recovery over native data (unreleased)
+
+Connected acceptance now keeps a real native worker running while simulated
+roster reads fail: Monitor retains its snapshot, hides unconfirmed progress and
+restricts Open through a held Refresh. A successful read restores the same worker
+and normal completion/report follows. Adapter fault/timing is simulated; product
+source stays unchanged. [Boundaries](verification.md#retained-native-snapshot-through-adapter-fault--component-acceptance).
+
 ## Native work reaches the production Monitor query (unreleased)
 
 A connected native/component acceptance now follows real delegated work through
