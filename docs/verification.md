@@ -1,3 +1,25 @@
+# v0.33.3 — Scope Settings config actions
+
+Native Local before/after: ambient scope-b has budget4222, displayed default has
+3111. Actual native Save exports4222/B before and3111/A after. A fresh rebuilt
+launch shows default in the Reset dialog; Cancel returns to Settings. Configs
+remain byte exact; session stores stay empty; no Send/model request occurs.
+
+Nine added cases yield genuine red8/9passes, then nearest60pass. Exported contents,
+confirmation/read scope changes, Cancel/noI/O, defaults read-origin and refused
+Reset acknowledgement are covered. Lint/types/build pass; inherited dynamic-import
+warning remains. Four-section pinned-base apply/hash/reverse passes,1086targets;
+one existing upstream route-binding test joins the kit/explicit selection.
+
+Baseline and rebuilt export/Reset cohorts pass actual60sSSH0/max4Hermes samples;
+observer-inclusive RSS937672704/948797440/888340480B, no savings claim. Export cohort
+watchdog expiry and inactive-read task-trial relaunch are retained as failed
+closure diagnostics; exact relaunch identities are stopped. Fresh Reset cohort
+closes normally. All owned identities/ports end and configs/modes/original313bundle/
+strict signature restore. Native Reset write is intentionally skipped because
+native defaults include timer policy. No daily-app/remote/ai/Linux or full Settings
+acceptance claim. [Release notes and limits](release-notes-v0.33.3.md).
+
 # v0.33.2 — Keep untouched settings visible after import
 
 Native Local before/after uses two actual imports of the same memory-only file.

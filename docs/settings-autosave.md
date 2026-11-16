@@ -21,6 +21,15 @@ From v0.8.15, the shared merge also [preserves nested edits followed by a null
 section](settings-null-sections.md), matching the native API rather than dropping
 those edits during coalescing.
 
+## Export and Reset use the displayed profile (v0.33.3)
+
+Settings Actions captures the displayed **Applies to** profile and connection
+when Export or Reset starts. Changing the selection while a read or confirmation
+is pending keeps that action on its original target. Reset names that profile
+before confirmation; Cancel performs no defaults read or write. A refused Reset
+save reports failure. Reset retains the native merge behavior; it does not remove
+extra configuration keys. [Checks and limits](release-notes-v0.33.3.md).
+
 ## Partial imports preserve the form (v0.33.2)
 
 Import merges sparse JSON into the displayed record with the same section rules

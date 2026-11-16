@@ -10997,10 +10997,48 @@ index 68c5a3e1b74856ec19591084e20c681d92984ba5..611d1a2baa53cdd89d6052f9c30747ff
 -  return $apiRequestScope.get().connectionId ?? (_apiLocalMode ? 'local' : undefined)
 +  return $apiRequestScope.get().connectionId ?? ($apiLocalMode.get() ? 'local' : undefined)
  }
+diff --git a/apps/desktop/src/api/config-route-binding.test.ts b/apps/desktop/src/api/config-route-binding.test.ts
+index 211ec8447f491bfdc13ebea33f35a14dfed26aae..bd227c0ecb2c66f02aa8437256f13605508e91a2 100644
+--- a/apps/desktop/src/api/config-route-binding.test.ts
++++ b/apps/desktop/src/api/config-route-binding.test.ts
+@@ -3,2 +3,3 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+ import {
++  getHermesConfigDefaults,
+   getHermesConfigRecord,
+@@ -59,2 +60,22 @@ describe('config read/write route binding', () => {
+   })
++
++  it.each([
++    { scope: undefined, connectionId: 'connection-a', profile: 'default' },
++    { scope: 'scope-b', connectionId: 'connection-a', profile: 'scope-b' },
++    { scope: { connectionId: 'connection-c', profile: 'scope-b' }, connectionId: 'connection-c', profile: 'scope-b' }
++  ])('binds config defaults to requested owner $connectionId/$profile', async ({ scope, connectionId, profile }) => {
++    setApiRequestConnection('connection-a')
++    setApiRequestProfile('default')
++    const defaults = await getHermesConfigDefaults(scope)
++    expect(api).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
++      path: '/api/config/defaults', connectionId, profile
++    }))
++    expect(peekConfigReadOrigin(defaults)).toEqual(expect.objectContaining({ connectionId, profile }))
++    setApiRequestConnection('connection-new')
++    setApiRequestProfile('new-profile')
++    await saveHermesConfig(defaults)
++    expect(api.mock.calls[1][0]).toEqual(expect.objectContaining({
++      method: 'PUT', path: '/api/config', connectionId, profile
++    }))
++  })
+ })
 diff --git a/apps/desktop/src/api/config.ts b/apps/desktop/src/api/config.ts
-index 976f79976e40cc672ef1a9bdfe6c1c80b91f4f1f..d65e9e9d6b7b93890c91dcbdb1bf080721550461 100644
+index 976f79976e40cc672ef1a9bdfe6c1c80b91f4f1f..a09c934491023034488d44cfe4e2f6d462678084 100644
 --- a/apps/desktop/src/api/config.ts
 +++ b/apps/desktop/src/api/config.ts
+@@ -165,4 +165,4 @@ export function getHermesConfigRecord(
+
+-export function getHermesConfigDefaults(): Promise<HermesConfigRecord> {
+-  return fetchBoundConfigRecord(undefined, {
++export function getHermesConfigDefaults(profile?: ProfileScope): Promise<HermesConfigRecord> {
++  return fetchBoundConfigRecord(profile, {
+     path: '/api/config/defaults',
 @@ -182,3 +182,3 @@ export function saveHermesConfig(
    profile?: ProfileScope,
 -  { preserveLanguage = false }: { preserveLanguage?: boolean } = {}
@@ -21690,10 +21728,10 @@ index fa2b1996b102517262ac337612b8ec226dd54399..9fd3e55fdb92c9cce8da85aff04d17b4
 -import type { HermesApiRequest } from '@/global'
  import { queryClient } from '@/lib/query-client'
 diff --git a/apps/desktop/src/app/settings/index.tsx b/apps/desktop/src/app/settings/index.tsx
-index f550dae314b58ea3089a8570be6b5a8335db1aff..2f92d5fb6c32b39707c379bcf31041c5cb70c30c 100644
+index f550dae314b58ea3089a8570be6b5a8335db1aff..ae2c2922fc4dd38b6ef2e2198745f238c218ac37 100644
 --- a/apps/desktop/src/app/settings/index.tsx
 +++ b/apps/desktop/src/app/settings/index.tsx
-@@ -1,8 +1,9 @@
+@@ -1,9 +1,10 @@
  import { useStore } from '@nanostores/react'
 -import { type ComponentType, useCallback, useEffect, useMemo, useRef } from 'react'
 +import { type ComponentType, type RefObject, useCallback, useEffect, useMemo, useRef } from 'react'
@@ -21704,12 +21742,18 @@ index f550dae314b58ea3089a8570be6b5a8335db1aff..2f92d5fb6c32b39707c379bcf31041c5
  import { codiconIcon } from '@/components/ui/codicon'
  import { KbdCombo } from '@/components/ui/kbd'
 -import { Tip } from '@/components/ui/tooltip'
- import { getHermesConfigDefaults, getHermesConfigRecord, saveHermesConfig } from '@/hermes'
-@@ -41,3 +42,2 @@ import { $settingsScopeProfile } from '@/store/settings-scope'
+-import { getHermesConfigDefaults, getHermesConfigRecord, saveHermesConfig } from '@/hermes'
++import { getHermesConfigDefaults, getHermesConfigRecord, resolveConfigWriteScope, saveHermesConfig } from '@/hermes'
+ import { useI18n } from '@/i18n'
+@@ -38,6 +39,5 @@ import { $localModelsEnabled } from '@/store/local-models-flag'
+ import { notifyError } from '@/store/notifications'
+-import { $settingsScopeProfile } from '@/store/settings-scope'
++import { $settingsRequestProfile, $settingsScopeProfile } from '@/store/settings-scope'
+
  import { useRouteEnumParam } from '../hooks/use-route-enum-param'
 -import { OverlayIconButton } from '../overlays/overlay-chrome'
  import { OverlayMain, OverlayNav, type OverlayNavGroup, OverlaySplitLayout } from '../overlays/overlay-split-layout'
-@@ -100,2 +100,94 @@ const SUBPAGE_VIEWS: Partial<Record<SettingsViewId, ComponentType<{ subpage?: st
+@@ -100,2 +100,105 @@ const SUBPAGE_VIEWS: Partial<Record<SettingsViewId, ComponentType<{ subpage?: st
 
 +// OverlayNav mounts wide and narrow footers together; each needs its own trigger.
 +function SettingsActions({
@@ -21720,11 +21764,14 @@ index f550dae314b58ea3089a8570be6b5a8335db1aff..2f92d5fb6c32b39707c379bcf31041c5
 +  onConfigSaved: SettingsPageProps['onConfigSaved']
 +}) {
 +  const { t } = useI18n()
++  const scopeProfile = useStore($settingsRequestProfile)
 +  const actionsTriggerRef = useRef<HTMLButtonElement | null>(null)
 +
 +  const exportConfig = async () => {
++    const owner = resolveConfigWriteScope(undefined, scopeProfile)
++
 +    try {
-+      const cfg = await getHermesConfigRecord()
++      const cfg = await getHermesConfigRecord(owner)
 +      const blob = new Blob([JSON.stringify(cfg, null, 2)], { type: 'application/json' })
 +      const url = URL.createObjectURL(blob)
 +      const a = document.createElement('a')
@@ -21739,8 +21786,11 @@ index f550dae314b58ea3089a8570be6b5a8335db1aff..2f92d5fb6c32b39707c379bcf31041c5
 +  }
 +
 +  const resetConfig = async () => {
++    const owner = resolveConfigWriteScope(undefined, scopeProfile)
++
 +    const ok = await confirm({
 +      confirmLabel: t.settings.resetToDefaults,
++      description: t.settings.profileScope.editsProfile(scopeProfile ?? 'custom'),
 +      onCloseAutoFocus: event => {
 +        event.preventDefault()
 +        actionsTriggerRef.current?.focus()
@@ -21754,7 +21804,12 @@ index f550dae314b58ea3089a8570be6b5a8335db1aff..2f92d5fb6c32b39707c379bcf31041c5
 +    }
 +
 +    try {
-+      await saveHermesConfig(await getHermesConfigDefaults())
++      const result = await saveHermesConfig(await getHermesConfigDefaults(owner), owner)
++
++      if (!result.ok) {
++        throw new Error(t.settings.resetFailed)
++      }
++
 +      triggerHaptic('success')
 +      onConfigSaved?.()
 +    } catch (err) {
@@ -21804,7 +21859,7 @@ index f550dae314b58ea3089a8570be6b5a8335db1aff..2f92d5fb6c32b39707c379bcf31041c5
 +}
 +
  export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: SettingsPageProps) {
-@@ -207,38 +299,2 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
+@@ -207,38 +310,2 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
 
 -  const exportConfig = async () => {
 -    try {
@@ -21843,7 +21898,7 @@ index f550dae314b58ea3089a8570be6b5a8335db1aff..2f92d5fb6c32b39707c379bcf31041c5
 -  }
 -
    const navGroups: OverlayNavGroup[] = useMemo(
-@@ -506,33 +562,2 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
+@@ -506,33 +573,2 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
 
 -  const navFooter = (
 -    <>
@@ -21877,7 +21932,7 @@ index f550dae314b58ea3089a8570be6b5a8335db1aff..2f92d5fb6c32b39707c379bcf31041c5
 -  )
 -
    const SubpageView = SUBPAGE_VIEWS[activeView]
-@@ -579,3 +604,6 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
+@@ -579,3 +615,6 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
        <OverlaySplitLayout>
 -        <OverlayNav footer={navFooter} groups={navGroups} />
 +        <OverlayNav
@@ -22060,10 +22115,10 @@ index fb45db8578840ad35d929b158926a2dcd0170622..256212523e4545e70854c1a48f813227
            className={cn(
 diff --git a/apps/desktop/src/app/settings/settings-actions.test.tsx b/apps/desktop/src/app/settings/settings-actions.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..23b59aacbe500ad0c471e312343daeab89dc1d05
+index 0000000000000000000000000000000000000000..8010f95595924fca93a588ce7ebdcf28fcb0849a
 --- /dev/null
 +++ b/apps/desktop/src/app/settings/settings-actions.test.tsx
-@@ -0,0 +1,227 @@
+@@ -0,0 +1,341 @@
 +import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 +import type { ReactNode, Ref } from 'react'
 +import { MemoryRouter } from 'react-router'
@@ -22071,9 +22126,12 @@ index 0000000000000000000000000000000000000000..23b59aacbe500ad0c471e312343daeab
 +
 +import { ConfirmHost } from '@/components/confirm-host'
 +import type * as HermesApi from '@/hermes'
-+import { getHermesConfigDefaults, getHermesConfigRecord, saveHermesConfig } from '@/hermes'
++import { getHermesConfigDefaults, getHermesConfigRecord, saveHermesConfig, setApiRequestConnection, setApiRequestProfile } from '@/hermes'
 +import { I18nProvider } from '@/i18n'
 +import { $confirmRequest, settleConfirm } from '@/store/confirm'
++import { notifyError } from '@/store/notifications'
++import type * as Notifications from '@/store/notifications'
++import { $settingsScopeOverride } from '@/store/settings-scope'
 +
 +import { SettingsView } from './index'
 +
@@ -22088,6 +22146,10 @@ index 0000000000000000000000000000000000000000..23b59aacbe500ad0c471e312343daeab
 +  saveHermesConfig: vi.fn(async () => ({ ok: true }))
 +}))
 +vi.mock('@/lib/haptics', () => ({ triggerHaptic: () => {} }))
++vi.mock('@/store/notifications', async importOriginal => ({
++  ...(await importOriginal<typeof Notifications>()),
++  notifyError: vi.fn()
++}))
 +vi.mock('@/store/desktop-metrics', () => ({ recordFeatureUse: () => {}, settingsArea: () => 'settings' }))
 +vi.mock('@/store/keybinds', () => ({ bindingsFor: () => [] }))
 +vi.mock('@/store/command-palette', async () => ({
@@ -22141,12 +22203,13 @@ index 0000000000000000000000000000000000000000..23b59aacbe500ad0c471e312343daeab
 +let downloadName = ''
 +const revokeObjectURL = vi.fn()
 +let settingsRender: ReturnType<typeof render>
++const onConfigSaved = vi.fn()
 +
 +function SettingsHarness({ showSettings = true }: { showSettings?: boolean }) {
 +  return (
 +    <I18nProvider configClient={null} initialLocale="en">
 +      <MemoryRouter initialEntries={['/settings?page=main']}>
-+        {showSettings ? <SettingsView onClose={() => {}} /> : <button type="button">Other screen</button>}
++        {showSettings ? <SettingsView onClose={() => {}} onConfigSaved={onConfigSaved} /> : <button type="button">Other screen</button>}
 +        <ConfirmHost />
 +      </MemoryRouter>
 +    </I18nProvider>
@@ -22172,6 +22235,9 @@ index 0000000000000000000000000000000000000000..23b59aacbe500ad0c471e312343daeab
 +  exported = undefined
 +  downloadName = ''
 +  vi.clearAllMocks()
++  $settingsScopeOverride.set(null)
++  vi.mocked(getHermesConfigDefaults).mockResolvedValue({})
++  vi.mocked(saveHermesConfig).mockResolvedValue({ ok: true })
 +  vi.mocked(getHermesConfigRecord).mockResolvedValue(structuredClone(configuration))
 +  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
 +    downloadName = this.download
@@ -22182,6 +22248,9 @@ index 0000000000000000000000000000000000000000..23b59aacbe500ad0c471e312343daeab
 +afterEach(() => {
 +  settleConfirm(false)
 +  cleanup()
++  $settingsScopeOverride.set(null)
++  setApiRequestConnection(null)
++  setApiRequestProfile(null)
 +  vi.restoreAllMocks()
 +})
 +afterAll(() => vi.unstubAllGlobals())
@@ -22290,6 +22359,106 @@ index 0000000000000000000000000000000000000000..23b59aacbe500ad0c471e312343daeab
 +  expect(other.ownerDocument.activeElement).not.toBe(other)
 +  expect(saveHermesConfig).not.toHaveBeenCalled()
 +  expect(getHermesConfigDefaults).not.toHaveBeenCalled()
++})
++
++async function readExportedConfig() {
++  return JSON.parse(await new Promise<string>((resolve, reject) => {
++    const reader = new FileReader()
++    reader.onload = () => resolve(String(reader.result))
++    reader.onerror = reject
++    reader.readAsText(exported!)
++  }))
++}
++
++it('exports the displayed profile instead of the ambient profile', async () => {
++  await act(async () => { $settingsScopeOverride.set('scope-b') })
++  setApiRequestConnection('connection-a')
++  setApiRequestProfile('default')
++  const selected = { memory: { memory_char_limit: 4222 } }
++  vi.mocked(getHermesConfigRecord).mockImplementation(async scope =>
++    typeof scope === 'object' && scope?.profile === 'scope-b' ? selected : configuration
++  )
++  await openActions()
++  fireEvent.click(screen.getByRole('menuitem', { name: 'Export config' }))
++  await waitFor(() => expect(exported).toBeDefined())
++  expect(await readExportedConfig()).toEqual(selected)
++  expect(getHermesConfigRecord).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
++    connectionId: 'connection-a', profile: 'scope-b'
++  }))
++  expect(saveHermesConfig).not.toHaveBeenCalled()
++})
++
++it('keeps the export owner while its read is pending', async () => {
++  await act(async () => { $settingsScopeOverride.set('scope-b') })
++  setApiRequestConnection('connection-a')
++  let release!: (config: typeof configuration) => void
++  vi.mocked(getHermesConfigRecord).mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
++  await openActions()
++  fireEvent.click(screen.getByRole('menuitem', { name: 'Export config' }))
++  await act(async () => { $settingsScopeOverride.set('scope-c'); setApiRequestConnection('connection-c') })
++  await act(async () => { release(configuration) })
++  await waitFor(() => expect(exported).toBeDefined())
++  expect(await readExportedConfig()).toEqual(configuration)
++  expect(getHermesConfigRecord).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
++    connectionId: 'connection-a', profile: 'scope-b'
++  }))
++})
++
++it('names the reset owner and retains it across a confirmation-time scope change', async () => {
++  await act(async () => { $settingsScopeOverride.set('scope-b') })
++  setApiRequestConnection('connection-a')
++  const defaults = { memory: { memory_char_limit: 2200 } }
++  vi.mocked(getHermesConfigDefaults).mockResolvedValueOnce(defaults)
++  await openActions()
++  fireEvent.click(screen.getByRole('menuitem', { name: 'Reset to defaults' }))
++  const dialog = await screen.findByRole('dialog', { name: 'Reset all settings to Hermes defaults?' })
++  const targetDescription = dialog.textContent
++  await act(async () => { $settingsScopeOverride.set('scope-c'); setApiRequestConnection('connection-c') })
++  fireEvent.click(screen.getByRole('button', { name: 'Reset to defaults' }))
++  await waitFor(() => expect(saveHermesConfig).toHaveBeenCalled())
++  const owner = expect.objectContaining({ connectionId: 'connection-a', profile: 'scope-b' })
++  expect(getHermesConfigDefaults).toHaveBeenCalledExactlyOnceWith(owner)
++  expect(saveHermesConfig).toHaveBeenCalledExactlyOnceWith(defaults, owner)
++  expect(targetDescription).toContain('scope-b')
++  expect(onConfigSaved).toHaveBeenCalledTimes(1)
++})
++
++it('keeps the reset owner while its defaults read is pending', async () => {
++  await act(async () => { $settingsScopeOverride.set('scope-b') })
++  setApiRequestConnection('connection-a')
++  let release!: (config: Record<string, unknown>) => void
++  vi.mocked(getHermesConfigDefaults).mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
++  await openActions()
++  fireEvent.click(screen.getByRole('menuitem', { name: 'Reset to defaults' }))
++  fireEvent.click(await screen.findByRole('button', { name: 'Reset to defaults' }))
++  await waitFor(() => expect(getHermesConfigDefaults).toHaveBeenCalled())
++  await act(async () => { $settingsScopeOverride.set('scope-c'); setApiRequestConnection('connection-c') })
++  await act(async () => { release({ memory: { memory_char_limit: 2200 } }) })
++  await waitFor(() => expect(saveHermesConfig).toHaveBeenCalled())
++  expect(vi.mocked(saveHermesConfig).mock.calls[0][1]).toEqual(expect.objectContaining({
++    connectionId: 'connection-a', profile: 'scope-b'
++  }))
++})
++
++it('cancels a named non-default reset without reading defaults or writing', async () => {
++  await act(async () => { $settingsScopeOverride.set('scope-b') })
++  await openActions()
++  fireEvent.click(screen.getByRole('menuitem', { name: 'Reset to defaults' }))
++  expect((await screen.findByRole('dialog')).textContent).toContain('scope-b')
++  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
++  await waitFor(() => expect($confirmRequest.get()).toBeNull())
++  expect(getHermesConfigDefaults).not.toHaveBeenCalled()
++  expect(saveHermesConfig).not.toHaveBeenCalled()
++})
++
++it('reports a refused reset acknowledgement', async () => {
++  vi.mocked(saveHermesConfig).mockResolvedValueOnce({ ok: false })
++  await openActions()
++  fireEvent.click(screen.getByRole('menuitem', { name: 'Reset to defaults' }))
++  fireEvent.click(await screen.findByRole('button', { name: 'Reset to defaults' }))
++  await waitFor(() => expect(saveHermesConfig).toHaveBeenCalled())
++  await waitFor(() => expect(notifyError).toHaveBeenCalled())
++  expect(onConfigSaved).not.toHaveBeenCalled()
 +})
 diff --git a/apps/desktop/src/app/shell/account-usage-statusbar.test.tsx b/apps/desktop/src/app/shell/account-usage-statusbar.test.tsx
 new file mode 100644

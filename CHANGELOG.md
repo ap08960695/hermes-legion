@@ -5,6 +5,17 @@ supported update or Desktop rebuild path. This kit does not install a rebuilt
 Hermes.app. Linked notes identify opt-in memory settings and admission guards
 that apply after adoption. Each entry states its adoption and verification limits.
 
+## v0.33.3 — Scope Settings config actions
+
+Export and Reset use the profile shown under **Applies to**. The target is kept
+for the whole action, even if the selection changes while a read or confirmation
+is pending. Reset names that profile before confirmation and reports a refused
+save as failure. Apply the source kit and rebuild Desktop.
+
+Native Local before/after exports, a named Reset dialog and Cancel passed;
+config bytes remained unchanged. Reset writes and selection races are covered
+offline only. [Checks and limits](docs/release-notes-v0.33.3.md).
+
 ## v0.33.2 — Keep untouched settings visible after import
 
 Partial config imports preserve untouched fields on screen, including switches

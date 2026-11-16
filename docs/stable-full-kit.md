@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1085-path** Legion source, interface and optimization alternative
+This is the complete **1086-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,16 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Scoped Settings actions (v0.33.3)
+
+Export and Reset capture the selected config owner before awaiting reads or
+confirmation. The defaults helper accepts an optional existing request scope;
+its no-argument callers keep ambient behavior and read-origin binding. Reset
+names the captured profile and requires a successful acknowledgement. Apply the
+kit and rebuild Desktop. Four source/test sections change, including one existing
+upstream route-binding regression newly included in the kit: 1086 targets. The
+Desktop selection adds that test. [Checks and limits](release-notes-v0.33.3.md).
 
 ## Complete partial-import drafts (v0.33.2)
 
