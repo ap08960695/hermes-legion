@@ -10,6 +10,15 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Native Error/Stopped reaches Monitor (unreleased)
+
+Two separate native Local outcomes now reach the actual roster query and Monitor:
+provider rejection and authenticated child Stop. Each active worker survives a
+query interval, then disappears with its step; the exact canonical Error/Stopped
+report opens. Delayed success cannot overwrite the stopped result. This closes
+negative outcome component acceptance; browser/Electron/navigation remain open.
+No product change or release. [Proof and limits](verification.md#native-error-and-stopped-reports-through-production-query--component-acceptance).
+
 ## Retained Monitor recovery over native data (unreleased)
 
 Connected acceptance now keeps a real native worker running while simulated

@@ -1,3 +1,54 @@
+# Native Error and Stopped reports through production query — component acceptance
+
+Two more native outcomes now pass through the real roster query and Monitor:
+provider rejection after the file read, and authenticated per-child Stop while a
+model reply is held. Each runs separately with the unchanged parameterized native
+lifecycle test, one existing authenticated socket and its serialized read-only
+adapter. Actual BotsWorkspace/useRoster/TanStack interval supplies component data;
+SDK local state/inventory, avatar presentation and model replies/usage are fixtures.
+
+The observer waits for same-child active DOM assertions across one natural
+five-second interval before returning the test's first active roster read. The
+receive lock is released during that diagnostic acknowledgment. The test then
+owns rejection/Stop and settlement; the observer never writes lifecycle or SQL.
+Each case moves from Working/step1/250 to removed current worker/step and exactly
+one canonical report: Error with the recorded rejection text, or Stopped with the
+recorded interruption text. Raw multiline summary/error text matches the selected
+run exactly. Parent/child/delegation/report/helper identities cross-check against
+native receipts; side-chat and independent profile cannot supply the report.
+No cache injection, prop replacement, manual refetch, ambient RPC or chat action.
+
+Native assertions retain real file read, terminal ledger/delivery, parent terminal
+admissions and nonempty side/profile readbacks. The Stop case independently proves
+ended child state before releasing the held reply; delayed success cannot replace
+its terminal state, result or assistant transcript. Negative scenarios do not wait
+for a heartbeat and make no heartbeat-advance claim; completed-path evidence stays
+in the prior acceptance. No new native production behavior is implied.
+
+One native attempt per outcome: Error1pass/2deselected and Stopped1pass/
+2deselected; two matching JSDOM consumer cases pass. Each sees elapsed
+7s->12s / 7s->12s across the real interval, then three
+successful component roster reads/five captured main-roster reads. Max4sampled
+processes including observer; largest sampled summed RSS
+1,451,474,944B including observer/excluding outer controller. Existing
+3child+observer/<3.5GiB/180s/loopback/SSH/shell/write guards remain unchanged.
+These samples are resource fences, not continuous peak or production RAM savings.
+
+Both changed-consumer preflights pass against explicitly labelled saved native
+fields plus retimed active timestamps; six HTTP refusal controls pass per case.
+The first Error replay exposed a test matcher normalizing newlines, while DOM
+held the exact raw summary. Exact raw-text assertions fixed the consumer before
+any native launch; first evidence is kept. Replay data is excluded from native
+proof. Four relevant source hashes stay exact; source/patch/selection unchanged.
+This is acceptance documentation/inventory only; no new release/version/tag.
+
+CUA browser host remains unavailable. No input/app/Guest retry, owner app/data or
+ai/other-host connection. These tests prove native-to-query-to-component outcome
+reconciliation, not paint/layout, actual Electron transport/inventory, desktop
+navigation, managed-worker processes or provider billing. Browser actual-query/
+degraded-refresh visuals, Electron and canonical navigation still gate the single
+Bot Monitor batch release.
+
 # Retained native snapshot through adapter fault — component acceptance
 
 The unchanged completed native lifecycle scenario and actual-query JSDOM consumer

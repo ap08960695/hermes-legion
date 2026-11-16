@@ -407,3 +407,21 @@ exact. This proves retained/pending/recovery behavior with real native data plus
 simulated adapter fault/timing. It does not prove native gateway/socket failure,
 reconnect or browser/Electron behavior. Native Error/Stopped query report cases
 and remaining browser/Electron/navigation acceptance remain separate.
+
+
+## Native Error/Stopped through the production query
+
+The remaining negative lifecycle outcomes now use the same actual-query/component
+bridge as completed work. Each separately observes the same active child across
+one unchanged five-second interval before the native test owns rejection or Stop.
+Terminal polling removes worker/step and opens exactly that canonical Error or
+Stopped report. Raw multiline summary/error text and parent/child/delegation/
+helper identities match fresh native receipts; independent side/profile controls
+and delayed-success rejection remain native assertions. No new product behavior,
+heartbeat-advance claim for these short cases or feature release.
+
+Both labelled saved-native preflights and two native/JSDOM cases pass within the
+existing process/RAM/time/network/write guards. Browser host is still unavailable;
+this closes negative outcome data-flow acceptance only. Actual browser query and
+degraded-refresh paint, Electron host inventory/transport and canonical navigation
+remain the batch release gates. [Evidence scope](verification.md#native-error-and-stopped-reports-through-production-query--component-acceptance).
