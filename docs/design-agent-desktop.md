@@ -157,6 +157,30 @@ cover dispatch/approval/privacy, bytes boundaries, capabilities and consumed ref
 Native unknown-ref refusal is refusal evidence only; real application insertion,
 caret placement and Monitor acceptance remain independent live gates.
 
+## Ref scroll areas
+
+Add scroll through the existing scroll action and shared single-use ref execution.
+Require an explicit latest captured element whose native canonical role is
+`scrollarea`; an arbitrary element advertising ScrollTo is not a scroll area.
+The [scroll contract](https://agent-browser.dev/desktop/commands/scroll) assigns
+refs to scrollarea nodes. That role authorizes an attempt, not successful delivery
+on every platform; native headless policy may refuse without physical fallback.
+Only up/down/left/right and exact integer amounts 1–50 are accepted, using the
+existing cua action bound. Omitted amount defaults to3. Reject bool/string/float/
+null, nonpositive/oversized counts, geometry, modifiers and foreground/focus.
+
+Common dispatch preserves the supplied amount for provider validation. Move its
+old int conversion into cua, preserving that backend's existing coercion/clamp.
+Schema-valid integer calls to other providers stay unchanged; those providers now
+receive the original value for malformed requests instead of a coerced integer.
+Reusing _act retains atomic consumption, lease/host binding, timeout/privacy and
+mandatory fresh capture after every attempt. Native completion cannot establish
+that a desired row is visible. Read fresh state before any further input.
+
+Standing delegation selects this next source slice; advisor319 supports bounded
+role semantics and existing guards. Use focused regression and native unknown-ref
+refusal only while the prior native capture/Monitor blocker remains unresolved.
+
 ## Remaining capability set
 
 Extend the provider with verified act loops using native snapshot refs. Keep secret typing on stdin,

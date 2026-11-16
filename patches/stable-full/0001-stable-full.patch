@@ -63869,6 +63869,189 @@ index 0000000000000000000000000000000000000000..553ab7720bbc001eb480e30758ba5c57
 +    with pytest.raises(RuntimeError, match='gateway-host placement'):
 +        backend.capture(mode='ax', app='Fixture')
 +    assert calls == []
+diff --git a/tests/computer_use/test_agent_desktop_scroll.py b/tests/computer_use/test_agent_desktop_scroll.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..ff30395b586edf69ad7ad82e50c3b61003791f51
+--- /dev/null
++++ b/tests/computer_use/test_agent_desktop_scroll.py
+@@ -0,0 +1,177 @@
++"""Scroll stays bound to one fresh native scroll-area ref, never a pointer target."""
++import json
++from types import SimpleNamespace
++
++import pytest
++
++
++@pytest.fixture
++def scrolling(monkeypatch):
++    from tools.computer_use import agent_desktop_backend as module, tool
++    tool.reset_backend_for_tests()
++    calls, state = [], {'role': 'scrollarea', 'actions': []}
++    monkeypatch.setattr(module.driver, 'resolve_agent_desktop', lambda **k: '/fixture/agent-desktop')
++    monkeypatch.setattr(module.driver, '_environment', lambda: {'SAFE': 'yes'})
++    def probe(argv, **kwargs):
++        calls.append((argv, kwargs))
++        command = argv[1]
++        if command == 'snapshot':
++            data = {'app': 'Fixture', 'complete': True, 'snapshot_id': 'scrolling', 'ref_count': 1,
++                    'window': {'id': 'w-1', 'title': 'Fixture'}, 'tree': {
++                        'role': 'window', 'name': 'Fixture', 'children': [
++                            {'role': state['role'], 'name': 'Area', 'ref_id': '@scrolling:e1',
++                             'available_actions': state['actions']}]}}
++        else:
++            if 'failure' in state:
++                failure = state['failure']
++                if isinstance(failure, BaseException):
++                    raise failure
++                return failure
++            data = {'action': 'scroll', 'disposition': {'delivery': 'delivered_unverified', 'retry': 'unsafe'},
++                    'private': 'PRIVATE_NATIVE_OUTPUT'}
++        return SimpleNamespace(returncode=0, stdout=json.dumps({'version': '2.6', 'ok': True, 'command': command, 'data': data}))
++    monkeypatch.setattr(module.driver, 'bounded_probe_run', probe)
++    backend = module.AgentDesktopBackend()
++    backend.start()
++    cap = backend.capture(mode='ax', app='Fixture')
++    yield module, backend, calls, state, cap
++    backend.stop()
++    tool.reset_backend_for_tests()
++
++
++@pytest.mark.parametrize('direction', ['up', 'down', 'left', 'right'])
++@pytest.mark.parametrize('amount', [1, 50])
++def test_area_scroll_uses_exact_bounded_native_args_and_consumes_capture(scrolling, direction, amount):
++    _, backend, calls, _, cap = scrolling
++    result = backend.scroll(element=cap.elements[1].index, direction=direction, amount=amount)
++    assert result.ok and result.action == 'scroll' and result.verified is None
++    assert result.meta['recapture_required'] is True and 'PRIVATE_NATIVE_OUTPUT' not in str(result)
++    argv, kwargs = calls[-1]
++    assert argv[:3] == ['/fixture/agent-desktop', 'scroll', '@scrolling:e1']
++    assert argv[-6:] == ['--timeout-ms', '5000', '--direction', direction, '--amount', str(amount)]
++    assert '--headed' not in argv and kwargs == {'timeout': 10, 'env': {'SAFE': 'yes'}}
++    assert not backend.scroll(element=cap.elements[1].index, direction=direction).ok
++    assert len(calls) == 2
++
++
++@pytest.mark.parametrize('amount', [None, True, False, '3', 3.5, 0, -1, 51, 10**50])
++def test_invalid_count_refuses_without_coercion_and_consumes_authority(scrolling, amount):
++    _, backend, calls, _, cap = scrolling
++    assert not backend.scroll(element=cap.elements[1].index, direction='down', amount=amount).ok
++    assert not backend.scroll(element=cap.elements[1].index, direction='down').ok
++    assert len(calls) == 1
++
++
++@pytest.mark.parametrize('direction', [None, 'DOWN', 'diagonal', [], 1])
++def test_invalid_direction_never_spawns(scrolling, direction):
++    _, backend, calls, _, cap = scrolling
++    assert not backend.scroll(element=cap.elements[1].index, direction=direction).ok
++    assert len(calls) == 1
++
++
++@pytest.mark.parametrize('kwargs', [{'x': 1}, {'y': 1}, {'modifiers': ['shift']},
++    {'delivery_mode': 'foreground'}, {'bring_to_front': True}])
++def test_scroll_never_uses_coordinates_modifiers_or_foreground(scrolling, kwargs):
++    _, backend, calls, _, cap = scrolling
++    assert not backend.scroll(element=cap.elements[1].index, direction='down', **kwargs).ok
++    assert len(calls) == 1
++
++
++@pytest.mark.parametrize('role,actions', [('button', ['ScrollTo']), ('group', ['Scroll']), ('textfield', ['ScrollTo'])])
++def test_non_area_actions_do_not_authorize_area_scroll(scrolling, role, actions):
++    _, backend, calls, state, _ = scrolling
++    state.update(role=role, actions=actions)
++    cap = backend.capture(mode='ax', app='Fixture')
++    assert not backend.scroll(element=cap.elements[1].index, direction='down').ok
++    assert all(argv[1] == 'snapshot' for argv, _ in calls)
++
++
++@pytest.mark.parametrize('element', [None, True, 0, 999])
++def test_missing_or_foreign_element_never_scrolls_an_implicit_target(scrolling, element):
++    _, backend, calls, _, _ = scrolling
++    assert not backend.scroll(element=element, direction='down').ok
++    assert len(calls) == 1
++
++
++@pytest.mark.parametrize('failure', [None, OSError('PRIVATE_NATIVE_OUTPUT'),
++    SimpleNamespace(returncode=1, stdout='PRIVATE_NATIVE_OUTPUT'),
++    SimpleNamespace(returncode=0, stdout='PRIVATE_NATIVE_OUTPUT')])
++def test_native_error_is_private_and_never_retried(scrolling, failure):
++    _, backend, calls, state, cap = scrolling
++    state['failure'] = failure
++    result = backend.scroll(element=cap.elements[1].index, direction='down')
++    assert not result.ok and result.meta['recapture_required']
++    assert 'PRIVATE_NATIVE_OUTPUT' not in str(result)
++    assert not backend.scroll(element=cap.elements[1].index, direction='down').ok
++    assert len(calls) == 2
++
++
++def test_cancellation_consumes_scroll_ref(scrolling):
++    _, backend, calls, state, cap = scrolling
++    state['failure'] = KeyboardInterrupt()
++    with pytest.raises(KeyboardInterrupt):
++        backend.scroll(element=cap.elements[1].index, direction='down')
++    assert not backend.scroll(element=cap.elements[1].index, direction='down').ok
++    assert len(calls) == 2
++
++
++def test_old_area_index_lease_and_placement_change_cannot_scroll(scrolling, monkeypatch):
++    module, backend, calls, _, old = scrolling
++    from tools.bot_desktop import lease
++    fresh = backend.capture(mode='ax', app='Fixture')
++    assert not backend.scroll(element=old.elements[1].index, direction='down').ok
++    fresh = backend.capture(mode='ax', app='Fixture')
++    epoch = lease.assert_agent_may_act().epoch
++    monkeypatch.setattr(lease, 'assert_agent_may_act', lambda: SimpleNamespace(epoch=epoch + 1))
++    assert not backend.scroll(element=fresh.elements[1].index, direction='down').ok
++    fresh = backend.capture(mode='ax', app='Fixture')
++    monkeypatch.setattr(module, '_host_placement', lambda: False)
++    assert not backend.scroll(element=fresh.elements[1].index, direction='down').ok
++    assert all(argv[1] == 'snapshot' for argv, _ in calls)
++
++
++@pytest.mark.parametrize('amount', [True, '3', 3.5, None])
++def test_common_dispatch_does_not_hide_invalid_native_count(scrolling, monkeypatch, amount):
++    _, _, calls, _, _ = scrolling
++    from hermes_cli import config
++    from tools.computer_use import tool
++    monkeypatch.setattr(config, 'load_config_readonly', lambda: {'computer_use': {'backend': 'agent-desktop'}})
++    approvals = []
++    monkeypatch.setattr(tool, '_request_approval', lambda scope, args: approvals.append(scope))
++    cap = json.loads(tool.handle_computer_use({'action': 'capture', 'mode': 'ax', 'app': 'Fixture'}, session_id='scroll'))
++    idx = next(e['index'] for e in cap['elements'] if e['label'] == 'Area')
++    result = json.loads(tool.handle_computer_use({'action': 'scroll', 'element': idx, 'amount': amount}, session_id='scroll'))
++    assert not result['ok'] and result['verdict']['decision'] == 'verify_fresh_state'
++    assert approvals == ['scroll'] and all(argv[1] == 'snapshot' for argv, _ in calls)
++
++
++def test_common_scroll_default_and_approval_denial(scrolling, monkeypatch):
++    _, _, calls, _, _ = scrolling
++    from hermes_cli import config
++    from tools.computer_use import tool
++    monkeypatch.setattr(config, 'load_config_readonly', lambda: {'computer_use': {'backend': 'agent-desktop'}})
++    cap = json.loads(tool.handle_computer_use({'action': 'capture', 'mode': 'ax', 'app': 'Fixture'}, session_id='scroll'))
++    idx = next(e['index'] for e in cap['elements'] if e['label'] == 'Area')
++    monkeypatch.setattr(tool, '_request_approval', lambda *a: json.dumps({'error': 'denied'}))
++    assert json.loads(tool.handle_computer_use({'action': 'scroll', 'element': idx}, session_id='scroll'))['error'] == 'denied'
++    assert all(argv[1] == 'snapshot' for argv, _ in calls)
++    monkeypatch.setattr(tool, '_request_approval', lambda *a: None)
++    result = json.loads(tool.handle_computer_use({'action': 'scroll', 'element': idx}, session_id='scroll'))
++    assert result['ok'] and result['verdict']['decision'] == 'verify_fresh_state'
++    assert calls[-1][0][-4:] == ['--direction', 'down', '--amount', '3']
++
++
++@pytest.mark.parametrize('amount,expected', [('3', 3), (3.9, 3), (100, 50), (0, 1)])
++def test_legacy_cua_retains_common_count_conversion_and_clamp(amount, expected):
++    from tools.computer_use import tool
++    from tools.computer_use.cua_backend_input import _InputMixin
++    from tools.computer_use.backend import ActionResult
++    calls = []
++    class Cua(_InputMixin):
++        _active_pid = 1
++        _active_window_id = 2
++        def _action(self, action, args):
++            calls.append((action, args))
++            return ActionResult(ok=True, action=action)
++    assert json.loads(tool._dispatch(Cua(), 'scroll', {'amount': amount, 'element': 5}))['ok']
++    assert calls == [('scroll', {'pid': 1, 'direction': 'down', 'amount': expected, 'window_id': 2, 'element_index': 5})]
 diff --git a/tests/computer_use/test_agent_desktop_status.py b/tests/computer_use/test_agent_desktop_status.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..dcb3d0be7e85d132392889bf97c7985f37cebdff
@@ -96341,10 +96524,10 @@ index 0000000000000000000000000000000000000000..5f4f0a82734efaf57c8a6b426ca1e2a1
 +    return 0
 diff --git a/tools/computer_use/agent_desktop_backend.py b/tools/computer_use/agent_desktop_backend.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..9395b3eadf9ec32b7e7b4d3d4507361043a5f58e
+index 0000000000000000000000000000000000000000..a5fd98bdac08a6e4c974d7b6f55bfb518e4ec33e
 --- /dev/null
 +++ b/tools/computer_use/agent_desktop_backend.py
-@@ -0,0 +1,243 @@
+@@ -0,0 +1,251 @@
 +"""Scoped AX reads and single-use semantic refs; no physical input or raw logging."""
 +from __future__ import annotations
 +
@@ -96480,7 +96663,10 @@ index 0000000000000000000000000000000000000000..9395b3eadf9ec32b7e7b4d3d45073610
 +                        actions = node.get('available_actions', [])
 +                        if not isinstance(actions, list) or any(not isinstance(a, str) for a in actions):
 +                            raise ValueError('Invalid actions')
-+                        targets[index] = (ref, frozenset(a for a in actions if a in {'Click', 'SetValue', 'TypeText'}))
++                        permitted = {a for a in actions if a in {'Click', 'SetValue', 'TypeText'}}
++                        if role == 'scrollarea':
++                            permitted.add('Scroll')
++                        targets[index] = (ref, frozenset(permitted))
 +                children = node.get('children', [])
 +                if not isinstance(children, list):
 +                    raise ValueError('Invalid children')
@@ -96488,7 +96674,7 @@ index 0000000000000000000000000000000000000000..9395b3eadf9ec32b7e7b4d3d45073610
 +            if type(data['ref_count']) is not int or data['ref_count'] != len(refs):
 +                raise ValueError('Invalid ref count')
 +            return (CaptureResult(mode='ax', width=0, height=0, elements=elements, app=app,
-+                                  window_title=window['title'], note='AX refs; read a fresh capture after every input attempt. type(text, element) inserts at the caret; set_value replaces the value. No screenshots or physical input.'), targets)
++                                  window_title=window['title'], note='AX refs; read a fresh capture after every input attempt. type(text, element) inserts at the caret; set_value replaces the value. scroll requires a scrollarea element. No screenshots or physical input.'), targets)
 +        except Exception:
 +            raise RuntimeError('agent-desktop AX snapshot failed; check target, permissions and protocol') from None
 +
@@ -96504,7 +96690,7 @@ index 0000000000000000000000000000000000000000..9395b3eadf9ec32b7e7b4d3d45073610
 +            self._capture_epoch = None
 +            return self._input_result(action, code='unsupported_action')
 +
-+    def _act(self, command, element, value=None):
++    def _act(self, command, element, value=None, *, extra_args=()):
 +        from tools.bot_desktop import lease
 +        action = 'type_text' if command == 'type' else command.replace('-', '_')
 +        with self._lock:
@@ -96520,9 +96706,10 @@ index 0000000000000000000000000000000000000000..9395b3eadf9ec32b7e7b4d3d45073610
 +            except Exception:
 +                return self._input_result(action, code='human_has_control')
 +            ref, actions = targets[element]
-+            if {'click': 'Click', 'set-value': 'SetValue', 'type': 'TypeText'}[command] not in actions:
++            if {'click': 'Click', 'set-value': 'SetValue', 'type': 'TypeText', 'scroll': 'Scroll'}[command] not in actions:
 +                return self._input_result(action, code='unsupported_action')
 +            argv = [self._binary, command, ref, '--session', self._session, '--timeout-ms', '5000']
++            argv.extend(extra_args)
 +            if value is not None:
 +                argv.append('--stdin')
 +            try:
@@ -96550,8 +96737,12 @@ index 0000000000000000000000000000000000000000..9395b3eadf9ec32b7e7b4d3d45073610
 +    def drag(self, **kwargs):
 +        return self._unsupported('drag')
 +
-+    def scroll(self, **kwargs):
-+        return self._unsupported('scroll')
++    def scroll(self, *, direction, amount=3, element=None, x=None, y=None, modifiers=None,
++               delivery_mode=None, bring_to_front=False):
++        if (direction not in ('up', 'down', 'left', 'right') or type(amount) is not int or not 1 <= amount <= 50
++                or x is not None or y is not None or modifiers or delivery_mode not in (None, 'background') or bring_to_front):
++            return self._unsupported('scroll')
++        return self._act('scroll', element, extra_args=('--direction', direction, '--amount', str(amount)))
 +
 +    def type_text(self, text, *, element=None, delivery_mode=None, bring_to_front=False):
 +        if delivery_mode not in {None, 'background'} or bring_to_front:
@@ -96598,9 +96789,14 @@ index 560c0e7b1da8c913fdf098490421230004e67fa5..ed5ac9107e903b6262e3f8f0d95314c8
 +    def type_text(self, text: str, *, element: Optional[int] = None, delivery_mode: Optional[str] = None,
                    bring_to_front: bool = False) -> ActionResult: ...
 diff --git a/tools/computer_use/cua_backend_input.py b/tools/computer_use/cua_backend_input.py
-index 2b09856a465c725389a534eb7c27a38400137d21..fd9a08e238dc798167f69d595553d32a957716b0 100644
+index 2b09856a465c725389a534eb7c27a38400137d21..dcd84b09efbb73b2148681571137d1009aa4e35e 100644
 --- a/tools/computer_use/cua_backend_input.py
 +++ b/tools/computer_use/cua_backend_input.py
+@@ -133,3 +133,3 @@ class _InputMixin:
+             return refusal
+-        args.update(direction=direction, amount=max(1, min(50, amount)))
++        args.update(direction=direction, amount=max(1, min(50, int(amount))))
+         # An element without a known window_id is not an addressing form here; scrolling then falls through
 @@ -147,3 +147,7 @@ class _InputMixin:
 
 -    def type_text(self, text: str, *, delivery_mode: Optional[str] = None, bring_to_front: bool = False) -> ActionResult:
@@ -96611,7 +96807,7 @@ index 2b09856a465c725389a534eb7c27a38400137d21..fd9a08e238dc798167f69d595553d32a
 +                           code="targeted_type_unsupported", meta={"recapture_required": True})
          refusal, args = self._target_args("type_text", need_window=True)
 diff --git a/tools/computer_use/tool.py b/tools/computer_use/tool.py
-index bd59a30764482831bf60c1ed99d6984a3416eedd..b7940c392a873a344530a254e534f8ed28f9cc65 100644
+index bd59a30764482831bf60c1ed99d6984a3416eedd..3e2e7e977db39a8d3fbd2d6ef645e144a8729e0e 100644
 --- a/tools/computer_use/tool.py
 +++ b/tools/computer_use/tool.py
 @@ -61,2 +61,4 @@ def _reject_unsafe(action: str, args: dict[str, Any]) -> Optional[str]:
@@ -96623,6 +96819,11 @@ index bd59a30764482831bf60c1ed99d6984a3416eedd..b7940c392a873a344530a254e534f8ed
      separate visible side effect with its own scope) -> backend -> dispatch under the session call lock."""
 +    args = dict(args)  # Approval must bind the original text and target while the caller waits.
      action = (args.get("action") or "").strip().lower()
+@@ -435,3 +438,3 @@ def _do_drag(backend, action, args, **delivery):
+ def _do_scroll(backend, action, args, **delivery):
+-    return backend.scroll(direction=args.get("direction", "down"), amount=int(args.get("amount", 3)),
++    return backend.scroll(direction=args.get("direction", "down"), amount=args.get("amount", 3),
+                           element=args.get("element"), **_scroll_xy(args), modifiers=args.get("modifiers"), **delivery)
 @@ -469,4 +472,6 @@ _ACTIONS: dict[str, _ActionSpec] = {
      "scroll": _input(_do_scroll, summarize=lambda a, args, fg: f"scroll {args.get('direction', '?')} x{args.get('amount', 3)}{fg}"),
 -    "type": _input(lambda backend, action, args, **delivery: backend.type_text(args.get("text", ""), **delivery),

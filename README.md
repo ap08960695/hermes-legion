@@ -44,6 +44,8 @@ application name. Semantic `click(element)`, `set_value(value, element)` and
 `type(text, element)` consume one captured ref set, then require a fresh capture.
 Text travels through stdin; type inserts at the caret, while set_value replaces
 its value. Targeted type requires a TypeText ref and at most 10,000 UTF-8 bytes.
+Scroll now accepts a captured `scrollarea` element, one direction and 1–50 units;
+its ref is consumed and a fresh capture is required. Coordinates/focus are refused.
 Host/sandbox boundaries remain enforced. Native input success, screenshots and
 other input forms remain unverified or unimplemented; see the design note.
 

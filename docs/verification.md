@@ -1,3 +1,44 @@
+# Agent-desktop ref scroll areas — unreleased
+
+The existing scroll action now accepts a latest captured native scrollarea ref.
+Only canonical scrollarea role authorizes the native attempt; arbitrary ScrollTo
+or Scroll on another role cannot authorize it. Role is not a platform delivery
+guarantee. The official scroll contract and installed1.3.1 help define qualified
+area refs and direction/amount arguments; Linux headless refusal remains native
+without enabling headed or physical fallback.
+
+Agent-desktop accepts four exact directions and integer amounts1–50, default3,
+using the house cua bound. Rejects bool/string/float/null, nonpositive/oversized
+counts, missing/foreign refs, coordinates, modifiers and foreground/focus. Shared
+_act atomically consumes authority and checks lease/host; no new transport, retry
+or raw result exposure. Native completion never establishes desired row visibility;
+a fresh capture must verify it. Capture note teaches the area requirement without
+changing the byte-frozen schema or default provider.
+
+Common dispatch now preserves raw amount. Its former int conversion lives at
+the cua boundary, preserving legacy coercion/clamp. Schema-valid integer calls
+are unchanged; third-party providers now receive original malformed values and
+remain responsible for validating them. No provider-name branch or new option.
+
+49 new source cases plus122nearest ref/type/adapter/approval/fence/delivery cases
+pass (171total, seven files, one worker). Fifteen initial behavioral reds; no
+setup-error red claim. Tests cover all directions/bounds/default, type rejection,
+role separation, consumed refs, stale index, lease/placement, cancellation/private
+error, generic raw forwarding, approval denial and legacy cua coercion/clamping.
+Synthetic successes are source/protocol acceptance, not native UI proof.
+
+A private hybrid uses synthetic area capture and empty private native namespace.
+The actual installed1.3.1 binary receives scroll/ref/down/3 and refuses with
+SNAPSHOT_NOT_FOUND; source refuses reuse. Exact command audit and OS network/write/
+SSH fences retained. No live app target, successful native scroll/visibility,
+model generation, UI/app/gateway launch or native171retry is claimed. Prior
+WINDOW_NOT_FOUND and incomplete detached accounting remain unresolved.
+
+Four changed source sections apply/hash/reverse on pinned
+bf0203a794a07aac3ff764972ab9087baa4e4f4e;1118targets, unrelated patch bytes retained.
+New test selection appended without reordering. No schema/default/dependency/
+version/tag/release/adoption change or full upstream/unchanged source sweep.
+
 # Agent-desktop explicit-ref type — unreleased
 
 The existing generic type action now forwards an explicitly supplied element to
