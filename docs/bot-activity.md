@@ -1,5 +1,26 @@
 # Bot activity
 
+## Parallel observed workers (v0.33.0)
+
+Full Bots cards now list recent observed workers with individual task titles
+and progress, plus an activity count. Compact rows show the latest eligible
+stamp and a count for multiple observations. A stopped newest worker no longer
+hides another eligible worker or makes its bot idle. Working still counts bots.
+
+The existing read/cache adds optional `worker_sessions` (at most 20), keeping
+`worker_session` for older clients. Canonical reads bound worker rows; the legacy
+reader keeps its existing 20 mixed-row window. Shared client eligibility excludes
+ended, stale and unavailable observations. Explicit empty/null stays empty; only
+an absent parallel field falls back to singular. These are observations, not a
+complete process census. More bounded metadata is carried; no savings claim.
+
+Native Local before/after UI Send, Stop A while B continues, heartbeat and final
+Refresh passed with real lifecycle/storage and controlled loopback model replies.
+Private prompts were not projected. Apply the kit, restart the updated gateway
+and rebuild Desktop. [Evidence and limits](release-notes-v0.33.0.md).
+
+## Earlier worker monitoring
+
 From v0.29.4, native `subagent` runs also reach the existing worker summary.
 Canonical own/sibling reads and the legacy roster admit these children without
 widening human conversation listings. A child can keep the bot Working after
@@ -32,7 +53,7 @@ the worker description (at most 120 characters) and terminal timestamp alongside
 existing identity/title/activity fields. It adds no model request, timer, extra
 query, account lookup or provider fallback. The usual roster refresh owns updates.
 
-The full Bots cards also reuse this display, with reported tool, step, elapsed
+The earlier singular full-card display added reported tool, step, elapsed
 time and token facts below the canonical preview. Native Local acceptance used
 controlled SessionDB records and checked display at both widths and removal
 after ending a record and clicking Refresh. That earlier v0.29.0 check did not

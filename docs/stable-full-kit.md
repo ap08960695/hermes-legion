@@ -10,6 +10,17 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Parallel observed bot work (v0.33.0)
+
+Full Bots cards list bounded worker observations with their own titles/activity/
+progress. Compact rows add a count for multiple workers. One eligibility rule
+keeps counts, stamps and Working status consistent after an individual stop.
+The existing cached roster read adds an optional list while retaining singular
+compatibility and separate conversation previews. Apply the kit to the gateway
+and Desktop, restart the updated gateway, and rebuild Desktop. Twelve existing
+sections change; 1085 targets and test selection remain. Native Local two-to-one-
+to-none monitoring passes. [Checks and limits](release-notes-v0.33.0.md).
+
 ## Readable chat charts (v0.32.0)
 
 Chart fences reuse the house full-view pan/zoom controls and offer an on-demand

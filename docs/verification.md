@@ -1,3 +1,32 @@
+# v0.33.0 — See parallel bot work
+
+Fresh native Local before/after UI Send created two real delegated children in
+one profile. Before, Bots showed one and briefly became Ready after stopping
+newest A while B ran, recovering on B's heartbeat. After, both titles/count 2
+appeared; Stop A left B/count 1/Working immediately after Refresh. Native 60s B
+heartbeat retained B's title beside its waiting activity. Releasing B persisted
+its reply/terminal state and the native batch delivery; final Refresh showed
+Ready/Working 0/no worker detail and the parent's new preview. Late A reply did
+not overwrite its terminal state. Five controlled loopback model requests per
+run; no lifecycle records seeded. Model content/timing only were controlled.
+
+Backend red7/20controls ->27 native assertion bodies pass using task-local
+fixture adapters and real SessionDB, not canonical pytest/conftest (unavailable
+in the managed environment). Initial duplicate-title bounds fixtures corrected
+before valid red. UI red4/38controls ->42 nearest pass. Lint/types/build pass;
+inherited row-test act and dynamic-import warnings remain. Twelve scoped
+sections pass pinned-base apply/hash/reverse;1085targets/selection retained.
+Optional <=20-worker metadata shares existing reads/cache and safe projections;
+no new query/poll/write/dependency/schema migration or model request.
+
+Both actual60s gates SSH0/max4sampledHermes/<4GiB.2272/1753samples,
+observer-inclusive RSSmax1226244096/1228685312B, not continuous peaks or savings.
+Both cohorts closed, gateway/model ports and threads ended, original313bundle/
+hash/strict signature/config restored. No owner data/otherhost/stop mutation.
+Native canonical full cards only; compact/legacy/sibling offline coverage,
+large-list keyboard scroll/narrow/managed-process monitoring/adoption unproved.
+[Release notes and detailed limits](release-notes-v0.33.0.md).
+
 # v0.32.0 — Read and enlarge chat charts
 
 Native Local before/after actual Send displayed the same controlled reply with

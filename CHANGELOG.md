@@ -5,6 +5,19 @@ supported update or Desktop rebuild path. This kit does not install a rebuilt
 Hermes.app. Linked notes identify opt-in memory settings and admission guards
 that apply after adoption. Each entry states its adoption and verification limits.
 
+## v0.33.0 — See parallel bot work
+
+Full Bots cards list recent observed workers with their own titles and progress.
+The activity count and Working status share the same eligibility rule; stopping
+the newest worker keeps an older active sibling visible. Compact rows keep one
+stamp and add a count for multiple observations. Conversation previews stay separate.
+
+Apply the source kit to the gateway and Desktop, restart the updated gateway,
+and rebuild Desktop. Native Local before/after Send, Stop A, B heartbeat,
+completion and parent delivery passed using controlled loopback replies.
+Counts are bounded observations, not a process census.
+[Checks and limits](docs/release-notes-v0.33.0.md).
+
 ## v0.32.0 — Read and enlarge chat charts
 
 Click a chart to enlarge it with the house pan/zoom viewer. Open **Details** to

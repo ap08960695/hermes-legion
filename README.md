@@ -13,6 +13,8 @@ the [release policy](CONTRIBUTING.md#release-policy) for future versioning.
 
 ## What is included
 
+- [v0.33.0: see parallel bot work](docs/release-notes-v0.33.0.md), lists observed workers and their progress, with consistent activity counts and status when one stops.
+
 - [v0.32.0: read and enlarge chat charts](docs/release-notes-v0.32.0.md), opens charts in the existing pan/zoom viewer and exposes full labels and parsed values through Details.
 - [v0.31.1: keep same-goal delegation cards separate](docs/release-notes-v0.31.1.md), shows each native child's own progress and outcome when two calls have identical goals.
 - [v0.31.0: name and reopen Local groups](docs/release-notes-v0.31.0.md), creates and reopens canonical rooms, with a new Rename control that keeps the room identity, members and unsent chat draft.
