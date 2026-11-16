@@ -117,7 +117,7 @@ results without recommending physical escalation or asserting delivery.
 
 Treat a valid action envelope as command completion only, not verified UI intent.
 Input, capture and host-placement authority are rechecked under the same lock.
-Other gestures, `type_text`, keyboard, focus, screenshots and bounded permission
+Other gestures, keyboard, focus, screenshots and bounded permission
 mode remain unsupported. No schema, default-provider, approval or lease change.
 Advisor315 supports this two-operation slice and atomic consumption. Standing
 delegation selects inline TDD; no native Monitor/owner-app action is needed.
@@ -129,6 +129,33 @@ define qualified refs and stdin. The [action result contract](https://agent-brow
 separates delivery from application effect; the [interaction reference](https://agent-browser.dev/desktop/commands/interaction)
 describes semantic activation and value replacement. No source claims mouse
 mechanics or automatic semantic verification from a successful command.
+
+## Explicit-ref typing
+
+Extend the existing `type` action with its existing `element` field; no schema
+change. For agent-desktop, require a fresh snapshot ref advertising `TypeText`.
+Use the same atomic single-use/lease/host checks as click and set_value. Send
+exact UTF-8 bytes through `type REF --stdin`, including empty input and line ends;
+reject NUL, invalid UTF-8 and more than 10,000 bytes before native execution. Refuse
+foreground/bring-to-front forms without physical or focus fallback. Type inserts
+at the target's insertion point; it does not replace the entire field or prove
+caret placement/application commitment. Fresh capture must verify the intended
+effect before another input. Use set_value for full value replacement.
+
+The base method adds optional element. Generic dispatch forwards only a supplied
+element, rejects malformed supplied indices before approvals, and snapshots
+request arguments before approval so the original caller cannot swap the text or
+index while approval waits. Targeted approval summaries omit text. Existing
+untargeted calls retain their signature and preview. Cua explicitly refuses
+targeted type before any input, with no physical escalation advice; it retains
+existing untargeted behavior. Third-party providers need to support the optional
+argument to accept targeted type; old untargeted signatures still work.
+
+Standing delegation chooses this source slice after171 native capture failed.
+Advisor318 supports the smallest existing-contract extension. Meaningful tests
+cover dispatch/approval/privacy, bytes boundaries, capabilities and consumed refs.
+Native unknown-ref refusal is refusal evidence only; real application insertion,
+caret placement and Monitor acceptance remain independent live gates.
 
 ## Remaining capability set
 

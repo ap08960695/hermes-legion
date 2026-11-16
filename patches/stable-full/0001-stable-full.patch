@@ -64144,6 +64144,220 @@ index 0000000000000000000000000000000000000000..dcb3d0be7e85d132392889bf97c7985f
 +    monkeypatch.setattr(desktop, 'bounded_probe_run', lambda *a, **kw: pytest.fail('unexpected driver'))
 +    assert desktop.print_agent_desktop_status() == 1
 +    assert 'not installed' in capsys.readouterr().out
+diff --git a/tests/computer_use/test_agent_desktop_type.py b/tests/computer_use/test_agent_desktop_type.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..a4ecd530886f29a7a7f418da2912ec16cb8bc2e2
+--- /dev/null
++++ b/tests/computer_use/test_agent_desktop_type.py
+@@ -0,0 +1,208 @@
++"""Explicit ref typing must never degrade to an uncontrolled focused target."""
++import json
++from types import SimpleNamespace
++
++import pytest
++
++
++@pytest.fixture
++def typed(monkeypatch):
++    from tools.computer_use import agent_desktop_backend as module
++    from tools.computer_use import tool
++    tool.reset_backend_for_tests()
++    calls = []
++    state = {'actions': ['TypeText']}
++    monkeypatch.setattr(module.driver, 'resolve_agent_desktop', lambda **k: '/fixture/agent-desktop')
++    monkeypatch.setattr(module.driver, '_environment', lambda: {'SAFE': 'yes'})
++    def probe(argv, **kwargs):
++        calls.append((argv, kwargs))
++        command = argv[1]
++        if command == 'snapshot':
++            data = {'app': 'Fixture', 'complete': True, 'snapshot_id': 'typing', 'ref_count': 2,
++                    'window': {'id': 'w-1', 'title': 'Fixture'}, 'tree': {
++                        'role': 'window', 'name': 'Fixture', 'children': [
++                            {'role': 'button', 'name': 'Activate', 'ref_id': '@typing:e1', 'available_actions': ['Click']},
++                            {'role': 'textfield', 'name': 'Input', 'ref_id': '@typing:e2', 'available_actions': state['actions']}]}}
++        else:
++            if 'failure' in state:
++                value = state['failure']
++                if isinstance(value, BaseException):
++                    raise value
++                return value
++            data = {'action': command, 'disposition': {'delivery': 'delivered_unverified', 'retry': 'unsafe'},
++                    'post_state': {'value': 'PRIVATE_NATIVE_OUTPUT'}}
++        return SimpleNamespace(returncode=0, stdout=json.dumps({'version': '2.6', 'ok': True, 'command': command, 'data': data}))
++    monkeypatch.setattr(module.driver, 'bounded_probe_run', probe)
++    backend = module.AgentDesktopBackend()
++    backend.start()
++    cap = backend.capture(mode='ax', app='Fixture')
++    yield module, backend, calls, state, cap
++    backend.stop()
++    tool.reset_backend_for_tests()
++
++
++@pytest.mark.parametrize('text', ['', 'private\n\r\nภาษาไทย\n', 'ก' * 3333 + 'a'], ids=['empty', 'multiline', 'utf8-byte-limit'])
++def test_ref_type_uses_exact_utf8_stdin_and_consumes_snapshot(typed, text):
++    _, backend, calls, _, cap = typed
++    result = backend.type_text(text, element=cap.elements[2].index)
++    assert result.ok and result.action == 'type_text' and result.verified is None
++    assert result.meta['recapture_required'] is True
++    assert 'PRIVATE_NATIVE_OUTPUT' not in str(result)
++    argv, kwargs = calls[-1]
++    assert argv[:3] == ['/fixture/agent-desktop', 'type', '@typing:e2']
++    assert argv[-3:] == ['--timeout-ms', '5000', '--stdin']
++    assert '--headed' not in argv and '--interval-ms' not in argv
++    assert kwargs == {'timeout': 10, 'env': {'SAFE': 'yes'}, 'input': text.encode('utf-8')}
++    assert not text or (text not in str(argv) and text not in str(result))
++    assert not backend.type_text(text, element=cap.elements[2].index).ok
++    assert len(calls) == 2
++
++
++@pytest.mark.parametrize('text', [None, b'bytes', '\x00', '\ud800', 'ก' * 3334, 'a' * 10001])
++def test_invalid_text_never_spawns_or_preserves_input_authority(typed, text):
++    _, backend, calls, _, cap = typed
++    assert not backend.type_text(text, element=cap.elements[2].index).ok
++    assert not backend.click(element=cap.elements[1].index).ok
++    assert len(calls) == 1
++
++
++@pytest.mark.parametrize('element', [None, True, 0, -1, '2', 999])
++def test_missing_or_malformed_ref_never_falls_back_to_focused_typing(typed, element):
++    _, backend, calls, _, cap = typed
++    assert not backend.type_text('private', element=element).ok
++    assert not backend.type_text('private', element=cap.elements[2].index).ok
++    assert len(calls) == 1
++
++
++def test_set_value_capability_does_not_authorize_type(typed):
++    _, backend, calls, state, _ = typed
++    state['actions'] = ['SetValue']
++    cap = backend.capture(mode='ax', app='Fixture')
++    assert not backend.type_text('private', element=cap.elements[2].index).ok
++    assert all(argv[1] == 'snapshot' for argv, _ in calls)
++
++
++@pytest.mark.parametrize('kwargs', [{'delivery_mode': 'foreground'}, {'bring_to_front': True}])
++def test_type_never_enables_foreground_or_focus_path(typed, kwargs):
++    _, backend, calls, _, cap = typed
++    assert not backend.type_text('private', element=cap.elements[2].index, **kwargs).ok
++    assert not backend.click(element=cap.elements[1].index).ok
++    assert len(calls) == 1
++
++
++@pytest.mark.parametrize('failure', [None, OSError('PRIVATE_NATIVE_OUTPUT'),
++    SimpleNamespace(returncode=1, stdout='PRIVATE_NATIVE_OUTPUT'),
++    SimpleNamespace(returncode=0, stdout='PRIVATE_NATIVE_OUTPUT')])
++def test_failed_type_drops_private_output_and_never_retries(typed, failure):
++    _, backend, calls, state, cap = typed
++    state['failure'] = failure
++    result = backend.type_text('private', element=cap.elements[2].index)
++    assert not result.ok and result.meta['recapture_required']
++    assert 'PRIVATE_NATIVE_OUTPUT' not in str(result)
++    assert not backend.type_text('private', element=cap.elements[2].index).ok
++    assert len(calls) == 2
++
++
++def test_cancelled_type_consumes_ref_without_retry(typed):
++    _, backend, calls, state, cap = typed
++    state['failure'] = KeyboardInterrupt()
++    with pytest.raises(KeyboardInterrupt):
++        backend.type_text('private', element=cap.elements[2].index)
++    assert not backend.type_text('private', element=cap.elements[2].index).ok
++    assert len(calls) == 2
++
++
++def test_old_type_ref_cannot_rebind_after_capture_or_lease_change(typed, monkeypatch):
++    _, backend, calls, _, old = typed
++    from tools.bot_desktop import lease
++    fresh = backend.capture(mode='ax', app='Fixture')
++    assert not backend.type_text('private', element=old.elements[2].index).ok
++    fresh = backend.capture(mode='ax', app='Fixture')
++    epoch = lease.assert_agent_may_act().epoch
++    monkeypatch.setattr(lease, 'assert_agent_may_act', lambda: SimpleNamespace(epoch=epoch + 1))
++    assert not backend.type_text('private', element=fresh.elements[2].index).ok
++    assert all(argv[1] == 'snapshot' for argv, _ in calls)
++
++
++def test_common_tool_binds_original_target_and_text_across_approval(typed, monkeypatch):
++    _, _, calls, _, _ = typed
++    from hermes_cli import config
++    from tools.computer_use import tool
++    monkeypatch.setattr(config, 'load_config_readonly', lambda: {'computer_use': {'backend': 'agent-desktop'}})
++    cap = json.loads(tool.handle_computer_use({'action': 'capture', 'mode': 'ax', 'app': 'Fixture'}, session_id='typing'))
++    field = next(e['index'] for e in cap['elements'] if e['label'] == 'Input')
++    button = next(e['index'] for e in cap['elements'] if e['label'] == 'Activate')
++    request = {'action': 'type', 'text': 'APPROVED_PRIVATE', 'element': field}
++    approvals = []
++    def approve(scope, args):
++        approvals.append(scope)
++        request.update(text='UNAPPROVED_PRIVATE', element=button)
++    monkeypatch.setattr(tool, '_request_approval', approve)
++    result = json.loads(tool.handle_computer_use(request, session_id='typing'))
++    assert result['ok'] and result['verdict']['decision'] == 'verify_fresh_state'
++    assert approvals == ['type']
++    assert calls[-1][0][1:3] == ['type', '@typing:e2']
++    assert calls[-1][1]['input'] == b'APPROVED_PRIVATE'
++    assert 'APPROVED_PRIVATE' not in str(result)
++
++
++def test_targeted_approval_summary_never_previews_text(typed):
++    from tools.computer_use import tool
++    text = 'PRIVATE_APPROVAL_TEXT'
++    summary = tool._summarize_action('type', {'text': text, 'element': 42})
++    assert text not in summary and '42' in summary
++    assert text in tool._summarize_action('type', {'text': text})
++
++
++@pytest.mark.parametrize('element', [None, False, 0, -1, '2'])
++def test_common_supplied_invalid_element_refuses_before_approval(typed, monkeypatch, element):
++    from tools.computer_use import tool
++    monkeypatch.setattr(tool, '_request_approval', lambda *a: pytest.fail('invalid target reached approval'))
++    result = json.loads(tool.handle_computer_use({'action': 'type', 'text': 'private', 'element': element}))
++    assert result['code'] == 'invalid_element'
++
++
++def test_type_hardblock_and_denial_still_prevent_native_input(typed, monkeypatch):
++    _, _, calls, _, _ = typed
++    from tools.computer_use import tool
++    monkeypatch.setattr(tool, '_request_approval', lambda *a: pytest.fail('hardblock reached approval'))
++    assert 'blocked pattern' in json.loads(tool.handle_computer_use({'action': 'type', 'text': 'rm -rf /', 'element': 42}))['error']
++    monkeypatch.setattr(tool, '_request_approval', lambda *a: json.dumps({'error': 'denied'}))
++    assert json.loads(tool.handle_computer_use({'action': 'type', 'text': 'private', 'element': 42}))['error'] == 'denied'
++    assert len(calls) == 1
++
++
++def test_old_provider_signature_receives_no_new_kwarg_when_element_omitted():
++    from tools.computer_use import tool
++    from tools.computer_use.backend import ActionResult
++    class Legacy:
++        def type_text(self, text, *, delivery_mode=None, bring_to_front=False):
++            assert text == 'legacy' and delivery_mode is None and not bring_to_front
++            return ActionResult(ok=True, action='type_text')
++    assert json.loads(tool._dispatch(Legacy(), 'type', {'text': 'legacy'}))['ok']
++
++
++def test_cua_targeted_type_refuses_without_focus_or_native_input():
++    from tools.computer_use.cua_backend_input import _InputMixin
++    from tools.computer_use import tool
++    from tools.computer_use.backend import ActionResult
++    calls = []
++    class Cua(_InputMixin):
++        _active_pid = 10
++        _active_window_id = 20
++        def _action(self, action, args):
++            calls.append((action, args))
++            return ActionResult(ok=True, action=action)
++    backend = Cua()
++    result = backend.type_text('private', element=42, bring_to_front=True, delivery_mode='foreground')
++    assert not result.ok and result.code == 'targeted_type_unsupported' and calls == []
++    assert tool._classify_action_result(result)['decision'] == 'verify_fresh_state'
++    assert backend.type_text('legacy').ok
++    assert calls == [('type_text', {'pid': 10, 'window_id': 20, 'text': 'legacy'})]
++
++
++def test_type_placement_change_refuses_before_native(typed, monkeypatch):
++    module, backend, calls, _, cap = typed
++    monkeypatch.setattr(module, '_host_placement', lambda: False)
++    assert not backend.type_text('private', element=cap.elements[2].index).ok
++    assert len(calls) == 1
 diff --git a/tests/conftest.py b/tests/conftest.py
 index 56422616f6a517a7995c7298b0213f9a9e407ed1..1ef258494a56495f1db16a4514a7f667b8771a46 100644
 --- a/tests/conftest.py
@@ -96127,10 +96341,10 @@ index 0000000000000000000000000000000000000000..5f4f0a82734efaf57c8a6b426ca1e2a1
 +    return 0
 diff --git a/tools/computer_use/agent_desktop_backend.py b/tools/computer_use/agent_desktop_backend.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..2ce9f46ddb261b0f64b5006b0a0049191694b85f
+index 0000000000000000000000000000000000000000..9395b3eadf9ec32b7e7b4d3d4507361043a5f58e
 --- /dev/null
 +++ b/tools/computer_use/agent_desktop_backend.py
-@@ -0,0 +1,233 @@
+@@ -0,0 +1,243 @@
 +"""Scoped AX reads and single-use semantic refs; no physical input or raw logging."""
 +from __future__ import annotations
 +
@@ -96266,7 +96480,7 @@ index 0000000000000000000000000000000000000000..2ce9f46ddb261b0f64b5006b0a004919
 +                        actions = node.get('available_actions', [])
 +                        if not isinstance(actions, list) or any(not isinstance(a, str) for a in actions):
 +                            raise ValueError('Invalid actions')
-+                        targets[index] = (ref, frozenset(a for a in actions if a in {'Click', 'SetValue'}))
++                        targets[index] = (ref, frozenset(a for a in actions if a in {'Click', 'SetValue', 'TypeText'}))
 +                children = node.get('children', [])
 +                if not isinstance(children, list):
 +                    raise ValueError('Invalid children')
@@ -96274,7 +96488,7 @@ index 0000000000000000000000000000000000000000..2ce9f46ddb261b0f64b5006b0a004919
 +            if type(data['ref_count']) is not int or data['ref_count'] != len(refs):
 +                raise ValueError('Invalid ref count')
 +            return (CaptureResult(mode='ax', width=0, height=0, elements=elements, app=app,
-+                                  window_title=window['title'], note='AX refs; read a fresh capture after every input attempt. No screenshots or physical input.'), targets)
++                                  window_title=window['title'], note='AX refs; read a fresh capture after every input attempt. type(text, element) inserts at the caret; set_value replaces the value. No screenshots or physical input.'), targets)
 +        except Exception:
 +            raise RuntimeError('agent-desktop AX snapshot failed; check target, permissions and protocol') from None
 +
@@ -96292,7 +96506,7 @@ index 0000000000000000000000000000000000000000..2ce9f46ddb261b0f64b5006b0a004919
 +
 +    def _act(self, command, element, value=None):
 +        from tools.bot_desktop import lease
-+        action = command.replace('-', '_')
++        action = 'type_text' if command == 'type' else command.replace('-', '_')
 +        with self._lock:
 +            targets, epoch = self._targets, self._capture_epoch
 +            self._targets, self._capture_epoch = {}, None
@@ -96306,7 +96520,7 @@ index 0000000000000000000000000000000000000000..2ce9f46ddb261b0f64b5006b0a004919
 +            except Exception:
 +                return self._input_result(action, code='human_has_control')
 +            ref, actions = targets[element]
-+            if ('Click' if command == 'click' else 'SetValue') not in actions:
++            if {'click': 'Click', 'set-value': 'SetValue', 'type': 'TypeText'}[command] not in actions:
 +                return self._input_result(action, code='unsupported_action')
 +            argv = [self._binary, command, ref, '--session', self._session, '--timeout-ms', '5000']
 +            if value is not None:
@@ -96339,8 +96553,18 @@ index 0000000000000000000000000000000000000000..2ce9f46ddb261b0f64b5006b0a004919
 +    def scroll(self, **kwargs):
 +        return self._unsupported('scroll')
 +
-+    def type_text(self, text, **kwargs):
-+        return self._unsupported('type_text')
++    def type_text(self, text, *, element=None, delivery_mode=None, bring_to_front=False):
++        if delivery_mode not in {None, 'background'} or bring_to_front:
++            return self._unsupported('type_text')
++        try:
++            if not isinstance(text, str) or '\x00' in text:
++                raise ValueError('Invalid text')
++            encoded = text.encode('utf-8')
++            if len(encoded) > 10000:
++                raise ValueError('Text too large')
++        except Exception:
++            return self._unsupported('type_text')
++        return self._act('type', element, encoded)
 +
 +    def key(self, keys, **kwargs):
 +        return self._unsupported('key')
@@ -96364,11 +96588,51 @@ index 0000000000000000000000000000000000000000..2ce9f46ddb261b0f64b5006b0a004919
 +
 +    def list_windows(self):
 +        raise RuntimeError('agent-desktop AX provider does not implement window listing')
+diff --git a/tools/computer_use/backend.py b/tools/computer_use/backend.py
+index 560c0e7b1da8c913fdf098490421230004e67fa5..ed5ac9107e903b6262e3f8f0d95314c8b844e61d 100644
+--- a/tools/computer_use/backend.py
++++ b/tools/computer_use/backend.py
+@@ -123,3 +123,3 @@ class ComputerUseBackend(ABC):
+     @abstractmethod
+-    def type_text(self, text: str, *, delivery_mode: Optional[str] = None,
++    def type_text(self, text: str, *, element: Optional[int] = None, delivery_mode: Optional[str] = None,
+                   bring_to_front: bool = False) -> ActionResult: ...
+diff --git a/tools/computer_use/cua_backend_input.py b/tools/computer_use/cua_backend_input.py
+index 2b09856a465c725389a534eb7c27a38400137d21..fd9a08e238dc798167f69d595553d32a957716b0 100644
+--- a/tools/computer_use/cua_backend_input.py
++++ b/tools/computer_use/cua_backend_input.py
+@@ -147,3 +147,7 @@ class _InputMixin:
+
+-    def type_text(self, text: str, *, delivery_mode: Optional[str] = None, bring_to_front: bool = False) -> ActionResult:
++    def type_text(self, text: str, *, element: Optional[int] = None,
++                  delivery_mode: Optional[str] = None, bring_to_front: bool = False) -> ActionResult:
++        if element is not None:
++            return _refuse("type_text", "This provider cannot type into an element; no input was sent.",
++                           code="targeted_type_unsupported", meta={"recapture_required": True})
+         refusal, args = self._target_args("type_text", need_window=True)
 diff --git a/tools/computer_use/tool.py b/tools/computer_use/tool.py
-index bd59a30764482831bf60c1ed99d6984a3416eedd..8104236242c05946250fc50343d37dfe4e69fa8f 100644
+index bd59a30764482831bf60c1ed99d6984a3416eedd..b7940c392a873a344530a254e534f8ed28f9cc65 100644
 --- a/tools/computer_use/tool.py
 +++ b/tools/computer_use/tool.py
-@@ -525,2 +525,4 @@ def _classify_action_result(res: ActionResult) -> dict[str, Any]:
+@@ -61,2 +61,4 @@ def _reject_unsafe(action: str, args: dict[str, Any]) -> Optional[str]:
+     """JSON error for hard-blocked input, else None. Runs BEFORE the approval prompt."""
++    if action == "type" and "element" in args and (type(args["element"]) is not int or args["element"] <= 0):
++        return json.dumps({"error": "type requires a positive element index when supplied", "code": "invalid_element"})
+     if action == "type" and (pat := next((p.pattern for p in _BLOCKED_TYPE_PATTERNS if p.search(args.get("text", ""))), None)):
+@@ -321,2 +323,3 @@ def handle_computer_use(args: dict[str, Any], **kwargs) -> Any:
+     separate visible side effect with its own scope) -> backend -> dispatch under the session call lock."""
++    args = dict(args)  # Approval must bind the original text and target while the caller waits.
+     action = (args.get("action") or "").strip().lower()
+@@ -469,4 +472,6 @@ _ACTIONS: dict[str, _ActionSpec] = {
+     "scroll": _input(_do_scroll, summarize=lambda a, args, fg: f"scroll {args.get('direction', '?')} x{args.get('amount', 3)}{fg}"),
+-    "type": _input(lambda backend, action, args, **delivery: backend.type_text(args.get("text", ""), **delivery),
+-                   summarize=lambda a, args, fg: f"type {args.get('text', '')[:60]!r}" + ("..." if len(args.get("text", "")) > 60 else "") + fg),
++    "type": _input(lambda backend, action, args, **delivery: backend.type_text(args.get("text", ""),
++                   **({"element": args["element"]} if "element" in args else {}), **delivery),
++                   summarize=lambda a, args, fg: (f"type into element #{args['element']}" if "element" in args else
++                   f"type {args.get('text', '')[:60]!r}" + ("..." if len(args.get("text", "")) > 60 else "")) + fg),
+     "key": _input(lambda backend, action, args, **delivery: backend.key(args.get("keys", ""), **delivery),
+@@ -525,2 +530,4 @@ def _classify_action_result(res: ActionResult) -> dict[str, Any]:
          return {"decision": "done"}
 +    if isinstance(res.meta, dict) and res.meta.get("recapture_required") is True:
 +        return {"decision": "verify_fresh_state", "hint": "Read a fresh capture before any further input; delivery and effect are not inferred."}

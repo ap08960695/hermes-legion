@@ -1,3 +1,46 @@
+# Agent-desktop explicit-ref type — unreleased
+
+The existing generic type action now forwards an explicitly supplied element to
+the provider; it never silently drops that target. Malformed supplied indices
+refuse before approval. Original text/index arguments are snapshotted at entry
+so the caller cannot swap them while approval waits. Targeted approval summaries
+omit typed content; old untargeted preview/signature behavior remains unchanged.
+The byte-frozen schema is unchanged. The base optional argument is additive; cua
+refuses targeted type before input/focus and gives no physical escalation advice.
+
+Agent-desktop accepts only a latest captured TypeText-qualified ref. Native type
+uses exact UTF-8 stdin, including empty input and line ends, with a 10,000-byte cap
+and NUL/encoding validation. Reuses locked single-use, lease and placement checks.
+Foreground/bring-to-front refuse; no click/focus/coordinate/physical path or retry.
+Insertion is at the element's insertion point, not replacement. Native command
+completion does not establish intended insertion/caret/application commitment.
+The existing type_text response action is retained for backend compatibility.
+
+35 new cases plus 32 existing action, 35 adapter and 20 approval/fence/delivery cases
+pass: 122 total across six source files, one worker. Sixteen initial behavioral
+reds expose missing dispatch/native support, private preview and invalid target
+handling; an initial runner flag error is separate setup evidence. Existing
+adapter assertion caught a response-action compatibility mismatch; corrected
+implementation retains type_text, without weakening that prior regression.
+Cases cover UTF8byte boundary/empty/newlines/invalid text, capability separation,
+stale/missing/invalid refs, lease/placement, cancel/error, approval argument swaps,
+hardblocks/denial, legacy untargeted dispatch and cua no-input refusal.
+
+Private hybrid: synthetic capture -> actual installed 1.3.1 type CLI, fresh empty
+private namespace and stdin. Native SNAPSHOT_NOT_FOUND and source reuse refusal
+confirm only refusal; no application was targeted or input delivered. First
+setup used a test interpreter missing ruamel.yaml; it failed before native spawn,
+config was restored, and the existing full runtime completed the check read-only.
+Python audit exact-argv guards and OS network/write/SSH fences remain in force.
+No dependency install, native app/gateway/model launch or GUI retry this round.
+
+Five changed source sections apply/hash/reverse against pinned
+bf0203a794a07aac3ff764972ab9087baa4e4f4e; 1,117 targets, unrelated patch bytes retained.
+The new test path is appended without reordering existing selection. Native round171
+WINDOW_NOT_FOUND/resource-accounting failure remains failed; no corrected native
+resource gate, real caret/input effect, Windows/Linux runtime or Monitor visual
+acceptance is claimed. Full capability/feature release stays open.
+
 # Agent-desktop semantic ref input — unreleased
 
 The existing selected provider now supports semantic click(element) and

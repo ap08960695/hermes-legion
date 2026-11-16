@@ -40,10 +40,12 @@ with `hermes config set computer_use.agent_desktop.path /path/to/agent-desktop`.
 This does not select a runtime provider or establish snapshot/action support.
 An opt-in AX ref provider is now included: select `computer_use.backend:
 agent-desktop`, then call `computer_use` capture with `mode=ax` and an explicit
-application name. Semantic `click(element)` and `set_value(value, element)` use
-one captured ref set, then require a fresh capture; values travel through stdin.
-Host/sandbox boundaries remain enforced. Screenshots and other input forms remain
-unimplemented. See the design note for current limits.
+application name. Semantic `click(element)`, `set_value(value, element)` and
+`type(text, element)` consume one captured ref set, then require a fresh capture.
+Text travels through stdin; type inserts at the caret, while set_value replaces
+its value. Targeted type requires a TypeText ref and at most 10,000 UTF-8 bytes.
+Host/sandbox boundaries remain enforced. Native input success, screenshots and
+other input forms remain unverified or unimplemented; see the design note.
 
 ## What is included
 
