@@ -1,3 +1,60 @@
+# Native existing canonical Bot Chat reopening — accepted, unreleased
+
+**Named-profile Monitor Open reopens the existing nonempty Bot Chat.** This
+focused native scenario passes its bound UI acknowledgment and independent
+read-only postcheck. It does not change round186's failed scenario result.
+
+One fresh isolated Local 480×620 instance uses the production renderer and
+source-built main/preload development bundle from kit `b5a8ca5`. Eleven relevant
+source hashes and the production preload stay unchanged. The existing guarded
+Local/zero-SSH hold passes for 60 seconds before UI input.
+
+Actual public RPC creates a default canonical chat, a separate side chat and a
+named-profile canonical Bot Chat. Two loopback fixture replies populate the side
+and named transcripts, with distinct IDs and markers. Before any Open, read-only
+snapshots freeze canonical ID/title, profile, session inventories, messages and
+recorded API/token counters. The target is nonempty and preexisting **before
+navigation**; persistence across an app relaunch is not tested.
+
+Native CUA AX/pixels first show a distinct New session route, then Bots → Monitor.
+The exact named-profile Open action alone changes the URL to the saved canonical
+session ID. The Bot Chat visibly shows the saved INDEPENDENT_PROFILE user and
+assistant content and the matching profile; it does not show the independent
+side-chat marker. No direct URL navigation, RPC activation, new prompt or input
+retry causes this transition. Matching text alone is not the identity proof:
+the URL and profile bind that content to the pre-Open named DB row, separately
+from default canonical and side-chat controls.
+
+After the observed result, the generation/target/profile-bound acknowledgment
+passes with a 12.993-second-old capture; its postcheck has 99.409 seconds left in
+the dedicated 120-second canonical phase. Native before/after checks and a second
+independent read-only DB inspection agree: session ID sets, messages and selected
+API/token counters remain unchanged in both DBs. Only the two initial fixture
+reply kinds occur. Opening the chat creates no session or model call.
+
+Original PID/birth/executable/window UUID/URL/lifecycle, single-use five-second
+admission receipts, CUA20/ACK1, freshness30, 335/360 acceptance/overall deadlines,
+25-second cleanup reserve and process/network guards remain. The scoped scenario
+omits worker delegation and filter/report walkthroughs already covered elsewhere;
+no product behavior, host adapter, DOM observer, preload capability or SQL/query
+seeding is added. Responses/timing/usage are fixtures, not production billing.
+
+Guardian exit0 records no failure/survivors and confirms gateway/model-server
+shutdown. Native elapsed 113.302 seconds; sampled peak four product non-OS/seven
+total children and 1,124,253,696 bytes including guardian. External CUA/advisor/
+build setup are excluded; no whole-task memory bound or savings claim. All31
+remembered PID generations close, owned paths/HOME and Desktop SSH are zero.
+Five configs and window-state absence restore; eleven source hashes stay exact.
+Cleanup journals 352,393,483 logical scratch bytes before deletion; physical
+reclaim is unmeasured.
+
+Private before/after images: `../evidence/bot-monitor-canonical-reopen-20261117`.
+Raw evidence: `../uitest-v090-c2q4iijp/bots-r187{,-canonical}/evidence`.
+This closes the existing nonempty canonical-reopen gate. Next is the feature-batch
+release review, retaining qualified round186 Error-control observations and its
+failed full-scenario boundary. No version/tag/release, remote connection or daily-
+app adoption is included; earlier failures stay failed.
+
 # Native recorded-issue search observations — phase admission refused, unreleased
 
 **Recorded-issue filtering/search is visibly observed and independently

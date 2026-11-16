@@ -35,10 +35,11 @@ completed report. Native wide Completed/Error reports and failed-refresh recover
 now pass. A fresh native narrow Stop scenario also passes its final ACK, with
 nonempty worker search/Working filtering, elapsed sorting and keyboard reach to
 hidden actions. Recorded-issue filtering and Error-excerpt search now have guarded
-native observations, but that trial's report-click admission failed before input;
-That trial's full-scenario acceptance and existing nonempty canonical reopening
-remain open.
-See the [release gate audit](docs/design-bot-monitor.md#release-gate-audit--2026-11-17).
+native observations, but that trial's report-click admission failed before input.
+A separate focused native trial now reopens the existing nonempty named Bot Chat,
+matching its saved session/profile/transcript without creating a session or model
+call. Feature-batch review retains the failed Error-control scenario boundary;
+see the [release gate audit](docs/design-bot-monitor.md#release-gate-audit--2026-11-17).
 The latest released version is v0.33.8. No daily-app adoption is included.
 
 The [agent-desktop diagnostics slice](docs/design-agent-desktop.md) is also
