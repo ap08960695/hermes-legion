@@ -1,3 +1,40 @@
+# Native Local sibling Bots acceptance — v0.33.5 follow-up
+
+Actual UI Send in scope-b invokes native delegation and holds one child through
+its normal heartbeat. After selecting default, Bots shows default Ready and
+scope-b Working with the task and separate parent preview. Task-only passthrough
+roster tracing records the actual default authority, readable scope-b sibling,
+and shared `_sibling_sessions` returning the same child ID found independently
+in scope-b's SessionDB. Twenty-two default-to-sibling reads match that ID; the
+profile label alone is not routing evidence.
+
+The child heartbeat advances from absent to a native timestamp. Refresh shows
+its waiting description. Releasing the controlled reply produces the native
+child result and terminal timestamp, durable completed/delivered delegation,
+and parent result. Refresh then shows Ready / Working 0 with no active-worker
+detail. Default's session/message/delegation tables remain empty throughout.
+Exactly four loopback model replies control content/timing only. Fixture token
+numbers are not provider usage. No lifecycle/activity rows were seeded.
+
+The admitted cohort passes the actual 60.137-second SSH-zero gate and 1,608
+bounded samples, with at most four Hermes processes and observer-inclusive RSS
+1,183,531,008 bytes. An earlier task observer confused LocalBot with its authority;
+it was closed before UI Send or the 60-second gate, corrected and tested before a
+fresh cohort. Its 381 samples and 905,297,920-byte observer-inclusive RSS remain
+failed-cohort evidence, not acceptance. UI evidence-helper binding corrections
+preceded the single Send; no mutation or request was blindly repeated.
+
+Both cohorts end all owned identities, model threads and loopback ports; original
+config bytes/modes and the 313-entry trial bundle with strict signature restore.
+No owner app/data, other host, ESTOP, pause or timer changed. The narrow observer
+preserves original read return/exception identity and context cleanup; it adds no
+query or authorization/lifecycle mutation. No source patch, renderer build, test
+selection, dependency or version change. This proves native gateway-thread child
+monitoring through canonical Local sibling reads; managed subprocesses, providers,
+legacy, daily-app, remote/ai and Linux remain unverified. Resource values are
+samples, not continuous peaks or savings. Required companion, tracked-copy
+release and secret gates apply. [Journey](bot-activity.md#native-local-sibling-acceptance-v0335-follow-up).
+
 # Native Local startup diagnostic — v0.33.5 follow-up
 
 One earlier cold launch stayed on Connecting until native Reload. One fresh,

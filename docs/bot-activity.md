@@ -19,6 +19,27 @@ Refresh passed with real lifecycle/storage and controlled loopback model replies
 Private prompts were not projected. Apply the kit, restart the updated gateway
 and rebuild Desktop. [Evidence and limits](release-notes-v0.33.0.md).
 
+## Native Local sibling acceptance (v0.33.5 follow-up)
+
+A real UI Send in `scope-b` created one native delegated child. After selecting
+`default`, Bots showed default Ready and scope-b Working, with the child task
+separate from its parent's message preview. A narrowly scoped task observer
+recorded the actual default roster authority, its readable scope-b sibling, and
+`_sibling_sessions` returning the same child ID stored in scope-b's SessionDB.
+The displayed profile label alone was not used as routing proof.
+
+The child's native heartbeat advanced while its controlled model reply waited.
+Refresh showed the waiting description. Releasing that reply produced the native
+child result, terminal timestamp and parent delivery; another Refresh showed both
+bots Ready, Working 0 and no active-worker detail. Default's session/message/
+delegation tables stayed empty. Four model replies had controlled content and
+timing on loopback; lifecycle and status records were not seeded.
+
+The existing v0.33.5 renderer and source kit were reused. This adds acceptance
+for canonical multiplexed Local sibling reads, without a new runtime release.
+It does not prove a real provider, legacy backend, managed-worker subprocess,
+remote/ai, Linux or daily-app behavior. [Checks and limits](verification.md#native-local-sibling-bots-acceptance--v0335-follow-up).
+
 ## Earlier worker monitoring
 
 From v0.29.4, native `subagent` runs also reach the existing worker summary.
