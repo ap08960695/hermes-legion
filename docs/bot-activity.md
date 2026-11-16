@@ -19,6 +19,24 @@ Refresh passed with real lifecycle/storage and controlled loopback model replies
 Private prompts were not projected. Apply the kit, restart the updated gateway
 and rebuild Desktop. [Evidence and limits](release-notes-v0.33.0.md).
 
+## Native compact rows (v0.33.5 follow-up)
+
+Open **Bots → Manage team** for compact rows; **Show bot cards** returns to cards.
+Native Local acceptance now covers one real delegated child from scope-b's
+canonical Bot Chat, viewed through default's readable sibling roster. The row
+shows the child task separately from the parent's preview. After the normal
+heartbeat and Refresh, the activity line reports model waiting while the parent
+preview stays unchanged. Clicking the row reopens the same canonical parent ID,
+not the child session, and creates no duplicate child.
+
+After the controlled model reply is released, native child completion and parent
+delivery persist. Refresh keeps the bot row and updated parent preview, and
+removes the worker activity. SessionDB lineage and passthrough roster traces
+correlate the actual identities; marker text alone is not the proof. Only model
+reply content/timing is simulated on loopback. No runtime change or new version.
+This checks one child, not parallel counts, large lists, keyboard navigation,
+legacy backends or managed subprocesses. [Evidence and limits](verification.md#native-compact-bots-acceptance--v0335-follow-up).
+
 ## Native Local sibling acceptance (v0.33.5 follow-up)
 
 A real UI Send in `scope-b` created one native delegated child. After selecting

@@ -1,3 +1,32 @@
+# Native compact Bots acceptance — v0.33.5 follow-up
+
+Actual Local **Bots → Open chat** creates scope-b's native canonical Bot Chat.
+One UI Send invokes native delegation and holds one child on a controlled
+loopback model response. Select default, then **Bots → Manage team**: the compact
+row shows the child task separately from the parent's message preview. After
+the normal 60-second heartbeat and Refresh, the same child's activity reports
+model waiting. Clicking the row reopens the original canonical parent ID, never
+the child. Returning to Bots retains compact mode and the waiting observation.
+
+Release the reply: the native child result, terminal timestamp, completed/delivered
+delegation and parent result persist. Refresh keeps both rows and the new parent
+preview, with no worker activity. Independent SessionDB snapshots prove one child,
+lineage/profile, heartbeat and terminal state. Thirty-one default-to-sibling trace
+reads match both worker and canonical parent IDs; default's session/message/
+delegation tables remain empty. Exactly four controlled loopback model calls;
+no lifecycle rows seeded. Fixture tokens are not provider usage or savings.
+
+The actual 60.048-second SSH-zero gate passes. Across 1,697 bounded samples,
+Hermes count stays at most four and observer-inclusive RSS reaches 1,204,846,592
+bytes, without a continuous-peak or physical-memory claim. All owned processes,
+model thread and loopback ports end; original config bytes/modes and the 313-entry
+trial bundle with strict signature restore. No owner app/data, other host, ESTOP,
+pause or timer changes. Existing v0.33.5 source, renderer, dependencies and test
+selection are reused; no runtime release. One child only: parallel counts,
+large-list/keyboard/narrow layouts, legacy backends, managed subprocesses,
+providers, daily-app, remote/ai and Linux remain unverified. Required companion,
+tracked-copy release and secret gates apply. [Journey](bot-activity.md#native-compact-rows-v0335-follow-up).
+
 # Native Mac title-bar close recovery — v0.33.5 follow-up
 
 With minimize-to-tray explicitly disabled, actual Local Settings changes default's
