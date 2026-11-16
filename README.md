@@ -29,7 +29,8 @@ columns now keep a readable minimum width instead of squeezing labels into a few
 letters; narrow tables keep their existing horizontal scroll. Browser fixture
 before/after checks cover this layout. Closing reports with Escape or Close now
 returns keyboard focus to the report button. Model replies and usage are fixtures;
-native visual acceptance remains open. The latest
+a browser adapter also follows a real native worker from Working/step into its
+completed report. Electron visual acceptance remains open. The latest
 released version is v0.33.8. No daily-app adoption is included.
 
 ## What is included

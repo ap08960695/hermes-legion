@@ -1,3 +1,49 @@
+# Monitor native-to-browser settlement — unreleased
+
+Actual Monitor, Reports, production CSS and production mood/source helpers ran
+in Chrome Guest at1140×620 against fresh profiles.list responses from the real
+local native gateway scenario. A task-private pytest observer serializes reads
+on that test's one authenticated WebSocket; no second socket, lifecycle SQL,
+product API or product poller. Its static/roster server binds127.0.0.1 only.
+Model replies/timing/usage remain simulated; native agent/delegation/read_file,
+heartbeat, terminal ledger/delivery and canonical reports remain real.
+
+CUA shows the same scoped child Working at step1/250; real reads advance elapsed
+9s ->39s. Working filter hides the independent helper, All restores it. After
+normal native settlement, current workers become0 with no stale Working/step,
+canonical parent preview becomes its completed acknowledgement, and that child's
+Completed report opens with MONITOR_WORKER_DONE. Raw child/parent identities
+match native roster, browser DOM-checked receipts and native DB assertions.
+Current-tool facts are absent after the read and remain missing. Helper source
+status stays Unknown: this adapter supplies no Electron source metadata.
+
+Images under ../evidence/local-ui-20261116/: r137-browser-active.jpg,
+r137-browser-progress.jpg, r137-browser-settled.jpg and
+r137-browser-completed-report.jpg. Unaltered CUA bytes/hashes/call/time identities,
+19 raw roster reads, DOM-checked active/terminal receipts and native output stay
+private. The native test source is byte-identical. Completed case passes with
+its real heartbeat, terminal/delivery/report and both nonempty independent
+side-chat/profile controls. Its85.618s includes deliberate UI receipt waits;
+92.1s per-file runtime is not a production latency measure. Seven model requests
+are fixtures. Initial pytest -p argument collided with Hermes profile parsing;
+that setup failure is retained. Standard PYTEST_PLUGINS loading resolves it
+without product/test/guard changes or automatic retries.
+
+Three added rendered cases cover active -> Completed/Error/Stopped report,
+removing ended workers' stale step/tool/Working state. Monitor24+31 nearby checks
+pass,55total; scoped test ESLint and the actual-component fixture build pass.
+Unchanged full renderer/types/backend negatives are not rerun. Eight exact
+Host/Origin/path/POST/CSP controls pass; only same-origin roster and view-receipt
+requests are allowed, no credential leaves the test observer. Guest closes to
+its original owner new-tab window; native test closes the owned server/socket.
+Sampled native peak425132032B inclobserver, max4processes inclobserver, unchanged
+180s/<3.5GiB/3child fence. Not continuous OS peaks or browser RSS accounting.
+
+This is browser fixture adapter acceptance, not Electron launch, useRoster,
+real chat navigation, production billing/model quality or RAM savings. Those
+native integration gates still block the Monitor batch release. One changed
+patch section applies/hashes/reverses;1,098targets and selected tests retained.
+
 # Monitor report focus — unreleased
 
 Original `BotMonitorReports` conditionally mounted a Dialog without a Trigger.

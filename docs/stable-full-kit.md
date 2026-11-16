@@ -10,6 +10,15 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Monitor native-to-browser settlement (unreleased)
+
+The actual Monitor now has browser adapter proof over fresh native gateway
+roster reads: Working/step/elapsed advances, settled worker disappears, its
+Completed report opens. Three rendered cases protect Completed/Error/Stopped
+settlement and stale progress removal. Native model replies/usage remain fixtures;
+Electron/useRoster/navigation acceptance is still open.
+[Evidence boundaries](verification.md#monitor-native-to-browser-settlement--unreleased).
+
 ## Monitor report keyboard focus (unreleased)
 
 Escape and Close return focus to the same report button, so keyboard users can

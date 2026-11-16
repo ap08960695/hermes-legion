@@ -225,3 +225,35 @@ original Escape focus loss and verifies fixed Escape/Close focus; stored Stopped
 report pixels match AX this round. These resolve the browser follow-ups above,
 not the unsupported native selector or on-screen native progress/settlement gates.
 If a roster change removes the opener, there is no mounted target to restore.
+
+
+## Browser adapter over native lifecycle
+
+Acceptance uses the actual Monitor and production CSS with real, fresh
+profiles.list responses from the existing native lifecycle scenario. A private
+test observer reuses its one authenticated socket; a locked read-only adapter
+feeds the browser. The original completed-worker scenario keeps native file-read,
+heartbeat, terminal/delivery/report and independent side/profile assertions.
+Only model replies/timing/usage remain simulated. Production mood/source helpers
+derive rows mechanically; absent current-tool data remains absent.
+
+The fixture adds a read-only roster endpoint and an exact terminal-view receipt,
+not a product API or lifecycle control. Native test completes its own worker;
+terminal receipt merely lets the diagnostic test finish after UI capture.
+Active-to-terminal screenshots and a rendered regression cover the same scoped
+worker/report. This is browser fixture adapter acceptance, not Electron launch,
+useRoster, real navigation or production billing evidence. Native release gate
+remains open. No new product poller, dependency or fallback.
+
+
+Browser adapter acceptance passed with fresh native roster reads: the same child
+appears Working at step1/250, elapsed advances from9s to39s, then current workers
+fall to0 and its Completed report opens. The original native scenario remains
+byte-identical and passes heartbeat/file/ledger/delivery and nonempty side/profile
+checks. The private observer serializes read-only RPC on that existing socket;
+only explicit DOM-checked view receipts delay its assertions for capture. No
+browser lifecycle control or SQL writes. Production current-tool data is absent
+in this held-after-read phase and stays absent. Helper status is Unknown because
+this adapter does not supply Electron source metadata. Three rendered settlement
+cases cover Completed/Error/Stopped with stale step/tool removal. Electron,
+useRoster and real navigation acceptance remain open before the feature release.
