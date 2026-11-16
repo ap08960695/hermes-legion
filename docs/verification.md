@@ -1,3 +1,65 @@
+# Native narrow readiness timeout and release-gate audit — unreleased
+
+A fresh production renderer and source-built main/preload development bundle
+from `2706aab`, including the narrow-table correction, use an owned Local-only
+profile and supported persisted 480×620 geometry. This is not shipped-package
+or installed-app adoption proof. Eleven
+relevant source hashes match through build; the production preload is byte-exact
+to the prior unmodified preload. The existing Node/OS/Chromium fences and
+remembered-generation guardian remain unchanged. The native content bounds match
+480×620 and the 60-second Local/zero-SSH gate passes.
+
+The first exact-owned CUA selection and paired baseline pixels show the actual
+Hermes chat and Local/profile labels. Its paired AX result is a diff-only
+unchanged message, not a persisted full baseline. The fixture's 90-second
+UI_READY deadline expires before an acknowledgment is written. The gateway log
+names that exact timeout; both profile databases contain zero sessions and zero
+messages. No worker, delegation, authenticated Stop or task report is created,
+and no model work runs. The original guardian fails after 92.789s and closes its
+owned generations, with a gateway/model-server shutdown receipt.
+
+A later full AX read shows the owned bundle's default Electron welcome page.
+Four replacement main/helper generations start after the guarded run has ended;
+all are closed by exact owned executable/PID-birth checks. That AX file is retained
+under an explicit unexpected-default-app label, separate from the original
+baseline image. Their RAM, network and write coverage is unmeasured; the earlier
+guardian sample does not cover them. The timing and changed content establish an
+observer/lifecycle failure, not a Monitor defect or proof of who initiated the
+replacement. There is no native retry or further CUA action after that observation.
+
+The original controlled sample reaches four non-OS/eight total children and
+937,541,632 bytes including guardian. It is not a bound for the complete CUA path
+or a whole-task RAM/savings result. The initial read-only identity probe used a
+Python without psutil and failed before mutation; the existing explicit test
+interpreter completed the preflight. That setup correction is not a native retry.
+
+Future observation uses one paired full AX/pixels result and an immediate
+original PID/birth/executable/window plus monotonic phase/overall-budget check
+before every CUA call. A private guard passes two positive and fifteen negative
+offline controls for generation/window changes, dead instances, expiry, short
+budget and invalid clocks. It is not integrated or proven against live CUA and
+cannot eliminate exit-between-check-and-call races. A future 180-second UI_READY
+budget within the same 360-second overall limit is a proposal, not a change to
+this retained failed fixture. No cancellation instrumentation or client-handler
+arrival claim is added.
+
+Independent offline work completes a compact [release gate audit](design-bot-monitor.md#release-gate-audit--2026-11-17)
+in the existing design. Eight referenced source/test surfaces match their
+packaged after-hashes; round181's unchanged 40 source cases, lint/types and
+browser red/green evidence are reused. The audit separates source/component,
+native wide, browser geometry and missing native narrow/Stopped evidence. It
+also preserves the gap in nonempty native control coverage and the bounds on
+roster observations, costs, model labels, report search and canonical opening.
+README now reflects actual native progress and limits its old stale-reply wording
+to the stopped-state assertion that was tested. No source, patch, test selection,
+version/tag/release or adoption change is made in this round.
+
+Private raw baseline/timing/closure evidence remains under
+`../uitest-v090-c2q4iijp/bots-r182{,-stopped}/evidence`; the labelled baseline image
+and unexpected AX are under `../evidence/bot-monitor-readiness-20261117`.
+Native narrow/Stopped acceptance remains open. Previous failed attempts stay
+failed; this completed item is the release-gate audit, not native acceptance.
+
 # Native Monitor Error report and narrow-layout fix — unreleased
 
 Two fresh sequential isolated Local native fixtures use the same production

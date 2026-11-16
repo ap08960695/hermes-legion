@@ -23,15 +23,18 @@ unavailable. Recent reports now opens recorded task outcomes and bounded report/
 error excerpts, with local outcome filters and recorded-stalled/Stopped/Unknown
 labels. Historical issues stay separate from current work. A native gateway
 regression follows real delegation and file reading into completed, rejected and
-explicitly stopped task reports, including stale-reply protection and independent
-side-chat/profile controls. The successful case retains a real heartbeat. Model
+explicitly stopped task reports, including independent side-chat/profile controls.
+Its stopped case keeps saved child state unchanged after the held server response
+handler finishes; arrival at the canceled client completion handler is unproven. The successful case retains a real heartbeat. Model
 columns now keep a readable minimum width instead of squeezing labels into a few
 letters; narrow tables keep their existing horizontal scroll. Browser fixture
 before/after checks cover this layout. Closing reports with Escape or Close now
 returns keyboard focus to the report button. Model replies and usage are fixtures;
 a browser adapter also follows a real native worker from Working/step into its
-completed report. Electron visual acceptance remains open. The latest
-released version is v0.33.8. No daily-app adoption is included.
+completed report. Native wide Completed/Error reports and failed-refresh recovery
+now pass. Native narrow/Stopped acceptance and nonempty control coverage remain
+open; see the [release gate audit](docs/design-bot-monitor.md#release-gate-audit--2026-11-17).
+The latest released version is v0.33.8. No daily-app adoption is included.
 
 The [agent-desktop diagnostics slice](docs/design-agent-desktop.md) is also
 unreleased: `hermes computer-use status --backend agent-desktop` finds an existing

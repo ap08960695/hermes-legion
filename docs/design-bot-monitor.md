@@ -3,6 +3,44 @@
 Status: development, not a released capability. Owner goal addenda 10/10b make
 this the current feature project. The existing v0.33.8 release remains historical.
 
+
+## Release gate audit — 2026-11-17
+
+**Not ready to release.** This audit maps the current companion kit at `2706aab` to
+existing evidence; it does not rerun unchanged suites or turn failed UI attempts
+into passes. The narrow-table source fix and its browser regression are included.
+
+| Capability | Evidence and coverage | Remaining boundary |
+|---|---|---|
+| Bot/worker activity, step and elapsed time | Native completed-worker journey shows Working, step 1/250, elapsed 17s → 32s, then worker removal and a nonempty Completed report. | Observations come from the existing roster, not an OS process census. At most the newest 20 observations per bot are eligible, with the existing 150-second liveness window. |
+| Tokens, cost and model | Existing DB/reader/rendered checks cover recorded fields, invalid/missing values and independent bot/worker amounts. Native worker tokens/model are displayed. | Model replies/timing/usage are fixtures. Amounts have partial coverage, are not summed or treated as invoices; configured and recorded models do not establish a live binding. |
+| Recorded task outcomes and issues | Actual-query/component cases cover Error and Stopped; native wide Error report shows task/time/nonempty summary and the recorded rejection. Completed report also passes natively. | Native Stopped report remains open. Recorded stalled/Unknown stay explicit historical facts, never inferred from age or an empty report list. |
+| Local search, filters and sort | Current Monitor/open/workspace source checks pass 40 cases. Native idle-profile search and an empty Recorded issues result pass in the static walkthrough. | Native controls with a nonempty worker/issue and sorting are not yet demonstrated as one complete journey. Search uses current signals and the displayed latest issue, not every historical report body. |
+| Source-qualified canonical opening | Native named-profile Open creates an empty Bot Chat whose URL matches that profile's persisted canonical-title row; default profile remains empty. Source integration checks cover the existing registry action. | This native proof does not establish reopening a pre-existing nonempty transcript. Worker Open uses its parent bot's canonical chat, not a worker-session browser. |
+| Failed refresh and recovery | Native route-read fault preserves source labels and stale notice, hides current workers, disables Open; explicit successful Refresh recovers. | The read fault is simulated. The aggregate fault is configured but not reached after the route shortcircuit; no real outage/reconnect claim. |
+| Narrow table and report access | Actual component/production CSS at 480×620 fails before the one-class fix and passes afterward: outer vertical scroll reveals the last row; horizontal pan reveals the last column. | Native narrow acceptance is still open. Round181 could not reveal the old table; round182 stopped at fixture readiness, before Monitor or worker creation. Neither is an after-fix native pass. |
+| Report keyboard behavior | Existing rendered/browser checks restore focus to the report trigger after Escape/Close; the table region remains focusable. | No spoken screen-reader audit or blanket accessibility certification. |
+| Local-only operation and adoption | Earlier P0 fan-out work has scoped local/mock evidence; recent controlled Local walkthroughs use backed-up isolated homes and zero-SSH gates. | No first ai connection or owner-app adoption is authorized here. Round182's replacement default-Electron generation falls outside its ended guardian's RAM/network measurement. |
+
+The next controlled native journey must visibly show the fixed narrow table,
+its actual worker/step, and the source-qualified Stopped report after authenticated
+interrupt. Include a nonempty local search/filter/sort check while the real child
+is held; clear controls explicitly before opening its terminal report. Bind
+observations to the original process/window and current native receipts. Preserve
+first-failure stop, Local/SSH fences and the overall resource/time limits.
+
+Late server-response completion is not proof that a canceled client's completion
+handler ran. Existing stopped-state assertions after the held server handler
+finishes retain that narrower coverage; no late-client race-safety claim is made.
+
+After those native gates pass, finish the single feature-batch release review:
+plain-language notes/screenshots, inventory and CHANGELOG consistency, then the
+version/tag handoff under the normal lead workflow. This audit adds no version,
+release, adoption, product behavior, polling or dependency. Native evidence and
+limits are detailed in [verification](verification.md); the round182 failure is
+[recorded separately](verification.md#native-narrow-readiness-timeout-and-release-gate-audit--unreleased).
+
+
 ## What the owner will see
 
 **Bots → Monitor** opens one dashboard instead of scanning individual cards.
