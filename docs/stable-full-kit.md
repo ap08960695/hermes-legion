@@ -10,6 +10,15 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
+## Monitor retains reports after refresh failure (unreleased)
+
+When a roster refresh fails, Monitor keeps the last successful snapshot and
+reports readable. A clear notice marks current work status unavailable; old
+workers/progress are hidden and chat Open is disabled. Existing Refresh restores
+normal activity only after a successful read. No cached worker is marked ended.
+Initial load failure still shows its error screen; no new request/retry policy.
+[Checks and live boundaries](verification.md#monitor-retained-refresh-failure--unreleased).
+
 ## Monitor automatic workspace polling regression (unreleased)
 
 A selected integration test connects actual BotsWorkspace, useRoster and its

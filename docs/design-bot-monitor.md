@@ -323,3 +323,39 @@ Production workspace, query, merging, source/mood derivation and reports run.
 This connects the earlier manual-refetch and prop-driven tests; it does not prove
 actual gateway polling, Electron, browser paint or native navigation. Current CUA
 browser host remains unavailable, so live acceptance still gates the batch release.
+
+
+## Retained Monitor after refresh failure
+
+A failed roster refresh must keep the last successful snapshot and stored task
+reports readable, with current activity explicitly unavailable. Reuse the query's
+cached data: the workspace keeps its existing ErrorState only when no data exists,
+otherwise passes a stale flag to Monitor. A successful empty roster is still data.
+Monitor shows a localized status notice, retained-snapshot row status, no current
+worker/step/elapsed/Working projection, and disabled chat Open. Local report
+controls and the mounted dialog's captured snapshot/focus identity remain intact.
+Working/unavailable filters use the stale classification; no cached worker is
+ended, mutated or given a report by this presentation change.
+
+Existing Refresh/interval/retry policy stays authoritative. Stale notice and
+restrictions persist while a recovery read is pending and clear only on success.
+No raw query error appears in product copy. Nine existing monitor catalogs cover
+one new notice; no new cache/store/API/dependency/poller. A separate retained
+store duplicates query state; retaining the current full error screen prevents
+reading stored reports. The optional presentation flag is the smallest complete
+approach. Standing owner autonomy delegates this choice; advisor281 supports it.
+
+Tests first cover retained report/dialog identity, current-work suppression and
+filters, no-data/empty-data distinction, unchanged cache and recovery. Actual
+workspace/useRoster query must exhaust existing retries, retain stale UI during
+a held Refresh, then restore current work on success. Only affected checks plus
+required owner gates run. Current CUA host remains unavailable; source/rendered
+checks do not replace native/browser acceptance or authorize release/adoption.
+
+The retained-failure source slice is implemented. Three new regressions fail
+before and pass after: preserved report/dialog and stale filtering/recovery,
+absent-versus-empty data, and real query retry exhaustion/held Refresh/success.
+Stored reports remain available through All/Unavailable. Existing row/filter
+lifetime still applies when a filter removes an opener; no global dialog owner
+is introduced. Thirty-one affected cases, scoped lint and renderer types/build
+pass. Native/browser acceptance remains open; no release or daily-app adoption.

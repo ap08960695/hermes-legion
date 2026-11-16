@@ -1,3 +1,42 @@
+# Monitor retained refresh failure — unreleased
+
+Workspace uses the existing cached roster on refresh error, passing optional
+stale state to Monitor. With no cached data, the existing ErrorState remains.
+A successful empty roster counts as data. Monitor displays a localized polite
+status notice and retained-snapshot status, hides unconfirmed current workers/
+step/elapsed/Working, classifies rows unavailable for local filters and disables
+chat Open. Stored canonical reports, recorded usage/model and captured timestamp
+remain readable; no worker is ended or given an invented completion/report.
+Existing query interval, retry policy, cache and source identity remain unchanged.
+The notice/restrictions persist through pending Refresh and clear only on success.
+Raw query errors never enter the notice. All nine existing catalogs cover it.
+
+TDD against original source:25existing pass/3new fail because Monitor/dialog is
+removed and stale notice absent. Rendered regressions cover preserved open report
+and trigger focus after dismissal, hidden current progress, disabled explicit
+Open, Working/Unavailable filters, unchanged input, recovery and absent/empty data.
+Actual BotsWorkspace/useRoster case waits for the existing two retries to exhaust
+a failed natural poll (four requests including initial success), then reads the
+prior Error report without inventing Completed or mutating cached child ended_at.
+A held explicit Refresh keeps stale restrictions; successful release restores
+current work/Open. It passes8.154s; unchanged interval-success case stays green.
+
+Final31cases across three affected files pass25.88s; scoped six-file ESLint exits0
+without warnings, full renderer types0 and bounded Vite build0. Build retains the
+existing advancedChunks deprecation/ineffective profile-ops dynamic-import warnings.
+Typecheck exposed the prior unchanged Open-chat test's notify mock returning
+undefined for a string SDK result; stable synthetic id corrects that test only.
+Last lint cleanup changes blank lines only, verified against the typed/tested
+bytes; tests/types/build were not repeated for whitespace.
+
+Six changed sections apply/after-hash/reverse/before-hash against pinned upstream;
+1,101targets retain unrelated sections byte-for-byte. Existing Desktop selection
+170 stays byte-identical. No new gateway API/dependency/storage/poller/version/tag.
+This is an unreleased UI source slice, not native/browser visual proof. CUA host
+still unavailable; no owner Hermes/Guest/server/gateway/model or launch retry.
+Report access uses All/Unavailable; a filter removing an opener keeps the existing
+row lifetime boundary. Live actual-query/Electron/navigation gate stays open.
+
 # Monitor automatic workspace polling — unreleased
 
 monitor-query.test.tsx renders actual BotsWorkspace once, selects Monitor through
