@@ -1,3 +1,30 @@
+# Native Mac Chat behavior persistence — v0.33.7 follow-up
+
+The existing Reasoning Blocks switch in **Settings → Chat → Behavior** saved off
+for default while scope-c was selected for new chats. Direct navigation to
+Attachments and back retained off. Native comparison found only the intended
+`display.show_reasoning` and `display.platforms.cli.show_reasoning` changes; every
+other default value and both other profiles were preserved. Settings read scope-b
+as on and default as off without another edit.
+
+All first writers and the guardian ended before fresh app/gateway processes opened
+the same home, app data and exact signed bundle. The same off/on values appeared;
+all three config hashes and modes matched the saved checkpoint. Native session,
+message, delegation and hosted-room counts stayed zero. No Send or model request.
+
+The two actual SSH-zero gates lasted 60.129 and 60.075 seconds. Across 1090 and
+733 samples, at most four Hermes processes were observed; observer-inclusive RSS
+maxima were 898,301,952 and 880,181,248 bytes. These are bounded samples, without
+continuous-peak or savings claims. All owned processes/ports and Computer Use ended
+before the original three config baselines and 313-entry trial bundle/signature
+were restored. Owner app/data, other hosts, ESTOP, pauses and timers were untouched.
+
+This is acceptance evidence for existing v0.33.7 behavior, with no source/build
+change or new runtime release. Startup paint remains unresolved; successful
+launches here do not establish reliability. Reasoning output, every Settings page,
+crash durability, daily-app adoption, cross-device and Linux/ai remain unverified.
+[Scope and limits](settings-autosave.md#native-mac-chat-behavior-persistence-v0337-follow-up).
+
 # v0.33.7 — Confirm per-Bot membership saves
 
 Unchanged native before: Create & join checks a membership and clears the name

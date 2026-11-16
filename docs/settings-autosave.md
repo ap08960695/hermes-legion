@@ -173,6 +173,29 @@ restored. No runtime change or version bump was needed. This does not establish
 zero writes on reopen, persistence before 550 ms, crash durability, disk-full or
 network-failure recovery. [Detailed evidence](verification.md#native-mac-title-bar-close-recovery--v0335-follow-up).
 
+## Native Mac Chat behavior persistence (v0.33.7 follow-up)
+
+In **Settings → Chat → Behavior**, Reasoning Blocks was switched off for default
+while scope-c was selected for new chats. Navigation went directly to Attachments
+and back; the switch remained off. Native file comparison showed only the intended
+global and local CLI reasoning flags changed. The other two profiles stayed byte
+exact, and all unrelated default settings were preserved. Selecting scope-b showed
+its unchanged on value; returning to default showed off.
+
+Every first app, gateway, helper and guardian stopped before fresh processes
+reopened the same home, app data and exact signed diagnostic bundle. Without
+another edit, Settings showed default off and scope-b on. All three config files
+matched their saved bytes and modes. No Send or inference ran; session, message,
+delegation and hosted-room stores stayed empty.
+
+Both launches passed actual 60-second Local SSH-zero gates. Original config bytes
+and modes and the trial bundle/signature were restored after all writers ended.
+No runtime change or new release was needed. This accepts the named preference's
+navigation, profile isolation and restart readback; it does not verify reasoning
+output rendering, persistence before 550 ms, crash recovery, every Chat control,
+all Settings pages, selector persistence or remote behavior. Previous startup
+paint symptoms remain unresolved. [Detailed evidence](verification.md#native-mac-chat-behavior-persistence--v0337-follow-up).
+
 ## Limits
 
 All config operations share one ordered queue because legacy aliases and registry
