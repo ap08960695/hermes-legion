@@ -68556,12 +68556,36 @@ index a46dcf76ec4b4a16d41fdc6c48d70ff19061b7a0..db0e0ccff88b8fca139ef7e9f8c97c8c
 -    monkeypatch.setattr(run, '_load_gateway_config', lambda: {'platform_toolsets': {'cli': []}})
 +    monkeypatch.setattr(run, '_load_gateway_config', lambda config_path=None: {'platform_toolsets': {'cli': []}})
      store = SessionStore(tmp_path / 'sessions', GatewayConfig())
+diff --git a/tests/gateway/test_captain_goal_blocked_native.py b/tests/gateway/test_captain_goal_blocked_native.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..783dae97d3556654792521138c9971a5eebd5cae
+--- /dev/null
++++ b/tests/gateway/test_captain_goal_blocked_native.py
+@@ -0,0 +1,6 @@
++"""Native external blocker stays paused despite delegated choices."""
++from tests.gateway.test_captain_goal_native_lifecycle import _run_native_goal_case
++
++
++def test_native_goal_blocked(tmp_path, monkeypatch):
++    _run_native_goal_case(tmp_path, monkeypatch, 'blocked')
+diff --git a/tests/gateway/test_captain_goal_budget_native.py b/tests/gateway/test_captain_goal_budget_native.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..507b9ffd51abab6d8888ac1c7819527578abe34d
+--- /dev/null
++++ b/tests/gateway/test_captain_goal_budget_native.py
+@@ -0,0 +1,6 @@
++"""Native configured turn budget pauses further goal continuation."""
++from tests.gateway.test_captain_goal_native_lifecycle import _run_native_goal_case
++
++
++def test_native_goal_budget(tmp_path, monkeypatch):
++    _run_native_goal_case(tmp_path, monkeypatch, 'budget')
 diff --git a/tests/gateway/test_captain_goal_native_lifecycle.py b/tests/gateway/test_captain_goal_native_lifecycle.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..57e612753515e544368916972ff3e8a96264a2ca
+index 0000000000000000000000000000000000000000..f5c0fa0b75cd936fe2a2895c58e309099e6b2c5f
 --- /dev/null
 +++ b/tests/gateway/test_captain_goal_native_lifecycle.py
-@@ -0,0 +1,260 @@
+@@ -0,0 +1,311 @@
 +"""Native goal orchestration with scripted localhost replies, not model reasoning."""
 +import asyncio
 +from http.server import ThreadingHTTPServer
@@ -68570,6 +68594,8 @@ index 0000000000000000000000000000000000000000..57e612753515e544368916972ff3e8a9
 +from pathlib import Path
 +import sys
 +import threading
++import time
++
 +
 +from websockets.asyncio.client import connect
 +
@@ -68635,7 +68661,12 @@ index 0000000000000000000000000000000000000000..57e612753515e544368916972ff3e8a9
 +                    assert any(MARKER in row['content'] for row in _rows(
 +                        self.server.home, "SELECT content FROM messages WHERE session_id=? AND role='tool'",
 +                        (children[0]['id'],)))
-+                    kind, verdict = 'judge-done', {'verdict': 'done', 'reason': 'Native child and parent file verification recorded'}
++                    outcome = getattr(self.server, 'goal_outcome', 'done')
++                    result = {'blocked': 'blocked', 'budget': 'continue'}.get(outcome, 'done')
++                    reason = {'blocked': 'Missing required publication credentials; reserved external gate.',
++                              'budget': 'Another authorized verification step remains.'}.get(
++                                  outcome, 'Native child and parent file verification recorded')
++                    kind, verdict = 'judge-' + result, {'verdict': result, 'reason': reason}
 +                else:
 +                    kind, verdict = 'judge-wait', {'verdict': 'wait', 'wait_for_seconds': 600,
 +                                                  'reason': 'Native delegated file read is still running'}
@@ -68702,7 +68733,8 @@ index 0000000000000000000000000000000000000000..57e612753515e544368916972ff3e8a9
 +            self.send_error(500)
 +
 +
-+async def exercise_goal(ws, home, peer, observe):
++async def exercise_goal(ws, home, peer, observe, outcome='done'):
++    assert outcome in {'done', 'pause', 'blocked', 'budget'}
 +    async def result(method, **params):
 +        value = await rpc(ws, method, **params)
 +        assert 'result' in value, value
@@ -68717,7 +68749,8 @@ index 0000000000000000000000000000000000000000..57e612753515e544368916972ff3e8a9
 +    parent = (await result('session.create', request_id='captain-goal', source='gui',
 +                           cwd=str(peer.path.parent), title='Captain goal workflow'))['session_id']
 +    peer.parent = parent
-+    command = ('goal Review local evidence\noutcome: Read and verify the local file\n'
++    headline = 'Review local evidence' + ('' if outcome == 'done' else ' (' + outcome + ')')
++    command = ('goal ' + headline + '\noutcome: Read and verify the local file\n'
 +               'verification: Delegate read, then inspect its evidence against the file\n'
 +               'constraints: Read-only local fixture; no publication or network services')
 +    directive = await result('slash.exec', session_id=parent, command=command)
@@ -68732,27 +68765,61 @@ index 0000000000000000000000000000000000000000..57e612753515e544368916972ff3e8a9
 +    assert active['turns_used'] == 1 and active['max_turns'] == created['max_turns']
 +    children = _rows(home, 'SELECT id,ended_at FROM sessions WHERE parent_session_id=?', (parent,))
 +    assert len(children) == 1 and children[0]['ended_at'] is None
++    await async_wait_until(lambda: (rows := _rows(home, 'SELECT status FROM session_admissions WHERE target_session_id=?', (parent,))) and all(row['status'] == 'terminal' for row in rows),
++                           timeout=20, what='kickoff admission settles before owner controls')
 +    await observe('active', {'parent': parent, 'child': children[0]['id'], 'goal': active, 'calls': list(peer.calls)})
++    paused_target = goal_state(home, parent) if outcome == 'pause' else None
++    if paused_target is not None:
++        assert paused_target['status'] == 'paused' and paused_target['turns_used'] == 1
++        assert not paused_target['waiting_until']
 +    peer.release.set()
-+    terminal = await async_wait_until(lambda: (state := goal_state(home, parent)) and state['status'] == 'done' and state,
-+                                     timeout=45, what='native judge terminal goal')
-+    assert terminal['last_verdict'] == 'done' and terminal['turns_used'] == 2
-+    assert terminal['max_turns'] == created['max_turns'] and not terminal['waiting_until']
-+    assert goal_state(home, side) == paused
++    expected_status = 'done' if outcome == 'done' else 'paused'
++    await async_wait_until(lambda: (state := goal_state(home, parent)) and state['status'] == expected_status,
++                           timeout=45, what='native goal expected terminal or owner-paused state')
 +    await async_wait_until(lambda: (rows := _rows(home, 'SELECT delivery_state FROM async_delegations WHERE parent_session_id=?',
 +                                                 (parent,))) and rows[0]['delivery_state'] == 'delivered',
 +                           timeout=15, what='native result delivery accounted')
-+    assert any(row['content'] == FINAL for row in _rows(home, "SELECT content FROM messages WHERE session_id=? AND role='assistant'", (parent,)))
-+    assert set(peer.calls) == {'plan', 'delegate', 'parent-wait', 'child-read', 'child-result', 'judge-wait',
-+                               'parent-verify', 'finish-plan', 'parent-final', 'judge-done'}
++    await async_wait_until(lambda: any(row['content'] == FINAL for row in _rows(
++        home, "SELECT content FROM messages WHERE session_id=? AND role='assistant'", (parent,))),
++        timeout=20, what='parent verifies delivered evidence')
++    def admissions():
++        return _rows(home, 'SELECT request_id,status,payload_json FROM session_admissions WHERE target_session_id=? ORDER BY seq', (parent,))
++    await async_wait_until(lambda: all(row['status'] == 'terminal' for row in admissions()),
++                           timeout=20, what='native parent admissions settle before quiet observation')
++    terminal = goal_state(home, parent)
++    verdict = {'done': 'done', 'pause': 'wait', 'blocked': 'blocked', 'budget': 'continue'}[outcome]
++    assert terminal['last_verdict'] == verdict and terminal['turns_used'] == (1 if outcome == 'pause' else 2)
++    assert terminal['max_turns'] == created['max_turns'] and not terminal['waiting_until']
++    if outcome == 'pause':
++        assert terminal == paused_target
++    elif outcome == 'blocked':
++        assert 'credentials' in terminal['paused_reason'] and terminal['delegated_auto_continues'] == 0
++    elif outcome == 'budget':
++        assert terminal['turns_used'] == terminal['max_turns'] == 2
++        assert 'budget exhausted' in terminal['paused_reason']
++    snapshot, calls, deadline = admissions(), list(peer.calls), time.monotonic() + 3
++    def quiet():
++        assert goal_state(home, parent) == terminal and goal_state(home, side) == paused
++        assert admissions() == snapshot and peer.calls == calls
++        return time.monotonic() >= deadline
++    await async_wait_until(quiet, timeout=5, what='settled native stop condition remains stable')
++    assert len(snapshot) == 2 and snapshot[0]['request_id'] == 'goal-kickoff'
++    assert json.loads(snapshot[1]['request_id'])[0] == 'async_delegation'
++    expected_calls = {'plan', 'delegate', 'parent-wait', 'child-read', 'child-result', 'judge-wait',
++                      'parent-verify', 'finish-plan', 'parent-final'}
++    if outcome != 'pause':
++        expected_calls.add('judge-' + verdict)
++    assert set(peer.calls) == expected_calls
 +    assert not peer.errors, peer.errors
 +    receipt = {'parent': parent, 'child': children[0]['id'], 'goal': terminal, 'calls': list(peer.calls),
-+               'independent_pause_preserved': True, 'scripted_loopback_not_provider_reasoning': True}
++               'independent_pause_preserved': True, 'scripted_loopback_not_provider_reasoning': True,
++               'outcome': outcome, 'settled_observation_seconds': 3, 'goal_continuations': 0,
++               'native_admissions': snapshot, 'pause_snapshot': paused_target}
 +    await observe('terminal', receipt)
 +    return receipt
 +
 +
-+def test_native_goal_finishes_only_after_delegated_evidence(tmp_path, monkeypatch):
++def _run_native_goal_case(tmp_path, monkeypatch, outcome):
 +    home, user = tmp_path / 'state', tmp_path / 'user'
 +    home.mkdir()
 +    user.mkdir()
@@ -68769,13 +68836,15 @@ index 0000000000000000000000000000000000000000..57e612753515e544368916972ff3e8a9
 +    peer.daemon_threads = True
 +    peer.path, peer.home, peer.calls, peer.errors, peer.verified = path, home, [], [], False
 +    peer.requests = 0
++    peer.goal_outcome = outcome
 +    peer.lock, peer.read_done, peer.release = threading.Lock(), threading.Event(), threading.Event()
 +    thread = threading.Thread(target=peer.serve_forever, kwargs={'poll_interval': .05}, daemon=True)
 +    thread.start()
 +    url = f'http://127.0.0.1:{peer.server_port}/v1'
 +    config = {'agent': {'environment_probe': False}, 'gateway': {'multiplex_profiles': False},
 +              'model': {'provider': 'custom', 'default': 'loopback-fixture', 'base_url': url},
-+              'goals': {'max_turns': 6},
++              'goals': {'max_turns': 2 if outcome == 'budget' else 6,
++                        'delegated_decisions': outcome == 'blocked'},
 +              'auxiliary': {'title_generation': {'enabled': False}, 'goal_judge': {
 +                  'provider': 'custom', 'model': 'goal-judge-fixture', 'base_url': url, 'api_key': 'loopback-only'}},
 +              'platform_toolsets': {key: ['delegation', 'file', 'todo'] for key in ['cli', 'local', 'desktop']},
@@ -68787,9 +68856,6 @@ index 0000000000000000000000000000000000000000..57e612753515e544368916972ff3e8a9
 +    monkeypatch.setenv('OPENAI_API_KEY', 'loopback-only')
 +    monkeypatch.setenv('OPENAI_BASE_URL', url)
 +    observations = []
-+
-+    async def observe(stage, info):
-+        observations.append((stage, info))
 +
 +    async def run():
 +        from gateway import run as gateway
@@ -68806,7 +68872,12 @@ index 0000000000000000000000000000000000000000..57e612753515e544368916972ff3e8a9
 +                'profile_id': str(home), 'instance_id': desc['instance_id'], 'purpose': 'interactive', 'scope': 'host'})
 +            async with connect(runner.session_api.api_origin.replace('http:', 'ws:') + '/api/ws', subprotocols=[
 +                    'hermes-gateway-v1', 'hermes-gateway-ticket.' + grant['ticket']]) as ws:
-+                await exercise_goal(ws, home, peer, observe)
++                async def observe(stage, info):
++                    observations.append((stage, info))
++                    if outcome == 'pause' and stage == 'active':
++                        result = await rpc(ws, 'session.control', session_id=info['parent'], action='goal.pause', args={})
++                        assert 'result' in result, result
++                await exercise_goal(ws, home, peer, observe, outcome)
 +        finally:
 +            peer.release.set()
 +            if runner is not None:
@@ -68822,6 +68893,22 @@ index 0000000000000000000000000000000000000000..57e612753515e544368916972ff3e8a9
 +        peer.server_close()
 +        thread.join(5)
 +        assert not thread.is_alive()
++
++
++def test_native_goal_finishes_only_after_delegated_evidence(tmp_path, monkeypatch):
++    _run_native_goal_case(tmp_path, monkeypatch, 'done')
+diff --git a/tests/gateway/test_captain_goal_pause_native.py b/tests/gateway/test_captain_goal_pause_native.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..8a834b7d0f5b9765a4dfcb71c7f2f428319b9143
+--- /dev/null
++++ b/tests/gateway/test_captain_goal_pause_native.py
+@@ -0,0 +1,6 @@
++"""Native goal Pause survives actual delegated completion."""
++from tests.gateway.test_captain_goal_native_lifecycle import _run_native_goal_case
++
++
++def test_native_goal_pause(tmp_path, monkeypatch):
++    _run_native_goal_case(tmp_path, monkeypatch, 'pause')
 diff --git a/tests/gateway/test_config_policy_recovery.py b/tests/gateway/test_config_policy_recovery.py
 index a338fefee85e09bcdd9b66982540611d62b26b18..4389454e38092ec2ab16fbeab88830e29c3eae47 100644
 --- a/tests/gateway/test_config_policy_recovery.py

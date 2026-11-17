@@ -1,4 +1,60 @@
+# Captain Pause and goal limits — native Local acceptance, unreleased
+
+Four native regression files pass through the canonical single-worker runner:
+Done control, owner Pause, external blocker and turn-budget exhaustion. Each
+uses the existing real gateway/session authority, goal manager, SQLite, tools
+and native judging path with scripted localhost model/judge replies. The fixture
+never writes tested-goal metadata or patches the judge, manager or provider
+cache. One existing helper file plus three thin case files preserve the project's
+required per-file process isolation. Four changed patch sections pass apply/hash/
+reverse checks; 1,130 targets, unrelated sections unchanged.
+
+Pause is applied while the child reply is held and the kickoff admission has
+settled. After the actual child result, parent verification and ordinary async
+delivery settle, the paused goal remains identical at one turn. Only the original
+kickoff and async-result admissions exist; no new judge/goal continuation appears
+during a further three-second observation. A scripted external blocker remains
+paused with zero delegated auto-continues despite delegated choices being enabled.
+A configured two-turn cap reaches two actual judged turns and pauses on Continue,
+with no third admission. Independent paused work and fixture config stay intact.
+This proves native verdict handling and real turn-budget enforcement, not an
+external credential policy or provider decisions. Each case has a shared cap of
+16 parent/worker/judge request attempts.
+
+The four isolated files pass in 78.0 seconds; sampled source RSS with observer is
+457,621,504 B. A fresh production Local desktop window reuses the unchanged,
+hash-bound renderer/preload. Original 480×620 AX/pixel captures show Waiting with
+a running worker, actual **Goal actions → Pause goal**, then completed plan/worker
+evidence while Goal paused remains at 1/20. Nine loopback exchanges include only
+one pre-Pause judge. Native goal metadata equals its pre-release paused snapshot.
+Both profile configs remain unchanged during the case. Private captures:
+`../evidence/captain-goal-limits-20261117`.
+
+Native trial: 166.59 seconds, 60 seconds Local, peak four product processes and
+1,182,466,048 B sampled RSS including guardian, zero owned survivors. App/helper
+exit precedes gateway/model teardown; seven config/env files and one geometry
+absence restored; Desktop SSH zero. External controllers are excluded, so these
+are fixture bounds, not whole-task RAM or savings evidence. Terminal capture
+retains left-edge clipping; no general layout acceptance is claimed.
+
+Earlier parametrized attempts remain failed: a paired run's main client retained
+the prior temporary endpoint while its auxiliary judge used the new endpoint.
+Pause alone passed, and failure occurred before Pause action. Changing process
+HOME between gateway restarts does not establish a runtime product bug. Follow
+canonical per-file isolation instead of resetting caches or changing product
+routing. An edit-script error also started a stale probe; it was stopped and
+its recorded generations were confirmed closed after the initial survivor
+receipt. No retry relabels those attempts as accepted.
+
+No runtime/default change, owner state/ESTOP/pause/timer/settings/permission
+change, other-host/ai connection or owner-app adoption. Goal Pause allows already
+running work and its ordinary result follow-up to finish and use model calls.
+Full worker Stop/cancellation and provider reasoning remain open. No version,
+tag or release; the Captain capability is still in development.
+
 # Captain native goal workflow — scripted Local acceptance, unreleased
+
+This section records round 199; the newer boundary acceptance is described above.
 
 A new native regression creates a goal through `slash.exec`, submits its real
 kickoff directive, writes the task plan through `todo_list`, delegates a native

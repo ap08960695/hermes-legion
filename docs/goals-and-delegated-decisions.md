@@ -105,7 +105,7 @@ Existing goal state remains authoritative. This adapter adds no background polls
 or work engine. Native Local before/after acceptance now covers received plan,
 running worker and failed result after parent follow-up, with the goal still
 paused. Child navigation and owner isolation have focused offline coverage.
-Provider-backed autonomous execution and Stop/block/budget acceptance remain open;
+Provider-backed autonomous execution and full worker Stop acceptance remain open;
 this step does not authorize a capability release or owner-app adoption.
 
 The native workflow also passes a bounded scripted Local case: `/goal` creates
@@ -115,6 +115,20 @@ Catch up observes waiting at turn 1/20 through completed tasks, worker evidence
 and Goal done after two turns. Independent paused work remains paused. This
 is orchestration evidence with scripted model/judge replies, not proof of a
 provider-backed Captain making its own decisions.
+
+### Pause goal continuation
+
+In the intended chat, open **Goal actions → Pause goal**. Native Local acceptance
+confirms that worker completion does not unpause the goal, spend another goal
+turn or schedule a goal continuation. Existing async work and its normal result
+follow-up can still finish and use model calls. Use explicit worker/session
+controls to request cancellation; Pause does not cancel those tasks.
+
+Separate native checks preserve a scripted external-blocker verdict even when
+routine decisions are delegated, and pause at an actually configured two-turn
+limit without admitting another goal turn. These establish native state handling
+and turn-budget enforcement; they do not prove real provider reasoning or
+credential policy. Full worker Stop acceptance remains open.
 
 ## Supply the skill and decision policy
 

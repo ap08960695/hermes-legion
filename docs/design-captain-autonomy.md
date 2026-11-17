@@ -77,7 +77,17 @@ then reaches Done after two turns. The goal under test is never written directly
 All parent/worker/judge requests share a fixture cap; judge Done requires recorded
 child evidence and parent verification. An independent paused goal and both
 profile configs remain unchanged. These scripted replies prove orchestration;
-provider reasoning and owner Stop/block/budget acceptance remain open.
+provider reasoning and full worker Stop/cancellation acceptance remain open.
+
+Native stop-condition regressions now cover owner goal Pause, an external-blocker
+verdict with delegated choices enabled, and actual exhaustion of a configured
+two-turn budget. Each uses the canonical per-file process isolation. Pause is
+confirmed before the held worker returns; completed result handling preserves
+the paused goal and its turn count, with no new judge or goal-continuation
+admission after settlement and a three-second observation. Desktop Goal actions
+also passes this Pause sequence on screen. Existing async work and its result
+follow-up may finish and use model calls; Pause is not worker cancellation.
+Blocker tests establish scripted verdict handling, not real credential policy.
 
 Do not use owner state or enable an ESTOP/pause/timer. First ai connection and
 owner-app adoption remain lead/owner-only. Agent-desktop input's separate native
