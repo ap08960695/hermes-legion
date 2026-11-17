@@ -299,3 +299,9 @@ animation, mascot restoration and a fresh overlay open working. Five packs
 still add 120.8 MiB in summed macOS physical footprint over no overlay, of
 which the overlay renderer accounts for 96.2 MiB. The remaining release
 budget needs work. [Current verification](verification.md#pet-overlay-boots-without-the-desktop-shell-unreleased).
+
+The [five-mode Mac comparison](verification.md#where-the-pet-overlay-uses-memory-unreleased)
+attributes 20.6 MiB to the blank overlay, 33.8 MiB to loading the production
+overlay above blank and 58.1 MiB to the five-pack workload above the atlas-free
+overlay. The largest measured step includes both sprite and presentation costs.
+Use the fixed-geometry fixture to isolate decoded atlas and canvas residency.

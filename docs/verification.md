@@ -1,3 +1,36 @@
+# Where the pet overlay uses memory (unreleased)
+
+Five fresh, local-only Electron runs used the same Desktop renderer build and
+overlay preload. They spent about 20 seconds in a steady phase before capture.
+The four overlay modes used a fixed 632 × 325 logical-pixel panel at 2× display
+scale. The blank mode mounted only a transparent document. The atlas-free mode
+loaded the production overlay with an empty atlas. The last two modes drew the
+mascot and five distinct character packs through the existing native IPC.
+
+| Mode | Median summed RSS | Median summed macOS physical footprint | CPU, one core = 100% | Overlay renderer footprint |
+| --- | ---: | ---: | ---: | ---: |
+| Main window without overlay | 261.4 MiB | 69.3 MiB | 0.85% | — |
+| Blank overlay | 349.9 MiB | 89.9 MiB | 1.69% | 17.1 MiB |
+| Production overlay without an atlas | 424.7 MiB | 123.7 MiB | 2.62% | 48.0 MiB |
+| Existing mascot | 440.1 MiB | 132.5 MiB | 3.51% | 56.5 MiB |
+| Five distinct character packs | 500.2 MiB | 181.9 MiB | 4.50% | 96.7 MiB |
+
+The blank window added 20.6 MiB. Loading the production overlay added 33.8 MiB
+above blank. The mascot added another 8.8 MiB, and replacing it with five packs
+added 49.4 MiB. Five packs used 58.1 MiB above the atlas-free production mode.
+That difference includes decoded art, canvas, labels, animation and preview
+traffic. Measure those costs separately before choosing an atlas or canvas
+change. The full five-pack overhead was 112.6 MiB of physical footprint and
+3.66 CPU percentage points, above the release budget.
+
+Both empty modes captured fully transparent pixels. The mascot matched its
+own atlas, and all five distinct packs moved across eight captures. Each mode
+had a zero Desktop SSH check after 60 seconds, used at most three product
+processes and left none running. Graphics accounting is included in the main
+process for this fixture. These are single-run, process-level measurements from
+a synthetic Local fixture. The full Edit Profile to Monitor walkthrough and
+real bot events remain open.
+
 # Pet overlay boots without the Desktop shell (unreleased)
 
 The renderer selects `?win=overlay` before loading the Desktop shell,
