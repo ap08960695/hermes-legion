@@ -33176,10 +33176,10 @@ index abe8afb7e670b207a192ac15fb797fb8dfed168e..2b2824a97bb7cfd9d21057f4efdfd811
              <SelectContent>
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..8890a7f21e573fe69be7c25f3e3aa0cd7e4f5351
+index 0000000000000000000000000000000000000000..61d8ba1785c0e6ac63d8e0194c28c029b98ff90e
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx
-@@ -0,0 +1,322 @@
+@@ -0,0 +1,400 @@
 +import { atom, host, type PluginProfileRoute } from '@hermes/plugin-sdk'
 +import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -33502,13 +33502,91 @@ index 0000000000000000000000000000000000000000..8890a7f21e573fe69be7c25f3e3aa0cd
 +  })
 +  expect(vi.mocked(window.hermesDesktop!.petOverlay!.pushState).mock.calls.some(([payload]) => payload.characterFile)).toBe(false)
 +})
++
++function completedReport(summary: string, completedAt = 1999) {
++  return { delegation_id: 'owned-delegation', task_index: 2, status: 'completed' as const,
++    completed_at: completedAt, goal: 'Saved worker task', summary, error: '' }
++}
++
++it('opens the exact saved worker report from a completed character without another RPC', async () => {
++  const routed = vi.spyOn(host, 'requestProfile')
++  const navigate = vi.spyOn(host, 'openSession')
++  const saved = completedReport('Owned completed result')
++  const route = { connectionId: 'local', mode: 'local' as const, profile: 'writer', targetProfile: 'writer' }
++
++  const bot = row('writer', { route, installId: 'fixture', canonical_session: { id: 'root', resolved_id: 'tip',
++    delegation_reports: [saved, { ...saved, task_index: 1, summary: 'Different report' }] } })
++
++  bot.working = false
++  const view = render(<BotMonitor now={2_000_000} onOpen={open} rows={[bot]} />)
++  fireEvent.click(screen.getByRole('button', { name: 'Show bot characters' }))
++
++  const actor = $petCharacterPreview.get()?.characters[0]
++  expect(actor).toMatchObject({ state: 'wave', name: 'writer · Worker · Completed' })
++  const id = actor!.outputId!
++  await act(async () => overlayControl({ type: 'character-output', id, request: 1 }))
++  const latestOutput = () => vi.mocked(window.hermesDesktop!.petOverlay!.pushState).mock.lastCall?.[0]?.characterOutput
++  expect(latestOutput()).toMatchObject({ text: 'Owned completed result', canOpen: true })
++  expect(latestOutput()).not.toHaveProperty('canLink')
++
++  const changed = { ...bot, bot: { ...bot.bot, canonical_session: { ...bot.bot.canonical_session,
++    delegation_reports: [{ ...saved, summary: 'Updated owned result' }] } } }
++
++  view.rerender(<BotMonitor now={2_000_001} onOpen={open} rows={[changed]} />)
++  await act(async () => overlayControl({ type: 'character-output-open', id, request: 1 }))
++  expect(screen.queryByRole('dialog')).toBeNull()
++
++  const next = $petCharacterPreview.get()!.characters[0].outputId!
++  expect(next).not.toBe(id)
++  await act(async () => overlayControl({ type: 'character-output', id: next, request: 2 }))
++  await act(async () => overlayControl({ type: 'character-output-open', id: next, request: 2 }))
++  const report = screen.getByRole('dialog', { name: 'Recent task reports · writer' })
++  expect(report.textContent).toContain('Updated owned result')
++  expect(report.textContent).not.toContain('Different report')
++  expect(routed).not.toHaveBeenCalled()
++  expect(navigate).not.toHaveBeenCalled()
++  expect(request).not.toHaveBeenCalled()
++})
++
++it('uses spare character slots and rejects expired, future or ambiguous worker reports', async () => {
++  const route = { connectionId: 'local', mode: 'local' as const, profile: 'archive', targetProfile: 'archive' }
++  const report = completedReport('Useful saved result', 1940.001)
++  const archive = row('archive', { route, canonical_session: { id: 'root', delegation_reports: [report] } })
++  archive.working = false
++  const live = Array.from({ length: 5 }, (_, i) => row('live-' + i))
++  const view = render(<BotMonitor now={2_000_000} onOpen={open} rows={[archive, ...live]} />)
++  fireEvent.click(screen.getByRole('button', { name: 'Show bot characters' }))
++  const states = () => $petCharacterPreview.get()?.characters.map(actor => actor.state)
++  expect(states()).toEqual(['run', 'run', 'run', 'run', 'run'])
++
++  const redraw = (reports: (typeof report)[], now = 2_000_000) => view.rerender(
++    <BotMonitor now={now} onOpen={open} rows={[{ ...archive, bot: { ...archive.bot,
++      canonical_session: { id: 'root', delegation_reports: reports } } }, ...live.slice(0, 4)]} />
++  )
++
++  redraw([report])
++  expect(states()).toEqual(['run', 'run', 'run', 'run', 'wave'])
++
++  const id = $petCharacterPreview.get()!.characters[4].outputId!
++  await act(async () => overlayControl({ type: 'character-output', id, request: 1 }))
++  vi.setSystemTime(2_000_001)
++  await act(async () => overlayControl({ type: 'character-output-open', id, request: 1 }))
++  expect(screen.queryByRole('dialog')).toBeNull()
++
++  redraw([report], 2_000_001)
++  expect(states()).toEqual(['run', 'run', 'run', 'run'])
++  redraw([{ ...report, completed_at: 2001 }])
++  expect(states()).toEqual(['run', 'run', 'run', 'run'])
++  redraw([report, { ...report, summary: 'Ambiguous duplicate' }])
++  expect(states()).toEqual(['run', 'run', 'run', 'run'])
++})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..58112826093b824fed03ae23e6eea48c5fb1a6b4
+index 0000000000000000000000000000000000000000..3f3dea316fe121d247d02f99aa6db26a9789df81
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx
-@@ -0,0 +1,153 @@
-+import { atom, Button, host, type PetCharacterPublisher, useValue } from '@hermes/plugin-sdk'
+@@ -0,0 +1,206 @@
++import { atom, Button, Dialog, host, type PetCharacterPublisher, useValue } from '@hermes/plugin-sdk'
 +import { useEffect, useMemo, useRef, useState } from 'react'
 +
 +import { notifyBotOpenFailure, openBotCanonicalChat } from './canonical-chat'
@@ -33517,9 +33595,11 @@ index 0000000000000000000000000000000000000000..58112826093b824fed03ae23e6eea48c
 +import { useBots } from './i18n'
 +import { stripPreviewMarkdown } from './labels'
 +import type { BotMonitorProps } from './monitor'
++import { BotMonitorReportContent, type ReportSnapshot } from './monitor-reports'
 +import { botRosterMeta, requestForBot, resolveBotConnectionRoute } from './routing'
 +import { activeWorkerSessions, workerProgress } from './row-helpers'
 +import { bumpBotOpenGeneration, getBotOpenGeneration, getPluginCtx } from './shared'
++import type { BotDelegationReport } from './types'
 +
 +const unavailable = atom(false)
 +const noClarification = atom(null)
@@ -33530,6 +33610,22 @@ index 0000000000000000000000000000000000000000..58112826093b824fed03ae23e6eea48c
 +
 +type OutputReply = Awaited<ReturnType<NonNullable<Actor['character']['output']>['read']>>
 +
++function completionIsFresh(at: number | null, now: number) {
++  return typeof at === 'number' && at > 0 && now - at * 1000 >= 0 && now - at * 1000 < 60_000
++}
++
++function savedCompletion(saved: BotDelegationReport[] | null | undefined, now: number) {
++  if (!Array.isArray(saved)) {return undefined}
++  const reports = saved.slice(0, 20)
++
++  return reports.find(report => report?.status === 'completed' && completionIsFresh(report.completed_at, now) &&
++    typeof report.delegation_id === 'string' && report.delegation_id.length > 0 && report.delegation_id.length <= 512 &&
++    report.task_index !== null && Number.isSafeInteger(report.task_index) && report.task_index >= 0 &&
++    typeof report.summary === 'string' && Boolean(report.summary.trim()) &&
++    typeof report.goal === 'string' && typeof report.error === 'string' &&
++    reports.filter(other => other?.delegation_id === report.delegation_id && other.task_index === report.task_index).length === 1)
++}
++
 +// shortcut: Monitor-scoped snapshots only; use a shared activity publisher for persistent tracking.
 +export function MonitorCharacters({ rows, now, stale }: Pick<BotMonitorProps, 'rows' | 'now' | 'stale'>) {
 +  const b = useBots(), pet = getPluginCtx()?.pet
@@ -33538,6 +33634,7 @@ index 0000000000000000000000000000000000000000..58112826093b824fed03ae23e6eea48c
 +  const preview = useRef<PetCharacterPublisher | null>(null)
 +  const loader = useRef<ReturnType<typeof createCharacterSpriteLoader> | null>(null)
 +  const [active, setActive] = useState(false), [spriteVersion, setSpriteVersion] = useState(0)
++  const [reportSnapshot, setReportSnapshot] = useState<ReportSnapshot | null>(null)
 +
 +  // eslint-disable-next-line no-restricted-syntax -- owns a non-atom loader lifecycle; no reactive value is mirrored
 +  useEffect(() => {
@@ -33547,7 +33644,7 @@ index 0000000000000000000000000000000000000000..58112826093b824fed03ae23e6eea48c
 +  }, [])
 +
 +  const actors = useMemo(() => {
-+    const current: Actor[] = []
++    const current: Actor[] = [], completed: Actor[] = []
 +
 +    if (!active || !visible || stale) {return current}
 +
@@ -33632,9 +33729,38 @@ index 0000000000000000000000000000000000000000..58112826093b824fed03ae23e6eea48c
 +      }
 +
 +      if (current.length >= 5) {break}
++
++      if (completed.length >= 5) {continue}
++
++      const session = row.bot.canonical_session
++      const saved = savedCompletion(session?.delegation_reports, now)
++
++      if (!saved || !session?.id) {continue}
++      const { route } = resolveBotConnectionRoute({ ...row.bot, sourceScoped: true })
++
++      if (!route) {continue}
++      const report = { ...saved }
++
++      const output = {
++        key: JSON.stringify([route, row.bot.installId, session.id, session.resolved_id || session.id, report]),
++        read: async () => {
++          if (!completionIsFresh(report.completed_at, Date.now())) {throw new Error('Saved report expired')}
++
++          return report.summary
++        },
++        open: async (stillCurrent: () => boolean) => {
++          if (stillCurrent() && completionIsFresh(report.completed_at, Date.now())) {
++            setReportSnapshot({ at: now, name: row.name, profile: row.bot.name, reports: [report], retained: false, source })
++          }
++        }
++      }
++
++      completed.push({ target, character: { id: `${key}:saved-worker-report`,
++        name: `${row.name} · ${b.monitor.worker} · ${b.monitor.reports.statuses.completed}`, source,
++        output, detail: stripPreviewMarkdown(report.goal) || b.monitor.reports.summary, state: 'wave' } })
 +    }
 +
-+    return current
++    return [...current, ...completed.slice(0, 5 - current.length)]
 +  }, [active, visible, stale, rows, now, metadata, b, clarification])
 +
 +  useEffect(() => {loader.current?.update(actors.flatMap(actor => actor.target ? [actor.target] : []))}, [actors])
@@ -33647,19 +33773,24 @@ index 0000000000000000000000000000000000000000..58112826093b824fed03ae23e6eea48c
 +    }), now)
 +  }, [actors, now, spriteVersion])
 +
-+  return <Button aria-pressed={active} disabled={!pet?.previewCharacters || (!visible && !active)}
-+    onClick={event => {
-+      if (preview.current) {
-+        preview.current.dispose()
-+        preview.current = null
-+        setActive(false)
-+      } else {
-+        preview.current = pet?.previewCharacters?.(event.currentTarget.getBoundingClientRect()) || null
-+        setActive(Boolean(preview.current))
-+      }
-+    }} size="sm" title={b.monitor.charactersHint} variant={active ? 'secondary' : 'ghost'}>
-+    {active ? b.monitor.stopCharacters : b.monitor.showCharacters}
-+  </Button>
++  return <>
++    <Button aria-pressed={active} disabled={!pet?.previewCharacters || (!visible && !active)}
++      onClick={event => {
++        if (preview.current) {
++          preview.current.dispose()
++          preview.current = null
++          setActive(false)
++        } else {
++          preview.current = pet?.previewCharacters?.(event.currentTarget.getBoundingClientRect()) || null
++          setActive(Boolean(preview.current))
++        }
++      }} size="sm" title={b.monitor.charactersHint} variant={active ? 'secondary' : 'ghost'}>
++      {active ? b.monitor.stopCharacters : b.monitor.showCharacters}
++    </Button>
++    <Dialog onOpenChange={open => !open && setReportSnapshot(null)} open={reportSnapshot !== null}>
++      {reportSnapshot && <BotMonitorReportContent snapshot={reportSnapshot} />}
++    </Dialog>
++  </>
 +}
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-desktop-bridge.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-desktop-bridge.test.tsx
 new file mode 100644
@@ -34809,17 +34940,17 @@ index 0000000000000000000000000000000000000000..5fc6c8803f2d42007a67db6102bf1a12
 +})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-reports.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-reports.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..3cafed7b8262903a02f2c88c1f9d3f14ceb0990a
+index 0000000000000000000000000000000000000000..cd61ad3b6aab9e720a12d9a63aee837fe7bdc1d6
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-reports.tsx
-@@ -0,0 +1,118 @@
+@@ -0,0 +1,128 @@
 +import { Button, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, EmptyState, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@hermes/plugin-sdk'
 +import { useState } from 'react'
 +
 +import { type BotsText, useBots } from './i18n'
 +import type { BotDelegationReport, RosterRow } from './types'
 +
-+interface ReportSnapshot {
++export interface ReportSnapshot {
 +  name: string
 +  profile: string
 +  source: string
@@ -34878,6 +35009,38 @@ index 0000000000000000000000000000000000000000..3cafed7b8262903a02f2c88c1f9d3f14
 +  )
 +}
 +
++export function BotMonitorReportContent({ snapshot, filter }: {
++  snapshot: ReportSnapshot
++  filter?: { value: string; onChange: (value: string) => void }
++}) {
++  const b = useBots(), m = b.monitor, r = m.reports
++
++  return <DialogContent className="max-w-2xl">
++    <DialogHeader>
++      <DialogTitle>{r.title} · {snapshot.name}</DialogTitle>
++      <DialogDescription>{filter ? r.scope : r.snapshot}</DialogDescription>
++    </DialogHeader>
++    <div className="space-y-1 text-xs text-muted-foreground">
++      <p>{snapshot.source}</p>
++      <p>{snapshot.profile}</p>
++      {snapshot.retained && <p>{m.retained}</p>}
++      {filter && <p>{r.snapshot}</p>}
++      <p>{reportTime(snapshot.at / 1000, m.missing)}</p>
++    </div>
++    {filter && <Select onValueChange={filter.onChange} value={filter.value}>
++      <SelectTrigger aria-label={r.filter}><SelectValue /></SelectTrigger>
++      <SelectContent>
++        <SelectItem value="all">{r.all}</SelectItem>
++        {(['completed', 'error', 'stalled', 'interrupted', 'unknown'] as const).map(id => (
++          <SelectItem key={id} value={id}>{r.statuses[id]}</SelectItem>
++        ))}
++      </SelectContent>
++    </Select>}
++    <ReportList b={b} reports={filter && filter.value !== 'all'
++      ? snapshot.reports.filter(report => report.status === filter.value) : snapshot.reports} />
++  </DialogContent>
++}
++
 +/** Stored reports never activate a source, navigate a chat or change current-work status. */
 +export function BotMonitorReports({ bot, name, now }: BotMonitorReportsProps) {
 +  const b = useBots(), m = b.monitor, r = m.reports
@@ -34906,29 +35069,7 @@ index 0000000000000000000000000000000000000000..3cafed7b8262903a02f2c88c1f9d3f14
 +        }} size="sm" variant="ghost">{r.recent} ({reports.length})</Button>
 +      </DialogTrigger>
 +    </div> : r.unavailable}
-+    {snapshot && <DialogContent className="max-w-2xl">
-+        <DialogHeader>
-+          <DialogTitle>{r.title} · {snapshot.name}</DialogTitle>
-+          <DialogDescription>{r.scope}</DialogDescription>
-+        </DialogHeader>
-+        <div className="space-y-1 text-xs text-muted-foreground">
-+          <p>{snapshot.source}</p>
-+          <p>{snapshot.profile}</p>
-+          {snapshot.retained && <p>{m.retained}</p>}
-+          <p>{r.snapshot}</p>
-+          <p>{reportTime(snapshot.at / 1000, m.missing)}</p>
-+        </div>
-+        <Select onValueChange={setFilter} value={filter}>
-+          <SelectTrigger aria-label={r.filter}><SelectValue /></SelectTrigger>
-+          <SelectContent>
-+            <SelectItem value="all">{r.all}</SelectItem>
-+            {(['completed', 'error', 'stalled', 'interrupted', 'unknown'] as const).map(id => (
-+              <SelectItem key={id} value={id}>{r.statuses[id]}</SelectItem>
-+            ))}
-+          </SelectContent>
-+        </Select>
-+        <ReportList b={b} reports={snapshot.reports.filter(report => filter === 'all' || report.status === filter)} />
-+    </DialogContent>}
++    {snapshot && <BotMonitorReportContent filter={{ value: filter, onChange: setFilter }} snapshot={snapshot} />}
 +  </Dialog>
 +}
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor.test.tsx

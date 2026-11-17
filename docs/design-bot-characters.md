@@ -359,6 +359,14 @@ its saved canonical Chat. The overlay receives one plain-text excerpt, up to
 600 characters, through the existing window bridge. Opaque output addresses
 expire with the current owner binding. The main process checks which window
 sent the request and discards late replies after dismissal or loss of visibility.
+A ready bot can also show one completed-worker character for its newest
+eligible saved report during the first minute after completion. Working
+characters take priority within the five-character limit. The label opens a
+plain summary from the authorized Monitor snapshot. **Open in Hermes** opens
+the single matching report in the existing Monitor dialog. Replacing the
+report or its canonical Bot Chat invalidates the old output action. No
+additional report fetch is needed.
+
 The popover and label accept clicks. The animation and transparent margins pass
 through on platforms that support it. [Open in Hermes](verification.md#open-the-full-bot-chat-from-its-character-unreleased)
 uses one action scoped to the displayed output and rechecks the owning
