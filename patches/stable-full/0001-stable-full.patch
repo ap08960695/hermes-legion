@@ -3466,6 +3466,54 @@ index 0000000000000000000000000000000000000000..241808d2697a1d086e7922b9d5a34ea9
 +            shutil.rmtree(staged)
 +        except OSError as exc:
 +            logger.warning("Pet import staging cleanup failed for %s: %s", staged, exc)
+diff --git a/agent/pet/manifest.py b/agent/pet/manifest.py
+index 18f17cb1aff73efd5553fbc1f67f911541ecbbf4..49e01fffc3e7beeb283c297da7891052b662d524 100644
+--- a/agent/pet/manifest.py
++++ b/agent/pet/manifest.py
+@@ -10,4 +10,2 @@ from __future__ import annotations
+
+-import logging
+-import threading
+ import time
+@@ -15,4 +13,2 @@ from dataclasses import dataclass
+
+-logger = logging.getLogger(__name__)
+-
+ MANIFEST_URL = "https://petdex.dev/api/manifest"
+@@ -27,4 +23,2 @@ _cache: tuple[float, list[ManifestEntry]] | None = None
+
+-_prefetch_lock = threading.Lock()
+-_prefetching = False
+
+@@ -41,28 +35,2 @@ def _cache_is_warm() -> bool:
+
+-def prefetch(*, timeout: float = _DEFAULT_TIMEOUT) -> None:
+-    """Warm the manifest cache in a daemon thread — idempotent, never blocks.
+-
+-    The desktop picker calls this when loading the instant local-only gallery so
+-    the full catalog is usually cached by the time it's requested.
+-    """
+-    global _prefetching
+-    if _cache_is_warm():
+-        return
+-    with _prefetch_lock:
+-        if _prefetching:
+-            return
+-        _prefetching = True
+-
+-    def _run() -> None:
+-        global _prefetching
+-        try:
+-            fetch_manifest(timeout=timeout)
+-        except Exception as exc:
+-            logger.debug("petdex manifest prefetch failed: %s", exc)
+-        finally:
+-            _prefetching = False
+-
+-    threading.Thread(target=_run, name="petdex-prefetch", daemon=True).start()
+-
+-
+ @dataclass(frozen=True)
 diff --git a/agent/pet/pack.py b/agent/pet/pack.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..0a22dbcd02e6fb9d2dae2e86950fd10b766d3b74
@@ -100423,6 +100471,164 @@ index 0000000000000000000000000000000000000000..a8596a70c7ef22247afd0e911d160aec
 +
 +    assert get_type_hints(module._shared_nous_store)["return"] == tuple[Path, ...]
 +    assert {"onboarding.state", "onboarding.set_run"} <= module._registry.names()
+diff --git a/tests/tui_gateway/test_pet_character_desktop_route.py b/tests/tui_gateway/test_pet_character_desktop_route.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..311135c3b6a927d916f693212ede910ab953ea02
+--- /dev/null
++++ b/tests/tui_gateway/test_pet_character_desktop_route.py
+@@ -0,0 +1,152 @@
++"""Installed characters through the authority-backed Desktop WebSocket dispatch."""
++import base64
++import json
++from types import SimpleNamespace
++
++from PIL import Image
++import pytest
++
++from tests.waiting import async_wait_until
++
++
++@pytest.fixture
++def character_route(tmp_path, monkeypatch):
++    from gateway.runtime_bootstrap import TicketStore
++    from gateway.session_authorities import SessionAuthorities
++    from gateway.session_controls import AuthorityConnection
++    from hermes_state import SessionDB
++    from tui_gateway import server
++    from tui_gateway.ws import _dispatch_request
++
++    root = tmp_path / ".hermes"
++    homes = {"default": root, "work": root / "profiles" / "work"}
++    monkeypatch.setenv("HERMES_HOME", str(root))
++    monkeypatch.setattr(server, "_hermes_home", root)
++    monkeypatch.setattr(server, "_served_profile_homes", set())
++    runner = SimpleNamespace(_draining=False, session_authorities=SessionAuthorities(root))
++    authorities, sheets = {}, {}
++    for (name, home), color in zip(homes.items(), ("red", "blue"), strict=True):
++        pack = home / "pets" / "shared"
++        pack.mkdir(parents=True)
++        (home / "config.yaml").write_text("display: {pet: {enabled: false}}\n")
++        (home / "profile.yaml").write_text("ui_meta: {hermes-bots: {title: Existing}, other: keep}\n")
++        sheet = pack / "spritesheet.png"
++        Image.new("RGB", (1152, 1664), color).save(sheet)
++        sheets[name] = sheet.read_bytes()
++        (pack / "pet.json").write_text(json.dumps({"displayName": name.capitalize()}))
++        authority = SimpleNamespace(profile_id=str(home), instance_id="fixture",
++                                    db=SessionDB(home / "state.db"), runner=runner,
++                                    events={}, sessions={})
++        authorities[name] = authority
++        runner.session_authorities.add(home, authority, name=name)
++
++    tickets = TicketStore("fixture", frozenset(str(home) for home in homes.values()))
++
++    def connect(route="default", *, scope="profile", purpose="interactive"):
++        authority = authorities[route]
++        ticket = tickets.mint(profile_id=authority.profile_id, subject="uid:fixture", purpose=purpose, scope=scope)
++        grant = tickets.redeem(ticket, profile_id=None, purpose=purpose)
++        identity = {"provider": "local", "user_id": grant["subject"], "profile_id": grant["profile_id"],
++                    "instance_id": grant["instance_id"], "capabilities": grant["capabilities"],
++                    "profile_scope": grant["scope"], "native_bootstrap": True}
++        frames = []
++        transport = SimpleNamespace(desktop_local=True, write=lambda frame: frames.append(frame) or True)
++        connection = AuthorityConnection(authority, transport, identity, operator=purpose == "interactive")
++
++        async def call(method, **params):
++            frame = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
++            result = await _dispatch_request(connection, frame, method, transport)
++            if result is None:
++                await async_wait_until(lambda: bool(frames), timeout=5)
++                result = frames.pop()
++            return result
++
++        return call
++
++    yield homes, sheets, connect
++    for authority in authorities.values():
++        authority.db.close()
++
++
++@pytest.mark.asyncio
++async def test_installed_characters_use_selected_profile_without_touching_petdex(character_route, monkeypatch):
++    from agent.pet import manifest
++
++    contacts = []
++
++    def unexpected_contact(*args, **kwargs):
++        contacts.append("manifest")
++        raise RuntimeError("petdex not available")
++
++    monkeypatch.setattr(manifest, "fetch_manifest", unexpected_contact)
++    monkeypatch.setattr(manifest, "prefetch", unexpected_contact, raising=False)
++    homes, sheets, connect = character_route
++    configs = {home: (home / "config.yaml").read_bytes() for home in homes.values()}
++    for profile, call in (("default", connect()), ("work", connect(scope="host")), ("work", connect("work"))):
++        gallery = await call("pet.gallery", profile=profile, localOnly=True)
++        sprite = await call("pet.sprite", profile=profile, slug="shared")
++        assert [(row["slug"], row["displayName"]) for row in gallery["result"]["pets"]] == [("shared", profile.capitalize())]
++        assert base64.b64decode(sprite["result"]["spritesheetBase64"]) == sheets[profile]
++        assert gallery["result"]["enabled"] is False
++    assert not contacts
++    assert all((home / "config.yaml").read_bytes() == before for home, before in configs.items())
++
++
++@pytest.mark.asyncio
++async def test_character_reads_keep_the_authority_scope(character_route):
++    _, _, connect = character_route
++    for method, params in (("pet.gallery", {"localOnly": True}), ("pet.sprite", {"slug": "shared"})):
++        cross = await connect()(method, profile="work", **params)
++        unserved = await connect(scope="host")(method, profile="missing", **params)
++        for reply in (cross, unserved):
++            assert reply["error"]["data"]["reason"] == "profile_mismatch"
++        limited = await connect(purpose="worker-adoption")(method, profile="default", **params)
++        assert limited["error"]["code"] == -32601
++
++
++@pytest.mark.asyncio
++async def test_explicit_full_gallery_still_merges_petdex(character_route, monkeypatch):
++    from agent.pet import manifest
++
++    remote = manifest.ManifestEntry("public", "Public", "", "", "https://example.invalid/public.png", "", "")
++    monkeypatch.setattr(manifest, "fetch_manifest", lambda: [remote])
++    _, _, connect = character_route
++    result = await connect()("pet.gallery")
++    assert [(row["slug"], row["installed"]) for row in result["result"]["pets"]] == [
++        ("public", False), ("shared", True)
++    ]
++
++
++@pytest.mark.asyncio
++async def test_desktop_character_save_clear_and_stale_cas_use_existing_dispatch(character_route):
++    from hermes_yaml import safe_load
++
++    homes, _, connect = character_route
++    call = connect("work")
++    root_meta = homes["default"] / "profile.yaml"
++    work_meta = homes["work"] / "profile.yaml"
++    root_before = root_meta.read_bytes()
++    roster = await call("profiles.list", include_sessions=False)
++    bot = next(row for row in roster["result"]["profiles"] if row["name"] == "work")
++    assert bot["ui_meta"]["hermes-bots"] == {"title": "Existing"}
++    revision = bot["ui_meta_revisions"].get("hermes-bots", 0)
++
++    async def save(character, expected):
++        return (await call("profiles.configure", name="work",
++                           ui_meta={"hermes-bots": {"title": "Existing", "character": character}},
++                           ui_meta_expected_revisions={"hermes-bots": expected}))["result"]
++
++    saved = await save("shared", revision)
++    assert saved["applied"]["ui_meta"] is True
++    saved_bytes = work_meta.read_bytes()
++    assert safe_load(saved_bytes)["ui_meta"]["hermes-bots"]["character"] == "shared"
++    # The stale clear leaves both the assignment and its revision unchanged.
++    stale = await save(None, revision)
++    assert stale["applied"]["ui_meta_conflicts"]["hermes-bots"]["actual"] == revision + 1
++    assert work_meta.read_bytes() == saved_bytes
++    cleared = await save(None, revision + 1)
++    assert cleared["applied"]["ui_meta"] is True
++    assert safe_load(work_meta.read_bytes())["ui_meta"] == {
++        "hermes-bots": {"title": "Existing", "character": None}, "other": "keep"
++    }
++    assert root_meta.read_bytes() == root_before
 diff --git a/tests/tui_gateway/test_pet_character_sprite.py b/tests/tui_gateway/test_pet_character_sprite.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..87870b19700b473536a9e5c1e7b42e03903f877f
@@ -106478,7 +106684,7 @@ index 386f5c10702d46453555d4ba037775c9b2391ffb..0da7f32fd3e06c6c34c4fdfe6f9a731d
 +    return _ok(rid, configure(profile_dir, params.get("workflow") or {}, params.get("expected_revision"),
 +                              model=params.get("model"), confirm=params.get("confirm", False)))
 diff --git a/tui_gateway/methods_session.py b/tui_gateway/methods_session.py
-index 29847639d071e61e8638682e83e2c1a6242ac2ab..6fb2b1c1491b55c73b82bf727a3e49429847af6b 100644
+index 29847639d071e61e8638682e83e2c1a6242ac2ab..1a59ff9187c08567d74b5d473ce1bc6b492282d3 100644
 --- a/tui_gateway/methods_session.py
 +++ b/tui_gateway/methods_session.py
 @@ -1364,2 +1364,8 @@ def _(rid, params: dict) -> dict:
@@ -106490,6 +106696,35 @@ index 29847639d071e61e8638682e83e2c1a6242ac2ab..6fb2b1c1491b55c73b82bf727a3e4942
 +                variables = {**variables, "scope": session.get("session_key") or "",
 +                    "work_overview": work_overview(session.get("session_key") or "", _session_cwd(session))}
              return _ok(rid, {"text": run_oneshot(
+@@ -1573,16 +1579,14 @@ def _(rid, params: dict) -> dict:
+     gallery: list[dict] = []
+-    try:
+-        from agent.pet.manifest import fetch_manifest, prefetch
+-        # Local-only still warms the manifest cache in the background.
+-        if local_only:
+-            prefetch()
+-        for entry in [] if local_only else fetch_manifest():
+-            gallery.append({
+-                "slug": entry.slug, "displayName": entry.display_name, "installed": entry.slug in installed,
+-                "spritesheetUrl": entry.spritesheet_url,
+-                # No popularity metric; petdex's hand-picked set (by asset path) is closest.
+-                "curated": "/curated/" in entry.spritesheet_url,
+-                "generated": entry.slug in installed and installed[entry.slug].generated})
+-    except Exception as exc:
+-        logger.debug("pet.gallery manifest fetch failed: %s", exc)
++    if not local_only:
++        try:
++            from agent.pet.manifest import fetch_manifest
++            for entry in fetch_manifest():
++                gallery.append({
++                    "slug": entry.slug, "displayName": entry.display_name, "installed": entry.slug in installed,
++                    "spritesheetUrl": entry.spritesheet_url,
++                    # No popularity metric; petdex's hand-picked set (by asset path) is closest.
++                    "curated": "/curated/" in entry.spritesheet_url,
++                    "generated": entry.slug in installed and installed[entry.slug].generated})
++        except Exception as exc:
++            logger.debug("pet.gallery manifest fetch failed: %s", exc)
+     seen = {item["slug"] for item in gallery}
 diff --git a/tui_gateway/methods_session_control.py b/tui_gateway/methods_session_control.py
 index 456132b9c00951fccdeee7035e949a0c9101e900..32619a395bfc143daf7e7788932b605bb2e95839 100644
 --- a/tui_gateway/methods_session_control.py

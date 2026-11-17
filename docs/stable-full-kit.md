@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1172-path** Legion source, interface and optimization alternative
+This is the complete **1174-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -31,9 +31,9 @@ On gateways that expose the shared pet and profile configuration RPCs, choose
 an installed pack in **Edit Profile → Character**. **Use default** clears the
 assignment. Monitor plays the chosen atlas for that bot and its workers in its
 five-character preview. Static avatars and the global pet choice remain separate.
-Source tests and isolated Mac handlers cover selection, clear, stale saves, and
-two profiles sharing a slug. Canonical transport support, native Desktop screen
-acceptance and the five-character resource budget are open.
+The installed list skips Petdex. Isolated Mac dispatch tests cover selection,
+clear, stale saves, and two profiles sharing a slug. Native Desktop screen
+acceptance and the five-character resource budget remain open.
 [Evidence](verification.md#per-bot-characters--source-and-contained-mac-handlers-unreleased).
 
 ## Keep pet picker reads with their owner (unreleased source fix)

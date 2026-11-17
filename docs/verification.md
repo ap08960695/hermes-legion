@@ -1,3 +1,19 @@
+# Installed characters stay offline — Local Desktop dispatch (unreleased)
+
+The existing Desktop WebSocket admits these RPCs through its shared handlers
+after the authority's profile check. An installed-only request used to start a
+Petdex prefetch. The Mac regression recorded three prefetch calls across three
+installed-only reads before the fix and zero afterward. The full gallery still
+merges its explicitly requested catalog with installed packs.
+
+Four route cases use real issued tickets and the production WebSocket request
+dispatcher with synthetic transport frames. They verify independent gallery
+and atlas bytes for a shared slug, denial for unserved or out-of-scope profiles
+and a worker grant, and Local roster metadata, save, stale-write refusal and
+clear through the existing profile writer. The focused run passed 20 tests
+including the sprite and generated-contract suites. Network and SSH execution
+were blocked for this invocation. No Electron window was launched.
+
 # Per-bot characters — source and contained Mac handlers (unreleased)
 
 Six focused Desktop files pass 50 cases. They cover the installed-only picker,
@@ -17,9 +33,10 @@ TypeScript validator. The handler measurement samples 267 MiB peak summed RSS
 including the observer, with at most three controlled processes and zero
 survivors. It measures the fixture, not the Desktop overlay.
 
-This covers the shared RPC handlers and client source. The canonical transport
-still lacks pet and profile configuration RPCs. Native Desktop pixels, event
-animations and five-character CPU/RAM acceptance remain open.
+This earlier trial covers the shared RPC handlers and client source. The later
+Local Desktop dispatch trial above covers the canonical WebSocket's shared
+handler path. Native Desktop pixels, event animations and five-character
+CPU/RAM acceptance remain open.
 
 # Profile-bound pet RPC — contained Mac handler acceptance
 

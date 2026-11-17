@@ -238,9 +238,9 @@ actual budget miss and trade-off before release; no budget claim from unit tests
 
 The draft native-atlas folder contract, metadata lint, original example recipe,
 blank template and starter guide are now included. The full runtime format still
-needs per-event animations/fallbacks, size/fps/anchor controls, extended formats,
-and canonical per-bot assignment. Native-atlas creator guidance, lint, terminal preview and
-Mac-tested no-overwrite import are included. Reuse current stores/renderer
+needs per-event animations and fallbacks, size/fps/anchor controls, and extended
+formats. Native-atlas creator guidance, lint, terminal preview and Mac-tested
+no-overwrite import are included. Reuse current stores and renderer
 rather than introducing another atlas taxonomy. Only original/owned art; no
 borrowed character designs or copied reference art.
 
@@ -279,7 +279,9 @@ Tests cover persistence, source races, eviction, payload validation and overlay
 rendering. The isolated Mac trial exercises real handlers and profile saves.
 [Verification](verification.md#per-bot-characters--source-and-contained-mac-handlers-unreleased).
 
-This slice uses the shared JSON-RPC surface. The canonical Desktop transport
-does not currently expose pet RPCs or `profiles.configure`. Canonical routing,
-native screen evidence, per-event interactions and five-character resource
-measurements remain release conditions.
+The canonical WebSocket processes these requests through its existing
+interactive-ticket dispatch to shared handlers. The authority's profile fence
+stays in place. Installed-only requests skip Petdex entirely. The full gallery
+still fetches its public catalog when explicitly requested. Native screen
+evidence, per-event interactions and five-character resource measurements
+remain release conditions.

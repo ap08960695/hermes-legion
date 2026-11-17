@@ -189,9 +189,9 @@ An assigned pack must be a readable static native PNG/WebP atlas at most 4 MiB
 and 3 million pixels to appear in the preview. If the pack is unavailable,
 choose another installed pack or clear the assignment.
 
-The isolated Mac handler proof covers assignment, clearing and profile
-isolation. Canonical transport support and native Desktop screen acceptance
-remain open.
+The installed-only list makes no Petdex request. The Local Desktop dispatch
+test covers own-profile and shared-host reads, assignment, clearing, and stale
+saves. Native Desktop screen acceptance remains open.
 
 ## Read the result
 
