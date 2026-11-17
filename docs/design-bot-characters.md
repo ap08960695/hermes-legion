@@ -325,8 +325,14 @@ renderer and 1.29 from the main process, which hosted Chromium's GPU
 thread in this fixture. The sprite loop already waits on a timer until
 the next frame is due. In a separate eight-second Chromium trace, layer
 updates used 41.5 ms of thread time, compared with 14.0 ms across renderer
-timers and animation callbacks. Trial one smaller presentation surface
-at the same sprite size and cadence. Keep this fixture budget open.
+timers and animation callbacks. The presentation surface was the next variable to isolate.
+
+A four-run Mac comparison tried 224 logical pixels of native window height
+instead of 325 at the same 632-pixel width and 2× scale. All five captions
+fit, and sprite size, screen-space anchor and draw cadence matched. The
+smaller window fell short of the required repeatable CPU or memory
+savings. Keep the current height so the existing output popover has
+room. The five-character resource budget remains open.
 
 The [cross-panel regression](verification.md#edit-profile-to-monitor-character-handoff-unreleased)
 verifies that the saved character reaches Monitor after a roster reload, even
