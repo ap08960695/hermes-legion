@@ -554,6 +554,39 @@ Native after-fix degraded paint, canonical navigation, nonempty reports and live
 terminal progress still gate the Bot Monitor batch release. No version/release,
 owner app/data, remote host/ai, ESTOP, pause, timer or permission change.
 
+# Explicit native window capture — unreleased
+
+The selected agent-desktop provider now accepts the common tool's existing
+numeric `window_id` without `app`: snapshot `--window-id w-N`, with exact returned
+window ID and a valid canonical app label. Exact named-app matching is unchanged;
+no prefix/alias fallback or PID selector is added. Incomplete, unproven or malformed
+native identity is refused. Invalid numeric/mixed selectors never spawn; wrong
+window responses disclose no private payload and invalidate earlier ref authority.
+
+The regression is red before implementation (21 failures/47 passes), then two
+focused source files pass 100 cases with one worker. Two changed patch sections
+apply against the pinned upstream, match after hashes and reverse to before
+hashes; unrelated sections and the 1,120-target/test-selection set are unchanged.
+
+A fresh long-name isolated production Local Monitor passes the actual common
+tool/provider with native 1.3.1: one complete snapshot, 50 refs, 78 mapped elements.
+Its canonical native label differs from the requested fixture's friendly name.
+Trusted native ID comes directly from that owned Electron window's media-source
+ID; exact response ID plus PID/birth/executable, original window generation,
+session/refmap and nonce witnesses agree. A numeric ID alone is not enduring app
+identity: callers need a fresh trusted selection because IDs can be reused.
+
+Paired CUA AX/pixels and the final bound ACK corroborate nonce/default/Connected/
+Monitor before and after. The table remains below-fold AX evidence. Foregrounded
+fixture, no native input/provider image/model call or owner-app adoption. The
+60-second Local gate passes; all owned processes close in 105.83 seconds with no
+survivors and gateway/model-server stopped. Sampled peak four product processes,
+seven including OS utilities, 916,946,944 bytes including guardian; external CUA,
+advisor/build/controllers excluded. No whole-task RAM bound or savings claim.
+Private before/after: `../evidence/agent-desktop-window-capture-20261117`.
+Input's canonical-lock exception, background/other-OS acceptance and the full
+capability release remain open. Earlier failed trials remain failed.
+
 # Full-production agent-desktop AX capture — unreleased
 
 A fresh isolated production Local Hermes Monitor now passes the actual selected
@@ -577,7 +610,8 @@ A second failed case returns a complete 50-ref snapshot under a truncated app
 label (31 of 36 fixture-name characters); exact-app validation refuses it. A
 short uniquely named fresh fixture then passes without relaxing that comparison.
 Native and CUA differ in whether “Device” is joined with the nonce; both retain
-the exact nonce. General long-name/alias compatibility remains unverified.
+the exact nonce. The later explicit-window proof above adds a separate safe route;
+it does not retroactively accept this failed named-app case.
 
 Successful trial closure: 135.31 seconds, zero survivors, gateway/model-server
 stopped, sampled peak four product processes/eight including OS utilities,

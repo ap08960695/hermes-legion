@@ -63886,10 +63886,10 @@ index 0000000000000000000000000000000000000000..8f3cf4e89bc381d03d081175d14a5daf
 +    assert sessions[0] != sessions[1]
 diff --git a/tests/computer_use/test_agent_desktop_backend.py b/tests/computer_use/test_agent_desktop_backend.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..553ab7720bbc001eb480e30758ba5c5723c6e5f2
+index 0000000000000000000000000000000000000000..e6179263e50e7f78222e1cf3f343fbe4d62e29d3
 --- /dev/null
 +++ b/tests/computer_use/test_agent_desktop_backend.py
-@@ -0,0 +1,234 @@
+@@ -0,0 +1,347 @@
 +"""Opt-in AX-only agent-desktop provider through the existing backend contract."""
 +import json
 +from types import SimpleNamespace
@@ -64124,6 +64124,119 @@ index 0000000000000000000000000000000000000000..553ab7720bbc001eb480e30758ba5c57
 +    with pytest.raises(RuntimeError, match='gateway-host placement'):
 +        backend.capture(mode='ax', app='Fixture')
 +    assert calls == []
++
++
++def test_common_tool_window_capture_returns_canonical_app_without_alias_matching(adapter, monkeypatch):
++    module, _, calls = adapter
++    from hermes_cli import config
++    from tools.computer_use import tool
++    value = snapshot()
++    value['data']['app'] = 'Canonical process label'
++    def probe(argv, **kwargs):
++        calls.append((argv, kwargs))
++        return SimpleNamespace(returncode=0, stdout=json.dumps(value), stderr='PRIVATE_DRIVER_OUTPUT')
++    monkeypatch.setattr(module.driver, 'bounded_probe_run', probe)
++    monkeypatch.setattr(config, 'load_config_readonly', lambda: {'computer_use': {'backend': 'agent-desktop'}})
++    tool.reset_backend_for_tests()
++    try:
++        result = json.loads(tool.handle_computer_use({'action': 'capture', 'mode': 'ax', 'window_id': 42}, session_id='window-read'))
++        assert result['mode'] == 'ax' and result['app'] == 'Canonical process label'
++        assert result['total_elements'] == 3 and result['elements'][2]['label'] == 'Run'
++        assert result['elements'][2]['app'] == 'Canonical process label'
++        assert 'screenshot_path' not in result and 'PRIVATE_DRIVER_OUTPUT' not in str(result)
++        assert len(calls) == 1
++        assert calls[0][0][:4] == ['/fixture/agent-desktop', 'snapshot', '--window-id', 'w-42']
++        assert '--app' not in calls[0][0] and '--session' in calls[0][0]
++    finally:
++        tool.reset_backend_for_tests()
++
++
++def test_window_selector_accepts_largest_exact_json_integer(adapter, monkeypatch):
++    module, backend, calls = adapter
++    value = snapshot()
++    value['data']['window']['id'] = 'w-9007199254740991'
++    def probe(argv, **kwargs):
++        calls.append((argv, kwargs))
++        return SimpleNamespace(returncode=0, stdout=json.dumps(value), stderr='')
++    monkeypatch.setattr(module.driver, 'bounded_probe_run', probe)
++    cap = backend.capture(mode='ax', window_id=9007199254740991)
++    assert cap.window_title == 'Fixture window'
++    assert calls[0][0][2:4] == ['--window-id', 'w-9007199254740991']
++
++
++@pytest.mark.parametrize('kwargs', [
++    {'window_id': 0}, {'window_id': -1}, {'window_id': True}, {'window_id': 42.0},
++    {'window_id': '42'}, {'window_id': 9007199254740992}, {'window_id': {}},
++    {'window_id': 42, 'app': ''}, {'window_id': 42, 'app': 'Fixture'},
++    {'window_id': 42, 'pid': 12}, {'window_id': 42, 'pid': 0},
++    {'window_id': 42, 'mode': 'vision'},
++])
++def test_invalid_window_selectors_never_execute_driver(adapter, kwargs):
++    _, backend, calls = adapter
++    with pytest.raises((ValueError, RuntimeError)):
++        backend.capture(**{'mode': 'ax', **kwargs})
++    assert calls == []
++
++
++@pytest.mark.parametrize('window', [{'id': 'w-43', 'title': 'PRIVATE_WINDOW'},
++                                    {'id': 42, 'title': 'PRIVATE_WINDOW'},
++                                    {'id': 'w-42 ', 'title': 'PRIVATE_WINDOW'},
++                                    {'title': 'PRIVATE_WINDOW'}, {}])
++def test_window_capture_refuses_wrong_or_missing_returned_id_without_private_payload(adapter, monkeypatch, window):
++    module, backend, calls = adapter
++    value = snapshot()
++    value['data']['app'] = 'PRIVATE_APPLICATION'
++    value['data']['window'] = window
++    def probe(argv, **kwargs):
++        calls.append((argv, kwargs))
++        return SimpleNamespace(returncode=0, stdout=json.dumps(value), stderr='PRIVATE_DRIVER_OUTPUT')
++    monkeypatch.setattr(module.driver, 'bounded_probe_run', probe)
++    with pytest.raises(RuntimeError, match='agent-desktop AX snapshot failed') as error:
++        backend.capture(mode='ax', window_id=42)
++    assert len(calls) == 1
++    import traceback
++    assert 'PRIVATE_' not in ''.join(traceback.format_exception(error.value))
++
++
++@pytest.mark.parametrize('app', ['', '   ', None, 42, {}, 'bad\x00name', 'x' * 257])
++def test_window_capture_requires_valid_canonical_app_label(adapter, monkeypatch, app):
++    module, backend, calls = adapter
++    value = snapshot()
++    value['data']['app'] = app
++    def probe(argv, **kwargs):
++        calls.append((argv, kwargs))
++        return SimpleNamespace(returncode=0, stdout=json.dumps(value), stderr='')
++    monkeypatch.setattr(module.driver, 'bounded_probe_run', probe)
++    with pytest.raises(RuntimeError, match='agent-desktop AX snapshot failed'):
++        backend.capture(mode='ax', window_id=42)
++    assert len(calls) == 1
++
++
++@pytest.mark.parametrize('scope', [{'app': 'Fixture'}, {'window_id': 42}])
++@pytest.mark.parametrize('unproven', [True, 'false', []])
++def test_capture_refuses_unproven_or_malformed_native_identity(adapter, monkeypatch, scope, unproven):
++    module, backend, _ = adapter
++    value = snapshot()
++    value['data']['identity_unproven'] = unproven
++    monkeypatch.setattr(module.driver, 'bounded_probe_run', lambda *a, **k: SimpleNamespace(returncode=0, stdout=json.dumps(value), stderr=''))
++    with pytest.raises(RuntimeError, match='agent-desktop AX snapshot failed'):
++        backend.capture(mode='ax', **scope)
++
++
++def test_failed_window_capture_clears_earlier_ref_authority(adapter, monkeypatch):
++    module, backend, calls = adapter
++    value = snapshot()
++    value['data']['tree']['children'][1]['available_actions'] = ['Click']
++    def probe(argv, **kwargs):
++        calls.append((argv, kwargs))
++        return SimpleNamespace(returncode=0, stdout=json.dumps(value), stderr='')
++    monkeypatch.setattr(module.driver, 'bounded_probe_run', probe)
++    old = backend.capture(mode='ax', window_id=42).elements[2].index
++    value['data']['window']['id'] = 'w-43'
++    with pytest.raises(RuntimeError, match='agent-desktop AX snapshot failed'):
++        backend.capture(mode='ax', window_id=42)
++    result = backend.click(element=old)
++    assert not result.ok and result.code == 'capture_required' and len(calls) == 2
 diff --git a/tests/computer_use/test_agent_desktop_scroll.py b/tests/computer_use/test_agent_desktop_scroll.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..ff30395b586edf69ad7ad82e50c3b61003791f51
@@ -96779,10 +96892,10 @@ index 0000000000000000000000000000000000000000..5f4f0a82734efaf57c8a6b426ca1e2a1
 +    return 0
 diff --git a/tools/computer_use/agent_desktop_backend.py b/tools/computer_use/agent_desktop_backend.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..a5fd98bdac08a6e4c974d7b6f55bfb518e4ec33e
+index 0000000000000000000000000000000000000000..26e042c59981d000598c2994ba59668ea4d952d8
 --- /dev/null
 +++ b/tools/computer_use/agent_desktop_backend.py
-@@ -0,0 +1,251 @@
+@@ -0,0 +1,263 @@
 +"""Scoped AX reads and single-use semantic refs; no physical input or raw logging."""
 +from __future__ import annotations
 +
@@ -96866,14 +96979,20 @@ index 0000000000000000000000000000000000000000..a5fd98bdac08a6e4c974d7b6f55bfb51
 +            raise RuntimeError('agent-desktop AX backend is not started')
 +        if not _host_placement():
 +            raise RuntimeError('agent-desktop AX provider supports gateway-host placement only')
-+        if mode != 'ax' or pid is not None or window_id is not None:
-+            raise ValueError('agent-desktop AX read-only capture requires mode=ax and an application name')
-+        if not isinstance(app, str) or not app.strip() or len(app) > 256 or '\x00' in app:
-+            raise ValueError('agent-desktop AX capture requires an explicit application name')
-+        app = app.strip()
++        if mode != 'ax' or pid is not None:
++            raise ValueError('agent-desktop AX capture requires mode=ax without pid')
++        if window_id is None:
++            if not isinstance(app, str) or not app.strip() or len(app) > 256 or '\x00' in app:
++                raise ValueError('agent-desktop AX capture requires an application name or window_id')
++            app = app.strip()
++            selector = ['--app', app]
++        else:
++            if app is not None or type(window_id) is not int or not 0 < window_id < 2**53:
++                raise ValueError('agent-desktop AX window_id must be a positive exact JSON integer without app')
++            selector = ['--window-id', f'w-{window_id}']
 +        try:
 +            result = driver.bounded_probe_run(
-+                [self._binary, 'snapshot', '--app', app, '--session', self._session],
++                [self._binary, 'snapshot', *selector, '--session', self._session],
 +                timeout=10, env=driver._environment())
 +            if result is None or result.returncode != 0 or len(result.stdout.encode('utf-8')) > 1024 * 1024:
 +                raise ValueError('Probe failed')
@@ -96881,11 +97000,17 @@ index 0000000000000000000000000000000000000000..a5fd98bdac08a6e4c974d7b6f55bfb51
 +            if not isinstance(envelope, dict) or envelope.get('version') != '2.6' or envelope.get('ok') is not True or envelope.get('command') != 'snapshot':
 +                raise ValueError('Invalid envelope')
 +            data = envelope['data']
-+            if data['app'] != app or data['complete'] is not True:
++            canonical_app = data['app']
++            if (not isinstance(canonical_app, str) or not canonical_app.strip() or len(canonical_app) > 256
++                    or '\x00' in canonical_app or data['complete'] is not True
++                    or data.get('identity_unproven', False) is not False
++                    or (app is not None and canonical_app != app)):
 +                raise ValueError('Incomplete or wrong target')
 +            window = data['window']
 +            if not isinstance(window['id'], str) or not window['id'] or not isinstance(window['title'], str):
 +                raise ValueError('Invalid window')
++            if window_id is not None and window['id'] != selector[1]:
++                raise ValueError('Wrong window')
 +            snapshot_id = data['snapshot_id']
 +            if not isinstance(snapshot_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', snapshot_id):
 +                raise ValueError('Invalid snapshot')
@@ -96913,7 +97038,7 @@ index 0000000000000000000000000000000000000000..a5fd98bdac08a6e4c974d7b6f55bfb51
 +                        index = next(_indices)
 +                    if index >= 2**53:
 +                        raise ValueError('Element index range exhausted')
-+                    elements.append(UIElement(index=index, role=role, label=label, app=app, element_token=ref))
++                    elements.append(UIElement(index=index, role=role, label=label, app=canonical_app, element_token=ref))
 +                    if ref:
 +                        actions = node.get('available_actions', [])
 +                        if not isinstance(actions, list) or any(not isinstance(a, str) for a in actions):
@@ -96928,7 +97053,7 @@ index 0000000000000000000000000000000000000000..a5fd98bdac08a6e4c974d7b6f55bfb51
 +                stack.extend((child, depth + 1) for child in reversed(children))
 +            if type(data['ref_count']) is not int or data['ref_count'] != len(refs):
 +                raise ValueError('Invalid ref count')
-+            return (CaptureResult(mode='ax', width=0, height=0, elements=elements, app=app,
++            return (CaptureResult(mode='ax', width=0, height=0, elements=elements, app=canonical_app,
 +                                  window_title=window['title'], note='AX refs; read a fresh capture after every input attempt. type(text, element) inserts at the caret; set_value replaces the value. scroll requires a scrollarea element. No screenshots or physical input.'), targets)
 +        except Exception:
 +            raise RuntimeError('agent-desktop AX snapshot failed; check target, permissions and protocol') from None

@@ -53,8 +53,9 @@ discovery remains available at start and through the explicit status command.
 When only the npm global probe locates a binary, set the discovered path explicitly
 so the cheap availability check can find it too.
 
-Capture supports `mode=ax` with an explicit exact application name.
-Require complete protocol2.6 snapshot data for that same app and a valid window,
+Capture supports `mode=ax` with an explicit exact application name, or a native
+`window_id` without `app`. Require complete protocol2.6 snapshot data for that
+same app or exact selected window and a valid canonical app label,
 with bounded payload/tree depth/count, unique snapshot-owned refs and no raw
 error disclosure. Map named AX nodes and native refs into existing CaptureResult/
 UIElement shapes, using a private namespace per backend session. No image is
@@ -80,6 +81,23 @@ Example after explicitly selecting `computer_use.backend: agent-desktop`:
 ```json
 {"action":"capture","mode":"ax","app":"Your application name"}
 ```
+
+For app-label differences, use the existing numeric window selector instead:
+
+```json
+{"action":"capture","mode":"ax","window_id":42}
+```
+
+The provider generates `--window-id w-42` and requires exactly that returned ID.
+Accept only positive JSON-safe integers; mixed app/window selectors and PID
+selection are refused before spawning. Use the numeric component of the native
+`w-N` ID, not an Electron window index or CUA element index. Obtain it from a
+fresh trusted window selection; IDs may become stale or be reused. Selector
+agreement alone does not prove enduring process identity. There is no prefix,
+alias or automatic retry fallback for a named-app capture. Complete snapshots
+marked `identity_unproven`, including malformed flag values, are refused.
+The common-tool window path and refusal/privacy/stale-ref controls pass alongside
+existing semantic-action cases: 100 focused source tests, one worker.
 
 Only protocol2.6 is accepted in this slice. Named AX nodes use the existing
 element/label response; native refs stay attached to their snapshot. Geometry is
@@ -107,7 +125,7 @@ Human takeover invalidates the earlier capture even after control is handed back
 Element indices must not rebind an approved stale request after a new capture or
 backend restart. Use process-wide non-reused positive indices within JSON's exact
 integer range; native qualified refs stay private to their snapshot/session. Keep
-the existing unknown geometry and explicit app capture requirement.
+the existing unknown geometry and explicit capture target requirement.
 
 `set_value` uses native `set-value --stdin`, never a value argument. Preserve UTF-8
 bytes, empty strings and line endings; reject NUL and more than128KiB before spawn.
@@ -216,8 +234,16 @@ execution; another complete snapshot returned a 31-character prefix of the
 36-character fixture app name and failed exact-app validation. The successful
 case uses a short unique app name. Native AX exposes the nonce as a separate
 static text node where CUA joins it with “Device”; the fixture checks the exact
-nonce in both representations. Long-name/alias compatibility remains open;
-never accept a prefix merely to make an identity check pass. The earlier tiny
+nonce in both representations. A later fresh long-name fixture passes through
+explicit window selection: its returned canonical app label differs, while the
+exact native window ID, owned process lifetime, nonce and refmap agree. No named
+app comparison is relaxed. This trial again maps 50 refs/78 elements, matches CUA
+AX/pixels, passes 60 seconds Local and the final bound ACK, and closes all owned
+processes after 105.83 seconds. Sampled peak is four product processes/seven
+including OS utilities, 916,946,944 bytes including guardian, with the same
+external-observer exclusions. Native input/model calls/provider images remain
+absent. Private before/after: `../evidence/agent-desktop-window-capture-20261117`.
+Never accept a prefix merely to make an identity check pass. The earlier tiny
 synthetic-renderer capture and unknown click outcome retain their narrow scope.
 
 ### Snapshot and input write authorization
