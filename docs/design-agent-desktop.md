@@ -206,6 +206,43 @@ lease, substitute a per-profile lock, weaken the sandbox or change permissions
 to make this fixture pass. Continue Monitor acceptance with the supported CUA
 path; native mutation acceptance needs compatible canonical coordination first.
 
+### Snapshot and input write authorization
+
+The pinned 1.3.1 [snapshot command](https://github.com/vercel-labs/agent-desktop/blob/b0b7277bea09b770ef9d1fb45aad667bc432cd57/crates/core/src/commands/snapshot.rs)
+uses `snapshot::run_with_context`, then `RefStore::for_session` and
+`save_new_snapshot`. Its session refstore lock, latest-snapshot marker and refmap
+live beneath the configured `AGENT_DESKTOP_HOME`. This is separate from the
+canonical native interaction lease. An explicit owned workspace state root makes
+this capture path eligible for the existing workspace write fence; it does not
+relocate or authorize the native input lock. Hermes also retains its own
+`HERMES_HOME/bot-desktop` lease checks. No lease is disabled for capture.
+
+Native input remains blocked in this fixture until the owner grants a narrow
+exception for the existing canonical mechanism to create/manage its required
+`/tmp/agent-desktop-<effective-uid>` directory and `interaction.lock` artifact
+(macOS resolves `/tmp` through `/private/tmp`). Workspace refstore permission,
+Accessibility permission and the desired feature do not grant that exception.
+Never try an input operation merely to test whether the forbidden write works.
+This is the trial's authorization boundary, not a claim that ordinary installations
+cannot use native input.
+
+Full-production capture acceptance is still open. The first preparation trial
+exits before gateway readiness: placing the fixture directory before source makes
+its `gateway.py` shadow the production package. No Electron app or native driver
+starts. A future-only bootstrap puts source before fixture helpers and validates
+the resolved gateway package and exact capture/admission helper paths before
+startup. Under the same OS/audit fences, actual imports pass; fixture-first gateway
+shadowing and a foreign capture helper both fail before startup. The original
+failed trial is retained, with no live retry or capture-success claim.
+
+Next fresh trial: one default profile, unchanged production renderer/main/preload,
+one common-tool AX capture in the existing gateway process, and one exact
+snapshot subprocess admission. Compare nonce content, PID/birth/executable,
+window generation and native refs with CUA AX/pixels. Keep the four-process,
+3.5 GiB, Local-only network/write/SSH and cleanup fences; no model prompts or
+native input. Import preparation does not establish runtime readiness or earn a
+feature release.
+
 ## Remaining capability set
 
 Extend the provider with verified act loops using native snapshot refs. Keep secret typing on stdin,

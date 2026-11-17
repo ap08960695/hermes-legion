@@ -556,6 +556,31 @@ owner app/data, remote host/ai, ESTOP, pause, timer or permission change.
 
 # Native provider capture and interaction-directory diagnosis — unreleased
 
+The later full-production capture preparation traces the pinned 1.3.1 snapshot
+path to its configured session refstore, separate from the canonical input lease.
+Workspace refstore writes are eligible; native input's `/tmp` directory/lock
+writes still need an explicit owner exception. No permission or sandbox change
+is made, and no input operation is attempted to probe that boundary.
+
+The single production trial fails before gateway readiness because fixture-first
+imports resolve the runner's `gateway.py` as the production package. The guardian
+closes its one process after 0.71 seconds, sampled peak 131,203,072 bytes including
+the guardian; Electron and agent-desktop never start. No full-target snapshot or
+new UI evidence exists. A future-only bootstrap fixes source/helper ordering and
+checks module provenance before startup. Actual imports under the existing
+OS/audit guards pass, while the original shadowing order and a substituted capture
+helper are refused. Eight existing Python guard cases and the single-use native
+command admission controls also pass. These are preparation checks, not a native
+capture pass. Original failure receipt and STOP remain unchanged; no live retry.
+
+Four fixture configs and initial window-state absence are restored, eleven source
+hashes unchanged and no owned process survives. Disposable build/runtime/temp
+artifacts are removed after recording their logical sizes; no physical disk saving
+or whole-task RAM claim. Full-production common-tool capture is the next live gate;
+native input and the agent-desktop feature release remain open.
+
+The earlier tiny-renderer capture evidence below retains its original scope.
+
 The actual common tool and selected provider parse a complete macOS native
 snapshot with five refs from an isolated production main/preload and synthetic
 renderer. Private checks bind live PID/birth/exe, nonce content, window and

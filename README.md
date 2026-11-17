@@ -58,6 +58,10 @@ Scroll now accepts a captured `scrollarea` element, one direction and 1–50 uni
 its ref is consumed and a fresh capture is required. Coordinates/focus are refused.
 Host/sandbox boundaries remain enforced. Native input success, screenshots and
 other input forms remain unverified or unimplemented; see the design note.
+Workspace snapshot-ref writes and the canonical native input lease need separate
+authorization in the isolated trial. Full-production provider capture remains
+open after a fixture import failure before app launch; guarded import preparation
+now passes. See the [capture boundary](docs/design-agent-desktop.md#snapshot-and-input-write-authorization).
 
 ## What is included
 
