@@ -188,6 +188,29 @@ display-only sleep handling and actual visibility/reduced-motion/resource
 acceptance remain open. No version or release for this development step, and
 no claim that the five-character CPU/RAM target is met.
 
+## Pet picker source isolation: completed offline prerequisite
+
+Before assigning imported packs to individual bots, the existing avatar Pet
+picker must read the intended bot's library. It previously used the active
+gateway and a slug-only thumbnail cache even when Edit Profile targeted another
+source/profile or New Bot targeted another connection.
+
+Both dialogs now supply a required captured source/request pair. Edit Profile
+uses the existing owner-aware bot router (including backend profile aliases and
+removed-owner refusal); New Bot pins the chosen/default backend descriptor when
+supported. Legacy unscoped behavior remains available. Gallery query identity and
+the shared120entry thumbnail LRU include source identity; thumbnails also include
+slug/URL. A source change remounts the gallery, and older selection callbacks
+cannot overwrite a newer pick, removal or another source's draft.
+
+Mounted component/caller tests, renderer types/build and scoped lint comparison
+verify this source fix offline. Native RPC functionality was observed in two
+profiles, but isolation failed: an import-time updater probed a local repository
+outside the fixture home. A separate strict successor stopped before Python
+startup because its interpreter runtime was under the denied tree. Both native
+attempts remain unaccepted; no third launch or boundary weakening. This is not
+native UI, per-bot animated pack assignment, or character/resource acceptance.
+
 ## Remaining capability work
 
 The first overlay slice must map actual active bots/workers to bounded actors in

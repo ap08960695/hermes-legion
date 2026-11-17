@@ -1,3 +1,59 @@
+# Pet picker source isolation — offline source fix, unreleased
+
+PetTab formerly queried the active gateway and cached thumbnails by slug even
+when its bot/creation target belonged to another source or profile. Required
+captured source/request pairs now flow from both dialogs through AvatarPicker.
+Owner-aware edit reads preserve aliases and fail closed for a removed owner.
+Creation reads pin the intended backend/profile where scoped RPC is available;
+legacy unscoped behavior remains. Source-keyed gallery lifetime/query identity
+and source+slug+URL thumbnail identity keep the shared120entry LRU bounded.
+A click generation invalidates stale results on newer picks, removal or unmount.
+No persistent assignment field, global pet selection, extra provider or setting.
+
+Four mounted regressions fail on the original picker. The fixed picker passes
+all8cases (four new/four existing), including same slug/different source icons,
+routed gallery/thumb calls, URL changes and late-source/older-click/removal guards.
+Both parent bindings execute captured request callbacks; alias rewriting, removed
+owner refusal and selected creation target are checked. Final3files/38tests pass,
+one worker, no retries. A first command used the wrong installed Vitest path and
+never reached tests; its failure remains. The first caller suite has37pass/1fail
+because a new exact label matcher missed the existing current-source suffix;
+using the established accessible-name matcher gives18creation cases, then the
+final38case suite passes. No product workaround for that fixture issue.
+
+Renderer types and a production renderer build pass. Scoped lint has0new
+messages; the same7pre-existing create-dialog diagnostics remain, verified
+against its backed-up original. Six other changed files are clean. The final
+post-test edit only adds the lint-required blank line; the current source is
+built. Existing dynamic-import build warning remains. No unchanged full source,
+Desktop or mock suite is rerun or summed into these counts.
+
+Native attempt1 calls real pet.gallery(localOnly) and pet.thumb handlers against
+two isolated profile directories with the same slug and distinct original fixture
+sprites. It verifies different galleries/thumbnails, missing-profile refusal and
+exact config/installed bytes. An explicitly warm empty catalog avoids catalog
+prefetch; no service or app is launched. Functional assertions pass, but process
+receipts expose gateway-import update prefetch invoking Git against a local
+repository outside the fixture home. The guard omitted owner-read denial.
+That attempt is INVALID for isolation; raw functional proof/receipt is retained
+unchanged with a separate rejection. No owner write or remote/SSH connection is
+observed; this does not establish that the owner repository was untouched.
+
+A second separately prepared actual-pytest fixture uses the upstream supported
+background-prefetch test mode, plugin/conftest/cache suppression, all outbound,
+owner-read and Git protocol/exec fences, plus owned parent/child/exec controls.
+It exits1before pytest, controls or RPC because the interpreter's base runtime
+is inside the denied owner tree (encodings import fails). Controls are prepared,
+not proved. No permission change, fence weakening, third native launch or third
+advisor call. Neither attempt establishes isolated native UI/backend acceptance.
+Both recorded process trees close with0survivors; raw failures remain failed.
+
+The completed milestone is the offline source/consumer fix. Native startup/UI,
+per-bot animated assignment and five-character CPU/RAM acceptance stay open;
+no version/tag/release/adoption. Two advisor consultations used supplied facts,
+not independent inspection. No owner app, backend switch, Hermes model inference,
+ESTOP/pause/timer or remote-host control. Only changed patch sections are exported.
+
 # Character-pack creator skill — native tooling slice, unreleased
 
 The self-contained `skills/character-pack-creator/SKILL.md` guides a brief or
