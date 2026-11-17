@@ -343,6 +343,12 @@ and 3.01–3.28 CPU points over no overlay. Keep canvas and
 test whether a shared paint region can reduce CPU with active-row residency.
 The five-character resource budget remains open.
 
+A matched Mac trial placed five full-sheet sprites on one tight canvas with
+the same readback hint, draw cadence, captions and geometry. The shared canvas
+added 109.9–112.6 MiB and 2.67–3.00 CPU points over no overlay.
+The shared full-sheet renderer missed the resource gate. It also missed the CPU headroom needed for the earlier active-row decode cost. The product still uses separate canvases.
+Keep the tested canvas path and target atlas residency and drawing cadence separately.
+
 The [cross-panel regression](verification.md#edit-profile-to-monitor-character-handoff-unreleased)
 verifies that the saved character reaches Monitor after a roster reload, even
 with the optimistic metadata cache cleared. The isolated Mac walkthrough
