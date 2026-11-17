@@ -1,3 +1,33 @@
+# Profile-bound pet RPC — contained Mac handler acceptance
+
+One fresh real pytest passes actual gallery/thumb requests for two isolated
+profiles with the same slug and different original sprite bytes. Gallery names
+and decoded thumbnails stay profile-specific; a missing profile fails. Root and
+profile configs and installed packs remain byte-identical, with no global pet
+selection. This is in-process native handler proof, not app startup, UI routing,
+per-bot animated assignment, real remote catalogs or five-character CPU/RAM.
+
+A separate preflight passes the strict owner-read/child/exec/protocol boundary.
+The private fixture then proves seven exact local metadata reads and eleven
+pre-exec refusals, including changed cwd/argv/environment, remote/SSH and a
+closed-phase read. Git executable/config/refs/source hashes are pinned; configs,
+protocols, hooks, fsmonitor, lazy-fetch and replacements are restricted. Only
+metadata import can use the finite allowance; it closes before RPC. Actual
+pytest suppression plus an explicit warm empty catalog prevents prefetch.
+951Python origins stay in the workspace;410libraries contain no owner Hermes
+runtime. No unexpected event, retry or guard relaxation occurs.
+
+Trial1.598s/238911488B sampled including guardian/max3controlled processes,
+0recorded survivors. These are fixture costs; external controllers/advisor are
+excluded. One consultation, supplied facts only. Earlier218/219failures remain
+failed. [Procedure and limits](native-checks-and-test-memory.md#profile-bound-pet-rpc--contained-mac-acceptance).
+
+Source/patch/selection/default/version/release unchanged;7matching source hashes
+reuse38UI/type/build evidence. Required companion/tracked-copy/secret gates
+remain separate. No owner app, ai/onex2/other host, permission audit/input,
+Hermes inference, ESTOP/pause/timer or adoption action. Capture/input lease and
+full character acceptance remain open.
+
 # Workspace runtime boundary — controls complete, native handler proof incomplete
 
 A reusable workspace copy of the public interpreter/runtime/test packages now

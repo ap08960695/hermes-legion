@@ -211,11 +211,15 @@ startup because its interpreter runtime was under the denied tree. Both native
 attempts remain unaccepted; no third launch or boundary weakening. This is not
 native UI, per-bot animated pack assignment, or character/resource acceptance.
 
-The subsequent workspace-runtime preflight now passes the strict owner-read,
-child-inheritance and exec/protocol controls, with no tested owner runtime
-dependency. Its one actual-pytest trial still stops before RPC on a local Git
-version-metadata subprocess. Runtime preparation is complete; handler/UI
-acceptance remains open. [Boundary evidence](native-checks-and-test-memory.md#workspace-runtime-under-a-strict-hermes-home-read-fence).
+The subsequent workspace-runtime preflight passes strict owner-read, child and
+exec/protocol controls. Round219's metadata-audit failure remains failed. A fresh
+Round220 actual pytest now passes profile-specific gallery/thumb and missing-
+profile behavior under the same OS fences. A finite seven-command local Git
+metadata allowance closes before RPC; eleven negative controls pass. Configs and
+pack bytes stay unchanged, no global selection or unexpected activity occurs.
+This completes contained native-handler acceptance only; Desktop routing,
+per-bot assignment and character/resource acceptance remain open. [Boundary
+evidence](native-checks-and-test-memory.md#profile-bound-pet-rpc--contained-mac-acceptance).
 
 ## Remaining capability work
 

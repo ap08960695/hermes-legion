@@ -1,5 +1,55 @@
 # Native checks and bounded QA memory
 
+## Profile-bound pet RPC — contained Mac acceptance
+
+One fresh actual-pytest case now passes the real in-process `pet.gallery` and
+`pet.thumb` handlers for two isolated local profiles. Each owns the same slug
+with different original synthetic sprite bytes. Galleries retain their profile
+names; decoded PNG thumbnails have different hashes. A missing profile fails.
+Root/profile configs and installed pack bytes remain unchanged; no global pet
+selection is made. This proves native handler/profile rebinding, not Desktop
+routing, per-bot animated assignment, app startup or the character CPU/RAM target.
+
+The private fixture admits only seven exact local version-metadata commands for
+the pinned source checkout. Executable/config/source/refs hashes, exact cwd and
+sanitised environment are checked; no arbitrary Git command or subprocess is
+allowed. Repository config has no include/worktree/executable/promisor setting;
+Git symlinks, alternates, common-dir indirection, grafts and replacement refs are
+rejected. Global/system config, protocols, hooks, fsmonitor, optional locks,
+lazy fetching and replacement objects are disabled. The owner-pointing origin
+is unused. This is a fixture policy, not a production version-reader change.
+
+Before the trial, the unchanged OS/runtime boundary controls pass again. Seven
+real metadata reads confirm the expected commit/base version; eleven negative
+controls refuse remote/fetch/SSH, other commands, wrong cwd, extra argv and
+explicit/inherited environment changes before execution. A closed-phase probe
+also refuses a formerly allowed read. The actual import reads its real version,
+then closes the subprocess allowance before RPC. All unexpected activity remains
+fatal. There is no forged version stamp or production-handler mock.
+
+Actual pytest runs with plugins/conftest/cache disabled and uses the framework's
+supported background-prefetch suppression. The explicit warm empty catalog is
+fixture data, not remote-catalog acceptance. All951loaded Python origins are in
+the workspace;410loaded libraries contain no owner Hermes dependency. OS owner
+read, all-outbound-network, SSH/transport-helper and workspace-write fences stay
+in force. No owner path is probed. One trial, no retry or boundary relaxation.
+
+The trial closes in1.598s, with238911488B sampled peak including its guardian,
+at most three controlled processes/four including guardian and no recorded
+survivors. External controllers/advisor are excluded; these are fixture costs,
+not production savings. The separate preflight and metadata controls take0.469s
+and0.601s respectively. One consultation uses supplied facts, not an independent
+review. Public summary: `../evidence/profile-bound-pet-rpc-r220`; private raw
+scripts, hashes, controls and receipts remain in the isolated fixture.
+
+Round218's owner-repository probe and strict-start failure, and Round219's
+metadata-audit failure remain failed. This distinct accepted trial advances the
+native prerequisite only. Seven unchanged picker source hashes reuse prior
+38UI/type/build evidence without rerunning or summing it. No source/patch/test
+selection/default/version/release, owner app, permissions, input, other-host,
+Hermes inference, ESTOP/pause/timer or adoption action occurs.
+
+
 ## Workspace runtime under a strict Hermes-home read fence
 
 The current Mac fixture now has an independently located interpreter and tested

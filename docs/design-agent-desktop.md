@@ -365,7 +365,9 @@ cleared by that report; native lease acquisition/act/verify is still untested.
 Bind future input to the test app and the applicable write scope, retaining the
 canonical lease instead of relocating/bypassing it or changing system permission
 settings. Ordinary installations are not subject to the earlier fixture's write
-rule. No permission audit or input is performed in the runtime-boundary round.
+rule. Workspace runtime preparation and a later contained pet-RPC trial perform
+no permission audit or native input. [Pet-handler proof](native-checks-and-test-memory.md#profile-bound-pet-rpc--contained-mac-acceptance)
+does not establish capture, canonical input lease or act/verify readiness.
 
 ## Remaining capability set
 
