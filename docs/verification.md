@@ -1,3 +1,30 @@
+# Saved character reaches the native Mac Monitor overlay (unreleased)
+
+An isolated Electron control first opened a plain Character disclosure and
+selected an installed option with Computer Use. Trusted DOM events, the
+accessibility state and a painted marker agreed for both steps. The control
+showed that the same action could work in a fresh, isolated window.
+
+The production Desktop build then connected to the canonical Local gateway
+through an authenticated loopback session. After the 60-second zero-SSH
+check, Computer Use opened the fixture bot's **Edit Profile → Character**,
+selected its installed Ruby pack, and saved. The editor reported success.
+A separate authenticated roster request read `ruby-character` from the
+same profile. The request for the installed gallery was Local-only.
+
+With an enabled cyan mascot in the active Local profile, Computer Use opened
+Monitor and selected **Show bot characters**. The bot and its synthetic
+worker both displayed ruby sprites in the shared overlay. Independent pixel
+checks found the ruby art and no cyan mascot pixels. That closes the native
+save-to-preview walkthrough for the isolated fixture. The earlier input and
+capture divergence did not recur. Its cause remains unknown.
+
+The control and full app each passed their own 60-second zero-SSH check.
+The full Desktop and gateway used at most four product processes, reached
+about 1.10 GiB peak summed RSS with the observer, and exited. The activity
+row was synthetic. Real bot events and the five-character resource budget
+remain release gates.
+
 # Edit Profile to Monitor character handoff (unreleased)
 
 The packaged Mac Desktop renderer, Electron main and preload connected to the
@@ -15,7 +42,7 @@ revision-checked write preserves unrelated profile metadata, clears the
 optimistic cache, reloads the saved value and verifies Monitor publishes the
 exact assigned sprite from the same Local route. Both focused suites pass
 18 tests. This proves the renderer handoff through the test transport. The
-native save and visual preview remain open.
+first Mac attempt stopped before the save and visual preview.
 
 The native run used a synthetic worker observation and no model generation.
 Peak sampled RSS including the observer was about 893 MiB, with at most four

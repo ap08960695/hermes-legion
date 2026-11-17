@@ -32,9 +32,10 @@ an installed pack in **Edit Profile → Character**. **Use default** clears the
 assignment. Monitor plays the chosen atlas for that bot and its workers in its
 five-character preview. Static avatars and the global pet choice remain separate.
 The installed list skips Petdex. Isolated Mac dispatch tests cover selection,
-clear, stale saves, and two profiles sharing a slug. Native Desktop screen
-acceptance and the five-character resource budget remain open.
-[Evidence](verification.md#per-bot-characters--source-and-contained-mac-handlers-unreleased).
+clear, stale saves, and two profiles sharing a slug. The isolated Mac
+walkthrough verified the assigned art in Monitor through the canonical Local
+gateway with synthetic activity. The five-character resource budget remains open.
+[Native walkthrough](verification.md#saved-character-reaches-the-native-mac-monitor-overlay-unreleased).
 
 ## Keep pet picker reads with their owner (unreleased source fix)
 

@@ -317,3 +317,9 @@ verifies that the saved character reaches Monitor after a roster reload, even
 with the optimistic metadata cache cleared. The isolated Mac walkthrough
 reached Edit Profile with the canonical Local gateway. Native input stopped
 at the Character disclosure, before assignment and visual acceptance.
+
+The [native Mac walkthrough](verification.md#saved-character-reaches-the-native-mac-monitor-overlay-unreleased)
+then saved an installed pack through Edit Profile, read it back through a
+separate authenticated Local request, and confirmed its art for the bot and
+worker in the shared overlay. The preview was exercised with a synthetic
+activity row. Real events and overlay resource acceptance remain open.
