@@ -319,6 +319,15 @@ The candidate added 79.5 MiB and 2.96 CPU points over no overlay. Keep the
 full-sheet path for now. The release budget still needs a change that reduces
 rendering cost without losing movement or click-through.
 
+A follow-up Mac run measured 111.6 MiB and 2.81 CPU points of five-pack
+overhead before tracing. About 1.51 CPU points came from the overlay
+renderer and 1.29 from the main process, which hosted Chromium's GPU
+thread in this fixture. The sprite loop already waits on a timer until
+the next frame is due. In a separate eight-second Chromium trace, layer
+updates used 41.5 ms of thread time, compared with 14.0 ms across renderer
+timers and animation callbacks. Trial one smaller presentation surface
+at the same sprite size and cadence. Keep this fixture budget open.
+
 The [cross-panel regression](verification.md#edit-profile-to-monitor-character-handoff-unreleased)
 verifies that the saved character reaches Monitor after a roster reload, even
 with the optimistic metadata cache cleared. The isolated Mac walkthrough
