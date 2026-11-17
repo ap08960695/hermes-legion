@@ -239,7 +239,7 @@ actual budget miss and trade-off before release; no budget claim from unit tests
 The draft native-atlas folder contract, metadata lint, original example recipe,
 blank template and starter guide are now included. The full runtime format still
 needs per-event animations/fallbacks, size/fps/anchor controls, extended formats,
-per-bot assignment. Native-atlas creator guidance, lint, terminal preview and
+and canonical per-bot assignment. Native-atlas creator guidance, lint, terminal preview and
 Mac-tested no-overwrite import are included. Reuse current stores/renderer
 rather than introducing another atlas taxonomy. Only original/owned art; no
 borrowed character designs or copied reference art.
@@ -248,3 +248,38 @@ Keep these items explicitly unimplemented until their source and native evidence
 exist. Full capability release requires screenshots/short recording, real-event
 acceptance and measured CPU/RAM. No source/runtime adoption into the owner app,
 ai/otherhost access or permission changes; first adoption remains lead/owner-only.
+
+## Per-bot installed characters — unreleased
+
+Edit Profile gets a separate Character selector listing only that captured
+profile's installed packs, plus Use default. Static avatar controls and legacy
+local-only `pet` metadata keep their meaning. Save only a changed nullable
+`character` slug through existing profile metadata/CAS; an untouched form never
+reverts another window's assignment. New/unassigned bots inherit the existing
+mascot. No download/install or global pet selection is part of assignment.
+
+Use a scoped read-only `pet.sprite` RPC and the existing payload/PetSprite path.
+Accept confined regular static PNG/WebP atlases, <=4MiB compressed and <=3million
+pixels, native192x208 frames and up to9rows/9columns; reject path/symlink escape,
+missing/oversized/animated packs. Enforce matching image-header dimensions,
+geometry, frame counts and bounded base64 at the publisher before rendering.
+This ceiling bounds input; actual five-character CPU/RAM remains a live gate.
+
+Monitor resolves only its five current actors. Source/route/install/bot/slug key
+all sprite identity; capture routes, request serially with an8s transport timeout,
+retain at most5current identities and discard late evicted/reassigned replies.
+Clear on stop/stale/unmount/source change; no automatic retry. An unassigned
+actor uses the default atlas; assigned loading/error/missing actors stay hidden.
+One source's bytes never substitute for another's identical slug. Overlay stays
+gateway-less and uses existing preview expiry/IPC/shared renderer/reduced motion.
+
+The separate installed dropdown reuses existing form and query behavior and
+preserves the avatar Pet tab's static pictures and remote gallery semantics.
+Tests cover persistence, source races, eviction, payload validation and overlay
+rendering. The isolated Mac trial exercises real handlers and profile saves.
+[Verification](verification.md#per-bot-characters--source-and-contained-mac-handlers-unreleased).
+
+This slice uses the shared JSON-RPC surface. The canonical Desktop transport
+does not currently expose pet RPCs or `profiles.configure`. Canonical routing,
+native screen evidence, per-event interactions and five-character resource
+measurements remain release conditions.

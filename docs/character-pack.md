@@ -3,8 +3,9 @@
 The current development kit can **lint, preview and import a local native-atlas
 folder**. Validation/preview leave installed entries alone. Explicit import adds
 a new entry to the current profile; selecting it remains a separate action.
-This is the draft native-atlas subset. Per-bot assignment and extended
-interaction events remain open.
+This is the draft native-atlas subset. The unreleased Desktop preview can use an
+[installed pack for one bot](#assign-an-installed-pack-to-a-bot) on compatible
+gateways. Extended interaction events remain open.
 
 ## Start with the original example
 
@@ -50,7 +51,7 @@ The one-file copy includes the supported geometry/manifest and native composer
 recipe. Its installed native discovery/read, embedded recipe and isolated CLI
 workflow are checked. This is deterministic tooling evidence, not proof that an
 artist agent or image model will produce good art or obey every instruction.
-Extended formats/events and per-bot assignment remain future work.
+Extended formats and events remain future work.
 
 ## Folder contract, schema 1
 
@@ -105,7 +106,7 @@ or a safe installer for hostile concurrent directory changes.
    if needed.
 7. When ready, import under a new slug as described below. Existing **installed**
    pets keep `hermes pets show <slug> --cycle --once`; do not combine a slug with
-   `--pack`. Per-bot assignment is still a future step.
+   `--pack`.
 
 | Row, from top | Native atlas name | Generator cells | Existing activity alias |
 |---|---|---:|---|
@@ -155,8 +156,8 @@ Import copies the exact validated image and keeps creator name/author/licence
 in `manifest.json` beside normal `pet.json` metadata. Extra source files and
 scripts are not copied or executed. The original folder stays unchanged.
 Current selection and settings stay unchanged; make it active only when you
-choose, with `hermes pets select my-character`. This is the existing global pet
-selection, not a new per-bot assignment setting. To remove the imported copy,
+choose, with `hermes pets select my-character`. This sets the global pet.
+To remove the imported copy,
 select another pet or turn display off first, then use
 `hermes pets remove my-character`; the original creator folder remains.
 
@@ -178,6 +179,20 @@ The native acceptance here is macOS. Linux/Windows implementations use their
 native no-replace contracts but have not been run in this Mac-only round.
 This does not install a new Hermes.app build or prove the character overlay.
 
+## Assign an installed pack to a bot
+
+On an unreleased Desktop build with the shared pet and profile configuration
+RPCs, open **Edit Profile → Character**, choose a pack installed in that
+profile, and save. **Use default** clears the assignment. **Show bot
+characters** in Monitor uses the selected sprite for that bot and its workers.
+An assigned pack must be a readable static native PNG/WebP atlas at most 4 MiB
+and 3 million pixels to appear in the preview. If the pack is unavailable,
+choose another installed pack or clear the assignment.
+
+The isolated Mac handler proof covers assignment, clearing and profile
+isolation. Canonical transport support and native Desktop screen acceptance
+remain open.
+
 ## Read the result
 
 Success prints the pack name, author, licence, dimensions and populated rows.
@@ -185,8 +200,7 @@ Warnings alone return exit **0**; errors return **1**, including unreadable file
 or metadata. Validation does not install a pet, select a profile, change settings,
 start a model or fetch an asset.
 
-FPS, anchor/footprint, custom per-event mappings, sounds, ZIP import, GIF/APNG/
-Lottie decoding and per-bot assignment are future parts of the full format.
-They are rejected or absent here rather than silently advertised as working options. Existing native geometry and animation scheduling
-remain in control. Lint is not proof of the five-character CPU/RAM budget or
-of enter/exit, handoff, retry, review or group-celebration behavior.
+FPS, anchor/footprint, custom per-event mappings, sounds, ZIP import, and
+GIF/APNG/Lottie decoding are future parts of the full format. Existing native
+geometry and animation scheduling remain in control. Visual behavior and the
+five-character CPU/RAM budget need separate acceptance.

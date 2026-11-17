@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1161-path** Legion source, interface and optimization alternative
+This is the complete **1172-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -25,14 +25,25 @@ font deduplication have regression coverage; native confirmation after the fix,
 screenshots and CPU/RAM acceptance remain open. [Design](design-bot-characters.md#active-character-overlay-preview-offline-source-step) and
 [verification limits](verification.md#bot-character-overlay-preview--offline-source-step-unreleased).
 
+## Choose a character for a bot (unreleased)
+
+On gateways that expose the shared pet and profile configuration RPCs, choose
+an installed pack in **Edit Profile → Character**. **Use default** clears the
+assignment. Monitor plays the chosen atlas for that bot and its workers in its
+five-character preview. Static avatars and the global pet choice remain separate.
+Source tests and isolated Mac handlers cover selection, clear, stale saves, and
+two profiles sharing a slug. Canonical transport support, native Desktop screen
+acceptance and the five-character resource budget are open.
+[Evidence](verification.md#per-bot-characters--source-and-contained-mac-handlers-unreleased).
+
 ## Keep pet picker reads with their owner (unreleased source fix)
 
 Edit Profile and New Bot now bind pet gallery/thumbnail reads to their intended
 source/profile. Query/cache identities separate equal slugs across sources;
 source changes and late callbacks preserve the latest draft choice. Existing
 thumbnail LRU/timeout/failure eviction remain. Mounted UI/caller tests, renderer
-types/build and baseline-aware lint verify the source change. Native isolation
-was not accepted; this does not add per-bot animated character assignment.
+types/build and baseline-aware lint verify the source change. A contained native
+handler trial also verifies profile isolation for equal slugs.
 [Evidence and limits](verification.md#pet-picker-source-isolation--offline-source-fix-unreleased).
 
 ## Import creator packs without replacing pets (unreleased)

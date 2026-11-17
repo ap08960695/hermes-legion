@@ -1,3 +1,26 @@
+# Per-bot characters — source and contained Mac handlers (unreleased)
+
+Six focused Desktop files pass 50 cases. They cover the installed-only picker,
+unchanged and cleared metadata, stale or evicted sprite responses, malformed
+atlases, and per-actor rendering. The renderer type check, build and scoped
+lint pass. The canonical Python test runner passes 14 sprite-handler and two
+generated-contract cases, including invalid file references and corrupt images.
+Changed patch sections apply and reverse against the pinned base. All unrelated
+sections retain their original bytes.
+
+One contained native pytest exercises real gallery, thumbnail and sprite
+handlers against two profiles with the same slug and different art. Real
+`profiles.configure` saves and clears the assignment, rejects a stale save and
+preserves unrelated metadata. The trial restores fixture configs and verifies
+pack and avatar bytes. Four returned PNG/WebP payloads pass the production
+TypeScript validator. The handler measurement samples 267 MiB peak summed RSS
+including the observer, with at most three controlled processes and zero
+survivors. It measures the fixture, not the Desktop overlay.
+
+This covers the shared RPC handlers and client source. The canonical transport
+still lacks pet and profile configuration RPCs. Native Desktop pixels, event
+animations and five-character CPU/RAM acceptance remain open.
+
 # Profile-bound pet RPC — contained Mac handler acceptance
 
 One fresh real pytest passes actual gallery/thumb requests for two isolated
