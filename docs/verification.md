@@ -1,3 +1,19 @@
+# See a delivered text file in a bot’s preview (unreleased)
+
+A character’s latest-output popover labels the full path when a complete
+saved reply contains one standalone `MEDIA:` delivery of an absolute
+`.txt` path. Quoted filename spaces are preserved. The label is plain
+text and **Open in Hermes** still opens the owning Bot Chat. Ambiguous
+or incomplete replies keep the ordinary text preview.
+
+An isolated Mac Local run displayed the exact path, including two spaces
+in the filename, from the canonical Bot Chat despite a newer side chat.
+The path was outside the fixture chat’s workspace. The popover made one
+authenticated output read and requested zero probes or launches of that
+file. The Desktop passed 60 seconds with zero SSH and all fixture
+processes exited. Direct preview needs a reader that enforces the
+owning workspace at file-read time.
+
 # Open web links from a bot’s saved reply (unreleased)
 
 The character popover shows up to two distinct standalone HTTP or HTTPS

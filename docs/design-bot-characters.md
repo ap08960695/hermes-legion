@@ -347,4 +347,10 @@ Opening a [web link](verification.md#open-web-links-from-a-bots-saved-reply-unre
 uses the existing default-browser opener. A complete plain-text reply can show
 up to two distinct standalone HTTP or HTTPS destinations. Electron keeps the
 validated destinations for the current popover and accepts one explicit link
-click. File actions and the five-character resource budget remain open.
+click.
+
+The [Delivered file row](verification.md#see-a-delivered-text-file-in-a-bots-preview-unreleased)
+shows the exact path of a single standalone text-file delivery from a complete
+reply. The path appears once as plain text and the transcript remains available
+through **Open in Hermes**. Direct preview needs a file reader that enforces
+the owning Bot Chat's workspace. The five-character resource budget remains open.
