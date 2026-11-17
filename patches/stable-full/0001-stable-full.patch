@@ -3385,6 +3385,99 @@ index 9a5e12ecba0400180e6b9c4c075f2d7c57859cc2..a1e17bd66f609502615c95b9f93e7c25
 +        context = "WORK OVERVIEW (goal, completed work, pending work, holds):\n" + overview + "\nRECENT CONVERSATION:\n" + str(user_input or "")[-1700:]
 +        return suggest_prompt(context, str(values.get("draft") or ""), str(values.get("scope") or ""))
      if template:
+diff --git a/agent/pet/pack.py b/agent/pet/pack.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..f9b469dd058ac3c7fe0b8537a1cadee3a1d9389d
+--- /dev/null
++++ b/agent/pet/pack.py
+@@ -0,0 +1,87 @@
++"""Read-only lint for local native-atlas creator folders; not an installer."""
++from __future__ import annotations
++
++import io
++import json
++import os
++import stat
++from pathlib import Path
++
++IMAGE_LIMIT = 16 * 1024 * 1024
++MANIFEST_LIMIT = 64 * 1024
++
++
++def _validate_image(stream) -> dict:
++    from PIL import Image
++
++    from agent.pet.generate.atlas import ATLAS_HEIGHT, ATLAS_WIDTH, validate_atlas
++
++    try:
++        with Image.open(stream, formats=("PNG", "WEBP")) as image:
++            if image.size != (ATLAS_WIDTH, ATLAS_HEIGHT):
++                raise ValueError(f"expected {ATLAS_WIDTH}x{ATLAS_HEIGHT}, got {image.width}x{image.height}")
++            if getattr(image, "is_animated", False):
++                raise ValueError("expected a static sprite atlas, not an animated image")
++            return validate_atlas(image)
++    except Image.DecompressionBombError as exc:
++        raise ValueError("image dimensions exceed the decoder limit") from exc
++
++
++def validate_spritesheet(path: Path) -> dict:
++    """Preserve standalone IMAGE validation, including user-selected symlinks."""
++    if not path.is_file() or path.stat().st_size > IMAGE_LIMIT:
++        raise ValueError("expected a PNG/WebP file no larger than 16 MiB")
++    with path.open("rb") as stream:
++        return _validate_image(stream)
++
++
++def _read_pack_file(path: Path, limit: int) -> bytes:
++    before = path.lstat()
++    if not stat.S_ISREG(before.st_mode):
++        raise ValueError("pack files must be regular files, not symlinks or special files")
++    if before.st_size > limit:
++        raise ValueError("pack file exceeds its byte limit")
++    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
++    with os.fdopen(os.open(path, flags), "rb") as stream:
++        opened = os.fstat(stream.fileno())
++        if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
++            raise ValueError("pack file changed while opening")
++        data = stream.read(limit + 1)
++    if len(data) > limit:
++        raise ValueError("pack file exceeds its byte limit")
++    return data
++
++
++def _unique_fields(pairs) -> dict:
++    fields = dict(pairs)
++    if len(fields) != len(pairs):
++        raise ValueError("duplicate manifest fields")
++    return fields
++
++
++def validate_pack(root: Path) -> dict:
++    """Lint the draft native-atlas folder schema without importing pet settings."""
++    if any(part.is_symlink() for part in (root.absolute(), *root.absolute().parents)):
++        raise ValueError("pack directory paths must not contain symlinks")
++    raw = _read_pack_file(root / "manifest.json", MANIFEST_LIMIT)
++    try:
++        meta = json.loads(raw.decode("utf-8-sig"), object_pairs_hook=_unique_fields)
++    except RecursionError as exc:
++        raise ValueError("manifest nesting is too deep") from exc
++    required = {"schema_version", "format", "name", "author", "licence", "spritesheet"}
++    if not isinstance(meta, dict) or set(meta) != required:
++        raise ValueError("manifest requires exactly schema_version, format, name, author, licence and spritesheet")
++    if type(meta["schema_version"]) is not int or meta["schema_version"] != 1 or meta["format"] != "hermes-native-atlas":
++        raise ValueError("unsupported character pack format or schema version")
++    for field in ("name", "author", "licence"):
++        value = meta[field]
++        if not isinstance(value, str) or not value.strip() or len(value) > 160 or not value.isprintable():
++            raise ValueError(f"{field} must be 1-160 printable characters")
++    if meta["spritesheet"] not in ("spritesheet.png", "spritesheet.webp"):
++        raise ValueError("spritesheet must be spritesheet.png or spritesheet.webp in the pack folder")
++    data = _read_pack_file(root / meta["spritesheet"], IMAGE_LIMIT)
++    result = _validate_image(io.BytesIO(data))
++    if "idle" not in result["filled_states"]:
++        result["errors"].append("pack requires a populated idle row")
++        result["ok"] = False
++    return {**result, "pack": meta}
 diff --git a/agent/process_bootstrap.py b/agent/process_bootstrap.py
 index 85dccfc737fb732db0bf79198259464e9cb89baa..2c5ceb2e8aa0aee55c183d1c3ca6379432d9dd4c 100644
 --- a/agent/process_bootstrap.py
@@ -51278,7 +51371,7 @@ index 5426a665312f9cd376b8d39c264129ce8de4fab4..8950fe926e836f0817734e2b21f7f994
 +        return "provider_reported_miss"
  
 diff --git a/hermes_cli/pets.py b/hermes_cli/pets.py
-index 5d568063e35b4fee7b9ad65323e6e7bf0b4c58b9..13a5e15b983071316e016630085dc7b3f3637cb0 100644
+index 5d568063e35b4fee7b9ad65323e6e7bf0b4c58b9..70e8bfa4a911c81f93fba9442bc74074cf2b42ae 100644
 --- a/hermes_cli/pets.py
 +++ b/hermes_cli/pets.py
 @@ -132,3 +132,3 @@ def _cmd_show(args) -> int:
@@ -51301,31 +51394,23 @@ index 5d568063e35b4fee7b9ad65323e6e7bf0b4c58b9..13a5e15b983071316e016630085dc7b3
 -            if args.once and loops >= len(states):
 +            if args.once:
                  break
-@@ -207,2 +205,33 @@ def _cmd_show(args) -> int:
+@@ -207,2 +205,25 @@ def _cmd_show(args) -> int:
 
 +def _cmd_validate(args) -> int:
-+    """Check a local generated atlas without installing or changing it."""
++    """Check a local atlas or creator folder without installing or changing it."""
 +    from pathlib import Path
 +
-+    from PIL import Image
-+
-+    from agent.pet.generate.atlas import ATLAS_HEIGHT, ATLAS_WIDTH, validate_atlas
++    from agent.pet.pack import validate_pack, validate_spritesheet
 +
 +    try:
 +        path = Path(args.spritesheet).expanduser()
-+        if not path.is_file() or path.stat().st_size > 16 * 1024 * 1024:
-+            raise ValueError("expected a PNG/WebP file no larger than 16 MiB")
-+        with Image.open(path, formats=("PNG", "WEBP")) as image:
-+            # Check the header before allocating decoded pixels.
-+            if image.size != (ATLAS_WIDTH, ATLAS_HEIGHT):
-+                raise ValueError(f"expected {ATLAS_WIDTH}x{ATLAS_HEIGHT}, got {image.width}x{image.height}")
-+            if getattr(image, "is_animated", False):
-+                raise ValueError("expected a static sprite atlas, not an animated image")
-+            result = validate_atlas(image)
-+    except (OSError, ValueError, Image.DecompressionBombError) as exc:
++        result = validate_pack(path) if path.is_dir() else validate_spritesheet(path)
++    except (OSError, ValueError) as exc:
 +        _err(f"✗ cannot validate atlas: {exc}")
 +        return 1
 +
++    if meta := result.get("pack"):
++        print(f"Pack {meta['name']} — {meta['author']} — licence: {meta['licence']}")
 +    print(f"Atlas {result['width']}x{result['height']} — states: {', '.join(result['filled_states']) or 'none'}")
 +    for warning in result["warnings"]:
 +        print(f"Warning: {warning}")
@@ -51335,15 +51420,15 @@ index 5d568063e35b4fee7b9ad65323e6e7bf0b4c58b9..13a5e15b983071316e016630085dc7b3
 +
 +
  def _cmd_doctor(args) -> int:
-@@ -400,3 +429,3 @@ _SUBCOMMANDS = (
+@@ -400,3 +421,3 @@ _SUBCOMMANDS = (
          (("slug",), dict(nargs="?", default="", help="Pet slug (default: active)")),
 -        (("--state",), dict(default="", help="Single state: idle/run/review/failed/wave/jump")),
 +        (("--state",), dict(default="", help="Single state: idle/run/review/failed/wave/jump/waiting")),
          (("--cycle",), dict(action="store_true", help="Cycle through all states")),
-@@ -413,2 +442,5 @@ _SUBCOMMANDS = (
+@@ -413,2 +434,5 @@ _SUBCOMMANDS = (
      )),
-+    ("validate", "Check a local sprite atlas without installing it", _cmd_validate, (
-+        (("spritesheet",), dict(help="Static PNG/WebP atlas (1536x1872, up to 16 MiB)")),
++    ("validate", "Check a local atlas or creator folder without installing it", _cmd_validate, (
++        (("spritesheet",), dict(help="Static PNG/WebP atlas (1536x1872, up to 16 MiB) or folder with manifest.json")),
 +    )),
      ("doctor", "Check pet setup + terminal graphics support", _cmd_doctor, ()),
 diff --git a/hermes_cli/plugin_code_cache.py b/hermes_cli/plugin_code_cache.py
@@ -79758,6 +79843,186 @@ index 0000000000000000000000000000000000000000..37434afa105c5c26f5d2a9b39cbe6a5c
 +        "agy",
 +    ]
 +    assert path.read_bytes() == before
+diff --git a/tests/hermes_cli/test_pet_pack.py b/tests/hermes_cli/test_pet_pack.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..bab677f95d3069b1dd0c3d939976b721c7c46313
+--- /dev/null
++++ b/tests/hermes_cli/test_pet_pack.py
+@@ -0,0 +1,174 @@
++"""Creator folder lint is bounded, read-only and compatible with native atlases."""
++import argparse
++import json
++import os
++from pathlib import Path
++
++import pytest
++from PIL import Image, ImageDraw
++
++from hermes_cli.subcommands.pets import build_pets_parser
++
++
++def validate(path):
++    parser = argparse.ArgumentParser()
++    build_pets_parser(parser.add_subparsers())
++    args = parser.parse_args(["pets", "validate", str(path)])
++    return args.func(args)
++
++
++@pytest.fixture
++def pack(tmp_path):
++    root = tmp_path / "creator"
++    root.mkdir()
++    meta = {
++        "schema_version": 1, "format": "hermes-native-atlas", "name": "Lanternling",
++        "author": "Hermes Legion", "licence": "CC0-1.0", "spritesheet": "spritesheet.png",
++    }
++    (root / "manifest.json").write_text(json.dumps(meta))
++    image = Image.new("RGBA", (1536, 1872))
++    draw = ImageDraw.Draw(image)
++    for row in range(9):
++        draw.rectangle((40, row * 208 + 30, 150, row * 208 + 180), fill="teal")
++    image.save(root / "spritesheet.png")
++    return root, meta
++
++
++def test_folder_metadata_and_native_rows_validate_without_writes(pack, capsys):
++    root, _ = pack
++    before = {p.name: p.read_bytes() for p in root.iterdir()}
++    assert validate(root) == 0
++    out = capsys.readouterr()
++    assert "Lanternling" in out.out and "Hermes Legion" in out.out and "CC0-1.0" in out.out
++    assert "1536x1872" in out.out and "running" in out.out
++    assert not out.err
++    assert before == {p.name: p.read_bytes() for p in root.iterdir()}
++
++
++def test_webp_pack_accepts_printable_unicode_metadata_with_utf8_bom(pack, capsys):
++    root, meta = pack
++    meta.update(name="โคมไฟ", author="นักวาด", spritesheet="spritesheet.webp")
++    (root / "manifest.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8-sig")
++    with Image.open(root / "spritesheet.png") as image:
++        image.save(root / "spritesheet.webp", lossless=True)
++    (root / "spritesheet.png").unlink()
++    assert validate(root) == 0
++    output = capsys.readouterr()
++    assert "โคมไฟ" in output.out and "นักวาด" in output.out and not output.err
++
++
++@pytest.mark.parametrize("field,value", [
++    ("schema_version", 2), ("schema_version", True), ("format", "other"),
++    ("name", ""), ("author", []), ("licence", None), ("author", "x" * 161),
++    ("name", "escape\x1b[31m"), ("licence", "line\nbreak"),
++    ("fps", 15), ("anchor", {"x": 96, "y": 208}), ("animations", {"work": "running"}),
++])
++def test_bad_or_unsupported_metadata_is_rejected(pack, capsys, field, value):
++    root, meta = pack
++    meta[field] = value
++    (root / "manifest.json").write_text(json.dumps(meta))
++    assert validate(root) == 1
++    error = capsys.readouterr().err
++    assert "cannot validate atlas" in error and "\x1b" not in error
++
++
++@pytest.mark.parametrize("value", ["../outside.png", "/tmp/outside.png", "C:\\outside.png", "https://example.invalid/a.png", "sub/spritesheet.png", "animation.gif"])
++def test_declared_asset_cannot_escape_or_select_unsupported_format(pack, capsys, value):
++    root, meta = pack
++    meta["spritesheet"] = value
++    (root / "manifest.json").write_text(json.dumps(meta))
++    assert validate(root) == 1
++    assert "spritesheet.png or spritesheet.webp" in capsys.readouterr().err
++
++
++@pytest.mark.parametrize("target", ["root", "ancestor", "manifest.json", "spritesheet.png"])
++def test_pack_symlinks_are_rejected(pack, tmp_path, capsys, target):
++    root, _ = pack
++    if target in {"root", "ancestor"}:
++        link = tmp_path / "linked"
++        link.symlink_to(root if target == "root" else tmp_path, target_is_directory=True)
++        root = link if target == "root" else link / "creator"
++    else:
++        original = root / target
++        outside = tmp_path / target
++        original.rename(outside)
++        original.symlink_to(outside)
++    assert validate(root) == 1
++    error = capsys.readouterr().err
++    assert ("symlinks" if target in {"root", "ancestor"} else "regular") in error
++
++
++@pytest.mark.parametrize("payload", [b"broken json", b"[]", b" " * (64 * 1024 + 1), b"[" * 1100 + b"]" * 1100, b'{"schema_version":1,"schema_version":2}'])
++def test_invalid_or_oversized_json_fails_cleanly(pack, capsys, payload):
++    root, _ = pack
++    (root / "manifest.json").write_bytes(payload)
++    assert validate(root) == 1
++    assert "cannot validate atlas" in capsys.readouterr().err
++
++
++def test_pack_requires_a_populated_idle_row(pack, capsys):
++    root, _ = pack
++    image = Image.new("RGBA", (1536, 1872))
++    ImageDraw.Draw(image).rectangle((40, 1070, 150, 1220), fill="teal")
++    image.save(root / "spritesheet.png")
++    assert validate(root) == 1
++    assert "populated idle row" in capsys.readouterr().err
++
++
++def test_animated_asset_is_rejected_even_with_png_name(pack, capsys):
++    root, _ = pack
++    with Image.open(root / "spritesheet.png") as image:
++        first = image.copy()
++    second = first.copy()
++    second.putpixel((50, 50), (255, 0, 0, 255))
++    first.save(root / "spritesheet.png", save_all=True, append_images=[second])
++    assert validate(root) == 1
++    assert "static sprite atlas" in capsys.readouterr().err
++
++
++@pytest.mark.platforms("posix")
++@pytest.mark.parametrize("target", ["manifest.json", "spritesheet.png"])
++def test_pack_fifo_is_refused_without_opening_it(pack, capsys, target):
++    root, _ = pack
++    path = root / target
++    path.unlink()
++    os.mkfifo(path)
++    assert validate(root) == 1
++    assert "regular" in capsys.readouterr().err
++
++
++@pytest.mark.platforms("posix")
++@pytest.mark.parametrize("replacement", ["file", "fifo"])
++def test_replacement_during_open_is_refused_without_blocking(pack, monkeypatch, capsys, replacement):
++    from agent.pet import pack as pack_module
++
++    root, _ = pack
++    manifest = root / "manifest.json"
++    real_open = os.open
++    def swap(path, flags, *args, **kwargs):
++        if Path(path) == manifest:
++            manifest.rename(root / "original.json")
++            if replacement == "fifo":
++                os.mkfifo(manifest)
++            else:
++                manifest.write_bytes((root / "original.json").read_bytes())
++        return real_open(path, flags, *args, **kwargs)
++    monkeypatch.setattr(pack_module.os, "open", swap)
++    assert validate(root) == 1
++    assert "changed while opening" in capsys.readouterr().err
++
++
++def test_oversized_asset_is_rejected_before_decode(pack, capsys):
++    root, _ = pack
++    with (root / "spritesheet.png").open("wb") as stream:
++        stream.truncate(16 * 1024 * 1024 + 1)
++    assert validate(root) == 1
++    assert "byte limit" in capsys.readouterr().err
++
++
++def test_standalone_image_symlink_keeps_existing_behavior(pack, tmp_path, capsys):
++    root, _ = pack
++    image = tmp_path / "my-image.png"
++    image.symlink_to(root / "spritesheet.png")
++    assert validate(image) == 0
++    assert "Atlas 1536x1872" in capsys.readouterr().out
 diff --git a/tests/hermes_cli/test_pet_preview.py b/tests/hermes_cli/test_pet_preview.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..3dd5756eafe256b5b3992655b1d39a6b6f7d6696

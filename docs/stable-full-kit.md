@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1152-path** Legion source, interface and optimization alternative
+This is the complete **1154-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -24,6 +24,16 @@ local font stacks and normal chat font loading. Cold boot, later paints and
 font deduplication have regression coverage; native confirmation after the fix,
 screenshots and CPU/RAM acceptance remain open. [Design](design-bot-characters.md#active-character-overlay-preview-offline-source-step) and
 [verification limits](verification.md#bot-character-overlay-preview--offline-source-step-unreleased).
+
+## Character creator folders (unreleased)
+
+`hermes pets validate DIRECTORY` now checks a local native-atlas folder's
+name, author, licence, schema and static asset. It reports errors without
+installing anything or changing a profile. The [creation guide](character-pack.md)
+ships a blank manifest and the original CC0 Lanternling generator. Folder/image
+checks, malformed metadata/path cases and real CLI generation/no-overwrite proof
+pass. This is read-only lint; pack installation, custom mappings and full native
+character acceptance remain open.
 
 ## Local sprite atlas check (unreleased)
 

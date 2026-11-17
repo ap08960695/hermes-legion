@@ -1,3 +1,45 @@
+# Character creator folder lint — unreleased development step
+
+`hermes pets validate DIRECTORY` reads a draft schema-1 `hermes-native-atlas`
+manifest: name, author, licence and one static native atlas. Name/author/licence
+are bounded inert printable text; unsupported fields/schema and duplicate keys
+fail. JSON is capped at64KiB and the sheet at16MiB. Files are regular and local,
+with no symlink components or asset subpaths; bounded reads compare opened file
+identity and use nonblocking/no-follow flags where supported. A replaced FIFO
+fails without blocking. This is stable-folder read-only lint, not an installer
+or a guarantee against hostile concurrent directory replacement.
+
+Image checks are factored from the existing CLI handler and still call the real
+generation validator. Raw IMAGE behavior, including user-selected image symlinks
+and missing-row warnings, is retained. Packs additionally require a populated
+idle row. No metadata setting affects a renderer or profile; unsupported fps,
+anchor or event mappings fail rather than imply working runtime controls.
+
+Thirty-seven new real parser/Pillow cases plus13existing IMAGE cases pass with
+one canonical worker/no retry: valid PNG, WebP with printable Thai/BOM metadata,
+no folder writes, schema/field/control-text errors, duplicate/deep/malformed/
+oversized JSON, traversal/absolute/URL/nested assets, directory/file symlinks,
+missing idle, animated content, oversized assets, special files and replacement
+file/FIFO identity refusal. Scoped Ruff covers both source files, the new tests
+and example recipe. No unchanged full source/desktop suite is claimed.
+
+Actual source CLI from owned scratch generates the original CC0 Lanternling
+example, validates folder and image, shows help, rejects the blank template,
+and refuses to overwrite the existing output folder. Case exits0/0/0/0/1/1;
+example bytes/config stay unchanged and previous config state is restored.
+The first harness run stopped after an overly strict help assertion ignored
+argparse line wrapping; that failure is retained. A distinct run normalizes only
+observer whitespace and completes all cases with unchanged product source.
+The atlas was visually inspected as a native-sheet example, not a Desktop frame.
+No model, asset download, Hermes.app/CUA or permission action occurs this round.
+
+Three changed source/test sections apply/hash/reverse/hash against pinned
+`bf0203a`; unrelated sections stay exact. The new Python regression appends to
+the existing selection. Required companion/tracked-copy/directory+history gates
+are in the private round evidence. Full pack format, install/assign, preview,
+character interactions and five-actor visual/CPU/RAM acceptance remain open.
+No version/tag/release/adoption or ai/otherhost access.
+
 # Local sprite atlas validation — creator step, unreleased
 
 `hermes pets validate <spritesheet>` is wired through the real pets parser and

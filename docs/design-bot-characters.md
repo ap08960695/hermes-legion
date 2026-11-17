@@ -42,8 +42,28 @@ exit 1 reports an unreadable, unsupported or invalid atlas.
 
 The real CLI parser/Pillow regression and isolated source CLI cover success,
 failure and help. No installation, model request or network is needed. This
-checks the current generated atlas only: pack manifests, licences, animation
-budgets, archives, install/assign and the complete creator guide remain open.
+IMAGE path checks the current generated atlas only. Folder metadata and a
+starter guide are covered below; animation budgets, archives, install/assign
+and the complete creator capability remain open.
+
+## Folder-pack creator lint: completed development slice
+
+`pets validate DIRECTORY` now reads versioned native-atlas metadata (name, author,
+licence and one confined static sheet) and reuses the image validator. Metadata
+and opened files are bounded; invalid schemas, control text, symlinks, special
+files and unsupported formats fail. The native idle row is required; absent
+other rows remain visible warnings. IMAGE behavior stays compatible.
+
+The [creator guide](character-pack.md) includes a blank manifest and a local
+recipe for the original CC0 Lanternling example, with every native row filled.
+Real parser/Pillow cases and actual source CLI generation/folder/image/help/
+invalid-template/no-overwrite checks pass. No installer or profile change.
+
+FPS, anchor and custom state mappings are deliberately absent until a runtime
+consumes them; unknown fields fail rather than imply support. Lint does not
+establish installability, playability, licence ownership or resource budgets.
+ZIP, GIF/APNG/Lottie, bot assignment, pack-based preview and extended event
+interactions remain open, as does the full character-pack-creator skill.
 
 ## Active-character overlay preview: offline source step
 
@@ -128,11 +148,12 @@ when screen locked/off or Hermes hidden/minimized. Measure before/after with fiv
 actors on this Mac: target <=1–2% average CPU and <=60–80MB extra RSS. Report an
 actual budget miss and trade-off before release; no budget claim from unit tests.
 
-Character packs still need a documented manifest/animation/fallback/size/frame/
-license contract, complete original example, blank template, non-programmer
-creation guide, validator/preview/install/assign tooling and creator skill. Reuse
-current stores/renderer rather than silently introducing another atlas taxonomy.
-Only original/owned art; no borrowed character designs or copied reference art.
+The draft native-atlas folder contract, metadata lint, original example recipe,
+blank template and starter guide are now included. The full runtime format still
+needs per-event animations/fallbacks, size/fps/anchor controls, extended formats,
+pack preview/install/assign and the creator skill. Reuse current stores/renderer
+rather than introducing another atlas taxonomy. Only original/owned art; no
+borrowed character designs or copied reference art.
 
 Keep these items explicitly unimplemented until their source and native evidence
 exist. Full capability release requires screenshots/short recording, real-event
