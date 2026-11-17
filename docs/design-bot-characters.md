@@ -55,12 +55,22 @@ through resume, and retires retained state/listeners when the overlay closes.
 Normal mascot behavior has regression coverage. All nine Monitor locales have
 the new control and its installed-pet/read-only scope hint.
 
-Offline tests/types/lint and renderer/changed-IPC builds pass. Two isolated
-native control renderers failed sandbox initialization before loading the
-production overlay. Both were closed; no Local60, CUA, screenshots or resource
-measurements passed. A launch-path difference from the working native harness
-is a diagnostic lead, not a proven cause. Do not weaken a sandbox or infer an
-overlay defect from those failures. [Evidence and limits](verification.md#bot-character-overlay-preview--offline-source-step-unreleased).
+Offline tests/types/lint and renderer/changed-IPC builds pass. Two earlier native
+control renderers failed sandbox initialization before overlay loading. A fresh
+fixture using the established Chromium sandbox and guarded native launch path
+loaded the control renderer, then reached production overlay loading. Its
+network guard refused a Google theme-font stylesheet before connection; the
+trial closed and remains failed. This does not establish the cause of the two
+earlier failures.
+
+The shared theme painter now skips its font-link injection only for exact
+`win=overlay`, covering cold boot and later theme paints. Palette, typography
+and local font stacks remain; normal main/HUD/secondary windows still load and
+deduplicate theme fonts. Suppressed fonts do not poison that cache. Four new
+regression cases and 23 neighboring theme cases pass, as do scoped lint,
+renderer types and the fixed renderer build. This guards the theme-font branch,
+not every custom CSS or asset URL. No native trial after the fix, Local60, CUA,
+screenshots or character resource acceptance is claimed. [Evidence and limits](verification.md#bot-character-overlay-preview--offline-source-step-unreleased).
 
 Persistent all-bot tracking, character interactions/open controls, per-bot packs,
 display-only sleep handling and actual visibility/reduced-motion/resource

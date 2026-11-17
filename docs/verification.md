@@ -42,7 +42,7 @@ sampled peak 181,157,888 bytes including guardian. Trial two verified owned
 Cocoa home/temp/appData/log/crash paths, then failed identically and closed two
 processes after 2.62s, peak 191,823,872 bytes. Neither reached Local60, CUA,
 screenshots, five characters, or performance measurement. These startup peaks
-are not overlay RAM measurements. No further native trial this round.
+are not overlay RAM measurements. No further native trial in round209.
 
 The narrow sandboxd query had no matching records. Static comparison found that
 the earlier working harness leaves Electron to Chromium's sandbox under Node
@@ -60,6 +60,47 @@ tests; Python selection stays unchanged. This completes an offline development
 step only. Full native rendering, persistent tracking, interactions/output
 preview, packs, display-only sleep and five-character CPU/RAM acceptance remain
 open. No version, tag, adoption or release.
+
+# Pet overlay theme-font fix — source acceptance, unreleased
+
+One fresh round210 fixture reused the earlier working Chromium-sandbox launch
+path with Node I/O/network guards, independently contained child processes,
+blackhole proxy and per-session canonical-file/network/navigation/IPC gates.
+This is not equivalent to an outer OS sandbox against a compromised privileged
+Electron process. Chromium sandboxing remains enabled; no permission or system
+setting changed. Pure guard self-checks pass (19 checks).
+
+The owned control renderer loaded, then production overlay loading attempted a
+Google Fonts Courier Prime stylesheet. The native URL gate rejected it before
+network connection. The trial failed and closed all three processes after
+25.91 seconds, sampled peak 548,421,632 bytes including guardian, zero survivors.
+This proves a startup blocker was reached, not native character acceptance or
+the cause of round209's earlier sandbox failures. No second trial was run.
+
+`applyTheme` injects the font link both at module boot and provider paint. Its
+shared font-link branch now skips exact `win=overlay`; palette/typography and
+local font stacks remain. Main, HUD and secondary window font loading stays
+unchanged, and suppressed links never enter the deduplication cache. Other
+custom CSS or asset URLs are outside this fix.
+
+The cold-import regression intercepts real head publication before importing
+the module and never attaches the external resource. It fails before the fix;
+three main/HUD/secondary controls already pass. After the fix all four new
+cases plus 23 neighboring theme cases pass (27 total). They cover provider
+paint, theme/mode changes and a later normal paint reusing the same module to
+check the skipped font was not cached. Scoped lint has zero errors/warnings;
+renderer types and a separate fixed production renderer build pass. Failed
+native artifact hashes are kept separately from the fixed artifact hashes.
+No native run after the fix, Local60, CUA, screenshot, actual Monitor/bot flow,
+five-character CPU/RAM or whole-task saving is claimed. Failed raw state and
+receipts remain at `../uitest-v090-c2q4iijp/characters-r210`.
+
+Two source/test sections are exported against the same pinned upstream base,
+with apply/after-hash/reverse/before-hash checks and all earlier sections kept.
+The kit now has 1151 paths. Desktop selection appends this test (179 total);
+Python selection remains 1536, with prior ordering/other keys unchanged. No
+version, tag, adoption or release. Next is a fresh contained Local-only native
+trial of the fixed overlay; full characters capability remains incomplete.
 
 # Pet creator preview — native terminal acceptance, unreleased
 

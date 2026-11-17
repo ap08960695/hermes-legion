@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1149-path** Legion source, interface and optimization alternative
+This is the complete **1151-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -17,9 +17,12 @@ it projects up to five fresh source-qualified bot/worker observations into the
 existing overlay, with bounded labels/signals and reported steps. This is an
 opt-in read-only preview while Monitor is open, without extra polling or a
 window/process per actor. Expiry, ownership, static reduced motion and native
-visibility pause have focused source coverage. The native control renderer
-failed before the preview loaded; no screenshots, native acceptance or CPU/RAM
-budget claim. [Design](design-bot-characters.md#active-character-overlay-preview-offline-source-step) and
+visibility pause have focused source coverage. A contained native trial reached
+overlay loading, then its network guard refused a theme-font request. The shared
+theme painter now skips font-link injection only for the pet overlay, keeping
+local font stacks and normal chat font loading. Cold boot, later paints and
+font deduplication have regression coverage; native confirmation after the fix,
+screenshots and CPU/RAM acceptance remain open. [Design](design-bot-characters.md#active-character-overlay-preview-offline-source-step) and
 [verification limits](verification.md#bot-character-overlay-preview--offline-source-step-unreleased).
 
 ## Pet creator preview (unreleased)
