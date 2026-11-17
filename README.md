@@ -59,9 +59,10 @@ its ref is consumed and a fresh capture is required. Coordinates/focus are refus
 Host/sandbox boundaries remain enforced. Native input success, screenshots and
 other input forms remain unverified or unimplemented; see the design note.
 Workspace snapshot-ref writes and the canonical native input lease need separate
-authorization in the isolated trial. The guarded full-production Local app now
-launches, but provider capture remains open after a controller failure before
-Raise/capture. See the [capture boundary](docs/design-agent-desktop.md#snapshot-and-input-write-authorization).
+authorization in the isolated trial. Full-production Local Monitor capture now
+passes through the provider/common tool with 50 native refs and a CUA comparison.
+This is capture-only acceptance with a short exact app name; input and long-name
+alias compatibility remain open. See the [capture boundary](docs/design-agent-desktop.md#snapshot-and-input-write-authorization).
 
 ## What is included
 

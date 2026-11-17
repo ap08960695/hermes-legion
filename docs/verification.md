@@ -554,6 +554,41 @@ Native after-fix degraded paint, canonical navigation, nonempty reports and live
 terminal progress still gate the Bot Monitor batch release. No version/release,
 owner app/data, remote host/ai, ESTOP, pause, timer or permission change.
 
+# Full-production agent-desktop AX capture — unreleased
+
+A fresh isolated production Local Hermes Monitor now passes the actual selected
+provider/common tool capture: one complete 1.3.1 snapshot, 50 native refs and 78
+mapped elements. The witness binds exact app, owned PID/birth/executable, native
+window/session/refmap and the original Electron window generation. CUA AX/pixels
+before/after corroborate the nonce/default/Connected/Monitor view; the final
+bound comparison ACK passes. The table is below the visible fold, so its full
+AX contents are not claimed as independently painted cell-by-cell evidence.
+
+Capture runs in the existing gateway thread. A fresh guardian sample admits the
+single native child only with three product processes and 512 MiB headroom.
+Native hash/argv/env/single-use, profile lease and all original Local/write/SSH/
+identity/335-acceptance/360-total/cleanup guards remain. A validated baseline ACK
+now creates the same 120-second capture phase directly; the redundant manual
+phase ACK caused the first failed trial's race and conveyed no input authority.
+Offline controls refuse wrong identity/window/ACK, STOP, expired budget and phase
+reset. The original failed case and its STOP are retained.
+
+A second failed case returns a complete 50-ref snapshot under a truncated app
+label (31 of 36 fixture-name characters); exact-app validation refuses it. A
+short uniquely named fresh fixture then passes without relaxing that comparison.
+Native and CUA differ in whether “Device” is joined with the nonce; both retain
+the exact nonce. General long-name/alias compatibility remains unverified.
+
+Successful trial closure: 135.31 seconds, zero survivors, gateway/model-server
+stopped, sampled peak four product processes/eight including OS utilities,
+914,702,336 bytes including guardian. CUA/advisors/build/controllers are excluded;
+no whole-task bound or RAM savings claim. No model prompt/native input/provider
+image/owner app or other host/ai is involved. The 60-second Local gate passes.
+Private before/after: `../evidence/agent-desktop-native-capture-20261117`.
+Capture acceptance is complete; input's canonical-lock write exception remains
+ungranted, background/other-OS acceptance and the capability release stay open.
+The earlier failed/preparation records below retain their historical scope.
+
 # Native provider capture and interaction-directory diagnosis — unreleased
 
 The later full-production capture preparation traces the pinned 1.3.1 snapshot

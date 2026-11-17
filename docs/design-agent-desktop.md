@@ -185,78 +185,60 @@ refusal only while the prior native capture/Monitor blocker remains unresolved.
 
 ## Native capture and mutation runtime boundary
 
-A production main/preload build with a tiny synthetic renderer now passes an
-actual macOS provider capture: five native refs, independently checked process
-identity, nonce content and window/session binding. CUA verifies the initial
-screen after an explicit Raise. This proves foregrounded fixture capture only;
-Bot Monitor, background operation and input effects remain unverified.
+The actual macOS provider and common `computer_use` tool now capture the full
+production Local Hermes Monitor window: one complete native snapshot, 50 refs,
+78 mapped elements, and an exact owned app/process/window/session witness.
+CUA AX and pixels before/after corroborate the device nonce, default profile,
+Connected state and Monitor view. The table is present in AX below the visible
+fold; this is not separate pixel acceptance of every table cell. The fixture is
+foregrounded after an exposed Raise; background operation remains unverified.
 
-On macOS, agent-desktop 1.3.1's default interaction lease uses
-`/tmp/agent-desktop-<uid>/interaction.lock`, independently of HOME, TMPDIR and
-AGENT_DESKTOP_HOME. The [versioned implementation](https://github.com/vercel-labs/agent-desktop/blob/b0b7277bea09b770ef9d1fb45aad667bc432cd57/crates/core/src/session/interaction_lease.rs)
-creates a private runtime directory; [ref execution](https://github.com/vercel-labs/agent-desktop/blob/b0b7277bea09b770ef9d1fb45aad667bc432cd57/crates/core/src/ref_action/ref_action_wait.rs)
-acquires this lease before dispatch. A workspace-only write sandbox conflicts
-with that requirement even when snapshots succeed. A no-UI source-function
-probe reproduces INTERNAL/EPERM there; an owned workspace control succeeds.
-This is a fixture boundary diagnosis, not an Accessibility diagnosis or a runtime
-fix. The earlier live click's delivery/effect remain unknown.
+Capture runs in the existing gateway thread, with one native snapshot child.
+A fresh guardian sample must show three product processes and memory headroom
+before the fourth child is admitted. Exact binary hash, argv, environment,
+single-use admission, profile lease, placement and nonce/PID-birth/executable/
+window/refmap checks remain enforced. The validated baseline ACK starts one
+120-second capture phase directly, followed by the bound final comparison ACK.
+A redundant second manual phase ACK was removed after it raced the gateway;
+it conveyed no input permission. The original 335-second acceptance deadline,
+360-second total, cleanup reserve and per-call identity/freshness fences remain.
 
-Do not infer action readiness from status or capture. Do not bypass the canonical
-lease, substitute a per-profile lock, weaken the sandbox or change permissions
-to make this fixture pass. Continue Monitor acceptance with the supported CUA
-path; native mutation acceptance needs compatible canonical coordination first.
+The successful isolated trial passes the 60-second Local gate and final ACK,
+then closes every owned process. Sampled peak is four product processes and
+914,702,336 bytes including the guardian; external CUA/advisors/build/controllers
+are excluded. This is capture acceptance, not a whole-service RAM or savings
+claim. No model prompt, native input, provider screenshot or owner-app adoption
+is part of this trial. Private before/after evidence is retained under
+`../evidence/agent-desktop-native-capture-20261117`.
+
+Earlier failed trials stay failed: a phase-handoff race stopped before provider
+execution; another complete snapshot returned a 31-character prefix of the
+36-character fixture app name and failed exact-app validation. The successful
+case uses a short unique app name. Native AX exposes the nonce as a separate
+static text node where CUA joins it with “Device”; the fixture checks the exact
+nonce in both representations. Long-name/alias compatibility remains open;
+never accept a prefix merely to make an identity check pass. The earlier tiny
+synthetic-renderer capture and unknown click outcome retain their narrow scope.
 
 ### Snapshot and input write authorization
 
 The pinned 1.3.1 [snapshot command](https://github.com/vercel-labs/agent-desktop/blob/b0b7277bea09b770ef9d1fb45aad667bc432cd57/crates/core/src/commands/snapshot.rs)
 uses `snapshot::run_with_context`, then `RefStore::for_session` and
 `save_new_snapshot`. Its session refstore lock, latest-snapshot marker and refmap
-live beneath the configured `AGENT_DESKTOP_HOME`. This is separate from the
-canonical native interaction lease. An explicit owned workspace state root makes
-this capture path eligible for the existing workspace write fence; it does not
-relocate or authorize the native input lock. Hermes also retains its own
-`HERMES_HOME/bot-desktop` lease checks. No lease is disabled for capture.
+live beneath the configured `AGENT_DESKTOP_HOME`. The successful capture uses an
+owned workspace state root under the existing write fence. Hermes retains its
+own `HERMES_HOME/bot-desktop` lease checks; no lease is disabled for capture.
 
-Native input remains blocked in this fixture until the owner grants a narrow
-exception for the existing canonical mechanism to create/manage its required
+Native input's existing `InteractionLease` instead creates/manages the canonical
 `/tmp/agent-desktop-<effective-uid>` directory and `interaction.lock` artifact
-(macOS resolves `/tmp` through `/private/tmp`). Workspace refstore permission,
-Accessibility permission and the desired feature do not grant that exception.
-Never try an input operation merely to test whether the forbidden write works.
-This is the trial's authorization boundary, not a claim that ordinary installations
-cannot use native input.
-
-Full-production capture acceptance is still open. The first preparation trial
-exits before gateway readiness: placing the fixture directory before source makes
-its `gateway.py` shadow the production package. No Electron app or native driver
-starts. A future-only bootstrap puts source before fixture helpers and validates
-the resolved gateway package and exact capture/admission helper paths before
-startup. Under the same OS/audit fences, actual imports pass; fixture-first gateway
-shadowing and a foreign capture helper both fail before startup. The original
-failed trial is retained, with no live retry or capture-success claim.
-
-A later fresh trial carries that import guard into the real launch: the production
-gateway, main and renderer reach the original 480x620 Local window. CUA selection
-returns AX text for the exact app/connection nonce, default profile and Connected
-state. The next controller call loses its app binding before Raise dispatch;
-there is no screenshot, 60-second gate or provider capture. INVALID/STOP closes
-all owned processes. Normal guardian cleanup exit does not make this trial pass.
-
-Future controller templates declare the app binding at top level and enclose
-admission, argument evaluation, API calls and capture in an outer error boundary.
-Offline JavaScript checks reproduce the old missing-binding escape before helper
-entry, then prove INVALID/STOP for that error and admission/operation/capture
-failures without any real UI call. These templates are not live-validated; the
-failed trial and its collector remain unchanged. No same-round retry, native
-input, permission or guard relaxation follows this preparation result.
-
-Next fresh trial: one default profile, unchanged production renderer/main/preload,
-one common-tool AX capture in the existing gateway process, and one exact
-snapshot subprocess admission. Compare nonce content, PID/birth/executable,
-window generation and native refs with CUA AX/pixels. Keep the four-process,
-3.5 GiB, Local-only network/write/SSH and cleanup fences; no model prompts or
-native input. Import preparation does not establish runtime readiness or earn a
-feature release.
+(macOS resolves `/tmp` through `/private/tmp`). A no-UI source-function probe
+previously reproduced the workspace write refusal there. This is a necessary
+fixture blocker, not proof of the earlier click's exact failure provenance.
+The owner has not granted the narrow exception for that canonical mechanism.
+Workspace refstore access, Accessibility permission and the desired feature do
+not grant it. Do not attempt input to probe that write, relocate/bypass the lock,
+weaken the sandbox or change permissions. Capture does not establish input
+readiness; ordinary installations are not subject to this trial's write rule.
 
 ## Remaining capability set
 
