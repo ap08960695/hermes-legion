@@ -2374,6 +2374,60 @@ index 006a17e914acbe92d01a9bdaed3be3066b5994f8..3aa23ded64a962cd1ba3b1f8421e4ccc
 +            for key, value in fast.items():
 +                overrides.setdefault(key, value)
      if "speed" in overrides and getattr(agent, "model", None) in (getattr(agent, "_fast_mode_unavailable_models", None) or ()):
+diff --git a/agent/file_safety.py b/agent/file_safety.py
+index 31bd2c8f0f944d101da2ac62adfd6888d2d5a878..16b8ada8c513c2d68fdff4de7b8edaa681d3d99b 100644
+--- a/agent/file_safety.py
++++ b/agent/file_safety.py
+@@ -15,2 +15,49 @@ from typing import Optional
+
++# Basenames the managed-files API must never list, read or download: credential
++# stores that become live secrets in the browsable tree the moment an operator
++# points the managed root at HERMES_HOME. Mirrors the two canonical guards
++# (agent.file_safety.get_read_block_error, gateway.platforms.base
++# ._ROOT_CREDENTIAL_FILES) so the Files tab never lags behind them.
++# These typically contain credentials (API keys, tokens) and exposing them through the dashboard file
++# browser is a security leak — see issue #57505.
++_SENSITIVE_MANAGED_FILE_BASENAMES = frozenset({
++    "auth.json", "auth.lock", "credentials", "config.yaml", ".anthropic_oauth.json",
++    "google_token.json", "google_oauth_pending.json", "google_oauth.json",
++    "webhook_subscriptions.json", "bws_cache.json", "bws_cache.enc.json",
++    ".git-credentials",  # git's credential-store cache (file_safety blocks it too)
++})
++
++# Directory names whose whole subtree is credential material (the canonical
++# guards deny these as trees: _ROOT_CREDENTIAL_DIRS and the mcp-tokens/ prefix
++# match). The browser can descend into subdirs, so a basename-only guard would
++# still expose ``mcp-tokens/<server>.json``; match on ANY path component so the
++# trees are blocked wherever they sit under the root, no HERMES_HOME resolution.
++_SENSITIVE_MANAGED_DIR_NAMES = frozenset({"mcp-tokens", "pairing"})
++
++
++def _is_sensitive_filename(name: str) -> bool:
++    """Basename denylist: ``.env`` / ``.env.<suffix>`` / ``.envrc`` plus the
++    credential-store basenames. Case-insensitive so ``.ENV`` / ``Auth.JSON``
++    on case-insensitive mounts can't slip past. Basename-only — call sites use
++    :func:`is_sensitive_managed_path`, which adds the credential-directory check."""
++    lowered = name.lower()
++    if lowered == ".env" or lowered.startswith(".env.") or lowered == ".envrc":
++        return True
++    return lowered in _SENSITIVE_MANAGED_FILE_BASENAMES
++
++
++def is_sensitive_managed_path(path: Path) -> bool:
++    """True when the basename is sensitive OR any path component (case-
++    insensitive) is a credential directory. Read-side guard (list/read/
++    download); the write endpoints are a separate threat class.
++
++    Read-side only: this guards list/read/download (the #57505 exfil surface). The write endpoints
++    (upload/mkdir/delete) are a separate threat class handled by the write-path checks; extending this guard
++    to them is out of scope for this fix.
++    """
++    if _is_sensitive_filename(path.name):
++        return True
++    return any(part.lower() in _SENSITIVE_MANAGED_DIR_NAMES for part in path.parts)
++
++
+ def _constants_path(getter_name: str) -> Path:
 diff --git a/agent/i18n.py b/agent/i18n.py
 index 05f875cb55ef9dcc4d59fb69cedb749c1b6e088b..2e88d94fe54988a839c19a39a44f6bdd29a71aa1 100644
 --- a/agent/i18n.py
@@ -8230,10 +8284,10 @@ index 2c784ec2a2e709f7fc953d88399b3078aaa5e12b..5492eec425bbd695225966f3bc91032d
  }
 diff --git a/apps/desktop/electron/pet-overlay-ipc.test.ts b/apps/desktop/electron/pet-overlay-ipc.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..efa9056a8f0caf213baf3bef7bb48fb3d64bc940
+index 0000000000000000000000000000000000000000..9b055424afbcf425c359d385ba3844bf37822332
 --- /dev/null
 +++ b/apps/desktop/electron/pet-overlay-ipc.test.ts
-@@ -0,0 +1,204 @@
+@@ -0,0 +1,230 @@
 +import { EventEmitter } from 'node:events'
 +
 +import { afterEach, expect, it, vi } from 'vitest'
@@ -8438,8 +8492,34 @@ index 0000000000000000000000000000000000000000..efa9056a8f0caf213baf3bef7bb48fb3
 +  click(6, 1); click(6, 1); click(6, 0)
 +  expect(openExternalUrl).toHaveBeenCalledExactlyOnceWith(second)
 +})
++
++it('relays one file request and one matching result without exposing the file capability to the overlay', () => {
++  const main = Object.assign(new EventEmitter(), { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false,
++    webContents: { send: vi.fn() } })
++
++  const overlay = Object.assign(new EventEmitter(), { isDestroyed: () => false, webContents: { send: vi.fn() } })
++  registerPetOverlayIpc({ getMainWindow: () => main as never, getPetOverlayWindow: () => overlay as never,
++    openPetOverlay: vi.fn(), closePetOverlay: vi.fn() })
++  const state = io.on.get('hermes:pet-overlay:state')!, control = io.on.get('hermes:pet-overlay:control')!
++  const preview = { characterPreview: { characters: [{ outputId: 'owned' }], expiresAt: Date.now() + 15000 } }
++  const id = 'owned', request = 1
++  const send = (payload: unknown, sender = overlay.webContents) => control({ sender }, payload)
++  const report = (text: string, sender = main.webContents) => state({ sender }, { ...preview, characterFile: { id, request, text } })
++  const file = { type: 'character-output-file', id, request }
++
++  state({ sender: main.webContents }, preview)
++  send({ type: 'character-output', id, request })
++  state({ sender: main.webContents }, { ...preview, characterOutput: { id, request, text: 'reply',
++    deliveredFile: '/fixture/file.txt', canPreviewFile: true } })
++  report('not requested')
++  expect(overlay.webContents.send.mock.lastCall?.[1].characterOutput).toMatchObject({ canPreviewFile: true })
++  send(file, main.webContents); send({ ...file, path: 'forged' }); send(file); send(file)
++  expect(main.webContents.send.mock.calls.filter(([, p]) => p.type === file.type)).toEqual([['hermes:pet-overlay:control', file]])
++  report('wrong window', overlay.webContents); report('too large'.repeat(1200)); report('allowed'); report('replayed')
++  expect(overlay.webContents.send.mock.lastCall?.[1].characterFile).toEqual({ id, request, text: 'allowed' })
++})
 diff --git a/apps/desktop/electron/pet-overlay-ipc.ts b/apps/desktop/electron/pet-overlay-ipc.ts
-index 59d8dd527dae029c695a8520996f6051d75df371..f3781b4de78d16f900f9a6bdd3163fca32629fca 100644
+index 59d8dd527dae029c695a8520996f6051d75df371..37b7165b74841658431f527824aee641d3ac8fcf 100644
 --- a/apps/desktop/electron/pet-overlay-ipc.ts
 +++ b/apps/desktop/electron/pet-overlay-ipc.ts
 @@ -2,3 +2,6 @@
@@ -8485,7 +8565,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..f3781b4de78d16f900f9a6bdd3163fca
 +  openExternalUrl
  }: PetOverlayIpcDeps) {
 +  let lastCharacterPayload: Record<string, unknown> | null = null
-+  let outputAction: (Pick<PetCharacterOutput, 'id' | 'request' | 'canOpen'> & { window: BrowserWindow; links?: string[] }) | null = null
++  let outputAction: (Pick<PetCharacterOutput, 'id' | 'request' | 'canOpen'> & { window: BrowserWindow; links?: string[]; file?: 'offered' | 'pending' }) | null = null
 +  let stopObserving: (() => void) | null = null
 +  let locked = false, suspended = false
 +
@@ -8583,16 +8663,32 @@ index 59d8dd527dae029c695a8520996f6051d75df371..f3781b4de78d16f900f9a6bdd3163fca
 +  }
 +
    // `request` is `{ bounds, screen }`. A fresh pop-out passes viewport-space
-@@ -144,3 +268,40 @@ export function registerPetOverlayIpc({
+@@ -144,3 +268,60 @@ export function registerPetOverlayIpc({
    // Main renderer → overlay: forward the latest pet state for the overlay to render.
 -  ipcMain.on('hermes:pet-overlay:state', (_event, payload) => {
 +  ipcMain.on('hermes:pet-overlay:state', (event, payload) => {
 +    if (payload?.characterPreview) {
-+      const { characterOutput, ...snapshot } = payload
++      const { characterOutput, characterFile, ...snapshot } = payload
++
++      if (characterFile) {
++        const overlay = getPetOverlayWindow(), main = getMainWindow()
++        const { id, request, text } = characterFile
++
++        if (!main || event.sender !== main.webContents || !overlay || overlay.isDestroyed() ||
++            outputAction?.file !== 'pending' || outputAction.window !== overlay || outputAction.id !== id ||
++            outputAction.request !== request || !visibleOutput(id) ||
++            !(text === null || (typeof text === 'string' && text.length <= 8192))) {return}
++
++        outputAction.file = undefined
++        overlay.webContents.send('hermes:pet-overlay:state', { ...lastCharacterPayload, charactersPaused: false,
++          characterFile: { id, request, text } })
++
++        return
++      }
 +
 +      if (characterOutput) {
 +        const overlay = getPetOverlayWindow(), main = getMainWindow()
-+        const { id, request, text, unavailable, canOpen, canLink, deliveredFile } = characterOutput
++        const { id, request, text, unavailable, canOpen, canLink, deliveredFile, canPreviewFile } = characterOutput
 +
 +        if (!main || event.sender !== main.webContents || !overlay || overlay.isDestroyed() ||
 +            !outputAction || outputAction.window !== overlay || outputAction.links || id !== outputAction.id ||
@@ -8604,10 +8700,14 @@ index 59d8dd527dae029c695a8520996f6051d75df371..f3781b4de78d16f900f9a6bdd3163fca
 +
 +        const openable = canOpen === true && unavailable !== true
 +        const links = openExternalUrl && canLink === true && unavailable !== true && typeof text === 'string' ? outputWebLinks(text) : []
-+        outputAction = openable || links.length ? { id, request, window: overlay, links, ...(openable ? { canOpen: true } : {}) } : null
++        const previewable = file && canPreviewFile === true
++
++        outputAction = openable || links.length || previewable ? { id, request, window: overlay, links,
++          ...(openable ? { canOpen: true } : {}), ...(previewable ? { file: 'offered' } : {}) } : null
 +        overlay.webContents.send('hermes:pet-overlay:state', { ...lastCharacterPayload, charactersPaused: false,
 +          characterOutput: { id, request, text, ...(unavailable === true ? { unavailable: true } : {}),
-+            ...(openable ? { canOpen: true } : {}), ...(links.length ? { links } : {}), ...(file ? { deliveredFile: file } : {}) } })
++            ...(openable ? { canOpen: true } : {}), ...(links.length ? { links } : {}), ...(file ? { deliveredFile: file } : {}),
++            ...(previewable ? { canPreviewFile: true } : {}) } })
 +
 +        return
 +      }
@@ -8619,21 +8719,21 @@ index 59d8dd527dae029c695a8520996f6051d75df371..f3781b4de78d16f900f9a6bdd3163fca
 +      return
 +    }
 +
-+    if (payload?.characterOutput) {return}
++    if (payload?.characterOutput || payload?.characterFile) {return}
 +    lastCharacterPayload = null
 +    outputAction = null
 +    stopObserving?.()
 +    stopObserving = null
      const petOverlayWindow = getPetOverlayWindow()
-@@ -152,3 +313,3 @@ export function registerPetOverlayIpc({
+@@ -152,3 +333,3 @@ export function registerPetOverlayIpc({
    // Overlay → main renderer: control messages (pop back in, composer submit).
 -  ipcMain.on('hermes:pet-overlay:control', (_event, payload) => {
 +  ipcMain.on('hermes:pet-overlay:control', (event, payload) => {
      const mainWindow = getMainWindow()
-@@ -159,2 +320,48 @@ export function registerPetOverlayIpc({
+@@ -159,2 +340,53 @@ export function registerPetOverlayIpc({
 
 +    if (payload?.type === 'character-output' || payload?.type === 'character-output-close' ||
-+        payload?.type === 'character-output-open' || payload?.type === 'character-output-link') {
++        payload?.type === 'character-output-open' || payload?.type === 'character-output-link' || payload?.type === 'character-output-file') {
 +      const overlay = getPetOverlayWindow()
 +
 +      if (!overlay || overlay.isDestroyed() || event.sender !== overlay.webContents) {return}
@@ -8664,7 +8764,12 @@ index 59d8dd527dae029c695a8520996f6051d75df371..f3781b4de78d16f900f9a6bdd3163fca
 +        return
 +      }
 +
-+      if (payload.type === 'character-output-open') {
++      if (payload.type === 'character-output-file') {
++        if (Object.keys(payload).length !== 3 || outputAction?.file !== 'offered' ||
++            outputAction.window !== overlay || outputAction.id !== id || outputAction.request !== request) {return}
++
++        outputAction.file = 'pending'
++      } else if (payload.type === 'character-output-open') {
 +        if (!outputAction?.canOpen || outputAction.window !== overlay || outputAction.id !== id || outputAction.request !== request) {return}
 +        outputAction = null
 +        mainWindow.show()
@@ -21443,10 +21548,10 @@ index de446bdb6a589e02ff3634ae483fe46d4a108ff2..447b3cacb7b6af2b6d1aca49f9487795
   *
 diff --git a/apps/desktop/src/app/pet-overlay/pet-characters.tsx b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..6974749f6a80ede52935e9fd711a98fb9ea6aacc
+index 0000000000000000000000000000000000000000..4fe61843b3531d2ba4edceed910280b20849d29c
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,101 @@
 +import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 +import { useEffect, useState } from 'react'
 +
@@ -21458,17 +21563,18 @@ index 0000000000000000000000000000000000000000..6974749f6a80ede52935e9fd711a98fb
 +  info: PetInfo
 +  preview: PetCharacterPreview
 +  paused: boolean
-+  output: (PetCharacterOutput & { loading?: true }) | null
++  output: (PetCharacterOutput & { loading?: true; fileLoading?: true; fileText?: string | null }) | null
 +  onOutput: (id: string | null) => void
 +  onOpen: () => void
 +  onOpenLink: (index: number) => void
++  onPreviewFile: () => void
 +}
 +
 +const labelStyle = { display: 'block', width: '100%', fontSize: 12, borderRadius: 8, padding: 6,
 +  color: 'inherit', background: 'var(--ui-bg-elevated)', overflow: 'hidden' } as const
 +
 +/** The overlay displays snapshots. Only the main renderer resolves output addresses. */
-+export function PetCharacters({ info, preview, paused, output, onOutput, onOpen, onOpenLink }: PetCharactersProps) {
++export function PetCharacters({ info, preview, paused, output, onOutput, onOpen, onOpenLink, onPreviewFile }: PetCharactersProps) {
 +  const reduced = useReducedMotion()
 +  const [expiredAt, setExpiredAt] = useState(0)
 +  useEffect(() => {
@@ -21496,10 +21602,18 @@ index 0000000000000000000000000000000000000000..6974749f6a80ede52935e9fd711a98fb
 +      </div>
 +      <div style={{ marginTop: 4, overflowY: 'auto', maxHeight: output.deliveredFile ? 116 : 96, overflowWrap: 'anywhere' }}>
 +        {output.deliveredFile && <div style={{ marginBottom: 4 }}>
-+          <strong>Delivered file</strong>
++          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6 }}>
++            <strong>Delivered file</strong>
++            {output.canPreviewFile && <button onClick={onPreviewFile} style={{ textDecoration: 'underline' }} type="button">Preview file</button>}
++          </div>
 +          <code dir="ltr" style={{ display: 'block', whiteSpace: 'pre-wrap', userSelect: 'text' }}>{output.deliveredFile}</code>
 +        </div>}
-+        {(output.text || output.loading || output.unavailable || !output.deliveredFile) && <p role="status" style={{ margin: 0 }}>
++        {typeof output.fileText === 'string' && <pre aria-label="File preview" style={{ margin: 0, whiteSpace: 'pre-wrap', userSelect: 'text' }}>
++          {output.fileText || 'Empty file'}
++        </pre>}
++        {output.fileLoading && <p role="status" style={{ margin: 0 }}>Loading file…</p>}
++        {output.fileText === null && <p role="status" style={{ margin: 0 }}>File preview unavailable</p>}
++        {!output.fileLoading && output.fileText === undefined && (output.text || output.loading || output.unavailable || !output.deliveredFile) && <p role="status" style={{ margin: 0 }}>
 +          {output.loading ? 'Loading…' : output.unavailable ? 'Output unavailable' : output.text || 'No text output yet'}
 +        </p>}
 +      </div>
@@ -21540,7 +21654,7 @@ index 0000000000000000000000000000000000000000..6974749f6a80ede52935e9fd711a98fb
 +  </div>
 +}
 diff --git a/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx b/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
-index 82319976a166e658f80e794b0033fed81a48d456..8ba719382046183463fdaeba4b22921da2cb6ab3 100644
+index 82319976a166e658f80e794b0033fed81a48d456..5b5acd35eef74da00dfa33777a4d58e3c45e274b 100644
 --- a/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
 +++ b/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
 @@ -10,2 +10,3 @@ import { isSubmitEnter } from '@/lib/ime'
@@ -21559,12 +21673,12 @@ index 82319976a166e658f80e794b0033fed81a48d456..8ba719382046183463fdaeba4b22921d
 @@ -67,2 +71,7 @@ export function PetOverlayApp() {
    const [composerOpen, setComposerOpen] = useState(false)
 +  const [characters, setCharacters] = useState<{ preview: PetCharacterPreview; paused: boolean } | null>(null)
-+  const [output, setOutput] = useState<(PetCharacterOutput & { loading?: true }) | null>(null)
++  const [output, setOutput] = useState<(PetCharacterOutput & { loading?: true; fileLoading?: true; fileText?: string | null }) | null>(null)
 +  const characterMode = Boolean(characters)
 +  const outputTargets = characters?.paused ? '' : characters?.preview.characters.map(character => character.outputId).join(',')
 +  const characterCount = Math.min(5, characters?.preview.characters.length ?? 0)
    const [draft, setDraft] = useState('')
-@@ -94,2 +103,15 @@ export function PetOverlayApp() {
+@@ -94,2 +103,21 @@ export function PetOverlayApp() {
      const off = window.hermesDesktop?.petOverlay?.onState(payload => {
 +      const preview = payload.characterPreview ?? null
 +      setCharacters(preview ? { preview, paused: payload.charactersPaused !== false } : null)
@@ -21573,6 +21687,12 @@ index 82319976a166e658f80e794b0033fed81a48d456..8ba719382046183463fdaeba4b22921d
 +        if (!current || payload.charactersPaused !== false ||
 +            !preview?.characters.some(character => character.outputId === current.id)) {return null}
 +
++        const file = payload.characterFile
++
++        if (current.fileLoading && file?.id === current.id && file.request === current.request) {
++          return { ...current, fileLoading: undefined, fileText: file.text }
++        }
++
 +        const reply = payload.characterOutput
 +
 +        return reply?.id === current.id && reply.request === current.request ? reply : current
@@ -21580,29 +21700,29 @@ index 82319976a166e658f80e794b0033fed81a48d456..8ba719382046183463fdaeba4b22921d
 +
 +      if (preview) {setComposerOpen(false)}
        setPetInfo(payload.info)
-@@ -104,3 +126,3 @@ export function PetOverlayApp() {
+@@ -104,3 +132,3 @@ export function PetOverlayApp() {
 
 -      if (lastReactionRef.current === null) {
 +      if (preview || lastReactionRef.current === null) {
          lastReactionRef.current = reaction?.id ?? 0
-@@ -122,2 +144,6 @@ export function PetOverlayApp() {
+@@ -122,2 +150,6 @@ export function PetOverlayApp() {
 
 +  useEffect(() => {
 +    if (characterMode) {setIgnore(true)}
 +  }, [characterMode, outputTargets])
 +
    // Click-through: make only the *solid* sprite pixels (plus the bubble / mail
-@@ -138,2 +164,4 @@ export function PetOverlayApp() {
+@@ -138,2 +170,4 @@ export function PetOverlayApp() {
 
 +      if (target?.closest('[data-pet-output-target]')) {return true}
 +
        if (!pet || !target || !pet.contains(target)) {
-@@ -316,3 +344,3 @@ export function PetOverlayApp() {
+@@ -316,3 +350,3 @@ export function PetOverlayApp() {
 
 -  usePetZoomGesture(petRef, onScale, Boolean(info.enabled && info.spritesheetBase64))
 +  usePetZoomGesture(petRef, onScale, Boolean(info.enabled && info.spritesheetBase64 && !characterMode))
 
-@@ -331,5 +359,6 @@ export function PetOverlayApp() {
+@@ -331,5 +365,6 @@ export function PetOverlayApp() {
      const { width, height } = overlayWindowSize(
 -      info.frameW ?? DEFAULT_FRAME_W,
 -      info.frameH ?? DEFAULT_FRAME_H,
@@ -21612,7 +21732,7 @@ index 82319976a166e658f80e794b0033fed81a48d456..8ba719382046183463fdaeba4b22921d
 +      characterMode ? DEFAULT_SCALE : info.scale ?? DEFAULT_SCALE,
 +      characterCount
      )
-@@ -364,3 +393,33 @@ export function PetOverlayApp() {
+@@ -364,3 +399,40 @@ export function PetOverlayApp() {
      window.hermesDesktop?.petOverlay?.control({ bounds, type: 'bounds' })
 -  }, [info.enabled, info.spritesheetBase64, info.scale, info.frameW, info.frameH])
 +  }, [info.enabled, info.spritesheetBase64, info.scale, info.frameW, info.frameH, characterCount, characterMode])
@@ -21646,22 +21766,29 @@ index 82319976a166e658f80e794b0033fed81a48d456..8ba719382046183463fdaeba4b22921d
 +    setOutput({ ...output, links: [] })
 +    window.hermesDesktop?.petOverlay?.control({ type: 'character-output-link', id, request, index })
 +  }
++
++  const previewOutputFile = () => {
++    if (!output?.canPreviewFile) {return}
++    const { id, request } = output
++    setOutput({ ...output, canPreviewFile: undefined, fileLoading: true })
++    window.hermesDesktop?.petOverlay?.control({ type: 'character-output-file', id, request })
++  }
 
-@@ -370,2 +429,8 @@ export function PetOverlayApp() {
+@@ -370,2 +442,8 @@ export function PetOverlayApp() {
 
 +  if (characters) {
 +    return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-end', height: '100vh', paddingBottom: PET_PADDING_BOTTOM, pointerEvents: 'none' }}>
-+      <PetCharacters info={info} onOpen={openOutput} onOpenLink={openOutputLink} onOutput={showOutput} output={output} paused={characters.paused} preview={characters.preview} />
++      <PetCharacters info={info} onOpen={openOutput} onOpenLink={openOutputLink} onOutput={showOutput} onPreviewFile={previewOutputFile} output={output} paused={characters.paused} preview={characters.preview} />
 +    </div>
 +  }
 +
    return (
 diff --git a/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..75c37ae5bcc283e2ca9f93004cbceb7a652db3f9
+index 0000000000000000000000000000000000000000..109ff2d6e87ad522c7ff4b517996db24a83282f0
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
-@@ -0,0 +1,206 @@
+@@ -0,0 +1,236 @@
 +import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 +import type * as Motion from 'motion/react'
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -21867,6 +21994,36 @@ index 0000000000000000000000000000000000000000..75c37ae5bcc283e2ca9f93004cbceb7a
 +  expect(screen.getByRole('button', { name: 'Open in Hermes' })).toBeTruthy()
 +  fireEvent.click(screen.getByRole('button', { name: 'Close latest output' }))
 +  expect(screen.queryByText('Delivered file')).toBeNull()
++})
++
++it('requests one file preview for the visible reply and renders its result as literal text', () => {
++  render(<PetOverlayApp />)
++  const payload = preview()
++  Object.assign(payload.characterPreview.characters[0], { outputId: 'current' })
++  act(() => emit(payload))
++  fireEvent.click(screen.getByRole('button', { name: /Latest output/ }))
++  const control = vi.mocked(window.hermesDesktop!.petOverlay!.control)
++  const request = control.mock.lastCall?.[0]
++
++  if (request?.type !== 'character-output') {throw new Error('missing fixture request')}
++
++  const id = request.id, seq = request.request
++  act(() => emit({ ...payload, characterOutput: { id, request: seq, text: 'Ready',
++    deliveredFile: '/fixture/result.txt', canPreviewFile: true } }))
++  const button = screen.getByRole('button', { name: 'Preview file' })
++  expect(control).toHaveBeenLastCalledWith(request)
++  fireEvent.click(button); fireEvent.click(button)
++  expect(control.mock.calls.filter(([msg]) => msg.type === 'character-output-file')).toEqual([
++    [{ type: 'character-output-file', id, request: seq }]
++  ])
++  act(() => emit({ ...payload, characterFile: { id, request: seq + 1, text: 'stale' } }))
++  expect(screen.queryByText('stale')).toBeNull()
++  act(() => emit({ ...payload, characterFile: { id, request: seq, text: '<img src=x>' } }))
++  expect(screen.getByText('<img src=x>')).toBeTruthy()
++  expect(window.document.querySelector('img')).toBeNull()
++  fireEvent.click(screen.getByRole('button', { name: 'Close latest output' }))
++  act(() => emit({ ...payload, characterFile: { id, request: seq, text: 'late file' } }))
++  expect(screen.queryByText('late file')).toBeNull()
 +})
 diff --git a/apps/desktop/src/app/retirement-view.test.tsx b/apps/desktop/src/app/retirement-view.test.tsx
 index 4097e9f517259a342942edfd4f6d5d6845907ba6..5abd02109d4897c0db3178fed9d94c115278d6f2 100644
@@ -33019,10 +33176,10 @@ index abe8afb7e670b207a192ac15fb797fb8dfed168e..2b2824a97bb7cfd9d21057f4efdfd811
              <SelectContent>
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..d4afa88c10378213042d13e86d8dafd20067cdfc
+index 0000000000000000000000000000000000000000..8890a7f21e573fe69be7c25f3e3aa0cd7e4f5351
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx
-@@ -0,0 +1,293 @@
+@@ -0,0 +1,322 @@
 +import { atom, host, type PluginProfileRoute } from '@hermes/plugin-sdk'
 +import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -33316,12 +33473,41 @@ index 0000000000000000000000000000000000000000..d4afa88c10378213042d13e86d8dafd2
 +  expect(create).not.toHaveBeenCalled()
 +  expect(request).not.toHaveBeenCalled()
 +})
++
++it('keeps the file revision on the owning route and discards the result if the preview closes', async () => {
++  const route = { connectionId: 'local', mode: 'local' as const, profile: 'writer', targetProfile: 'writer' }
++  const bot = row('writer', { route, installId: 'fixture', canonical_session: { id: 'root', resolved_id: 'tip' } })
++  const path = '/fixture/one.txt', token = '1234567.' + 'a'.repeat(64)
++  let finish!: (value: { text: string }) => void
++
++  const routed = vi.spyOn(host, 'requestProfile')
++    .mockResolvedValueOnce({ text: `Result\nMEDIA:${path}`, complete: true, file_preview: { path, token } })
++    .mockImplementationOnce(() => new Promise(resolve => {finish = resolve}))
++
++  render(<BotMonitor now={2_000_000} onOpen={open} rows={[bot]} />)
++  fireEvent.click(screen.getByRole('button', { name: 'Show bot characters' }))
++  const id = $petCharacterPreview.get()!.characters[0].outputId!
++
++  await act(async () => overlayControl({ type: 'character-output', id, request: 1 }))
++  expect(routed).toHaveBeenCalledTimes(1)
++  const snapshot = vi.mocked(window.hermesDesktop!.petOverlay!.pushState).mock.lastCall?.[0]
++  expect(snapshot?.characterOutput).toMatchObject({ canPreviewFile: true, deliveredFile: path })
++  expect(snapshot?.characterOutput).not.toHaveProperty('fileToken')
++  await act(async () => overlayControl({ type: 'character-output-file', id, request: 1 }))
++  expect(routed).toHaveBeenLastCalledWith(route, 'profiles.output_file',
++    { canonical_id: 'tip', token }, 8000)
++  await act(async () => {
++    overlayControl({ type: 'character-output-close' })
++    finish({ text: 'late content' })
++  })
++  expect(vi.mocked(window.hermesDesktop!.petOverlay!.pushState).mock.calls.some(([payload]) => payload.characterFile)).toBe(false)
++})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..fa5cc5fa0514b426e78b282a21f9b3ded3d1944a
+index 0000000000000000000000000000000000000000..58112826093b824fed03ae23e6eea48c5fb1a6b4
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx
-@@ -0,0 +1,147 @@
+@@ -0,0 +1,153 @@
 +import { atom, Button, host, type PetCharacterPublisher, useValue } from '@hermes/plugin-sdk'
 +import { useEffect, useMemo, useRef, useState } from 'react'
 +
@@ -33341,6 +33527,8 @@ index 0000000000000000000000000000000000000000..fa5cc5fa0514b426e78b282a21f9b3de
 +  character: Parameters<PetCharacterPublisher['update']>[0][number]
 +  target?: CharacterSpriteTarget
 +}
++
++type OutputReply = Awaited<ReturnType<NonNullable<Actor['character']['output']>['read']>>
 +
 +// shortcut: Monitor-scoped snapshots only; use a shared activity publisher for persistent tracking.
 +export function MonitorCharacters({ rows, now, stale }: Pick<BotMonitorProps, 'rows' | 'now' | 'stale'>) {
@@ -33406,8 +33594,12 @@ index 0000000000000000000000000000000000000000..fa5cc5fa0514b426e78b282a21f9b3de
 +
 +        const output = route && registryId && canonical ? {
 +          key: JSON.stringify([route, bot.installId, registryId, canonical]),
-+          read: () => requestForBot<{ text: string | null; complete?: boolean }>(bot, 'profiles.latest_output',
++          read: () => requestForBot<OutputReply>(bot, 'profiles.latest_output',
 +            { canonical_id: canonical }, { timeoutMs: 8000 }),
++          ...(route.mode === 'local' && route.connectionId === 'local' ? {
++            previewFile: (token: string) => requestForBot<{ text: string | null }>(bot, 'profiles.output_file',
++              { canonical_id: canonical, token }, { timeoutMs: 8000 })
++          } : {}),
 +          open: async (current: () => boolean) => {
 +            const generation = bumpBotOpenGeneration()
 +            const stillCurrent = () => current() && generation === getBotOpenGeneration()
@@ -43226,10 +43418,10 @@ index b0eb473252b6e6e149f1f0711a6d8de535e87d8e..ad1ef8e2c1e29ef4fed05dc9d0fac09d
  
 diff --git a/apps/desktop/src/store/pet-characters.ts b/apps/desktop/src/store/pet-characters.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..f00bf26dcbe853b83ce900cdd41a26a8ab0b4124
+index 0000000000000000000000000000000000000000..0f7d4afea760010ec5dd5a1f320c4ca47f1450c3
 --- /dev/null
 +++ b/apps/desktop/src/store/pet-characters.ts
-@@ -0,0 +1,168 @@
+@@ -0,0 +1,199 @@
 +import { atom } from 'nanostores'
 +
 +import { mediaTagValues } from '@/lib/chat-messages/parts'
@@ -43249,7 +43441,8 @@ index 0000000000000000000000000000000000000000..f00bf26dcbe853b83ce900cdd41a26a8
 +
 +interface OutputSource {
 +  key: string
-+  read: () => Promise<string | null | { text: string | null; complete?: boolean }>
++  read: () => Promise<string | null | { text: string | null; complete?: boolean; file_preview?: { path: string; token: string } | null }>
++  previewFile?: (token: string) => Promise<{ text: string | null }>
 +  open?: (stillCurrent: () => boolean) => Promise<void>
 +}
 +
@@ -43261,7 +43454,14 @@ index 0000000000000000000000000000000000000000..f00bf26dcbe853b83ce900cdd41a26a8
 +  canOpen?: true
 +  canLink?: true
 +  deliveredFile?: string
++  canPreviewFile?: true
 +  links?: string[]
++}
++
++export interface PetCharacterFile {
++  id: string
++  request: number
++  text: string | null
 +}
 +
 +export interface PetCharacterPublisher {
@@ -43309,7 +43509,7 @@ index 0000000000000000000000000000000000000000..f00bf26dcbe853b83ce900cdd41a26a8
 +  return { path, excerpt: lines.join('\n') }
 +}
 +
-+export async function readPetCharacterOutput(id: string): Promise<Pick<PetCharacterOutput, 'text' | 'unavailable' | 'canOpen' | 'canLink' | 'deliveredFile'> | undefined> {
++export async function readPetCharacterOutput(id: string): Promise<(Pick<PetCharacterOutput, 'text' | 'unavailable' | 'canOpen' | 'canLink' | 'deliveredFile'> & { fileToken?: string }) | undefined> {
 +  const binding = currentOutputBinding(id)
 +
 +  if (!binding) {return undefined}
@@ -43319,6 +43519,11 @@ index 0000000000000000000000000000000000000000..f00bf26dcbe853b83ce900cdd41a26a8
 +    const raw = typeof reply === 'string' ? reply : reply?.text
 +    const complete = typeof reply === 'object' && reply?.complete === true && typeof raw === 'string'
 +    const delivery = complete ? deliveredTextFile(raw) : undefined
++    const offered = complete ? reply.file_preview : undefined
++
++    const fileToken = delivery && offered?.path === delivery.path && binding.previewFile &&
++      typeof offered.token === 'string' && /^[0-9]{1,12}\.[0-9a-f]{64}$/.test(offered.token) ? offered.token : undefined
++
 +    const excerpt = delivery?.excerpt ?? (typeof raw === 'string' ? raw : '')
 +    const text = sanitizePetText(excerpt, 1200) || null
 +
@@ -43329,11 +43534,29 @@ index 0000000000000000000000000000000000000000..f00bf26dcbe853b83ce900cdd41a26a8
 +      text,
 +      ...(canLink ? { canLink: true } : {}),
 +      ...(delivery ? { deliveredFile: delivery.path } : {}),
++      ...(fileToken ? { fileToken } : {}),
 +      ...(typeof binding.open === 'function' ? { canOpen: true } : {})
 +    } : undefined
 +  } catch {
 +    return currentOutputBinding(id) === binding ? { text: null, unavailable: true } : undefined
 +  }
++}
++
++export async function readPetCharacterFile(id: string, token: string): Promise<string | null | undefined> {
++  const binding = currentOutputBinding(id)
++
++  if (!binding?.previewFile) {return undefined}
++  let text: string | null = null
++
++  try {
++    const reply = await binding.previewFile(token)
++
++    if (typeof reply?.text === 'string' && reply.text.length <= 8192) {text = reply.text}
++  } catch {
++    // File absence and a stale gateway ticket share the unavailable state.
++  }
++
++  return currentOutputBinding(id) === binding ? text : undefined
 +}
 +
 +export async function openPetCharacterOutput(id: string, popoverCurrent: () => boolean): Promise<void> {
@@ -43399,27 +43622,29 @@ index 0000000000000000000000000000000000000000..f00bf26dcbe853b83ce900cdd41a26a8
 +  }
 +}
 diff --git a/apps/desktop/src/store/pet-overlay.ts b/apps/desktop/src/store/pet-overlay.ts
-index d47f67023fb8b820d6f6cbd455562a591600413b..c80a7a4d13acfafadd67bd1959da4b57ddef1a86 100644
+index d47f67023fb8b820d6f6cbd455562a591600413b..746b556d2ef9ba757c5ff57e2cb4c4cf0ae67486 100644
 --- a/apps/desktop/src/store/pet-overlay.ts
 +++ b/apps/desktop/src/store/pet-overlay.ts
 @@ -5,2 +5,3 @@ import { persistBoolean, persistString, storedBoolean, storedString } from '@/li
  import { $petActivity, $petInfo, $petUnread, clearPetUnread, type PetActivity, type PetInfo } from '@/store/pet'
-+import { $petCharacterPreview, openPetCharacterOutput, type PetCharacterOutput, type PetCharacterPreview, readPetCharacterOutput } from '@/store/pet-characters'
++import { $petCharacterPreview, openPetCharacterOutput, type PetCharacterFile, type PetCharacterOutput, type PetCharacterPreview, readPetCharacterFile, readPetCharacterOutput } from '@/store/pet-characters'
  import { $petPluginMessages, type PetPluginMessage } from '@/store/pet-plugin-messages'
-@@ -53,2 +54,5 @@ export interface PetOverlayStatePayload {
+@@ -53,2 +54,6 @@ export interface PetOverlayStatePayload {
    pluginMessages?: PetPluginMessage[]
 +  characterPreview?: PetCharacterPreview | null
 +  charactersPaused?: boolean
 +  characterOutput?: PetCharacterOutput
++  characterFile?: PetCharacterFile
  }
-@@ -58,2 +62,6 @@ export type PetOverlayControl =
+@@ -58,2 +63,7 @@ export type PetOverlayControl =
    | { type: 'ready' }
 +  | { type: 'character-output'; id: string; request: number }
 +  | { type: 'character-output-close' }
 +  | { type: 'character-output-open'; id: string; request: number }
++  | { type: 'character-output-file'; id: string; request: number }
 +  | { type: 'character-output-link'; id: string; request: number; index: number }
    | { type: 'submit'; text: string }
-@@ -132,5 +140,5 @@ const OVERLAY_MIN_H = 300
+@@ -132,5 +142,5 @@ const OVERLAY_MIN_H = 300
   */
 -export function overlayWindowSize(frameW: number, frameH: number, scale: number): { width: number; height: number } {
 +export function overlayWindowSize(frameW: number, frameH: number, scale: number, characterCount = 0): { width: number; height: number } {
@@ -43427,21 +43652,21 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..c80a7a4d13acfafadd67bd1959da4b57
 -    width: Math.max(OVERLAY_MIN_W, Math.round(frameW * scale + OVERLAY_PAD_X)),
 +    width: Math.max(OVERLAY_MIN_W, Math.round(frameW * scale + OVERLAY_PAD_X), Math.min(5, characterCount) * 120 + 32),
      height: Math.max(OVERLAY_MIN_H, Math.round(frameH * scale + OVERLAY_PAD_Y))
-@@ -153,3 +161,4 @@ function currentPayload(): PetOverlayStatePayload {
+@@ -153,3 +163,4 @@ function currentPayload(): PetOverlayStatePayload {
      reaction: $petReaction.get(),
 -    pluginMessages: $petPluginMessages.get()
 +    pluginMessages: $petPluginMessages.get(),
 +    characterPreview: $petCharacterPreview.get()
    }
-@@ -191,3 +200,4 @@ function openOverlay(request: PetOverlayOpenRequest): void {
+@@ -191,3 +202,4 @@ function openOverlay(request: PetOverlayOpenRequest): void {
      $petReaction.subscribe(pushNow),
 -    $petPluginMessages.subscribe(pushNow)
 +    $petPluginMessages.subscribe(pushNow),
 +    $petCharacterPreview.subscribe(pushNow)
    ]
-@@ -282,4 +292,23 @@ export function initPetOverlayBridge(): () => void {
+@@ -282,4 +294,37 @@ export function initPetOverlayBridge(): () => void {
 
-+  let activeOutput: { id: string; request: number; canOpen?: true; opened?: true } | null = null
++  let activeOutput: { id: string; request: number; canOpen?: true; opened?: true; fileToken?: string } | null = null
    controlUnsub = api.onControl(payload => {
 -    if (payload?.type === 'pop-in') {
 +    if (payload?.type === 'character-output') {
@@ -43451,7 +43676,21 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..c80a7a4d13acfafadd67bd1959da4b57
 +      void readPetCharacterOutput(id).then(reply => {
 +        if (activeOutput !== action || !$petOverlayActive.get() || !reply) {return}
 +        action.canOpen = reply.canOpen
-+        api.pushState({ ...currentPayload(), characterOutput: { ...reply, id, request } })
++        const { fileToken, ...display } = reply
++
++        action.fileToken = fileToken
++        api.pushState({ ...currentPayload(), characterOutput: { ...display, id, request,
++          ...(fileToken ? { canPreviewFile: true } : {}) } })
++      })
++    } else if (payload?.type === 'character-output-file') {
++      const action = activeOutput
++
++      if (!action?.fileToken || action.opened || action.id !== payload.id || action.request !== payload.request) {return}
++      const token = action.fileToken
++      action.fileToken = undefined
++      void readPetCharacterFile(action.id, token).then(text => {
++        if (activeOutput !== action || action.opened || !$petOverlayActive.get() || text === undefined) {return}
++        api.pushState({ ...currentPayload(), characterFile: { id: action.id, request: action.request, text } })
 +      })
 +    } else if (payload?.type === 'character-output-open') {
 +      const action = activeOutput
@@ -43464,7 +43703,7 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..c80a7a4d13acfafadd67bd1959da4b57
 +    } else if (payload?.type === 'pop-in') {
 +      activeOutput = null
        popInPet()
-@@ -307,2 +336,3 @@ export function initPetOverlayBridge(): () => void {
+@@ -307,2 +352,3 @@ export function initPetOverlayBridge(): () => void {
    return () => {
 +    activeOutput = null
      controlUnsub?.()
@@ -43890,7 +44129,7 @@ index 0000000000000000000000000000000000000000..48fb2a357fec113ea6d7fb268b1af5b0
 +  return Object.fromEntries(entries)
 +}
 diff --git a/apps/shared/src/gateway-contract.generated.ts b/apps/shared/src/gateway-contract.generated.ts
-index 57a5f6d6774588963334c22dccc5a7101a80b7ed..8bbdf320fbe5e5d955578de36c786d4d19ffc9b2 100644
+index 57a5f6d6774588963334c22dccc5a7101a80b7ed..7644374197a4f451faedc85350ce7c25344b0d67 100644
 --- a/apps/shared/src/gateway-contract.generated.ts
 +++ b/apps/shared/src/gateway-contract.generated.ts
 @@ -812,2 +812,26 @@ export interface SharedMetricsDesktopDailyResult {
@@ -44014,7 +44253,7 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..8bbdf320fbe5e5d955578de36c786d4d
    worker_session?: ProfileWorkerSession | null
 +  worker_sessions?: ProfileWorkerSession[] | null
    canonical_session?: ProfileCanonicalSession | null
-@@ -5293,2 +5388,10 @@ export interface CanonicalProfileRow {
+@@ -5293,2 +5388,23 @@ export interface CanonicalProfileRow {
  }
 +export interface CanonicalBotOutputParams {
 +  profile?: string | null
@@ -44023,56 +44262,71 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..8bbdf320fbe5e5d955578de36c786d4d
 +export interface CanonicalBotOutputResult {
 +  text: string | null
 +  complete?: boolean | null
++  file_preview?: CanonicalBotFilePreview | null
++}
++export interface CanonicalBotFilePreview {
++  path: string
++  token: string
++}
++export interface CanonicalBotFileParams {
++  profile?: string | null
++  canonical_id: string
++  token: string
++}
++export interface CanonicalBotFileResult {
++  text: string | null
 +}
  export interface CanonicalAttachedImageResult {
-@@ -6057,2 +6160,4 @@ export type ConnectorErrorReason = 'INVALID_PARAMS' | 'NOT_OWNER' | 'UNSUPPORTED
+@@ -6057,2 +6173,4 @@ export type ConnectorErrorReason = 'INVALID_PARAMS' | 'NOT_OWNER' | 'UNSUPPORTED
  export interface RpcMethods {
 +  /** Read per-account quota snapshots. Only refresh=true queries readonly credential-scoped quota endpoints. */
 +  'account.usage': { params: AccountUsageParams; result: AccountUsageResult }
    /** Registry-wide background process summary for ``/agents``. */
-@@ -6323,2 +6428,4 @@ export interface RpcMethods {
+@@ -6323,2 +6441,4 @@ export interface RpcMethods {
    'pet.select': { params: PetSlugParams; result: PetSlugResult }
 +  /** Read one installed character atlas without selecting, installing or enabling the mascot. */
 +  'pet.sprite': { params: PetSlugParams; result: PetInfoResult }
    /** Idle-frame PNG data URI for the picker (desktop CSP breaks CDN <img>). */
-@@ -6353,2 +6460,6 @@ export interface RpcMethods {
+@@ -6353,2 +6473,6 @@ export interface RpcMethods {
    'profiles.set_asset': { params: ProfilesSetAssetParams; result: ProfilesSetAssetResult }
 +  /** Role-specific THINK/ACTION configuration; linkage is not dispatch readiness. */
 +  'profiles.workflow.configure': { params: ProfileWorkflowConfigureParams; result: ProfileWorkflowResult }
 +  /** Role-specific THINK/ACTION configuration; linkage is not dispatch readiness. */
 +  'profiles.workflow.get': { params: ProfileWorkflowGetParams; result: ProfileWorkflowResult }
    /** Structured project facts for a cwd so UIs don't re-sniff the workspace. */
-@@ -6576,2 +6687,3 @@ export type RpcMethod = keyof RpcMethods
+@@ -6576,2 +6700,3 @@ export type RpcMethod = keyof RpcMethods
  export const RPC_METHODS = [
 +  'account.usage',
    'agents.list',
-@@ -6709,2 +6821,3 @@ export const RPC_METHODS = [
+@@ -6709,2 +6834,3 @@ export const RPC_METHODS = [
    'pet.select',
 +  'pet.sprite',
    'pet.thumb',
-@@ -6724,2 +6837,4 @@ export const RPC_METHODS = [
+@@ -6724,2 +6850,4 @@ export const RPC_METHODS = [
    'profiles.set_asset',
 +  'profiles.workflow.configure',
 +  'profiles.workflow.get',
    'project.facts',
-@@ -6871,3 +6986,8 @@ export interface CanonicalRpcMethods {
+@@ -6871,3 +6999,9 @@ export interface CanonicalRpcMethods {
    'kanban.run': { params: KanbanRunParams; result: KanbanRunResult }
 +  'profiles.latest_output': { params: CanonicalBotOutputParams; result: CanonicalBotOutputResult }
    'profiles.list': { params: CanonicalProfilesParams; result: CanonicalProfilesResult }
++  'profiles.output_file': { params: CanonicalBotFileParams; result: CanonicalBotFileResult }
 +  /** Profile-scoped bot workflow configuration with an expected-revision fence. */
 +  'profiles.workflow.configure': { params: ProfileWorkflowConfigureParams; result: ProfileWorkflowResult }
 +  /** Profile-scoped bot workflow configuration with an expected-revision fence. */
 +  'profiles.workflow.get': { params: ProfileWorkflowGetParams; result: ProfileWorkflowResult }
    /** Retire a still-queued admission; a started one is unaffected. */
-@@ -6940,3 +7060,6 @@ export const CANONICAL_RPC_METHODS = [
+@@ -6940,3 +7074,7 @@ export const CANONICAL_RPC_METHODS = [
    'kanban.run',
 +  'profiles.latest_output',
    'profiles.list',
++  'profiles.output_file',
 +  'profiles.workflow.configure',
 +  'profiles.workflow.get',
    'prompt.cancel',
 diff --git a/apps/shared/src/gateway-contract.openrpc.json b/apps/shared/src/gateway-contract.openrpc.json
-index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..24e73e1234bb0440392dcfc974cfa1f27164be2f 100644
+index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..61a703cd9adf48d71c9f2c341cac4a30f6492ec9 100644
 --- a/apps/shared/src/gateway-contract.openrpc.json
 +++ b/apps/shared/src/gateway-contract.openrpc.json
 @@ -8,2 +8,20 @@
@@ -44436,8 +44690,79 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..24e73e1234bb0440392dcfc974cfa1f2
 +        "type": "object"
 +      },
        "BrowserAction": {
-@@ -8269,2 +8612,61 @@
+@@ -8269,2 +8612,143 @@
        },
++      "CanonicalBotFileParams": {
++        "additionalProperties": false,
++        "properties": {
++          "profile": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Profile"
++          },
++          "canonical_id": {
++            "title": "Canonical Id",
++            "type": "string"
++          },
++          "token": {
++            "title": "Token",
++            "type": "string"
++          }
++        },
++        "required": [
++          "canonical_id",
++          "token"
++        ],
++        "title": "CanonicalBotFileParams",
++        "type": "object"
++      },
++      "CanonicalBotFilePreview": {
++        "additionalProperties": false,
++        "properties": {
++          "path": {
++            "title": "Path",
++            "type": "string"
++          },
++          "token": {
++            "title": "Token",
++            "type": "string"
++          }
++        },
++        "required": [
++          "path",
++          "token"
++        ],
++        "title": "CanonicalBotFilePreview",
++        "type": "object"
++      },
++      "CanonicalBotFileResult": {
++        "additionalProperties": false,
++        "properties": {
++          "text": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "title": "Text"
++          }
++        },
++        "required": [
++          "text"
++        ],
++        "title": "CanonicalBotFileResult",
++        "type": "object"
++      },
 +      "CanonicalBotOutputParams": {
 +        "additionalProperties": false,
 +        "properties": {
@@ -44489,6 +44814,17 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..24e73e1234bb0440392dcfc974cfa1f2
 +            ],
 +            "default": null,
 +            "title": "Complete"
++          },
++          "file_preview": {
++            "anyOf": [
++              {
++                "$ref": "#/components/schemas/CanonicalBotFilePreview"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null
 +          }
 +        },
 +        "required": [
@@ -44498,7 +44834,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..24e73e1234bb0440392dcfc974cfa1f2
 +        "type": "object"
 +      },
        "CanonicalConfigGetResult": {
-@@ -9474,2 +9876,18 @@
+@@ -9474,2 +9958,18 @@
            },
 +          "worker_sessions": {
 +            "anyOf": [
@@ -44517,7 +44853,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..24e73e1234bb0440392dcfc974cfa1f2
 +            "title": "Worker Sessions"
 +          },
            "canonical_session": {
-@@ -29273,2 +29691,81 @@
+@@ -29273,2 +29773,81 @@
              "title": "Live Message Count"
 +          },
 +          "input_tokens": {
@@ -44599,7 +44935,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..24e73e1234bb0440392dcfc974cfa1f2
 +            "default": null,
 +            "title": "Delegation Reports"
            }
-@@ -29282,2 +29779,74 @@
+@@ -29282,2 +29861,74 @@
        },
 +      "ProfileDelegationReport": {
 +        "additionalProperties": false,
@@ -44674,7 +45010,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..24e73e1234bb0440392dcfc974cfa1f2
 +        "type": "object"
 +      },
        "ProfileMirrored": {
-@@ -29471,2 +30040,18 @@
+@@ -29471,2 +30122,18 @@
            },
 +          "worker_sessions": {
 +            "anyOf": [
@@ -44693,12 +45029,12 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..24e73e1234bb0440392dcfc974cfa1f2
 +            "title": "Worker Sessions"
 +          },
            "canonical_session": {
-@@ -29583,3 +30168,3 @@
+@@ -29583,3 +30250,3 @@
          "additionalProperties": false,
 -        "description": "Newest kanban/tool worker row, so rosters can show a profile as working.",
 +        "description": "Observed worker metadata, separate from human-facing conversation previews.",
          "properties": {
-@@ -29610,2 +30195,136 @@
+@@ -29610,2 +30277,136 @@
              "title": "Last Active"
 +          },
 +          "last_activity_description": {
@@ -44835,7 +45171,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..24e73e1234bb0440392dcfc974cfa1f2
 +            "default": null,
 +            "title": "Model"
            }
-@@ -29618,2 +30337,145 @@
+@@ -29618,2 +30419,145 @@
        },
 +      "ProfileWorkflowConfigureParams": {
 +        "additionalProperties": false,
@@ -44981,7 +45317,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..24e73e1234bb0440392dcfc974cfa1f2
 +        "type": "object"
 +      },
        "ProfilesConfigureApplied": {
-@@ -36096,2 +36958,37 @@
+@@ -36096,2 +37040,37 @@
              "title": "Index"
 +          },
 +          "title": {
@@ -45019,7 +45355,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..24e73e1234bb0440392dcfc974cfa1f2
 +            "default": null,
 +            "title": "Expected Revision"
            }
-@@ -48113,2 +49010,20 @@
+@@ -48113,2 +49092,20 @@
      },
 +    {
 +      "name": "profiles.latest_output",
@@ -45040,8 +45376,26 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..24e73e1234bb0440392dcfc974cfa1f2
 +      }
 +    },
      {
-@@ -48131,2 +49046,38 @@
+@@ -48131,2 +49128,56 @@
      },
++    {
++      "name": "profiles.output_file",
++      "summary": "",
++      "params": [
++        {
++          "name": "params",
++          "schema": {
++            "$ref": "#/components/schemas/CanonicalBotFileParams"
++          }
++        }
++      ],
++      "result": {
++        "name": "result",
++        "schema": {
++          "$ref": "#/components/schemas/CanonicalBotFileResult"
++        }
++      }
++    },
 +    {
 +      "name": "profiles.workflow.configure",
 +      "summary": "Profile-scoped bot workflow configuration with an expected-revision fence.",
@@ -46177,6 +46531,120 @@ index 0000000000000000000000000000000000000000..6dd5de7bd1df30dc611f51f2bc5480ac
 +    if cancelled is not None:
 +        raise cancelled
 +    return result
+diff --git a/gateway/session_bot_file.py b/gateway/session_bot_file.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..70e2f19b988d3f7a0150e3f41f963d4d356f093b
+--- /dev/null
++++ b/gateway/session_bot_file.py
+@@ -0,0 +1,108 @@
++"""Bounded, click-only text snapshots for the current Bot Chat workspace."""
++import hmac
++import json
++import os
++from pathlib import Path
++import re
++import secrets
++import stat
++from time import monotonic
++from unicodedata import category
++
++from agent.file_safety import is_sensitive_managed_path
++
++_TOKEN_KEY = secrets.token_bytes(32)
++_TTL = 30
++_PREVIEW_BYTES = 8192
++
++
++def preview_supported():
++    from tools.terminal_scope import TerminalPolicyUnavailable, terminal_env
++
++    if os.name != 'posix' or not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY'):
++        return False
++    try:
++        return terminal_env('TERMINAL_ENV', 'local') == 'local'
++    except TerminalPolicyUnavailable:
++        return False
++
++
++def workspace_delivery(raw, cwd, profile_id):
++    from hermes_constants import get_default_hermes_root
++
++    # shortcut: one literal direct child until the transcript projects structured attachments.
++    lines = raw.splitlines()
++    if not cwd or raw.count('MEDIA:') != 1 or any(line.lstrip().startswith(('```', '~~~')) for line in lines):
++        return None
++    value = next((line[6:].strip(' \t') for line in lines if line.startswith('MEDIA:')), '')
++    if not value:
++        return None
++    if value[0] in ('"', "'") and value[-1] == value[0]:
++        value = value[1:-1]
++    elif any(char.isspace() for char in value):
++        return None
++    if not value.startswith('/') or not value.lower().endswith('.txt'):
++        return None
++    if any(not part or part.startswith('.') for part in value[1:].split('/')):
++        return None
++    if any(char in '"`\\' or category(char)[0] == 'C' or category(char) in ('Zl', 'Zp') for char in value):
++        return None
++    if value.rpartition('/')[0] != cwd or any(part.endswith((' ', '.')) for part in cwd[1:].split('/')):
++        return None
++    path = Path(value)
++    folded = Path(value.casefold())
++    private_roots = (Path(profile_id), get_default_hermes_root())
++    if is_sensitive_managed_path(path) or any(folded.is_relative_to(str(root).casefold()) for root in private_roots):
++        return None
++    return path
++
++
++def _token(candidate, expiry):
++    path, binding = candidate
++    data = json.dumps([expiry, str(path), *binding], separators=(',', ':')).encode()
++    return f'{expiry}.{hmac.digest(_TOKEN_KEY, data, "sha256").hex()}'
++
++
++def issue_preview(candidate):
++    expiry = int(monotonic()) + _TTL
++    return {'path': str(candidate[0]), 'token': _token(candidate, expiry)}
++
++
++def read_preview(token, snapshot):
++    if not isinstance(token, str) or not re.fullmatch(r'[0-9]{1,12}\.[0-9a-f]{64}', token):
++        return None
++    expiry = int(token.split('.', 1)[0])
++    if expiry <= monotonic():
++        return None
++    _, candidate = snapshot()
++    if not candidate or not hmac.compare_digest(_token(candidate, expiry), token):
++        return None
++    text = _read_workspace_text(candidate[0])
++    if text is None or expiry <= monotonic():
++        return None
++    _, current = snapshot()
++    return text if current == candidate and expiry > monotonic() else None
++
++
++def _read_workspace_text(path):
++    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
++    try:
++        directory = os.open('/', directory_flags)
++        try:
++            for part in path.parent.parts[1:]:
++                child = os.open(part, directory_flags, dir_fd=directory)
++                os.close(directory)
++                directory = child
++            leaf = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
++            with os.fdopen(leaf, 'rb') as stream:
++                info = os.fstat(stream.fileno())
++                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > _PREVIEW_BYTES:
++                    return None
++                data = stream.read(_PREVIEW_BYTES + 1)
++        finally:
++            os.close(directory)
++        if len(data) <= _PREVIEW_BYTES and not any(byte < 32 and byte not in (9, 10, 13) for byte in data):
++            return data.decode('utf-8')
++    except (OSError, UnicodeError, NotImplementedError):
++        return None
++    return None
 diff --git a/gateway/session_bot_workflow.py b/gateway/session_bot_workflow.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..04868875b5317ae995baac923e434c7de1a012f6
@@ -46292,7 +46760,7 @@ index 65887575dec12b3ddb9f859ebe56156264ea120e..e893e94cd8d03641e6f1b56877ac9d2a
 +                if method in GROUP_METHODS or method in PROFILE_READS:
                      result = await dispatch_group_control(self, method, params)
 diff --git a/gateway/session_group_controls.py b/gateway/session_group_controls.py
-index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..52733faa10ede35cee360c23877a7802e5f2d70a 100644
+index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..250d2c53e2be371e0ddd647c123308ac58227b34 100644
 --- a/gateway/session_group_controls.py
 +++ b/gateway/session_group_controls.py
 @@ -2,2 +2,3 @@
@@ -46301,24 +46769,38 @@ index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..52733faa10ede35cee360c23877a7802
  import logging
 @@ -28,2 +29,3 @@ GROUP_METHODS = {
  }
-+PROFILE_READS = {'profiles.list', 'profiles.latest_output'}
++PROFILE_READS = {'profiles.list', 'profiles.latest_output', 'profiles.output_file'}
  _FIELDS = {
-@@ -45,2 +47,3 @@ _FIELDS = {
+@@ -45,2 +47,4 @@ _FIELDS = {
      'profiles.list': {'include_sessions'},
 +    'profiles.latest_output': {'canonical_id'},
++    'profiles.output_file': {'canonical_id', 'token'},
  }
-@@ -76,2 +79,4 @@ async def dispatch_group_control(connection, method, params):
+@@ -76,2 +80,17 @@ async def dispatch_group_control(connection, method, params):
                  return _profiles(authority, actor, home, supplied, siblings)
-+            if method == 'profiles.latest_output':
-+                return _read_bot_output(authority, actor, supplied.get('canonical_id'))
++            if method in {'profiles.latest_output', 'profiles.output_file'}:
++                from gateway.session_bot_file import issue_preview, preview_supported, read_preview
++                can_preview = connection.native_owner and 'session:control' in actor.capabilities and preview_supported()
++                if method == 'profiles.output_file' and not can_preview:
++                    raise RuntimeStoreError('permission_denied')
++
++                def snapshot():
++                    return _read_bot_output(authority, actor, supplied.get('canonical_id'), can_preview=can_preview)
++
++                if method == 'profiles.output_file':
++                    return {'text': read_preview(supplied.get('token'), snapshot)}
++                result, candidate = snapshot()
++                if candidate:
++                    result['file_preview'] = issue_preview(candidate)
++                return result
              try:
-@@ -97,3 +102,4 @@ def _group(authority, actor, method, params, *, host_scope=False):
+@@ -97,3 +116,4 @@ def _group(authority, actor, method, params, *, host_scope=False):
          status = service.runtime.status()
 -        if not status.get('running') or status.get('stopping'):
 +        # An armed standby owner accepts producers without allocating an idle supervisor.
 +        if not (status.get('running') or status.get('armed')) or status.get('stopping'):
              service = None
-@@ -316,5 +322,55 @@ def _bot_sessions(authority, actor):
+@@ -316,5 +336,67 @@ def _bot_sessions(authority, actor):
 
 +def _canonical_bot_chat(conn, subject, operator):
 +    from hermes_state_local_migration import LEGACY_PREFIX
@@ -46329,7 +46811,7 @@ index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..52733faa10ede35cee360c23877a7802
 +    return None
 +
 +
-+def _read_bot_output(authority, actor, canonical_id):
++def _read_bot_output(authority, actor, canonical_id, *, can_preview=False):
 +    from hermes_state_compression import _CHAIN_STEP_SQL, _walk_compression_chain
 +    from hermes_state_messages import DISPLAY_VISIBLE_SQL
 +
@@ -46351,7 +46833,7 @@ index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..52733faa10ede35cee360c23877a7802
 +        prefix = db._CONTENT_JSON_PREFIX.encode()
 +        row = conn.execute(
 +            "SELECT CASE WHEN typeof(content)='text' AND substr(CAST(content AS BLOB),1,?) != ? "
-+            "THEN substr(content,1,?) END, instr(CAST(content AS BLOB),x'00') "
++            "THEN substr(content,1,?) END, instr(CAST(content AS BLOB),x'00'), messages.id, sessions.user_id "
 +            "FROM messages JOIN sessions ON sessions.id=messages.session_id "
 +            "WHERE session_id IN (SELECT value FROM json_each(?)) AND archived=0 AND (? OR user_id=?) "
 +            "AND role='assistant' AND (active=1 OR compacted=1) AND COALESCE(_compressed_summary,0)=0 "
@@ -46359,11 +46841,23 @@ index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..52733faa10ede35cee360c23877a7802
 +            + DISPLAY_VISIBLE_SQL + " ORDER BY messages.id DESC LIMIT 1",
 +            (len(prefix), prefix, limit + 1, json.dumps(chain), operator, actor.subject),
 +        ).fetchone()
++        tip = None
++        if can_preview and row and row[0] and 'MEDIA:' in row[0] and row[3] == root['user_id'] == actor.subject:
++            tip = conn.execute('SELECT id,cwd,git_metadata_generation,archived,user_id FROM sessions WHERE id=?',
++                               (chain[-1],)).fetchone()
 +    raw = (row[0] or '') if row else ''
 +    text = raw.strip()
 +    if text and len(raw) > limit:
 +        text = raw[:limit - 1].strip() + '…'
-+    return {'text': text or None, 'complete': bool(text and row and not row[1] and len(raw) <= limit)}
++    complete = bool(text and row and not row[1] and len(raw) <= limit)
++    candidate = None
++    if complete and tip and not tip['archived'] and tip['user_id'] == actor.subject:
++        from gateway.session_bot_file import workspace_delivery
++        path = workspace_delivery(raw, tip['cwd'], authority.profile_id)
++        if path:
++            candidate = (path, (actor.subject, authority.profile_id, authority.instance_id, root['id'], tip['id'],
++                                tip['git_metadata_generation'], row[2], raw))
++    return {'text': text or None, 'complete': complete}, candidate
 +
 +
  def _read_bot_sessions(db, subject, operator):
@@ -46374,7 +46868,7 @@ index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..52733faa10ede35cee360c23877a7802
      from hermes_state_sessions import INTERNAL_LISTING_SOURCES
 +    from hermes_cli.session_listing import SUBAGENT_SOURCE
      hidden_sources = ','.join('?' * len(INTERNAL_LISTING_SOURCES))
-@@ -324,4 +380,6 @@ def _read_bot_sessions(db, subject, operator):
+@@ -324,4 +406,6 @@ def _read_bot_sessions(db, subject, operator):
      with db._read_ctx(reopen=False) as conn:
 -        def summary(root):
 -            tip = db._compression_tip_on(conn, root['id'])
@@ -46383,7 +46877,7 @@ index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..52733faa10ede35cee360c23877a7802
 +                     if canonical else [])
 +            tip = chain[-1] if chain else db._compression_tip_on(conn, root['id'])
              target = conn.execute('SELECT * FROM sessions WHERE id=?', (tip,)).fetchone() or root
-@@ -337,10 +395,12 @@ def _read_bot_sessions(db, subject, operator):
+@@ -337,10 +421,12 @@ def _read_bot_sessions(db, subject, operator):
                      'last_active': target['last_activity_at'] or target['started_at'] or 0,
 -                    'message_count': target['message_count'] or 0}
 +                    'message_count': target['message_count'] or 0,
@@ -46402,7 +46896,7 @@ index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..52733faa10ede35cee360c23877a7802
 +        if canonical:
 +            fields['canonical_session'] = summary(canonical, canonical=True)
          # The newest conversation a picker shows: a hidden row (a Bot Chat, group member plumbing)
-@@ -356,14 +416,22 @@ def _read_bot_sessions(db, subject, operator):
+@@ -356,14 +442,22 @@ def _read_bot_sessions(db, subject, operator):
              fields['last_session'] = summary(latest)
 -        # The profile's freshest worker (#90268, #140977): workers are deny-listed out of every
 -        # conversation listing, so a roster row that only carried conversation fields read "idle"
@@ -46435,12 +46929,12 @@ index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..52733faa10ede35cee360c23877a7802
 +        if fields['worker_sessions']:
 +            fields['worker_session'] = fields['worker_sessions'][0]
      return fields
-@@ -392,3 +460,3 @@ def _profiles(authority, actor, home, params, siblings=()):
+@@ -392,3 +486,3 @@ def _profiles(authority, actor, home, params, siblings=()):
      ``_roster_siblings``' snapshot; a sibling with a reader carries the same session fields."""
 -    from hermes_cli.profiles import _profile_info
 +    from hermes_cli.profiles import _profile_info, _read_config_model
      import hermes_yaml as yaml
-@@ -424,5 +492,8 @@ def _profiles(authority, actor, home, params, siblings=()):
+@@ -424,5 +518,8 @@ def _profiles(authority, actor, home, params, siblings=()):
          seen.add(target.resolve())
 +        # The configured route is the config.yaml model block, memoised on the file's signature, so
 +        # a 5 s poll does not re-parse it; the card shows it as configured, not as a live binding.
@@ -46451,7 +46945,7 @@ index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..52733faa10ede35cee360c23877a7802
 +                 'model': model or '', 'provider': provider or '', 'description': '',
 +                 'display_name': configured, 'skill_count': 0}
          if include_sessions and reach is not None:
-@@ -432,2 +503,3 @@ def _profiles(authority, actor, home, params, siblings=()):
+@@ -432,2 +529,3 @@ def _profiles(authority, actor, home, params, siblings=()):
              entry['display_name'] = str(meta.get('display_name') or configured)
 +            entry['description'] = str(meta.get('description') or '').strip()
              if isinstance(meta.get('ui_meta'), dict):
@@ -56928,10 +57422,64 @@ index 0000000000000000000000000000000000000000..8bdab494a3303055bb9c45eab670dc7a
 +        return [_check_path(path,backend,session.get('cwd') or '',request) for path in payload.paths]
 +    return {'files':await asyncio.to_thread(inspect)}
 diff --git a/hermes_cli/web_routers/files.py b/hermes_cli/web_routers/files.py
-index 5605dd1b93b256f78ad459bdb5e11b4f45f2ad6e..71c71f90cda31b844109a8b2ed462330ac62f4ef 100644
+index 5605dd1b93b256f78ad459bdb5e11b4f45f2ad6e..c649571494e76af7445ba75f7517fd37b78104c8 100644
 --- a/hermes_cli/web_routers/files.py
 +++ b/hermes_cli/web_routers/files.py
-@@ -800,5 +800,10 @@ async def fs_list(path: str, request: Request, profile: Optional[str] = None):
+@@ -27,2 +27,3 @@ from fastapi.responses import FileResponse, StreamingResponse
+
++from agent.file_safety import is_sensitive_managed_path as _is_sensitive_path
+ from hermes_cli._subprocess_compat import windows_hide_flags
+@@ -63,49 +64,2 @@ _FS_READDIR_HIDDEN = {
+
+-# Basenames the managed-files API must never list, read or download: credential
+-# stores that become live secrets in the browsable tree the moment an operator
+-# points the managed root at HERMES_HOME. Mirrors the two canonical guards
+-# (agent.file_safety.get_read_block_error, gateway.platforms.base
+-# ._ROOT_CREDENTIAL_FILES) so the Files tab never lags behind them.
+-# These typically contain credentials (API keys, tokens) and exposing them through the dashboard file
+-# browser is a security leak — see issue #57505.
+-_SENSITIVE_MANAGED_FILE_BASENAMES = frozenset({
+-    "auth.json", "auth.lock", "credentials", "config.yaml", ".anthropic_oauth.json",
+-    "google_token.json", "google_oauth_pending.json", "google_oauth.json",
+-    "webhook_subscriptions.json", "bws_cache.json", "bws_cache.enc.json",
+-    ".git-credentials",  # git's credential-store cache (file_safety blocks it too)
+-})
+-
+-# Directory names whose whole subtree is credential material (the canonical
+-# guards deny these as trees: _ROOT_CREDENTIAL_DIRS and the mcp-tokens/ prefix
+-# match). The browser can descend into subdirs, so a basename-only guard would
+-# still expose ``mcp-tokens/<server>.json``; match on ANY path component so the
+-# trees are blocked wherever they sit under the root, no HERMES_HOME resolution.
+-_SENSITIVE_MANAGED_DIR_NAMES = frozenset({"mcp-tokens", "pairing"})
+-
+-
+-def _is_sensitive_filename(name: str) -> bool:
+-    """Basename denylist: ``.env`` / ``.env.<suffix>`` / ``.envrc`` plus the
+-    credential-store basenames. Case-insensitive so ``.ENV`` / ``Auth.JSON``
+-    on case-insensitive mounts can't slip past. Basename-only — call sites use
+-    :func:`_is_sensitive_path`, which adds the credential-directory check."""
+-    lowered = name.lower()
+-    if lowered == ".env" or lowered.startswith(".env.") or lowered == ".envrc":
+-        return True
+-    return lowered in _SENSITIVE_MANAGED_FILE_BASENAMES
+-
+-
+-def _is_sensitive_path(path: Path) -> bool:
+-    """True when the basename is sensitive OR any path component (case-
+-    insensitive) is a credential directory. Read-side guard (list/read/
+-    download); the write endpoints are a separate threat class.
+-
+-    Read-side only: this guards list/read/download (the #57505 exfil surface). The write endpoints
+-    (upload/mkdir/delete) are a separate threat class handled by the write-path checks; extending this guard
+-    to them is out of scope for this fix.
+-    """
+-    if _is_sensitive_filename(path.name):
+-        return True
+-    return any(part.lower() in _SENSITIVE_MANAGED_DIR_NAMES for part in path.parts)
+-
+-
+ _FS_TEXT_SOURCE_MAX_BYTES = 64 * 1024 * 1024
+@@ -800,5 +754,10 @@ async def fs_list(path: str, request: Request, profile: Optional[str] = None):
  @router.get("/api/fs/read-text")
 -async def fs_read_text(path: str, request: Request = None, profile: Optional[str] = None):
 +async def fs_read_text(path: str, request: Request = None, profile: Optional[str] = None, session_id: Optional[str] = None):
@@ -56943,12 +57491,12 @@ index 5605dd1b93b256f78ad459bdb5e11b4f45f2ad6e..71c71f90cda31b844109a8b2ed462330
 +            if not Path(path).is_absolute():
 +                raise HTTPException(409, "An absolute artifact path is required for this workspace")
          try:
-@@ -823,3 +828,3 @@ async def fs_read_text(path: str, request: Request = None, profile: Optional[str
+@@ -823,3 +782,3 @@ async def fs_read_text(path: str, request: Request = None, profile: Optional[str
      profile_home = _fs_profile_home(profile)
 -    target = _agent_fs_path(path, profile_home=profile_home)
 +    target = await _fs_download_path(path, profile, session_id)
      _hosted_fs_read_guard(target, request)
-@@ -1011 +1016,5 @@ async def fs_default_cwd(profile: Optional[str] = None):
+@@ -1011 +970,5 @@ async def fs_default_cwd(profile: Optional[str] = None):
      return {"cwd": cwd, "branch": _fs_git_branch(cwd)}
 +
 +# Reuses this module's native path, origin and hosted-files policy.
@@ -75952,7 +76500,7 @@ index 7f2323ea35ae9b638fc4a392e01d180c466b7529..bd12d861dc5ec2ee464fce1dae6dc000
 +    monkeypatch.setattr(run, '_load_gateway_config', lambda config_path=None: {'platform_toolsets': {'cli': []}})
      monkeypatch.setattr('hermes_cli.lifecycle.invoke_hook', lambda name, **kwargs: None)
 diff --git a/tests/gateway/test_session_group_controls.py b/tests/gateway/test_session_group_controls.py
-index 91f30aa217762d0aa80a9dccfcf5134050a9d3eb..2f51e53d4adb6faa48cdfbda1a215c2f28d64fc1 100644
+index 91f30aa217762d0aa80a9dccfcf5134050a9d3eb..ef44ad68eafa667a054101191bf347ce67331dd7 100644
 --- a/tests/gateway/test_session_group_controls.py
 +++ b/tests/gateway/test_session_group_controls.py
 @@ -201,2 +201,14 @@ def _list_profiles(home):
@@ -75970,7 +76518,7 @@ index 91f30aa217762d0aa80a9dccfcf5134050a9d3eb..2f51e53d4adb6faa48cdfbda1a215c2f
 +
 +
  def test_profiles_list_survives_an_undecodable_sibling_profile_yaml(tmp_path, monkeypatch, caplog):
-@@ -282 +294,55 @@ def test_profiles_list_cache_sees_changes_inside_one_mtime_tick(tmp_path, monkey
+@@ -282 +294,167 @@ def test_profiles_list_cache_sees_changes_inside_one_mtime_tick(tmp_path, monkey
      assert g._discovered_profile_meta('writer', meta) == {}
 +
 +
@@ -76025,6 +76573,118 @@ index 91f30aa217762d0aa80a9dccfcf5134050a9d3eb..2f51e53d4adb6faa48cdfbda1a215c2f
 +            assert (await call(secondary))['result']['complete'] is False
 +            assert not main.sessions and not writer.sessions
 +
++        asyncio.run(probe())
++
++
++def test_bot_output_file_reads_only_a_fresh_current_workspace_delivery(tmp_path, monkeypatch):
++    import os
++    from gateway import session_bot_file
++    from gateway.session_identity import authenticated_subject
++
++    root = tmp_path.resolve()
++    workspace = root / 'work'
++    workspace.mkdir()
++    sibling = root / 'work-other'
++    sibling.mkdir()
++    home = root / 'authority'
++    home.mkdir()
++    monkeypatch.setenv('HERMES_HOME', str(home))
++    path = workspace / 'two  spaces.txt'
++    text = '<img src=x>\nExact UTF-8: ก\n'
++    path.write_text(text, encoding='utf-8')
++    outside = sibling / path.name
++    outside.write_text('outside fixture', encoding='utf-8')
++    owner = authenticated_subject({'user_id': 'reader'})
++
++    with SessionDB(home / 'state.db') as db:
++        authority = SimpleNamespace(profile_id=str(home), instance_id='local', db=db, events={},
++                                    sessions={}, retired=False, retiring=False)
++        db.create_session('bot', source='gui', user_id=owner, chat_id='local-bot', cwd=str(workspace))
++        db.set_session_title('bot', 'Bot Chat')
++        db.append_message('bot', 'assistant', f'Result\nMEDIA:"{path}"')
++
++        async def probe():
++            def connection(user='reader', native=True, caps=('session:read', 'session:control')):
++                return AuthorityConnection(authority, object(), {'user_id': user, 'profile_id': str(home),
++                    'native_bootstrap': native, 'capabilities': list(caps)})
++
++            async def call(method='profiles.latest_output', *, client=None, **params):
++                return await (client or connection()).dispatch({'id': 'test', 'method': method,
++                    'params': {'canonical_id': 'bot', **params}})
++
++            async def offered():
++                return (await call())['result']['file_preview']
++
++            reads = []
++            read = session_bot_file._read_workspace_text
++
++            def observe(candidate):
++                reads.append(candidate)
++                return read(candidate)
++
++            monkeypatch.setattr(session_bot_file, '_read_workspace_text', observe)
++            token = await offered()
++            assert reads == []
++            assert token['path'] == str(path)
++            with monkeypatch.context() as expired:
++                expired.setattr(session_bot_file, 'monotonic', lambda: int(token['token'].split('.')[0]) + 1)
++                assert (await call('profiles.output_file', token=token['token']))['result'] == {'text': None}
++            assert reads == []
++            assert 'file_preview' not in (await call(client=connection(native=False)))['result']
++            assert 'file_preview' not in (await call(client=connection(caps=('session:read',))))['result']
++            assert (await call('profiles.output_file', token=token['token']))['result'] == {'text': text}
++            assert reads == [path]
++            assert 'error' in await call('profiles.output_file', client=connection(user='other'), token=token['token'])
++            assert 'error' in await call('profiles.output_file', token=token['token'], path=str(outside))
++
++            db.update_session_cwd('bot', str(sibling))
++            assert 'file_preview' not in (await call())['result']
++            db.update_session_cwd('bot', str(workspace))
++            assert (await call('profiles.output_file', token=token['token']))['result'] == {'text': None}
++            token = await offered()
++            moved = workspace.rename(root / 'owned-original')
++            workspace.symlink_to(sibling, target_is_directory=True)
++            assert (await call('profiles.output_file', token=token['token']))['result'] == {'text': None}
++            workspace.unlink()
++            moved.rename(workspace)
++
++            path.unlink()
++            path.symlink_to(outside)
++            assert (await call('profiles.output_file', token=token['token']))['result'] == {'text': None}
++            path.unlink()
++            os.link(outside, path)
++            assert (await call('profiles.output_file', token=token['token']))['result'] == {'text': None}
++            path.unlink()
++            os.mkfifo(path)
++            assert (await call('profiles.output_file', token=token['token']))['result'] == {'text': None}
++            path.unlink()
++            path.write_bytes(b'\x00text')
++            assert (await call('profiles.output_file', token=token['token']))['result'] == {'text': None}
++            path.write_bytes(b'x' * 8193)
++            assert (await call('profiles.output_file', token=token['token']))['result'] == {'text': None}
++
++            path.write_bytes(b'x')
++            fstat = os.fstat
++            inode = path.stat().st_ino
++
++            def grow(fd):
++                before = fstat(fd)
++                if before.st_ino == inode:
++                    path.write_bytes(b'x' * 8193)
++                return before
++
++            with monkeypatch.context() as race:
++                race.setattr(os, 'fstat', grow)
++                assert (await call('profiles.output_file', token=token['token']))['result'] == {'text': None}
++
++            db.append_message('bot', 'assistant', f'MEDIA:"{outside}"')
++            assert 'file_preview' not in (await call())['result']
++            assert (await call('profiles.output_file', token=token['token']))['result'] == {'text': None}
++            db.append_message('bot', 'assistant', f'MEDIA:{workspace}/.ENV.txt')
++            assert 'file_preview' not in (await call())['result']
++
++        if os.name != 'posix' or not hasattr(os, 'O_NOFOLLOW'):
++            pytest.skip('POSIX no-follow preview')
 +        asyncio.run(probe())
 diff --git a/tests/gateway/test_session_interrupt_goal.py b/tests/gateway/test_session_interrupt_goal.py
 new file mode 100644
@@ -107702,24 +108362,39 @@ index 7572ad12850dde68d70ad0876c10d0a32ff20b16..209cb8dbe9798bcafc95cd2a8436448d
 +    "kanban_archive",  # local patch 24
      "kanban_attach", "kanban_attach_url", "kanban_attachments",
 diff --git a/tui_gateway/contracts/canonical_projections.py b/tui_gateway/contracts/canonical_projections.py
-index 7b8931440e4299f155949b0e5943f89093dbeeaa..ed9b65e649dd6c54b2ecfb32f9997609ca29bdea 100644
+index 7b8931440e4299f155949b0e5943f89093dbeeaa..590a9d023ec6be617d044f797abd165892cd86f2 100644
 --- a/tui_gateway/contracts/canonical_projections.py
 +++ b/tui_gateway/contracts/canonical_projections.py
-@@ -51,2 +51,11 @@ class CanonicalProfilesParams(ProfileParams):
+@@ -51,2 +51,25 @@ class CanonicalProfilesParams(ProfileParams):
 
 +class CanonicalBotOutputParams(ProfileParams):
 +    canonical_id: str
 +
 +
++class CanonicalBotFilePreview(Result):
++    path: str
++    token: str
++
++
 +class CanonicalBotOutputResult(Result):
 +    text: str | None
 +    complete: bool | None = None
++    file_preview: CanonicalBotFilePreview | None = None
++
++
++class CanonicalBotFileParams(CanonicalBotOutputParams):
++    token: str
++
++
++class CanonicalBotFileResult(Result):
++    text: str | None
 +
 +
  class CanonicalRoomCreateParams(RoomParams):
-@@ -104,2 +113,3 @@ for _name, _params, _result in (
+@@ -104,2 +127,4 @@ for _name, _params, _result in (
      ('profiles.list', CanonicalProfilesParams, CanonicalProfilesResult),
 +    ('profiles.latest_output', CanonicalBotOutputParams, CanonicalBotOutputResult),
++    ('profiles.output_file', CanonicalBotFileParams, CanonicalBotFileResult),
      ('image.attach_bytes', ImageAttachBytesParams, CanonicalAttachedImageResult),
 diff --git a/tui_gateway/contracts/config_free_tier_control.py b/tui_gateway/contracts/config_free_tier_control.py
 index a7346e3f0a6d57a6ea1eeb0a05517eb943b737d0..da2738697b6257c235c147bd6f5b3662e61439e3 100644

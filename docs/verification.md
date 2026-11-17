@@ -1,3 +1,19 @@
+# Preview a delivered text file in a bot’s character (unreleased)
+
+**Preview file** appears when the complete saved reply delivers one
+absolute .txt path directly inside the current Bot Chat workspace on a
+Local POSIX backend. A click rechecks the saved reply and workspace, then
+reads up to 8 KiB of UTF-8 text through no-follow file and directory
+descriptors. The snapshot appears as plain text in the popover.
+
+The isolated Mac Local run made zero file reads when the popover opened
+and one when the user selected **Preview file**. It preserved the two
+spaces in the filename and displayed HTML-like bytes literally. A later
+reply pointing outside the workspace showed its path and made zero file
+reads. The fixture passed 60 seconds with zero Desktop SSH and exited.
+Regressions cover stale replies and cross-owner requests, symlinks, hard
+links, special files and overflow after the initial size check.
+
 # See a delivered text file in a bot’s preview (unreleased)
 
 A character’s latest-output popover labels the full path when a complete
@@ -11,8 +27,7 @@ in the filename, from the canonical Bot Chat despite a newer side chat.
 The path was outside the fixture chat’s workspace. The popover made one
 authenticated output read and requested zero probes or launches of that
 file. The Desktop passed 60 seconds with zero SSH and all fixture
-processes exited. Direct preview needs a reader that enforces the
-owning workspace at file-read time.
+processes exited. This walkthrough covered the path display.
 
 # Open web links from a bot’s saved reply (unreleased)
 

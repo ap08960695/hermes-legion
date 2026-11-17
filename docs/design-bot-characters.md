@@ -352,5 +352,12 @@ click.
 The [Delivered file row](verification.md#see-a-delivered-text-file-in-a-bots-preview-unreleased)
 shows the exact path of a single standalone text-file delivery from a complete
 reply. The path appears once as plain text and the transcript remains available
-through **Open in Hermes**. Direct preview needs a file reader that enforces
-the owning Bot Chat's workspace. The five-character resource budget remains open.
+through **Open in Hermes**.
+
+[Preview file](verification.md#preview-a-delivered-text-file-in-a-bots-character-unreleased)
+can read one small UTF-8 .txt file directly inside the current Bot Chat workspace
+on a Local POSIX backend. The gateway binds the offered revision to that chat,
+its saved workspace generation and the exact current reply. It rechecks the
+revision on click and reads through a directory descriptor without following
+symlinks. The overlay shows the snapshot as plain text. Other deliveries still
+show their path. The five-character resource budget remains open.
