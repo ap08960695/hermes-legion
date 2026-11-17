@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1151-path** Legion source, interface and optimization alternative
+This is the complete **1152-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -24,6 +24,18 @@ local font stacks and normal chat font loading. Cold boot, later paints and
 font deduplication have regression coverage; native confirmation after the fix,
 screenshots and CPU/RAM acceptance remain open. [Design](design-bot-characters.md#active-character-overlay-preview-offline-source-step) and
 [verification limits](verification.md#bot-character-overlay-preview--offline-source-step-unreleased).
+
+## Local sprite atlas check (unreleased)
+
+Creators can run `hermes pets validate ./spritesheet.png` before installation.
+It prints populated animation rows, warnings for absent states and actionable
+validation errors. Static native-size PNG/WebP files up to 16 MiB use the existing
+generation validator; unsupported, corrupt, oversized or invalid images fail
+with exit 1. No pet settings or installed files change. The real parser/Pillow
+suite and isolated CLI success/failure/help checks pass. Full character-pack
+validation and overlay visual/resource acceptance remain open.
+[Contract](design-bot-characters.md#local-atlas-validation-creator-tooling) and
+[evidence](verification.md#local-sprite-atlas-validation--creator-step-unreleased).
 
 ## Pet creator preview (unreleased)
 

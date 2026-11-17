@@ -29,6 +29,22 @@ Eight focused source tests and the real source CLI through an isolated native
 PTY pass with a synthetic atlas. This is terminal preview, not the new desktop
 overlay. [Evidence and limits](verification.md#pet-creator-preview--native-terminal-acceptance-unreleased).
 
+## Local atlas validation: creator tooling
+
+`hermes pets validate ./spritesheet.png` checks an existing local generated
+atlas without installing it or changing pet settings. Reuse the generation
+pipeline's `validate_atlas`; a separate pack parser or duplicate pixel validator
+would create a second contract. The existing CLI table owns dispatch/help.
+Accept static PNG/WebP, at most 16 MiB, with the native 1536x1872 geometry checked
+before pixel decoding. Report populated rows, missing-state warnings and the
+shared empty/collapse/outlier/transparent-RGB errors. Exit 0 permits warnings;
+exit 1 reports an unreadable, unsupported or invalid atlas.
+
+The real CLI parser/Pillow regression and isolated source CLI cover success,
+failure and help. No installation, model request or network is needed. This
+checks the current generated atlas only: pack manifests, licences, animation
+budgets, archives, install/assign and the complete creator guide remain open.
+
 ## Active-character overlay preview: offline source step
 
 The working source adds **Show bot characters** in Monitor. A loaded, enabled
@@ -86,7 +102,11 @@ reaches Local60 with unchanged renderer/native IPC artifacts. This identifies a
 fixture defect; no product-source fix is inferred. Its app-filtered window
 inventory lists control only, so overlay images, five actors, motion and resource
 acceptance remain open. The later expanded visual attempt also ended at its
-deadline. No completed character acceptance is claimed. [Evidence and limits](verification.md#bot-character-overlay-preview--offline-source-step-unreleased).
+deadline. A subsequent relative-entry fixture reaches Local60 with a real native panel
+identifier, but its exact app/window capture receives Screen Recording
+`PERM_DENIED`. The trial closes without input or retries; no actor image, motion,
+restoration or CPU/RAM acceptance follows. No permission settings are changed.
+No completed character acceptance is claimed. [Evidence and limits](verification.md#bot-character-overlay-preview--offline-source-step-unreleased).
 
 Persistent all-bot tracking, character interactions/open controls, per-bot packs,
 display-only sleep handling and actual visibility/reduced-motion/resource

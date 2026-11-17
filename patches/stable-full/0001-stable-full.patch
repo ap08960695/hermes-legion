@@ -51278,7 +51278,7 @@ index 5426a665312f9cd376b8d39c264129ce8de4fab4..8950fe926e836f0817734e2b21f7f994
 +        return "provider_reported_miss"
  
 diff --git a/hermes_cli/pets.py b/hermes_cli/pets.py
-index 5d568063e35b4fee7b9ad65323e6e7bf0b4c58b9..d7603a6dd473faa028a678b6f5e5bdec360ff498 100644
+index 5d568063e35b4fee7b9ad65323e6e7bf0b4c58b9..13a5e15b983071316e016630085dc7b3f3637cb0 100644
 --- a/hermes_cli/pets.py
 +++ b/hermes_cli/pets.py
 @@ -132,3 +132,3 @@ def _cmd_show(args) -> int:
@@ -51301,11 +51301,51 @@ index 5d568063e35b4fee7b9ad65323e6e7bf0b4c58b9..d7603a6dd473faa028a678b6f5e5bdec
 -            if args.once and loops >= len(states):
 +            if args.once:
                  break
-@@ -400,3 +398,3 @@ _SUBCOMMANDS = (
+@@ -207,2 +205,33 @@ def _cmd_show(args) -> int:
+
++def _cmd_validate(args) -> int:
++    """Check a local generated atlas without installing or changing it."""
++    from pathlib import Path
++
++    from PIL import Image
++
++    from agent.pet.generate.atlas import ATLAS_HEIGHT, ATLAS_WIDTH, validate_atlas
++
++    try:
++        path = Path(args.spritesheet).expanduser()
++        if not path.is_file() or path.stat().st_size > 16 * 1024 * 1024:
++            raise ValueError("expected a PNG/WebP file no larger than 16 MiB")
++        with Image.open(path, formats=("PNG", "WEBP")) as image:
++            # Check the header before allocating decoded pixels.
++            if image.size != (ATLAS_WIDTH, ATLAS_HEIGHT):
++                raise ValueError(f"expected {ATLAS_WIDTH}x{ATLAS_HEIGHT}, got {image.width}x{image.height}")
++            if getattr(image, "is_animated", False):
++                raise ValueError("expected a static sprite atlas, not an animated image")
++            result = validate_atlas(image)
++    except (OSError, ValueError, Image.DecompressionBombError) as exc:
++        _err(f"✗ cannot validate atlas: {exc}")
++        return 1
++
++    print(f"Atlas {result['width']}x{result['height']} — states: {', '.join(result['filled_states']) or 'none'}")
++    for warning in result["warnings"]:
++        print(f"Warning: {warning}")
++    for error in result["errors"]:
++        _err(f"✗ {error}")
++    return 0 if result["ok"] else 1
++
++
+ def _cmd_doctor(args) -> int:
+@@ -400,3 +429,3 @@ _SUBCOMMANDS = (
          (("slug",), dict(nargs="?", default="", help="Pet slug (default: active)")),
 -        (("--state",), dict(default="", help="Single state: idle/run/review/failed/wave/jump")),
 +        (("--state",), dict(default="", help="Single state: idle/run/review/failed/wave/jump/waiting")),
          (("--cycle",), dict(action="store_true", help="Cycle through all states")),
+@@ -413,2 +442,5 @@ _SUBCOMMANDS = (
+     )),
++    ("validate", "Check a local sprite atlas without installing it", _cmd_validate, (
++        (("spritesheet",), dict(help="Static PNG/WebP atlas (1536x1872, up to 16 MiB)")),
++    )),
+     ("doctor", "Check pet setup + terminal graphics support", _cmd_doctor, ()),
 diff --git a/hermes_cli/plugin_code_cache.py b/hermes_cli/plugin_code_cache.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..66538f304e8a2f433e82cd15b66feb0237cf08b7
@@ -79778,6 +79818,110 @@ index 0000000000000000000000000000000000000000..3dd5756eafe256b5b3992655b1d39a6b
 +        with pytest.raises(ValueError, match="render interrupted"):
 +            pets._cmd_show(args)
 +    assert "\x1b[?25h" in capsys.readouterr().out
+diff --git a/tests/hermes_cli/test_pet_validate.py b/tests/hermes_cli/test_pet_validate.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..f576b2e24ec80bb4c4183c425536364a6394165f
+--- /dev/null
++++ b/tests/hermes_cli/test_pet_validate.py
+@@ -0,0 +1,98 @@
++"""Creators can check a local atlas without installing it or changing a profile."""
++import argparse
++
++import pytest
++from PIL import Image, ImageDraw
++
++from hermes_cli.subcommands.pets import build_pets_parser
++
++
++def validate(path):
++    parser = argparse.ArgumentParser()
++    build_pets_parser(parser.add_subparsers())
++    args = parser.parse_args(["pets", "validate", str(path)])
++    return args.func(args)
++
++
++@pytest.fixture
++def sheet(tmp_path):
++    path = tmp_path / "my-character.png"
++    image = Image.new("RGBA", (1536, 1872))
++    draw = ImageDraw.Draw(image)
++    for row in range(9):
++        draw.rectangle((40, row * 208 + 30, 150, row * 208 + 180), fill="teal")
++    image.save(path)
++    return path
++
++
++@pytest.mark.parametrize("format", ["PNG", "WEBP"])
++def test_local_atlas_validates_without_changing_files(sheet, tmp_path, capsys, format):
++    if format == "WEBP":
++        with Image.open(sheet) as image:
++            image.save(sheet, format="WEBP", lossless=True)
++    before = {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
++    assert validate(sheet) == 0
++    output = capsys.readouterr()
++    assert "1536x1872" in output.out
++    assert "idle" in output.out and "review" in output.out
++    assert not output.err
++    assert before == {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
++
++
++def test_missing_states_are_visible_warnings(tmp_path, capsys):
++    path = tmp_path / "partial.png"
++    image = Image.new("RGBA", (1536, 1872))
++    ImageDraw.Draw(image).rectangle((40, 30, 150, 180), fill="teal")
++    image.save(path)
++    assert validate(path) == 0
++    assert "state 'review' has no frames" in capsys.readouterr().out
++
++
++@pytest.mark.parametrize("residue", [False, True])
++def test_invalid_atlas_reports_shared_validation_errors(sheet, capsys, residue):
++    image = Image.new("RGBA", (1536, 1872))
++    if residue:
++        with Image.open(sheet) as valid:
++            image = valid.copy()
++        image.putpixel((0, 0), (255, 0, 0, 0))
++    image.save(sheet)
++    assert validate(sheet) == 1
++    expected = "transparent pixels retain RGB residue" if residue else "atlas is empty"
++    assert expected in capsys.readouterr().err
++
++
++def test_wrong_geometry_is_rejected_before_pixel_decode(tmp_path, monkeypatch, capsys):
++    path = tmp_path / "wrong.png"
++    Image.new("RGBA", (10, 10)).save(path)
++    def unexpected_load(self):
++        pytest.fail("wrong geometry must not decode pixels")
++    monkeypatch.setattr(Image.Image, "load", unexpected_load)
++    assert validate(path) == 1
++    assert "expected 1536x1872, got 10x10" in capsys.readouterr().err
++
++
++@pytest.mark.parametrize("format", ["PNG", "WEBP"])
++def test_animated_images_are_not_treated_as_static_atlases(sheet, capsys, format):
++    with Image.open(sheet) as image:
++        first = image.copy()
++    second = first.copy()
++    second.putpixel((50, 50), (255, 0, 0, 255))
++    first.save(sheet, format=format, save_all=True, append_images=[second], lossless=True)
++    assert validate(sheet) == 1
++    assert "expected a static sprite atlas" in capsys.readouterr().err
++
++
++@pytest.mark.parametrize("kind", ["missing", "corrupt", "oversize", "directory", "gif"])
++def test_unreadable_or_unsupported_input_fails_cleanly(tmp_path, capsys, kind):
++    path = tmp_path / "input"
++    if kind == "corrupt":
++        path.write_bytes(b"broken image")
++    elif kind == "oversize":
++        with path.open("wb") as stream:
++            stream.truncate(16 * 1024 * 1024 + 1)
++    elif kind == "directory":
++        path.mkdir()
++    elif kind == "gif":
++        Image.new("RGB", (10, 10)).save(path, format="GIF")
++    assert validate(path) == 1
++    assert "cannot validate atlas" in capsys.readouterr().err
 diff --git a/tests/hermes_cli/test_plugin_manifest_cache.py b/tests/hermes_cli/test_plugin_manifest_cache.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..0dee9289324c6bb1a3157d0467dabca65fa64e8a

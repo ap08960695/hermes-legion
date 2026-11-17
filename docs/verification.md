@@ -1,3 +1,42 @@
+# Local sprite atlas validation — creator step, unreleased
+
+`hermes pets validate <spritesheet>` is wired through the real pets parser and
+existing command table. It checks a regular PNG/WebP file (at most 16 MiB), native
+1536x1872 header geometry before pixel decoding, and a static image. The existing
+generation validator supplies occupancy, size/collapse/outlier and transparent
+RGB diagnostics. Populated rows and absent-state warnings are printed; warnings
+alone return 0 and errors return 1. No second pixel validator or dependency.
+
+The old CLI fails the new missing-state-warning journey because `validate` is
+not a command. With the new handler, 13 parser/Pillow cases pass: native PNG/WebP,
+unchanged fixture files, visible missing-state warnings, empty/residue errors,
+geometry rejection before load, animated PNG/WebP rejection, missing/corrupt/
+oversized/directory/GIF input. Six neighboring preview cases pass. Scoped Ruff
+passes. The canonical runner uses one worker/no retry; its scratch root and
+serial targeted precompile stay inside the isolated task. No broad source suite
+or full unchanged selection is claimed.
+
+The actual source `hermes_cli.main` runs from an owned directory outside the
+source tree with an isolated backed-up home. Valid, missing-file and help cases
+return 0/1/0 with expected output. Atlas and fixture config stay byte-identical;
+prior config state is restored. These are native CLI checks using synthetic
+geometric artwork, not desktop images or a complete character pack.
+
+Two source/test sections are exported against pinned `bf0203a`; changed-section
+apply/hash/reverse/hash checks pass. The new test appends to the Python selection;
+unrelated patch sections and selection order remain. Companion tests, tracked
+copy release verification and directory/history secret scans are recorded in
+the private round evidence. No version bump or character feature release.
+
+The UI attempt in this round remains failed: the first launch never reaches
+bootstrap; the distinct relative-entry fixture reaches Local60 (60.048 seconds),
+zero Desktop SSH and a native panel media identifier. Exact app/window capture
+then reports `PERM_DENIED: Screen Recording permission not granted`. Both trials
+close with zero recorded survivors; no third launch, permission change or input.
+No five-actor image/motion/restoration or CPU/RAM result is accepted. Raw private
+trial receipts, CLI stdout/stderr, source bindings and config backups remain in
+`../uitest-v090-c2q4iijp/characters-r213` and `characters-r213-fixed`.
+
 # Bot character overlay preview — offline source step, unreleased
 
 The working source adds an explicit Monitor character preview through the
