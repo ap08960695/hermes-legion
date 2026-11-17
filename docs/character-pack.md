@@ -1,11 +1,10 @@
 # Make a native-atlas character pack
 
-The current development kit can **lint and preview a local folder** before
-installation. It checks creator metadata and the same atlas geometry/pixels used
-by generated Hermes pets, then uses the existing terminal renderer for preview.
-This does not install the pack or make its metadata active in Desktop. This is
-the draft native-atlas subset; pack import, bot assignment and extended
-interactions are still open.
+The current development kit can **lint, preview and import a local native-atlas
+folder**. Validation/preview leave installed entries alone. Explicit import adds
+a new entry to the current profile; selecting it remains a separate action.
+This is the draft native-atlas subset. Per-bot assignment and extended
+interaction events remain open.
 
 ## Start with the original example
 
@@ -79,9 +78,9 @@ or a safe installer for hostile concurrent directory changes.
    one state; explicit `--state` takes priority over `--cycle`. Without either,
    preview uses idle; omit `--once` to loop until Ctrl+C. Use `--mode unicode`
    if needed.
-7. Installation and bot assignment are still future steps. Existing **installed**
+7. When ready, import under a new slug as described below. Existing **installed**
    pets keep `hermes pets show <slug> --cycle --once`; do not combine a slug with
-   `--pack`.
+   `--pack`. Per-bot assignment is still a future step.
 
 | Row, from top | Native atlas name | Generator cells | Existing activity alias |
 |---|---|---:|---|
@@ -116,6 +115,44 @@ if a requested state has no frames: fill that row or request a populated state.
 Previewing the native atlas does not implement the future interaction events,
 select a bot character or prove its Desktop appearance/CPU/RAM budget.
 
+## Import into the current profile
+
+Choose an unused slug with 1–64 lowercase ASCII letters, digits and single
+hyphens, such as `my-character`:
+
+```sh
+hermes pets import ./my-character my-character
+hermes pets list --installed
+hermes pets show my-character --cycle --once
+```
+
+Import copies the exact validated image and keeps creator name/author/licence
+in `manifest.json` beside normal `pet.json` metadata. Extra source files and
+scripts are not copied or executed. The original folder stays unchanged.
+Current selection and settings stay unchanged; make it active only when you
+choose, with `hermes pets select my-character`. This is the existing global pet
+selection, not a new per-bot assignment setting. To remove the imported copy,
+select another pet or turn display off first, then use
+`hermes pets remove my-character`; the original creator folder remains.
+
+A file, directory (including an empty one) or symlink at the chosen slug makes
+import fail. There is no force/overwrite option. Complete files are staged in a
+private container and published together using a native no-replace operation;
+existing readers do not expose the unfinished payload. Unsupported atomic
+operations fail instead of using an overwriting fallback. The imported directory
+is private to its owner on the tested Mac path.
+
+Write/publication failures discard only the task's staging container. If staging
+cleanup itself fails, a warning identifies it; a completed import stays successful
+and an earlier failure is preserved. An abrupt process/power loss may leave an
+unfinished private staging directory: atomic visibility is not a crash-durability
+or recovery guarantee. Do not treat unknown staging folders as safe to delete.
+Store parent paths must remain trusted/stable during import.
+
+The native acceptance here is macOS. Linux/Windows implementations use their
+native no-replace contracts but have not been run in this Mac-only round.
+This does not install a new Hermes.app build or prove the character overlay.
+
 ## Read the result
 
 Success prints the pack name, author, licence, dimensions and populated rows.
@@ -124,8 +161,8 @@ or metadata. Validation does not install a pet, select a profile, change setting
 start a model or fetch an asset.
 
 FPS, anchor/footprint, custom per-event mappings, sounds, ZIP import, GIF/APNG/
-Lottie decoding, install/uninstall/assign and a pack creation skill are future
-parts of the full format. They are rejected or absent here rather than silently
+Lottie decoding, per-bot assignment and a pack creation skill are future parts
+of the full format. They are rejected or absent here rather than silently
 advertised as working options. Existing native geometry and animation scheduling
 remain in control. Lint is not proof of the five-character CPU/RAM budget or
 of enter/exit, handoff, retry, review or group-celebration behavior.

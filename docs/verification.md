@@ -1,3 +1,49 @@
+# No-overwrite creator pack import — Mac CLI step, unreleased
+
+`pets import DIRECTORY SLUG` uses the existing bounded snapshot loader and pet
+store classes. It accepts only a canonical1–64character slug before store access.
+The checked image bytes, creator manifest and standard pet.json are written into
+a private container/payload layout below the store. Existing enumeration ignores
+that unfinished container. One native no-replace directory operation publishes
+all closed files; no existing target is removed or replaced. No automatic
+selection, force flag, new createdBy enum, renderer, model call or dependency.
+
+Darwin uses SDK-verified renamex_np/RENAME_EXCL; Linux uses renameat2/NOREPLACE;
+Windows uses os.rename's documented existing-target refusal. Missing native
+support or an unsupported filesystem fails closed. Only the Mac native path is
+executed here; no OS faking or other machine use. Atomic visibility is separate
+from crash durability and assumes a trusted/stable store parent. Cleanup errors
+are logged without changing the committed result or masking a prior failure.
+
+The old CLI first rejects the absent import command (intended RED). Thirty new
+import cases plus9existing engine and37folder validation cases pass (76total),
+one canonical worker/no retry. Real Mac filesystem cases cover existing file,
+empty/full directory, live/dangling symlink, a target created at publication,
+two threads/one winner, hidden staging, retained creator metadata, exact immutable
+bytes despite source replacement, WebP/store/renderer compatibility, each write
+fault, publication/native-capability refusal, cleanup faults before/after commit,
+canonical slug checks, warnings, invalid images and no selection/config changes.
+Scoped Ruff passes. Linux/Windows marker arms are not native acceptance here.
+
+Actual source CLI from a backed-up isolated profile passes nine sequential
+cases: import0/list0/duplicate1/empty-target1/bad-slug1/installed-show0/select0/
+select-original0/remove0. Each binds importer/loader/CLI hashes. Import/list/
+show/collisions leave config byte-identical; only explicit selections change the
+fixture, and its original config is restored afterward. Original entry and source
+pack stay byte-identical; creator metadata and image survive import. The imported
+directory is owner-private on this Mac. The installed preview emits39actual
+encoded terminal frames/19distinct chunks, restores the cursor once and exits.
+No staging or recorded process survives. Native21.464s/peak172703744B inclguardian,
+max3product processes (4including guardian); external controllers excluded.
+This is terminal/filesystem proof, not Desktop pixels or five-character CPU/RAM.
+
+Four changed source/test sections apply/hash/reverse/hash against pinnedbf0203a;
+unrelated sections stay exact and two Python regressions append. Required
+companion/tracked-copy/directory+history gates are recorded privately. No Hermes.
+app/CUA/permission retry, owner app/data, otherhost/ai, ESTOP/pause/timer/settings
+change. No version/tag/release/adoption; full formats/events/per-bot assignment,
+creator skill and native character/resource acceptance remain open.
+
 # Pre-install creator pack preview — native terminal step, unreleased
 
 `hermes pets show --pack DIRECTORY --cycle --once` previews the existing seven

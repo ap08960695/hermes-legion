@@ -3385,6 +3385,87 @@ index 9a5e12ecba0400180e6b9c4c075f2d7c57859cc2..a1e17bd66f609502615c95b9f93e7c25
 +        context = "WORK OVERVIEW (goal, completed work, pending work, holds):\n" + overview + "\nRECENT CONVERSATION:\n" + str(user_input or "")[-1700:]
 +        return suggest_prompt(context, str(values.get("draft") or ""), str(values.get("scope") or ""))
      if template:
+diff --git a/agent/pet/importer.py b/agent/pet/importer.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..241808d2697a1d086e7922b9d5a34ea9b7fd6bd1
+--- /dev/null
++++ b/agent/pet/importer.py
+@@ -0,0 +1,75 @@
++"""Import validated native creator packs without replacing installed entries."""
++from __future__ import annotations
++
++import ctypes
++import errno
++import json
++import logging
++import os
++from pathlib import Path
++import shutil
++import tempfile
++
++from agent.pet import store
++from agent.pet.pack import load_pack
++from hermes_platform.host import facts
++
++logger = logging.getLogger(__name__)
++
++
++def _publish_new_directory(source: Path, target: Path) -> None:
++    """One native publication point; never fall back to an overwriting rename."""
++    family = facts.os_family()
++    if family == "win32":
++        os.rename(source, target)
++        return
++    if family not in ("darwin", "linux"):
++        raise OSError(errno.ENOTSUP, "atomic no-replace import is unavailable")
++    libc = ctypes.CDLL(None, use_errno=True)
++    function = getattr(libc, "renamex_np" if family == "darwin" else "renameat2", None)
++    if function is None:
++        raise OSError(errno.ENOTSUP, "atomic no-replace import is unavailable")
++    src, dst = os.fsencode(source), os.fsencode(target)
++    if family == "darwin":
++        function.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
++        arguments = (src, dst, 4)  # Darwin RENAME_EXCL.
++    else:
++        function.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
++        arguments = (-100, src, -100, dst, 1)  # Linux AT_FDCWD, RENAME_NOREPLACE.
++    function.restype = ctypes.c_int
++    if function(*arguments) != 0:
++        error = ctypes.get_errno()
++        raise OSError(error, os.strerror(error), os.fspath(target))
++
++
++def import_pack(source: Path, slug: str) -> tuple[store.InstalledPet, list[str]]:
++    """Copy one checked snapshot into the current profile; selection stays explicit."""
++    if not isinstance(slug, str) or not slug or len(slug) > 64 or store.slugify(slug) != slug:
++        raise ValueError("slug must be canonical lowercase letters/digits/hyphens, 1-64 characters")
++    report, data = load_pack(source)
++    if not report["ok"]:
++        raise ValueError("; ".join(report["errors"]))
++    meta = report["pack"]
++    root = store.pets_dir().resolve()
++    target = root / slug
++    pet = store.InstalledPet(slug, meta["name"], "", target, target / meta["spritesheet"])
++    staged = Path(tempfile.mkdtemp(prefix=".pet-import-", dir=root))
++    try:
++        payload = staged / "payload"
++        payload.mkdir(mode=0o700)
++        pet_meta = {"id": slug, "displayName": meta["name"], "description": "", "spritesheetPath": meta["spritesheet"]}
++        files = {
++            "manifest.json": (json.dumps(meta, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
++            "pet.json": (json.dumps(pet_meta, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
++            meta["spritesheet"]: data,
++        }
++        for name, content in files.items():
++            (payload / name).write_bytes(content)
++        # shortcut: atomic visibility only; sync files/directories before promising crash durability.
++        _publish_new_directory(payload, target)
++        return pet, report["warnings"]
++    finally:
++        try:
++            shutil.rmtree(staged)
++        except OSError as exc:
++            logger.warning("Pet import staging cleanup failed for %s: %s", staged, exc)
 diff --git a/agent/pet/pack.py b/agent/pet/pack.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..0a22dbcd02e6fb9d2dae2e86950fd10b766d3b74
@@ -51376,10 +51457,30 @@ index 5426a665312f9cd376b8d39c264129ce8de4fab4..8950fe926e836f0817734e2b21f7f994
 +        return "provider_reported_miss"
  
 diff --git a/hermes_cli/pets.py b/hermes_cli/pets.py
-index 5d568063e35b4fee7b9ad65323e6e7bf0b4c58b9..de0faeb643e90b2b987b0cd921fe054da710068e 100644
+index 5d568063e35b4fee7b9ad65323e6e7bf0b4c58b9..dc2d53b921e30096ba07bdd599adda64b1e77921 100644
 --- a/hermes_cli/pets.py
 +++ b/hermes_cli/pets.py
-@@ -128,8 +128,5 @@ def _cmd_show(args) -> int:
+@@ -75,2 +75,19 @@ def _cmd_install(args) -> int:
+
++def _cmd_import(args) -> int:
++    from pathlib import Path
++
++    from agent.pet.importer import import_pack
++
++    try:
++        pet, warnings = import_pack(Path(args.directory).expanduser(), args.slug)
++    except (OSError, ValueError) as exc:
++        _err(f"✗ cannot import pack: {exc}")
++        return 1
++    for warning in warnings:
++        print(f"Warning: {warning}")
++    print(f"✓ imported {pet.display_name} → {pet.directory}")
++    print(f"  Select with: hermes pets select {pet.slug}")
++    return 0
++
++
+ def _cmd_remove(args) -> int:
+@@ -128,8 +145,5 @@ def _cmd_show(args) -> int:
      (kitty/iTerm2/sixel when supported, else truecolor half-block fallback). Ctrl+C stops."""
 -    import shutil
 -    import time
@@ -51390,7 +51491,7 @@ index 5d568063e35b4fee7b9ad65323e6e7bf0b4c58b9..de0faeb643e90b2b987b0cd921fe054d
 -    from agent.pet.constants import DEFAULT_SCALE, LOOP_MS, STATE_ROWS, PetState, resolve_cols
 -    from agent.pet.render import build_renderer
 
-@@ -141,2 +138,35 @@ def _cmd_show(args) -> int:
+@@ -141,2 +155,35 @@ def _cmd_show(args) -> int:
          return 1
 +    return _animate_pet(args, pet.spritesheet, pet.display_name, cfg)
 +
@@ -51426,40 +51527,40 @@ index 5d568063e35b4fee7b9ad65323e6e7bf0b4c58b9..de0faeb643e90b2b987b0cd921fe054d
 +    from agent.pet.constants import DEFAULT_SCALE, LOOP_MS, PetState, resolve_cols
 +    from agent.pet.render import build_renderer
 
-@@ -146,3 +176,3 @@ def _cmd_show(args) -> int:
+@@ -146,3 +193,3 @@ def _cmd_show(args) -> int:
 
 -    renderer = build_renderer(pet.spritesheet, configured_mode=mode_cfg, scale=scale, unicode_cols=cols)
 +    renderer = build_renderer(spritesheet, configured_mode=mode_cfg, scale=scale, unicode_cols=cols)
      if not renderer.available:
-@@ -156,3 +186,3 @@ def _cmd_show(args) -> int:
+@@ -156,3 +203,3 @@ def _cmd_show(args) -> int:
      elif args.cycle:
 -        states = [s for s in STATE_ROWS if s in {e.value for e in PetState}]
 +        states = [state.value for state in PetState]
      else:
-@@ -160,2 +190,5 @@ def _cmd_show(args) -> int:
+@@ -160,2 +207,5 @@ def _cmd_show(args) -> int:
 
 +    if check_frames and (missing := [state for state in states if not renderer.frame_count(state)]):
 +        _err(f"✗ pack has no frames for requested state(s): {', '.join(missing)}")
 +        return 1
      is_unicode = renderer.mode == "unicode"
-@@ -174,4 +207,3 @@ def _cmd_show(args) -> int:
+@@ -174,4 +224,3 @@ def _cmd_show(args) -> int:
      try:
 -        print(f"{pet.display_name} — mode={renderer.mode}  (Ctrl+C to stop)")
 -        loops = 0
 +        print(f"{display_name} — mode={renderer.mode}  (Ctrl+C to stop)")
          while True:
-@@ -191,3 +223,3 @@ def _cmd_show(args) -> int:
+@@ -191,3 +240,3 @@ def _cmd_show(args) -> int:
                          out.write("\x1b[2J\x1b[3J\x1b[H")  # clear for image protocols
 -                        out.write(f"{pet.display_name} [{state}]\n")
 +                        out.write(f"{display_name} [{state}]\n")
                          out.write(indent + encoded + "\n")
-@@ -195,4 +227,3 @@ def _cmd_show(args) -> int:
+@@ -195,4 +244,3 @@ def _cmd_show(args) -> int:
                      time.sleep(frame_delay)
 -            loops += 1
 -            if args.once and loops >= len(states):
 +            if args.once:
                  break
-@@ -207,2 +238,25 @@ def _cmd_show(args) -> int:
+@@ -207,2 +255,25 @@ def _cmd_show(args) -> int:
 
 +def _cmd_validate(args) -> int:
 +    """Check a local atlas or creator folder without installing or changing it."""
@@ -51485,13 +51586,20 @@ index 5d568063e35b4fee7b9ad65323e6e7bf0b4c58b9..de0faeb643e90b2b987b0cd921fe054d
 +
 +
  def _cmd_doctor(args) -> int:
-@@ -400,3 +454,4 @@ _SUBCOMMANDS = (
+@@ -395,2 +466,6 @@ _SUBCOMMANDS = (
+     )),
++    ("import", "Import a local creator folder without replacing or selecting a pet", _cmd_import, (
++        (("directory",), dict(help="Native creator folder with manifest.json")),
++        (("slug",), dict(help="New canonical pet slug (1-64 lowercase letters/digits/hyphens)")),
++    )),
+     ("select", "Set the active pet (writes display.pet.*)", _cmd_select, (
+@@ -400,3 +475,4 @@ _SUBCOMMANDS = (
          (("slug",), dict(nargs="?", default="", help="Pet slug (default: active)")),
 -        (("--state",), dict(default="", help="Single state: idle/run/review/failed/wave/jump")),
 +        (("--pack",), dict(default="", metavar="DIRECTORY", help="Preview a local creator folder without installing or selecting it")),
 +        (("--state",), dict(default="", help="Single state: idle/run/review/failed/wave/jump/waiting")),
          (("--cycle",), dict(action="store_true", help="Cycle through all states")),
-@@ -413,2 +468,5 @@ _SUBCOMMANDS = (
+@@ -413,2 +489,5 @@ _SUBCOMMANDS = (
      )),
 +    ("validate", "Check a local atlas or creator folder without installing it", _cmd_validate, (
 +        (("spritesheet",), dict(help="Static PNG/WebP atlas (1536x1872, up to 16 MiB) or folder with manifest.json")),
@@ -64397,6 +64505,272 @@ index 23fe388856f2536e3077dd891d4ae29f71ade3d6..63d2f5b6f964c81800efe7b26bcd7c65
 -            "deepseek-v4-flash", "http://127.0.0.1:8080/v1", 1048576
 +            "deepseek-v4-flash", "http://127.0.0.1:8080/v1", 1048576, api_key=""
          )
+diff --git a/tests/agent/test_pet_pack_import.py b/tests/agent/test_pet_pack_import.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..647564544084cbf46c19e26b718e2547cf286234
+--- /dev/null
++++ b/tests/agent/test_pet_pack_import.py
+@@ -0,0 +1,260 @@
++"""New creator imports publish once without replacing any existing store entry."""
++from concurrent.futures import ThreadPoolExecutor
++import errno
++import json
++from pathlib import Path
++from threading import Barrier
++from types import SimpleNamespace
++
++import pytest
++from PIL import Image, ImageDraw
++
++
++def files(root):
++    return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file() and not p.is_symlink()}
++
++
++@pytest.fixture
++def creator(tmp_path, monkeypatch):
++    from agent.pet import store
++
++    home = tmp_path / "profile"
++    home.mkdir()
++    (home / "config.yaml").write_text("display:\n  pet:\n    enabled: false\n    slug: old\n")
++    old = home / "pets/old"
++    old.mkdir(parents=True)
++    (old / "pet.json").write_text('{"id":"old","displayName":"Existing","spritesheetPath":"spritesheet.png"}')
++    (old / "spritesheet.png").write_bytes(b"existing owner bytes")
++    monkeypatch.setenv("HERMES_HOME", str(home))
++    monkeypatch.setattr(store, "get_hermes_home", lambda: home)
++    source = tmp_path / "creator"
++    source.mkdir()
++    meta = {"schema_version": 1, "format": "hermes-native-atlas", "name": "โคมไฟ",
++            "author": "Artist", "licence": "CC0-1.0", "spritesheet": "spritesheet.png"}
++    (source / "manifest.json").write_text(json.dumps(meta))
++    image = Image.new("RGBA", (1536, 1872))
++    draw = ImageDraw.Draw(image)
++    for row in range(9):
++        draw.rectangle((40, row * 208 + 30, 150, row * 208 + 180), fill="teal")
++    image.save(source / "spritesheet.png")
++    return source, home, meta
++
++
++@pytest.mark.platforms("macos", "linux", "windows")
++def test_import_preserves_creator_metadata_and_existing_entries(creator):
++    from agent.pet import importer, store
++
++    source, home, meta = creator
++    before = files(home)
++    (source / "ignored.py").write_text("raise RuntimeError('must never execute')")
++    pet, warnings = importer.import_pack(source, "creator")
++    assert pet == store.load_pet("creator") and pet.exists and not pet.generated
++    assert not warnings and pet.display_name == "โคมไฟ"
++    assert json.loads((pet.directory / "manifest.json").read_text()) == meta
++    assert set(p.name for p in pet.directory.iterdir()) == {"manifest.json", "pet.json", "spritesheet.png"}
++    assert pet.spritesheet.read_bytes() == (source / "spritesheet.png").read_bytes()
++    assert all((home / n).read_bytes() == data for n, data in before.items())
++    assert {p.slug for p in store.installed_pets()} == {"old", "creator"}
++    assert not list((home / "pets").glob(".pet-import-*"))
++
++
++@pytest.mark.platforms("macos", "linux", "windows")
++def test_webp_import_keeps_native_store_and_renderer_compatibility(creator):
++    from agent.pet import importer, render, store
++
++    source, _, meta = creator
++    with Image.open(source / "spritesheet.png") as image:
++        image.save(source / "spritesheet.webp", lossless=True)
++    meta["spritesheet"] = "spritesheet.webp"
++    (source / "manifest.json").write_text(json.dumps(meta))
++    pet, _ = importer.import_pack(source, "creator")
++    assert store.load_pet("creator").spritesheet == pet.spritesheet
++    assert pet.spritesheet.name == "spritesheet.webp"
++    assert pet.spritesheet.read_bytes() == (source / "spritesheet.webp").read_bytes()
++    assert render.PetRenderer(pet.spritesheet, mode="unicode").frame_count("idle") > 0
++
++
++@pytest.mark.platforms("macos", "linux", "windows")
++@pytest.mark.parametrize("kind", ["file", "empty", "populated"])
++def test_import_never_replaces_existing_entry_even_empty_directory(creator, kind):
++    from agent.pet import importer
++
++    source, home, _ = creator
++    target = home / "pets/occupied"
++    if kind == "file":
++        target.write_bytes(b"keep file")
++    else:
++        target.mkdir()
++        if kind == "populated":
++            (target / "keep").write_bytes(b"keep directory")
++    before = files(home)
++    identity = target.lstat().st_ino
++    with pytest.raises(OSError):
++        importer.import_pack(source, "occupied")
++    assert files(home) == before and target.lstat().st_ino == identity
++    assert not list((home / "pets").glob(".pet-import-*"))
++
++
++@pytest.mark.platforms("macos", "linux")
++@pytest.mark.parametrize("dangling", [False, True])
++def test_import_preserves_destination_symlinks(creator, dangling):
++    from agent.pet import importer
++
++    source, home, _ = creator
++    target = home / "pets/occupied"
++    target.symlink_to(home / ("missing" if dangling else "pets/old"), target_is_directory=True)
++    before = files(home)
++    with pytest.raises(OSError):
++        importer.import_pack(source, "occupied")
++    assert target.is_symlink() and files(home) == before
++    assert not list((home / "pets").glob(".pet-import-*"))
++
++
++@pytest.mark.platforms("macos", "linux", "windows")
++def test_staging_is_invisible_and_uses_exact_loaded_bytes(creator, monkeypatch):
++    from agent.pet import importer, store
++
++    source, home, meta = creator
++    original = (source / "spritesheet.png").read_bytes()
++    publish = importer._publish_new_directory
++    def observe(staged, target):
++        assert {p.slug for p in store.installed_pets()} == {"old"}
++        assert set(p.name for p in staged.iterdir()) == {"pet.json", "manifest.json", "spritesheet.png"}
++        (source / "spritesheet.png").write_bytes(b"source replaced after validation")
++        (source / "manifest.json").write_bytes(b"metadata replaced after validation")
++        return publish(staged, target)
++    monkeypatch.setattr(importer, "_publish_new_directory", observe)
++    pet, _ = importer.import_pack(source, "creator")
++    assert pet.spritesheet.read_bytes() == original
++    assert json.loads((pet.directory / "manifest.json").read_text()) == meta
++    assert not list((home / "pets").glob(".pet-import-*"))
++
++
++@pytest.mark.platforms("macos", "linux", "windows")
++def test_destination_created_at_publication_is_preserved(creator, monkeypatch):
++    from agent.pet import importer
++
++    source, home, _ = creator
++    publish = importer._publish_new_directory
++    identity = []
++    def race(staged, target):
++        target.mkdir()
++        identity.append(target.stat().st_ino)
++        return publish(staged, target)
++    monkeypatch.setattr(importer, "_publish_new_directory", race)
++    with pytest.raises(OSError):
++        importer.import_pack(source, "creator")
++    target = home / "pets/creator"
++    assert target.is_dir() and target.stat().st_ino == identity[0] and not list(target.iterdir())
++    assert not list((home / "pets").glob(".pet-import-*"))
++
++
++@pytest.mark.platforms("macos", "linux", "windows")
++def test_two_importers_have_exactly_one_winner(creator, monkeypatch):
++    from agent.pet import importer, store
++
++    source, home, _ = creator
++    publish = importer._publish_new_directory
++    barrier = Barrier(2)
++    def race(staged, target):
++        barrier.wait(timeout=10)
++        return publish(staged, target)
++    monkeypatch.setattr(importer, "_publish_new_directory", race)
++    def run():
++        try:
++            return importer.import_pack(source, "creator")[0].slug
++        except OSError:
++            return "collision"
++    with ThreadPoolExecutor(max_workers=2) as pool:
++        results = list(pool.map(lambda _: run(), range(2)))
++    assert sorted(results) == ["collision", "creator"]
++    assert {p.slug for p in store.installed_pets()} == {"old", "creator"}
++    assert not list((home / "pets").glob(".pet-import-*"))
++
++
++@pytest.mark.parametrize("filename", ["manifest.json", "pet.json", "spritesheet.png"])
++def test_stage_write_failure_preserves_store_and_settings(creator, monkeypatch, filename):
++    from agent.pet import importer
++
++    source, home, _ = creator
++    before = files(home)
++    write = Path.write_bytes
++    def fail(path, data):
++        if path.parent.parent.name.startswith(".pet-import-") and path.name == filename:
++            raise OSError("stage write refused")
++        return write(path, data)
++    monkeypatch.setattr(Path, "write_bytes", fail)
++    with pytest.raises(OSError, match="stage write refused"):
++        importer.import_pack(source, "creator")
++    assert files(home) == before and not (home / "pets/creator").exists()
++    assert not list((home / "pets").glob(".pet-import-*"))
++
++
++def test_publish_failure_preserves_store_and_settings(creator, monkeypatch):
++    from agent.pet import importer
++
++    source, home, _ = creator
++    before = files(home)
++    def fail(*args):
++        raise OSError(errno.ENOTSUP, "no safe publication")
++    monkeypatch.setattr(importer, "_publish_new_directory", fail)
++    with pytest.raises(OSError, match="no safe publication"):
++        importer.import_pack(source, "creator")
++    assert files(home) == before and not list((home / "pets").glob(".pet-import-*"))
++
++
++@pytest.mark.platforms("macos", "linux", "windows")
++@pytest.mark.parametrize("published", [False, True])
++def test_cleanup_error_does_not_change_commit_or_primary_failure(creator, monkeypatch, caplog, published):
++    from agent.pet import importer, store
++
++    source, home, _ = creator
++    before = files(home)
++    cleanup = importer.shutil.rmtree
++    def fail_cleanup(*args, **kwargs):
++        raise OSError("cleanup refused")
++    monkeypatch.setattr(importer.shutil, "rmtree", fail_cleanup)
++    if not published:
++        def fail_publish(*args):
++            raise OSError("publication refused")
++        monkeypatch.setattr(importer, "_publish_new_directory", fail_publish)
++    try:
++        if published:
++            assert importer.import_pack(source, "creator")[0].exists
++            assert store.load_pet("creator").exists
++        else:
++            with pytest.raises(OSError, match="publication refused"):
++                importer.import_pack(source, "creator")
++            assert not (home / "pets/creator").exists()
++        assert "staging cleanup failed" in caplog.text
++    finally:
++        for path in (home / "pets").glob(".pet-import-*"):
++            cleanup(path)
++    assert all((home / n).read_bytes() == data for n, data in before.items())
++
++
++@pytest.mark.platforms("macos", "linux")
++def test_missing_native_capability_has_no_unsafe_rename_fallback(creator, monkeypatch):
++    from agent.pet import importer
++
++    source, home, _ = creator
++    before = files(home)
++    monkeypatch.setattr(importer.ctypes, "CDLL", lambda *args, **kwargs: SimpleNamespace())
++    def forbidden(*args):
++        pytest.fail("must not fall back to overwriting rename")
++    monkeypatch.setattr(importer.os, "rename", forbidden)
++    with pytest.raises(OSError, match="no-replace"):
++        importer.import_pack(source, "creator")
++    assert files(home) == before and not list((home / "pets").glob(".pet-import-*"))
++
++
++@pytest.mark.parametrize("slug", ["", "Name", "../escape", "a/b", "a--b", ".hidden", "x" * 65])
++def test_noncanonical_slug_fails_before_store_access(creator, monkeypatch, slug):
++    from agent.pet import importer, store
++
++    source, _, _ = creator
++    def forbidden():
++        pytest.fail("invalid slug must not touch the store")
++    monkeypatch.setattr(store, "pets_dir", forbidden)
++    with pytest.raises(ValueError, match="slug"):
++        importer.import_pack(source, slug)
 diff --git a/tests/agent/test_platform_hint_desktop.py b/tests/agent/test_platform_hint_desktop.py
 index 2a59548f4e7a395b26fb26c614aff1a826fe96ae..fe8249cd717553c7bc10bd2dfd6c24ca5ea89ccc 100644
 --- a/tests/agent/test_platform_hint_desktop.py
@@ -80089,6 +80463,114 @@ index 0000000000000000000000000000000000000000..bab677f95d3069b1dd0c3d939976b721
 +    image.symlink_to(root / "spritesheet.png")
 +    assert validate(image) == 0
 +    assert "Atlas 1536x1872" in capsys.readouterr().out
+diff --git a/tests/hermes_cli/test_pet_pack_import.py b/tests/hermes_cli/test_pet_pack_import.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..c358c4a35b0db48844f725b8915266ed2db33bbc
+--- /dev/null
++++ b/tests/hermes_cli/test_pet_pack_import.py
+@@ -0,0 +1,102 @@
++"""Import is explicit, non-selecting and compatible with the normal pet store."""
++import argparse
++import json
++
++import pytest
++from PIL import Image, ImageDraw
++
++from hermes_cli.subcommands.pets import build_pets_parser
++
++
++@pytest.fixture
++def creator(tmp_path, monkeypatch):
++    from agent.pet import store
++    from hermes_cli import pets
++
++    home = tmp_path / "home"
++    home.mkdir()
++    monkeypatch.setenv("HERMES_HOME", str(home))
++    monkeypatch.setattr(store, "get_hermes_home", lambda: home)
++    config = home / "config.yaml"
++    config.write_text("display:\n  pet:\n    enabled: false\n    slug: existing\n")
++    def forbidden(*args, **kwargs):
++        pytest.fail("import must not read pet settings or auto-select")
++    monkeypatch.setattr(pets, "_pet_config", forbidden)
++    monkeypatch.setattr(pets, "_set_active", forbidden)
++    root = tmp_path / "pack"
++    root.mkdir()
++    (root / "manifest.json").write_text(json.dumps({
++        "schema_version": 1, "format": "hermes-native-atlas", "name": "Creator pack",
++        "author": "Artist", "licence": "CC0-1.0", "spritesheet": "spritesheet.png",
++    }))
++    image = Image.new("RGBA", (1536, 1872))
++    draw = ImageDraw.Draw(image)
++    for row in range(9):
++        draw.rectangle((40, row * 208 + 30, 150, row * 208 + 180), fill="teal")
++    image.save(root / "spritesheet.png")
++    return root, home
++
++
++def invoke(*words):
++    parser = argparse.ArgumentParser()
++    build_pets_parser(parser.add_subparsers())
++    args = parser.parse_args(["pets", *map(str, words)])
++    return args.func(args)
++
++
++@pytest.mark.platforms("macos", "linux", "windows")
++def test_import_lists_and_removes_without_selecting(creator, capsys):
++    from agent.pet import store
++
++    root, home = creator
++    config = (home / "config.yaml").read_bytes()
++    original = {p.name: p.read_bytes() for p in root.iterdir()}
++    assert invoke("import", root, "creator") == 0
++    out = capsys.readouterr()
++    assert "Creator pack" in out.out and "hermes pets select creator" in out.out
++    assert not out.err and (home / "config.yaml").read_bytes() == config
++    assert {p.name: p.read_bytes() for p in root.iterdir()} == original
++    assert invoke("list", "--installed") == 0
++    assert "Creator pack" in capsys.readouterr().out
++    assert store.load_pet("creator").exists
++    assert invoke("remove", "creator") == 0
++    assert store.load_pet("creator") is None
++    assert (home / "config.yaml").read_bytes() == config
++
++
++@pytest.mark.platforms("macos", "linux", "windows")
++def test_second_import_reports_collision_without_changing_first(creator, capsys):
++    root, home = creator
++    assert invoke("import", root, "creator") == 0
++    capsys.readouterr()
++    installed = home / "pets/creator"
++    before = {p.name: p.read_bytes() for p in installed.iterdir()}
++    assert invoke("import", root, "creator") == 1
++    assert "cannot import pack" in capsys.readouterr().err
++    assert before == {p.name: p.read_bytes() for p in installed.iterdir()}
++    assert not list((home / "pets").glob(".pet-import-*"))
++
++
++@pytest.mark.parametrize("bad", ["slug", "pack", "image"])
++def test_invalid_input_is_visible_before_creating_store(creator, capsys, bad):
++    root, home = creator
++    slug = "../escape" if bad == "slug" else "creator"
++    if bad == "pack":
++        (root / "manifest.json").write_bytes(b"invalid json")
++    elif bad == "image":
++        Image.new("RGBA", (1536, 1872)).save(root / "spritesheet.png")
++    assert invoke("import", root, slug) == 1
++    assert "cannot import pack" in capsys.readouterr().err
++    assert not (home / "pets").exists()
++
++
++@pytest.mark.platforms("macos", "linux", "windows")
++def test_partial_pack_warnings_do_not_auto_select(creator, capsys):
++    root, home = creator
++    image = Image.new("RGBA", (1536, 1872))
++    ImageDraw.Draw(image).rectangle((40, 30, 150, 180), fill="teal")
++    image.save(root / "spritesheet.png")
++    before = (home / "config.yaml").read_bytes()
++    assert invoke("import", root, "creator") == 0
++    assert "state 'waving' has no frames" in capsys.readouterr().out
++    assert (home / "config.yaml").read_bytes() == before
 diff --git a/tests/hermes_cli/test_pet_pack_preview.py b/tests/hermes_cli/test_pet_pack_preview.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..05aa967012b1e3afd4b5c7ed3e8c35e28abd8285

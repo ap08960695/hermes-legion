@@ -81,6 +81,29 @@ cases pass. Native PTYs confirm all seven aliases, finite once behavior and
 Ctrl+C cleanup. The original example emits changing terminal frames; physical
 screen/graphics appearance and Desktop resource acceptance are not established.
 
+## Local pack import: completed Mac development slice
+
+`pets import DIRECTORY SLUG` copies exact validated bytes into the existing
+profile pet store and retains creator metadata/licence. Canonical `pet.json`
+keeps list/show/select/remove compatibility; no new creator enum or automatic
+selection. Strict canonical slugs and native no-replace publication preserve any
+existing target, including an empty directory or symlink.
+
+A private container/payload staging layout stays invisible to existing readers.
+All files close before one publication operation; cleanup touches only that
+owned container. Cleanup warnings cannot turn a committed import into failure
+or hide the primary error. The source folder and prior entries/settings remain.
+Atomic visibility does not promise crash durability or hostile store-parent
+mutation safety; no unsafe rename fallback. Primary contracts:
+[Linux renameat2](https://man7.org/linux/man-pages/man2/rename.2.html),
+[Windows os.rename](https://docs.python.org/3.14/library/os.html#os.rename);
+Darwin `renamex_np`/`RENAME_EXCL=4` was checked in the installed SDK.
+
+Native Mac filesystem regressions and the actual isolated CLI lifecycle pass,
+including races, I/O faults, original metadata, non-selection and restoration.
+Linux/Windows code paths await native acceptance. Per-bot assignment, extended
+formats/events, creator skill and Desktop/resource proof remain open.
+
 ## Active-character overlay preview: offline source step
 
 The working source adds **Show bot characters** in Monitor. A loaded, enabled
@@ -167,9 +190,9 @@ actual budget miss and trade-off before release; no budget claim from unit tests
 The draft native-atlas folder contract, metadata lint, original example recipe,
 blank template and starter guide are now included. The full runtime format still
 needs per-event animations/fallbacks, size/fps/anchor controls, extended formats,
-pack install/assign and the creator skill. Native-atlas terminal preview is
-included. Reuse current stores/renderer rather than introducing another atlas
-taxonomy. Only original/owned art; no
+per-bot assignment and the creator skill. Native-atlas lint, terminal preview
+and Mac-tested no-overwrite import are included. Reuse current stores/renderer
+rather than introducing another atlas taxonomy. Only original/owned art; no
 borrowed character designs or copied reference art.
 
 Keep these items explicitly unimplemented until their source and native evidence

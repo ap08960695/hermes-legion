@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1155-path** Legion source, interface and optimization alternative
+This is the complete **1158-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -25,6 +25,17 @@ font deduplication have regression coverage; native confirmation after the fix,
 screenshots and CPU/RAM acceptance remain open. [Design](design-bot-characters.md#active-character-overlay-preview-offline-source-step) and
 [verification limits](verification.md#bot-character-overlay-preview--offline-source-step-unreleased).
 
+## Import creator packs without replacing pets (unreleased)
+
+`hermes pets import DIRECTORY SLUG` installs a new native-atlas entry in the
+current profile without selecting it. It preserves author/licence metadata and
+exact checked image bytes, then publishes the complete staged directory with
+native no-replace semantics. Existing files, empty/full directories and symlinks
+are preserved. Normal list/show/select/remove work in the isolated Mac CLI
+acceptance; prior source/entry/config state is protected. No force flag,
+new dependency or renderer. Linux/Windows runtime and full Desktop characters
+acceptance remain open. [Guide](character-pack.md#import-into-the-current-profile).
+
 ## Preview creator packs before installation (unreleased)
 
 `hermes pets show --pack DIRECTORY --cycle --once` previews the seven current
@@ -33,7 +44,8 @@ validated bytes from a private temporary snapshot, without choosing an installed
 pet or reading/changing pet settings. Single-state/default-idle behavior, cursor
 restoration and installed preview remain; malformed/conflicting/missing-frame
 requests fail clearly. Snapshot cleanup and source-mutation cases have regression
-coverage. This is terminal preview, not Desktop or pack installation.
+coverage. This is terminal preview; the explicit import step is separate from Desktop
+acceptance.
 [Guide](character-pack.md#preview-without-adopting-the-pack).
 
 ## Character creator folders (unreleased)
@@ -43,7 +55,7 @@ name, author, licence, schema and static asset. It reports errors without
 installing anything or changing a profile. The [creation guide](character-pack.md)
 ships a blank manifest and the original CC0 Lanternling generator. Folder/image
 checks, malformed metadata/path cases and real CLI generation/no-overwrite proof
-pass. Lint and terminal preview are available; pack installation, custom mappings
+pass. Lint, terminal preview and Mac-tested import are available; custom mappings
 and full native character acceptance remain open.
 
 ## Local sprite atlas check (unreleased)
