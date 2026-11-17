@@ -49,8 +49,9 @@ installation and reports permission states. Configure a binary/release directory
 with `hermes config set computer_use.agent_desktop.path /path/to/agent-desktop`.
 This does not select a runtime provider or establish snapshot/action support.
 An opt-in AX ref provider is now included: select `computer_use.backend:
-agent-desktop`, then call `computer_use` capture with `mode=ax` and an exact
-application name, or a numeric native `window_id` without `app`. Semantic
+agent-desktop`, then call `computer_use` capture with `mode=ax` and an explicit
+application name. Add a numeric native `window_id` to select a window within that
+app; window-only requests are refused before the native probe. Semantic
 `click(element)`, `set_value(value, element)` and
 `type(text, element)` consume one captured ref set, then require a fresh capture.
 Text travels through stdin; type inserts at the caret, while set_value replaces
@@ -62,8 +63,9 @@ other input forms remain unverified or unimplemented; see the design note.
 Workspace snapshot-ref writes and the canonical native input lease need separate
 authorization in the isolated trial. Full-production Local Monitor capture now
 passes through the provider/common tool with 50 native refs and a CUA comparison.
-Exact window selection also passes with a long app name whose native label
-differs. Obtain a fresh trusted native window ID; IDs can be reused. Input
+App + window selection passes three foreground Monitor captures in one session.
+Use a unique app scope and a fresh trusted native window ID; IDs can be reused.
+Earlier window-only output proof did not establish inventory isolation. Input
 acceptance remains open. See the [capture boundary](docs/design-agent-desktop.md#snapshot-and-input-write-authorization).
 When a native window lacks an accessibility element, capture now reports that
 specific limitation and directs you to inspect the target app's accessibility

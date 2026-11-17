@@ -53,9 +53,9 @@ discovery remains available at start and through the explicit status command.
 When only the npm global probe locates a binary, set the discovered path explicitly
 so the cheap availability check can find it too.
 
-Capture supports `mode=ax` with an explicit exact application name, or a native
-`window_id` without `app`. Require complete protocol2.6 snapshot data for that
-same app or exact selected window and a valid canonical app label,
+Capture supports `mode=ax` with an explicit application name and an optional
+numeric native `window_id` within that app. Require complete protocol2.6 snapshot
+data for that same app, or exact selected window with a valid canonical app label,
 with bounded payload/tree depth/count, unique snapshot-owned refs and no raw
 error disclosure. Map named AX nodes and native refs into existing CaptureResult/
 UIElement shapes, using a private namespace per backend session. No image is
@@ -82,22 +82,41 @@ Example after explicitly selecting `computer_use.backend: agent-desktop`:
 {"action":"capture","mode":"ax","app":"Your application name"}
 ```
 
-For app-label differences, use the existing numeric window selector instead:
+For a particular window, supply both selectors:
 
 ```json
-{"action":"capture","mode":"ax","window_id":42}
+{"action":"capture","mode":"ax","app":"Your application name","window_id":42}
 ```
 
-The provider generates `--window-id w-42` and requires exactly that returned ID.
-Accept only positive JSON-safe integers; mixed app/window selectors and PID
-selection are refused before spawning. Use the numeric component of the native
+The provider generates `--app APP --window-id w-42` and requires exactly that
+returned ID. Accept only positive JSON-safe integers; missing/invalid app scopes
+and PID selection are refused before spawning. Use the numeric component of the native
 `w-N` ID, not an Electron window index or CUA element index. Obtain it from a
 fresh trusted window selection; IDs may become stale or be reused. Selector
-agreement alone does not prove enduring process identity. There is no prefix,
-alias or automatic retry fallback for a named-app capture. Complete snapshots
+agreement alone does not prove enduring process identity. The combined route uses
+the app as a native inventory filter and returns its canonical label; this label
+may differ. Named-app-only capture still requires exact returned label equality.
+There is no prefix/alias heuristic or automatic retry fallback. Complete snapshots
 marked `identity_unproven`, including malformed flag values, are refused.
 The common-tool window path and refusal/privacy/stale-ref controls pass alongside
-existing semantic-action cases: 100 focused source tests, one worker.
+existing semantic-action cases: 118 focused source tests, one worker.
+
+### App scope and earlier window-only evidence
+
+Pinned 1.3.1 [core selection](https://github.com/vercel-labs/agent-desktop/blob/b0b7277bea09b770ef9d1fb45aad667bc432cd57/crates/core/src/snapshot/surface_target.rs)
+passes the app filter into [native inventory](https://github.com/vercel-labs/agent-desktop/blob/b0b7277bea09b770ef9d1fb45aad667bc432cd57/crates/macos/src/system/window/window_inventory.rs).
+Without it, the driver uses global window/AX inventory, including frontmost AX
+and accessibility probes for eligible app PIDs. Selecting one returned window
+did not confine these internal reads. The earlier window-only isolation claim
+is withdrawn; its selected-content/PID/refmap evidence retains that narrow scope.
+The unreleased window-only API is now refused. Add `app` to migrate; do not retry
+without it. No further unscoped live trial is used to re-prove the failure.
+
+An explicit app filter scopes AX/CG window probes to matching owner PIDs. Native
+app-owner discovery still enumerates OS app metadata. Use a unique intended app
+identifier; valid canonical text alone is not ownership proof. Native scoped
+filtering and exact-window ownership checks are part of the trusted driver
+contract; no syscall audit or universal metadata-isolation guarantee is claimed.
 
 Only protocol2.6 is accepted in this slice. Named AX nodes use the existing
 element/label response; native refs stay attached to their snapshot. Geometry is
@@ -243,8 +262,30 @@ processes after 105.83 seconds. Sampled peak is four product processes/seven
 including OS utilities, 916,946,944 bytes including guardian, with the same
 external-observer exclusions. Native input/model calls/provider images remain
 absent. Private before/after: `../evidence/agent-desktop-window-capture-20261117`.
+This historical window-only result proves selected output, not isolated inventory;
+the app-required contract above supersedes it.
 Never accept a prefix merely to make an identity check pass. The earlier tiny
 synthetic-renderer capture and unknown click outcome retain their narrow scope.
+
+### Foreground app + window recapture
+
+A fresh full-production Local Monitor passes three sequential actual provider/
+common-tool snapshots with both selectors. Each maps 50 refs/78 elements; one
+backend session, distinct snapshot IDs and disjoint element indices. Exact owned
+PID/birth/executable, original window generation, native window, nonce and refmap
+agree each time. Fourth-slot reservations prevent overlapping native children
+and require fresh three-process/headroom samples. Paired CUA AX/pixels and final
+bound ACK pass; the table remains below-fold AX evidence. The original deadlines,
+Local/write/lease/cleanup guards remain. No native input/model call/provider image.
+
+The foreground trial closes in 132.78 s with zero survivors, sampled peak four
+product processes/seven including OS utilities and 921,600,000 bytes including
+guardian. External CUA/advisors/build/controllers are excluded; no whole-task RAM
+or savings claim. Private before/after: `../evidence/agent-desktop-app-scoped-capture-20261117`.
+The separate cold inactive app-scoped trial fails `WINDOW_NOT_FOUND` after 60 s
+Local. Native scoped inventory drops windows not classified visible/minimized;
+visibility/Space association is a hypothesis, not established root cause.
+Foreground success does not establish cold inactive or background pixel support.
 
 ### Background capture diagnosis
 

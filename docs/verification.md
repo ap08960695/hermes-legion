@@ -554,6 +554,51 @@ Native after-fix degraded paint, canonical navigation, nonempty reports and live
 terminal progress still gate the Bot Monitor batch release. No version/release,
 owner app/data, remote host/ai, ESTOP, pause, timer or permission change.
 
+# Require app scope for native window capture — unreleased
+
+Window-only requests are now refused before native probe. Every capture requires
+an explicit valid app; numeric selection passes both `--app APP --window-id w-N`.
+Exact returned window ID, canonical-label validation, lease/ref invalidation and
+privacy/error bounds remain. Named-app-only equality stays exact; combined scope
+uses the app as the native filter and may return its canonical label. No PID,
+fuzzy matching, autoactivation or unscoped fallback is added. Existing caller/
+schema already forwards both selectors, so no default/config/dependency change.
+
+Primary pinned source establishes the gap: [core selection](https://github.com/vercel-labs/agent-desktop/blob/b0b7277bea09b770ef9d1fb45aad667bc432cd57/crates/core/src/snapshot/surface_target.rs)
+uses [global native inventory](https://github.com/vercel-labs/agent-desktop/blob/b0b7277bea09b770ef9d1fb45aad667bc432cd57/crates/macos/src/system/window/window_inventory_global.rs)
+when app is omitted. That inventory reads frontmost AX and probes eligible owner
+PIDs. Earlier window-only output/PID/refmap witnesses did not isolate internal
+inventory; that isolation claim is withdrawn. Retained selected snapshots bind
+fixture output, not absence of unrelated internal metadata reads. App-scoped
+inventory still discovers OS app-owner metadata; choose a unique intended scope.
+No syscall audit or hostwide metadata-isolation claim. No unscoped live retry.
+
+Updated regression is red 36 fail/50 pass before implementation, then backend/
+actions pass 118 tests with one worker. Both selectors reach the common tool and
+exact native argv; missing/malformed app scopes and window-only calls never probe.
+Canonical-label differences, named-only identity checks, wrong windows, private
+errors and stale refs remain covered. Two changed patch sections apply/hash/
+reverse; unrelated sections, 1,120 targets and test selection remain unchanged.
+
+Fresh foreground production Local Monitor passes three actual app+window scoped
+snapshots in one backend session, each 50 refs/78 elements. Distinct snapshot IDs,
+disjoint indices, same original owned PID/birth/executable/window generation/
+native window/nonce/refmap; reserved fourth slot and fresh headroom each time.
+Paired CUA AX/pixels, bound final ACK and 60-second Local gate pass. The narrow
+table remains below-fold AX evidence. Closure 132.78 s, zero survivors, gateway/
+model-server stopped; sampled peak four product/seven including OS utilities,
+921,600,000 B including guardian. External CUA/advisor/build/controllers excluded;
+no whole-task bound/savings claim or native input/model call/provider image.
+Private before/after: `../evidence/agent-desktop-app-scoped-capture-20261117`.
+
+Separate cold inactive app-scoped trial remains failed: after 60 s Local, first
+snapshot returns `WINDOW_NOT_FOUND`; zero accepted captures. Closure 62.59 s/
+zero survivors, peak four product/948,256,768 B including guardian. Visibility/
+Space association is a hypothesis from native filtering, not proven cause.
+Earlier failures remain failed; no cold inactive/background pixel acceptance.
+Eight configs/two geometry absences restored, eleven UI hashes unchanged each,
+two intentional source hashes verified; both runtime trees closed, Desktop SSH 0.
+
 # Inaccessible native window guidance — unreleased
 
 Two isolated production Local background trials fail and remain failed. The
@@ -594,9 +639,13 @@ Private diagnosis: `../evidence/agent-desktop-background-diagnostics-20261117`.
 Two changed patch sections apply/hash/reverse against the pinned upstream;
 unrelated sections, 1,120 targets and test selection remain unchanged.
 
-# Explicit native window capture — unreleased
+# Earlier window-only capture — superseded
 
-The selected agent-desktop provider now accepts the common tool's existing
+This historical slice proved selected output. Its inventory-isolation claim is
+withdrawn above; current capture requires app scope. It did not establish absence
+of unrelated native inventory reads.
+
+The experimental agent-desktop provider accepted the common tool's existing
 numeric `window_id` without `app`: snapshot `--window-id w-N`, with exact returned
 window ID and a valid canonical app label. Exact named-app matching is unchanged;
 no prefix/alias fallback or PID selector is added. Incomplete, unproven or malformed
