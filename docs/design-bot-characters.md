@@ -381,6 +381,12 @@ uses one action scoped to the displayed output and rechecks the owning
 profile's named chat before opening it. A replaced or missing chat requires a
 fresh preview.
 
+The Mac Local pointer test clicked a verified transparent margin and an
+owned control beneath it received exactly one trusted click. The completed
+worker label and **Open in Hermes** then received trusted system clicks and
+opened the exact saved report. The underlay count stayed at one throughout.
+The test used an isolated fixture with a stored report.
+
 Opening a [web link](verification.md#open-web-links-from-a-bots-saved-reply-unreleased)
 uses the existing default-browser opener. A complete plain-text reply can show
 up to two distinct standalone HTTP or HTTPS destinations. Electron keeps the
