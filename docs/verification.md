@@ -1,3 +1,135 @@
+# Captain plan and worker results — native Local step accepted, unreleased
+
+Catch up shows the bound chat's received plan, native worker progress and latest
+finished results. Native testing reproduced a lost result: the parent's follow-up
+pruned finished live workers, removing the failed worker from Catch up. The store
+now retains only its latest pruned terminal batch for review; current rows win
+on matching IDs. Session clear/Stop and gateway switches remove both views.
+Live counters/retirement, native goals, budgets and model settings stay unchanged.
+No new RPC, polling, scheduler, dependency or durable history store.
+
+A regression fails before the retention fix. The seven nearest source files then
+pass 60 tests: actual parent-turn pruning, latest-batch replacement, no late
+resurrection, live counts, owner/session isolation, retained-only/global clears,
+gateway-switch wipe and child/parent navigation. Production renderer/native-main
+build and renderer typecheck pass. The six changed adapter/store source and test
+files pass ESLint. Older navigation act warnings remain; no full-source lint or
+unchanged full native suite claim.
+
+Separate native production Local baseline and corrected candidate runs pass
+bound AX/pixel acknowledgments for running and terminal phases at 480×620. The
+baseline lacks plan/worker rows. Candidate shows Previous tasks 2/2, Running,
+then Failed with the received rejection after automatic parent follow-up. Stored
+synthetic plan and five scripted loopback exchanges exercise real delegation/file
+reading, not autonomous provider reasoning. Paused goal and fixture config remain
+byte exact. Child navigation is offline-tested, not clicked in these native trials.
+Private captures: `../evidence/captain-work-visibility-20261117`.
+
+Both accepted runs pass 60 seconds Local, stay within four product processes and
+finish with zero owned survivors. Baseline/candidate sampled RSS including guardian
+is 1,228,095,488 / 1,129,119,744 B; external CUA/advisor/controllers are excluded.
+These are fixture peaks, not whole-task RAM or savings evidence. App/helper exit
+is observed before gateway/model teardown. Across five trials, 35 fixture config/
+env files and five geometry absences are restored; Desktop SSH remains zero.
+
+Failed trials and STOPs remain failed. The first trial breached the process guard
+at five during teardown. Ordered app-exit/gateway teardown corrects that fixture
+ordering; subsequent accepted trials peak at four. Another failed trial exposed
+the product's disappearing terminal result before this fix. Window-menu activation
+resolved earlier AX/pixel visibility mismatch without a product focus change.
+No owner app/data/settings, other host/ai, ESTOP/pause/timer or permissions change;
+agent-desktop native input remains ungranted. Complete autonomous goal execution,
+Stop/block/budget cases and capability release remain open. No version/tag bump.
+
+# Captain plan and worker activity — round 197 historical incomplete trials
+
+The unreleased working patch puts the bound session's received tasks and native
+worker progress/results in Catch up. It reuses existing stores, task rows,
+translations, historical rendering and child-session navigation. No new RPC,
+poll, scheduler, model setting or goal/budget change. Completed activity does not
+complete a goal. Five changed native sections retain the existing 1,122 targets.
+
+Two adapter cases fail before implementation. The three nearest files then pass
+19 cases, including a shell-to-Catch-up integration. Coverage includes live and
+retained tasks, completed/failed/queued worker status, result text, session switch
+and late foreign updates, absent/prototype-key sessions, actual child/parent
+navigation arguments, and unchanged goal state after completed activity. Renderer
+production build and typecheck pass. Adapter source/test lint is clean; a
+baseline comparison finds no introduced diagnostics in the other touched files.
+Existing React act warnings in two earlier navigation tests remain.
+
+Four isolated Local baseline trials remain failed, with their STOPs retained.
+The first exposed a private scripted-model classifier error; two more exposed
+fixture scaffold links mistakenly copied as file contents. The fourth reaches
+a real native chat, persisted synthetic plan and native delegated file read,
+with a paused goal and bounded loopback model endpoint. CUA observes the chat
+AX/pixels. Catch-up navigation does not open in the observed AX state; coordinate
+input reports noWindowsAvailable. The observation budget then expires. This does
+not establish a product navigation bug, a locked screen or accepted UI comparison.
+No candidate native launch or before/after screenshot pair is claimed.
+
+All owned processes and model/API servers are closed, 28 fixture config/env files
+and four geometry absences restored, Desktop SSH count zero. The fourth trial
+passes 60 seconds Local; its sampled peak is four product processes and
+1,139,458,048 B including guardian. External CUA/advisor/build/controller memory
+is excluded; no whole-task RAM or savings claim. No other host, ai or owner-app
+connection, native agent-desktop input or owner data/settings change.
+
+Native acceptance remains open, so no COMMIT-MSG, version, tag or release is
+created for this step. Scripted loopback activity and stored synthetic tasks do
+not prove provider-backed autonomous goal completion, Stop/block/budget behavior.
+
+# Captain autonomy profile controls — accepted step, unreleased
+
+Desktop now exposes the native `goals.allow_self_management` and
+`goals.delegated_decisions` permissions in **Safety → Captain autonomy**, using
+existing scoped config rows, saves and search routing. They remain independent
+and default off. No new runner, RPC, store, budget editor or prompt mutation.
+Page and field copy is supplied for all nine bundled locales; native visual
+acceptance below uses English. Backend authority remains unchanged.
+
+The regression is red before implementation: the new switch is missing, while
+the old-backend/no-fabricated-permission control passes. The three nearest
+Settings/helper/subpage files then pass 79 tests. Assertions cover independent
+flags, only the changed key in the selected profile save, unchanged limits and
+unrelated settings, and absence of invented old-backend defaults. Renderer
+typecheck and scoped lint pass; two initial test-format warnings are corrected.
+Twelve changed source sections apply, match after hashes and reverse against the
+pinned upstream. Ten existing targets plus two newly patched upstream files yield
+1,122 targets; unrelated sections and the existing test selection are retained.
+
+A real isolated Local baseline shows the earlier Safety navigation without this
+page. A fresh candidate shows both switches off. Its active profile is `captain-b`;
+the visible Settings target is `default`. Actual CUA clicks first enable routine
+decisions alone, then self-management. Switching to `captain-b` still shows both
+off. Returning to `default`, closing/reopening Settings and selecting the field
+through Settings search shows both saved permissions on. Native YAML readback
+confirms exactly those two effective config changes; the other profile is byte
+identical. Seeded active/paused goal JSON and recorded caps 13/7 are unchanged,
+as are configured goal limits 20/17 and other model/approval settings. These are
+configuration/preservation controls, not a running autonomous goal-loop proof.
+
+The successful case uses AX after actions and separate documented CUA AX/image
+calls for the two required screenshots; both image observations succeed without
+retry. Final bound ACK and 60-second Local gate pass. Closure 202.67 s, zero
+survivors, gateway/model server stopped; peak four product/seven including OS
+utilities, 988,250,112 B including guardian. External CUA/advisor/build/controllers
+are excluded; no whole-task RAM or savings claim. No model calls, native
+agent-desktop input, other host/ai connection or owner-app adoption.
+
+Earlier candidate trials remain failed: one observation lease refusal before
+input (fractional/integer clock mismatch plausible, exact client age unavailable),
+one invalid native profile-menu element before selection, and one ScreenCaptureKit
+parameter error after the first switch click. No failed STOP is reset. A private
+integer timestamp fix retains the strict 0–5,000 ms lease; actual-consumer boundary
+controls accept 0/5,000 and reject fractional-future/-1/5,001 ms. These fixture
+changes are not product fixes. Before/after and configuration receipts remain
+private: `../evidence/captain-autonomy-controls-20261117`.
+
+The full Captain capability remains open: plan/decision/delegation follow-through,
+native terminal completion and owner Stop/block/budget acceptance. This step does
+not establish provider-backed autonomy or authorize wider rights.
+
 # Minimized native Monitor AX recapture — accepted, unreleased
 
 One distinct isolated production Local fixture from kit `de783fc` passes three

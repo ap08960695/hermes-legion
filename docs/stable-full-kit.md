@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1120-path** Legion source, interface and optimization alternative
+This is the complete **1126-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,15 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Captain work visibility (unreleased)
+
+Catch up now shows the bound chat's received plan and worker progress/results.
+The latest finished batch stays visible after Captain follow-up, including failed
+work. Session clear/Stop and backend switches clear that review snapshot; live
+worker counts and native goal authority stay unchanged. Native Local before/after
+screenshots and terminal-failure retention pass. This is an accepted development
+step; complete autonomous goal execution remains open. [Proof and limits](verification.md#captain-plan-and-worker-results--native-local-step-accepted-unreleased).
 
 ## Bot Monitor capability batch — v0.34.0
 

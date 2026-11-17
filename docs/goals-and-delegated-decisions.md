@@ -47,6 +47,21 @@ This command only stores native goal metadata. It does not dispatch a worker, in
 
 ## Check every intended Captain
 
+In Desktop, open **Settings → Safety → Captain autonomy**, then choose the intended
+profile under **Applies to**. **Let Captain set its own goal** and **Delegate routine
+decisions** are independent permissions. Both remain off by default; opening the
+page does not enable either one. Settings search can find the permission labels.
+If an older backend exposes neither permission in its config nor schema, the page
+does not invent a replacement setting.
+
+Self-management permits the bound-session `hermes goal ensure` path; it does not
+start work or resume an owner pause. Delegated decisions permit routine choices
+within the existing goal contract. Tool approvals, quotas, review/publication
+gates and existing goal turn budgets still apply. This page does not edit budgets
+or grant an autonomous Captain workflow by itself. The CLI equivalents below
+remain available. The complete capability and remaining acceptance are tracked
+in the [Captain autonomy design](design-captain-autonomy.md).
+
 Self-management permission and skill installation belong to a profile. Enabling one Captain does not configure a second Captain. The profile selected in Desktop also does not select the profile of a terminal command. On an existing working installation, check the configuration path and permission for each intended profile first:
 
 ```sh
@@ -70,6 +85,28 @@ For an explicitly authorized multi-step objective or continuation, load the inst
 ```
 
 These checks establish configuration and discoverability. They do not establish that a cached Captain has read the pointer, used a skill or completed autonomous work. Retain existing conversation prefixes and verify that behavior through the next normal authorized task rather than sending an extra model request solely for proof.
+
+## Read the Captain plan and delegated activity (unreleased work)
+
+The working Desktop patch adds the current chat's received task plan and worker
+activity to **All features → Catch up**, beside its native goal and controls.
+Previous tasks retain their historical label. Worker rows show native status and
+latest reported progress/result; their existing open action targets the child's
+chat using the Captain's owner context. A backend without a child chat falls back
+to worker runs. Unknown activity stays unreported; another chat is never used.
+
+The latest finished worker batch remains available after the Captain's next turn,
+so a failed result does not disappear when the live worker shelf retires it.
+This is a bounded in-memory review snapshot per session. Clearing/stopping the
+session or switching backend removes it; use native reports for durable history.
+
+A completed task list or worker is activity evidence, not a verified goal result.
+Existing goal state remains authoritative. This adapter adds no background polls
+or work engine. Native Local before/after acceptance now covers received plan,
+running worker and failed result after parent follow-up, with the goal still
+paused. Child navigation and owner isolation have focused offline coverage.
+Provider-backed autonomous execution and Stop/block/budget acceptance remain open;
+this step does not authorize a capability release or owner-app adoption.
 
 ## Supply the skill and decision policy
 
