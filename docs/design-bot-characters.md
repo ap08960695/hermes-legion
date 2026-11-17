@@ -305,3 +305,9 @@ attributes 20.6 MiB to the blank overlay, 33.8 MiB to loading the production
 overlay above blank and 58.1 MiB to the five-pack workload above the atlas-free
 overlay. The largest measured step includes both sprite and presentation costs.
 Use the fixed-geometry fixture to isolate decoded atlas and canvas residency.
+
+[Matching five-pack runs](verification.md#keep-the-canvas-readback-hint-for-character-previews-unreleased)
+showed that omitting the preview canvas readback hint added 152.4 MiB of
+physical footprint with the same CPU use. Keep the hint under the current
+Electron setup. Evaluate atlas residency separately before changing storage
+or pixel fidelity.

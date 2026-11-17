@@ -1,3 +1,29 @@
+# Keep the canvas readback hint for character previews (unreleased)
+
+Two fresh Mac Local fixture runs drew the same five atlases in the same
+632 × 325 panel at 2× scale. The trial omitted the canvas readback hint only
+for read-only preview sprites. The paired run retained it. The renderer's
+animation, capture dimensions and atlas fingerprints matched. All five
+sprites moved through six observed frame positions in both runs.
+
+| Preview context | Median summed RSS | Median summed macOS physical footprint | CPU, one core = 100% |
+| --- | ---: | ---: | ---: |
+| Readback hint retained | 492.8 MiB | 181.4 MiB | 5.03% |
+| Readback hint omitted | 542.7 MiB | 333.8 MiB | 5.01% |
+
+Omitting the hint added 152.4 MiB of physical footprint with essentially the
+same CPU use. Most of the increase appeared in the main process, which also
+accounts for graphics in this fixture. These measurements do not identify
+individual graphics allocations. The experiment was reverted. The retained
+regression test checks opaque and transparent mascot hits and verifies that
+pointer movement over previews requests no canvas context for alpha sampling.
+
+Both launches checked zero Desktop SSH after 60 seconds before capturing
+their owned overlay. Each used at most three product processes and left
+none running. Each measurement used a steady 20-second window before any
+capture. The result applies to this synthetic Mac fixture. The five-pack
+resource budget and the real Edit Profile to Monitor walkthrough remain open.
+
 # Where the pet overlay uses memory (unreleased)
 
 Five fresh, local-only Electron runs used the same Desktop renderer build and
