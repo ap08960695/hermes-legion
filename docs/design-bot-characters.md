@@ -311,3 +311,9 @@ showed that omitting the preview canvas readback hint added 152.4 MiB of
 physical footprint with the same CPU use. Keep the hint under the current
 Electron setup. Evaluate atlas residency separately before changing storage
 or pixel fidelity.
+
+The [cross-panel regression](verification.md#edit-profile-to-monitor-character-handoff-unreleased)
+verifies that the saved character reaches Monitor after a roster reload, even
+with the optimistic metadata cache cleared. The isolated Mac walkthrough
+reached Edit Profile with the canonical Local gateway. Native input stopped
+at the Character disclosure, before assignment and visual acceptance.

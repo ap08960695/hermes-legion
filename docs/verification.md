@@ -1,3 +1,26 @@
+# Edit Profile to Monitor character handoff (unreleased)
+
+The packaged Mac Desktop renderer, Electron main and preload connected to the
+actual Local gateway. An authenticated loopback connection returned the
+fixture roster. Computer Use reached Bots and Edit Profile for the named
+fixture after 60.10 seconds with zero Desktop SSH. The Character disclosure
+and its label returned no clickable frame. Coordinate input found no window,
+keyboard focus failed to advance in the editor and captured pixels lagged the
+accessibility tree. The trial stopped before any gallery read, assignment,
+profile save or Monitor preview. The input and capture cause remains open.
+
+The renderer regression uses the existing Edit Profile and Monitor views
+with a simulated profile transport. It selects an installed pack, checks the
+revision-checked write preserves unrelated profile metadata, clears the
+optimistic cache, reloads the saved value and verifies Monitor publishes the
+exact assigned sprite from the same Local route. Both focused suites pass
+18 tests. This proves the renderer handoff through the test transport. The
+native save and visual preview remain open.
+
+The native run used a synthetic worker observation and no model generation.
+Peak sampled RSS including the observer was about 893 MiB, with at most four
+product processes. The test app and gateway both closed.
+
 # Keep the canvas readback hint for character previews (unreleased)
 
 Two fresh Mac Local fixture runs drew the same five atlases in the same
