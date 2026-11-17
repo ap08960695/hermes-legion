@@ -359,13 +359,14 @@ its saved canonical Chat. The overlay receives one plain-text excerpt, up to
 600 characters, through the existing window bridge. Opaque output addresses
 expire with the current owner binding. The main process checks which window
 sent the request and discards late replies after dismissal or loss of visibility.
-A ready bot can also show one completed-worker character for its newest
-eligible saved report during the first minute after completion. Working
-characters take priority within the five-character limit. The label opens a
-plain summary from the authorized Monitor snapshot. **Open in Hermes** opens
-the single matching report in the existing Monitor dialog. Replacing the
-report or its canonical Bot Chat invalidates the old output action. No
-additional report fetch is needed.
+A ready bot can show one completed or failed worker character for its
+newest eligible saved report during the first minute after the outcome.
+Working characters take priority within the five-character limit.
+A saved Error uses the failed pose and previews the redacted error, with a
+saved summary as the fallback. **Open in Hermes** opens the single matching
+report from the authorized Monitor snapshot. Replacing the report, changing
+its status, or changing its canonical Bot Chat invalidates the old action.
+The popover adds no report fetch.
 
 The isolated Mac Local lifecycle test held a loopback model reply while the
 actual delegation worker read a fixture file, appeared as working, and

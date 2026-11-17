@@ -33176,10 +33176,10 @@ index abe8afb7e670b207a192ac15fb797fb8dfed168e..2b2824a97bb7cfd9d21057f4efdfd811
              <SelectContent>
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..61d8ba1785c0e6ac63d8e0194c28c029b98ff90e
+index 0000000000000000000000000000000000000000..bf30e7516cef116f94a636b150dfdb74e2703dec
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx
-@@ -0,0 +1,400 @@
+@@ -0,0 +1,448 @@
 +import { atom, host, type PluginProfileRoute } from '@hermes/plugin-sdk'
 +import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -33580,12 +33580,60 @@ index 0000000000000000000000000000000000000000..61d8ba1785c0e6ac63d8e0194c28c029
 +  redraw([report, { ...report, summary: 'Ambiguous duplicate' }])
 +  expect(states()).toEqual(['run', 'run', 'run', 'run'])
 +})
++
++it.each([
++  { error: 'Saved local rejection', outputText: 'Saved local rejection' },
++  { error: ' ', outputText: 'Current saved output' }
++])('retires a success binding when the same task becomes Error with $outputText', async ({ error, outputText }) => {
++  const routed = vi.spyOn(host, 'requestProfile')
++  const navigate = vi.spyOn(host, 'openSession')
++  const older = { ...completedReport('Earlier completed result', 1998), delegation_id: 'older-delegation' }
++  const success = { ...completedReport('Current saved output'), goal: 'Recorded worker task', error }
++  const failure = { ...success, status: 'error' as const }
++
++  const route = { connectionId: 'local', mode: 'local' as const, profile: 'writer', targetProfile: 'writer' }
++
++  const bot = row('writer', { route, installId: 'fixture', canonical_session: { id: 'root', resolved_id: 'tip',
++    delegation_reports: [success, older] } })
++
++  bot.working = false
++  const view = render(<BotMonitor now={2_000_000} onOpen={open} rows={[bot]} />)
++  fireEvent.click(screen.getByRole('button', { name: 'Show bot characters' }))
++  const oldId = $petCharacterPreview.get()!.characters[0].outputId!
++  await act(async () => overlayControl({ type: 'character-output', id: oldId, request: 1 }))
++
++  const updated = { ...bot, bot: { ...bot.bot, canonical_session: { id: 'root', resolved_id: 'tip',
++    delegation_reports: [failure, older] } } }
++
++  view.rerender(<BotMonitor now={2_000_001} onOpen={open} rows={[updated]} />)
++  const [actor] = $petCharacterPreview.get()!.characters
++  expect($petCharacterPreview.get()?.characters).toHaveLength(1)
++  expect(actor).toMatchObject({ state: 'failed', name: 'writer · Worker · Error' })
++  expect(actor.outputId).not.toBe(oldId)
++  await act(async () => overlayControl({ type: 'character-output-open', id: oldId, request: 1 }))
++  expect(screen.queryByRole('dialog')).toBeNull()
++
++  const id = actor.outputId!
++  await act(async () => overlayControl({ type: 'character-output', id, request: 2 }))
++  const output = vi.mocked(window.hermesDesktop!.petOverlay!.pushState).mock.lastCall?.[0]?.characterOutput
++  expect(output).toMatchObject({ text: outputText, canOpen: true })
++  expect(output).not.toHaveProperty('canLink')
++  await act(async () => overlayControl({ type: 'character-output-open', id, request: 2 }))
++  const report = screen.getByRole('dialog', { name: 'Recent task reports · writer' })
++  expect(report.textContent).toContain('Recorded worker task')
++  expect(report.textContent).toContain(outputText)
++  expect(report.textContent).not.toContain('Earlier completed result')
++  expect(report.textContent).not.toContain('Completed')
++  expect(routed).not.toHaveBeenCalled()
++  expect(navigate).not.toHaveBeenCalled()
++  expect(request).not.toHaveBeenCalled()
++})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..3f3dea316fe121d247d02f99aa6db26a9789df81
+index 0000000000000000000000000000000000000000..47d8f84308c759d7d285c29d9bdb4e4597b8d5d2
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx
-@@ -0,0 +1,206 @@
+@@ -0,0 +1,212 @@
 +import { atom, Button, Dialog, host, type PetCharacterPublisher, useValue } from '@hermes/plugin-sdk'
 +import { useEffect, useMemo, useRef, useState } from 'react'
 +
@@ -33614,15 +33662,20 @@ index 0000000000000000000000000000000000000000..3f3dea316fe121d247d02f99aa6db26a
 +  return typeof at === 'number' && at > 0 && now - at * 1000 >= 0 && now - at * 1000 < 60_000
 +}
 +
-+function savedCompletion(saved: BotDelegationReport[] | null | undefined, now: number) {
++function reportPreviewText(report: BotDelegationReport) {
++  return report.status === 'error' ? report.error.trim() || report.summary.trim() : report.summary.trim()
++}
++
++function savedWorkerReport(saved: BotDelegationReport[] | null | undefined, now: number) {
 +  if (!Array.isArray(saved)) {return undefined}
 +  const reports = saved.slice(0, 20)
 +
-+  return reports.find(report => report?.status === 'completed' && completionIsFresh(report.completed_at, now) &&
++  return reports.find(report => (report?.status === 'completed' || report?.status === 'error') &&
++    completionIsFresh(report.completed_at, now) &&
 +    typeof report.delegation_id === 'string' && report.delegation_id.length > 0 && report.delegation_id.length <= 512 &&
 +    report.task_index !== null && Number.isSafeInteger(report.task_index) && report.task_index >= 0 &&
-+    typeof report.summary === 'string' && Boolean(report.summary.trim()) &&
-+    typeof report.goal === 'string' && typeof report.error === 'string' &&
++    typeof report.summary === 'string' && typeof report.goal === 'string' && typeof report.error === 'string' &&
++    Boolean(reportPreviewText(report)) &&
 +    reports.filter(other => other?.delegation_id === report.delegation_id && other.task_index === report.task_index).length === 1)
 +}
 +
@@ -33644,7 +33697,7 @@ index 0000000000000000000000000000000000000000..3f3dea316fe121d247d02f99aa6db26a
 +  }, [])
 +
 +  const actors = useMemo(() => {
-+    const current: Actor[] = [], completed: Actor[] = []
++    const current: Actor[] = [], finished: Actor[] = []
 +
 +    if (!active || !visible || stale) {return current}
 +
@@ -33730,10 +33783,10 @@ index 0000000000000000000000000000000000000000..3f3dea316fe121d247d02f99aa6db26a
 +
 +      if (current.length >= 5) {break}
 +
-+      if (completed.length >= 5) {continue}
++      if (finished.length >= 5) {continue}
 +
 +      const session = row.bot.canonical_session
-+      const saved = savedCompletion(session?.delegation_reports, now)
++      const saved = savedWorkerReport(session?.delegation_reports, now)
 +
 +      if (!saved || !session?.id) {continue}
 +      const { route } = resolveBotConnectionRoute({ ...row.bot, sourceScoped: true })
@@ -33746,7 +33799,7 @@ index 0000000000000000000000000000000000000000..3f3dea316fe121d247d02f99aa6db26a
 +        read: async () => {
 +          if (!completionIsFresh(report.completed_at, Date.now())) {throw new Error('Saved report expired')}
 +
-+          return report.summary
++          return reportPreviewText(report)
 +        },
 +        open: async (stillCurrent: () => boolean) => {
 +          if (stillCurrent() && completionIsFresh(report.completed_at, Date.now())) {
@@ -33755,12 +33808,13 @@ index 0000000000000000000000000000000000000000..3f3dea316fe121d247d02f99aa6db26a
 +        }
 +      }
 +
-+      completed.push({ target, character: { id: `${key}:saved-worker-report`,
-+        name: `${row.name} · ${b.monitor.worker} · ${b.monitor.reports.statuses.completed}`, source,
-+        output, detail: stripPreviewMarkdown(report.goal) || b.monitor.reports.summary, state: 'wave' } })
++      finished.push({ target, character: { id: `${key}:saved-worker-report`,
++        name: `${row.name} · ${b.monitor.worker} · ${b.monitor.reports.statuses[report.status]}`, source,
++        output, detail: stripPreviewMarkdown(report.goal) || b.monitor.reports.summary,
++        state: report.status === 'error' ? 'failed' : 'wave' } })
 +    }
 +
-+    return [...current, ...completed.slice(0, 5 - current.length)]
++    return [...current, ...finished.slice(0, 5 - current.length)]
 +  }, [active, visible, stale, rows, now, metadata, b, clarification])
 +
 +  useEffect(() => {loader.current?.update(actors.flatMap(actor => actor.target ? [actor.target] : []))}, [actors])
