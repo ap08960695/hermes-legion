@@ -1,3 +1,19 @@
+# Open the full Bot Chat from its character (unreleased)
+
+**Open in Hermes** appears after the overlay loads the bot's saved output.
+An active popover supplies one action. The main renderer resolves the exact
+Bot Chat again on its owning connection and profile, checks the named chat
+is still the one previewed, and opens its current compression tip. A missing
+or replaced chat leaves the existing conversation alone. Regressions cover
+expired and replaced previews, mismatched windows, duplicate clicks, and
+closing the popover while the lookup is in flight.
+
+An isolated Mac Local run started in Monitor and opened the full fixture Bot
+Chat using the overlay button. The gateway log recorded one output read, one
+named lookup and one resume for that chat. The displayed reply and session ID
+agreed with the fixture even though a newer visible side chat existed.
+The Local gateway and app passed 60 seconds with zero SSH and exited.
+
 # Read a bot’s latest saved reply from its character (unreleased)
 
 With the character overlay enabled in Monitor, select an underlined bot label
@@ -15,8 +31,7 @@ used persisted messages and synthetic worker activity with no model request.
 A second Local run opened a long reply, scrolled its body while the header
 and close control stayed visible, then dismissed it without a second read.
 Both trials passed 60 seconds with zero Desktop SSH, used at most four product
-processes and exited. Chat navigation, attachment actions and worker results
-remain open.
+processes and exited. Attachment actions and worker results remain open.
 
 # Monitor character shows the focused bot’s pending clarification (unreleased)
 

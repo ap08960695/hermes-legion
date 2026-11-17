@@ -8224,10 +8224,10 @@ index 2c784ec2a2e709f7fc953d88399b3078aaa5e12b..5492eec425bbd695225966f3bc91032d
  }
 diff --git a/apps/desktop/electron/pet-overlay-ipc.test.ts b/apps/desktop/electron/pet-overlay-ipc.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..083a435ed6bed8dc04f698712dbebded77d4f560
+index 0000000000000000000000000000000000000000..ca870cb51e3f3c73d5d448c92783083848ce45c0
 --- /dev/null
 +++ b/apps/desktop/electron/pet-overlay-ipc.test.ts
-@@ -0,0 +1,109 @@
+@@ -0,0 +1,154 @@
 +import { EventEmitter } from 'node:events'
 +
 +import { afterEach, expect, it, vi } from 'vitest'
@@ -8337,8 +8337,53 @@ index 0000000000000000000000000000000000000000..083a435ed6bed8dc04f698712dbebded
 +  reply(4)
 +  expect(overlay.webContents.send.mock.lastCall?.[1].characterOutput).toBeUndefined()
 +})
++
++it('opens only the current presented action from its own overlay, once', () => {
++  const main = Object.assign(new EventEmitter(), { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false,
++    show: vi.fn(), focus: vi.fn(), webContents: { send: vi.fn() } })
++
++  const overlay = Object.assign(new EventEmitter(), { isDestroyed: () => false, webContents: { send: vi.fn() } })
++  registerPetOverlayIpc({ getMainWindow: () => main as never, getPetOverlayWindow: () => overlay as never,
++    openPetOverlay: vi.fn(), closePetOverlay: vi.fn() })
++  const state = io.on.get('hermes:pet-overlay:state')!, control = io.on.get('hermes:pet-overlay:control')!
++  const preview = (outputId: string, advance = 15_000) => ({ characterPreview: { characters: [{ outputId }], expiresAt: Date.now() + advance } })
++  const publish = (id: string, advance?: number) => state({ sender: main.webContents }, preview(id, advance))
++  const send = (type: string, request: number, id = 'a', sender = overlay.webContents) => control({ sender }, { type, id, request, profile: 'forged' })
++
++  const present = (request: number, id = 'a') => {
++    send('character-output', request, id)
++    state({ sender: main.webContents }, { ...preview(id), characterOutput: { id, request, text: 'fixture', canOpen: true } })
++  }
++
++  publish('a')
++  send('character-output-open', 1)
++  present(1)
++  send('character-output-open', 1, 'a', main.webContents)
++  send('character-output-close', 1)
++  send('character-output-open', 1)
++  present(2)
++  publish('b')
++  publish('a')
++  send('character-output-open', 2)
++  present(3)
++  powerMonitor.emit('lock-screen'); powerMonitor.emit('unlock-screen')
++  send('character-output-open', 3)
++  present(4)
++  publish('a', -10)
++  send('character-output-open', 4)
++  expect(main.show).not.toHaveBeenCalled()
++  expect(main.focus).not.toHaveBeenCalled()
++  publish('a')
++  present(5)
++  send('character-output-open', 5); send('character-output-open', 5)
++  expect(main.show).toHaveBeenCalledOnce()
++  expect(main.focus).toHaveBeenCalledOnce()
++  expect(main.webContents.send.mock.calls.filter(([, payload]) => payload.type === 'character-output-open')).toEqual([
++    ['hermes:pet-overlay:control', { type: 'character-output-open', id: 'a', request: 5 }]
++  ])
++})
 diff --git a/apps/desktop/electron/pet-overlay-ipc.ts b/apps/desktop/electron/pet-overlay-ipc.ts
-index 59d8dd527dae029c695a8520996f6051d75df371..f91f4f65fdc263711a2b910a8ce90d91e44f2692 100644
+index 59d8dd527dae029c695a8520996f6051d75df371..05c8bd415bc78e840490ab701e25e9b502269631 100644
 --- a/apps/desktop/electron/pet-overlay-ipc.ts
 +++ b/apps/desktop/electron/pet-overlay-ipc.ts
 @@ -2,3 +2,6 @@
@@ -8352,7 +8397,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..f91f4f65fdc263711a2b910a8ce90d91
 @@ -36,2 +39,100 @@ export function registerPetOverlayIpc({
  }: PetOverlayIpcDeps) {
 +  let lastCharacterPayload: Record<string, unknown> | null = null
-+  let pendingOutput: Pick<PetCharacterOutput, 'id' | 'request'> | null = null
++  let outputAction: (Pick<PetCharacterOutput, 'id' | 'request' | 'canOpen'> & { window: BrowserWindow }) | null = null
 +  let stopObserving: (() => void) | null = null
 +  let locked = false, suspended = false
 +
@@ -8375,7 +8420,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..f91f4f65fdc263711a2b910a8ce90d91
 +    if (!lastCharacterPayload || !overlay || overlay.isDestroyed()) {return}
 +    const paused = charactersPaused()
 +
-+    if (pendingOutput && !visibleOutput(pendingOutput.id)) {pendingOutput = null}
++    if (outputAction && (outputAction.window !== overlay || !visibleOutput(outputAction.id))) {outputAction = null}
 +    overlay.webContents.send('hermes:pet-overlay:state', { ...lastCharacterPayload, charactersPaused: paused })
 +  }
 +
@@ -8414,7 +8459,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..f91f4f65fdc263711a2b910a8ce90d91
 +      stopObserving?.()
 +      stopObserving = null
 +      lastCharacterPayload = null
-+      pendingOutput = null
++      outputAction = null
 +    }
 +
 +    const closed = () => {
@@ -8450,7 +8495,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..f91f4f65fdc263711a2b910a8ce90d91
 +  }
 +
    // `request` is `{ bounds, screen }`. A fresh pop-out passes viewport-space
-@@ -144,3 +245,33 @@ export function registerPetOverlayIpc({
+@@ -144,3 +245,36 @@ export function registerPetOverlayIpc({
    // Main renderer → overlay: forward the latest pet state for the overlay to render.
 -  ipcMain.on('hermes:pet-overlay:state', (_event, payload) => {
 +  ipcMain.on('hermes:pet-overlay:state', (event, payload) => {
@@ -8459,15 +8504,18 @@ index 59d8dd527dae029c695a8520996f6051d75df371..f91f4f65fdc263711a2b910a8ce90d91
 +
 +      if (characterOutput) {
 +        const overlay = getPetOverlayWindow(), main = getMainWindow()
-+        const { id, request, text, unavailable } = characterOutput
++        const { id, request, text, unavailable, canOpen } = characterOutput
 +
 +        if (!main || event.sender !== main.webContents || !overlay || overlay.isDestroyed() ||
-+            !pendingOutput || id !== pendingOutput.id || request !== pendingOutput.request || !visibleOutput(id) ||
++            !outputAction || outputAction.window !== overlay || outputAction.canOpen || id !== outputAction.id ||
++            request !== outputAction.request || !visibleOutput(id) ||
 +            !(text === null || (typeof text === 'string' && text.length <= 1200))) {return}
 +
-+        pendingOutput = null
++        const openable = canOpen === true && unavailable !== true
++        outputAction = openable ? { id, request, canOpen: true, window: overlay } : null
 +        overlay.webContents.send('hermes:pet-overlay:state', { ...lastCharacterPayload, charactersPaused: false,
-+          characterOutput: { id, request, text, ...(unavailable === true ? { unavailable: true } : {}) } })
++          characterOutput: { id, request, text, ...(unavailable === true ? { unavailable: true } : {}),
++            ...(openable ? { canOpen: true } : {}) } })
 +
 +        return
 +      }
@@ -8481,24 +8529,24 @@ index 59d8dd527dae029c695a8520996f6051d75df371..f91f4f65fdc263711a2b910a8ce90d91
 +
 +    if (payload?.characterOutput) {return}
 +    lastCharacterPayload = null
-+    pendingOutput = null
++    outputAction = null
 +    stopObserving?.()
 +    stopObserving = null
      const petOverlayWindow = getPetOverlayWindow()
-@@ -152,3 +283,3 @@ export function registerPetOverlayIpc({
+@@ -152,3 +286,3 @@ export function registerPetOverlayIpc({
    // Overlay → main renderer: control messages (pop back in, composer submit).
 -  ipcMain.on('hermes:pet-overlay:control', (_event, payload) => {
 +  ipcMain.on('hermes:pet-overlay:control', (event, payload) => {
      const mainWindow = getMainWindow()
-@@ -159,2 +290,23 @@ export function registerPetOverlayIpc({
+@@ -159,2 +293,32 @@ export function registerPetOverlayIpc({
 
-+    if (payload?.type === 'character-output' || payload?.type === 'character-output-close') {
++    if (payload?.type === 'character-output' || payload?.type === 'character-output-close' || payload?.type === 'character-output-open') {
 +      const overlay = getPetOverlayWindow()
 +
 +      if (!overlay || overlay.isDestroyed() || event.sender !== overlay.webContents) {return}
 +
 +      if (payload.type === 'character-output-close') {
-+        pendingOutput = null
++        outputAction = null
 +        mainWindow.webContents.send('hermes:pet-overlay:control', { type: payload.type })
 +
 +        return
@@ -8507,7 +8555,16 @@ index 59d8dd527dae029c695a8520996f6051d75df371..f91f4f65fdc263711a2b910a8ce90d91
 +      const { id, request } = payload
 +
 +      if (typeof id !== 'string' || !Number.isSafeInteger(request) || request <= 0 || !visibleOutput(id)) {return}
-+      pendingOutput = { id, request }
++
++      if (payload.type === 'character-output-open') {
++        if (!outputAction?.canOpen || outputAction.window !== overlay || outputAction.id !== id || outputAction.request !== request) {return}
++        outputAction = null
++        mainWindow.show()
++        mainWindow.focus()
++      } else {
++        outputAction = { id, request, window: overlay }
++      }
++
 +      mainWindow.webContents.send('hermes:pet-overlay:control', { type: payload.type, id, request })
 +
 +      return
@@ -21278,10 +21335,10 @@ index de446bdb6a589e02ff3634ae483fe46d4a108ff2..447b3cacb7b6af2b6d1aca49f9487795
   *
 diff --git a/apps/desktop/src/app/pet-overlay/pet-characters.tsx b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..bac05b792c99894c96f751f20a0fac49c08705aa
+index 0000000000000000000000000000000000000000..2193a7fda1fc21b9107fbc29427af8bee307bfb0
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,81 @@
 +import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 +import { useEffect, useState } from 'react'
 +
@@ -21295,13 +21352,14 @@ index 0000000000000000000000000000000000000000..bac05b792c99894c96f751f20a0fac49
 +  paused: boolean
 +  output: (PetCharacterOutput & { loading?: true }) | null
 +  onOutput: (id: string | null) => void
++  onOpen: () => void
 +}
 +
 +const labelStyle = { display: 'block', width: '100%', fontSize: 12, borderRadius: 8, padding: 6,
 +  color: 'inherit', background: 'var(--ui-bg-elevated)', overflow: 'hidden' } as const
 +
 +/** The overlay displays snapshots. Only the main renderer resolves output addresses. */
-+export function PetCharacters({ info, preview, paused, output, onOutput }: PetCharactersProps) {
++export function PetCharacters({ info, preview, paused, output, onOutput, onOpen }: PetCharactersProps) {
 +  const reduced = useReducedMotion()
 +  const [expiredAt, setExpiredAt] = useState(0)
 +  useEffect(() => {
@@ -21330,6 +21388,9 @@ index 0000000000000000000000000000000000000000..bac05b792c99894c96f751f20a0fac49
 +      <p role="status" style={{ margin: '4px 0 0', overflowY: 'auto', maxHeight: 96, overflowWrap: 'anywhere' }}>
 +        {output.loading ? 'Loading…' : output.unavailable ? 'Output unavailable' : output.text || 'No text output yet'}
 +      </p>
++      {output.canOpen && <button onClick={onOpen} style={{ display: 'block', margin: '6px 0 0 auto', textDecoration: 'underline' }} type="button">
++        Open in Hermes
++      </button>}
 +    </section>}
 +    <AnimatePresence>
 +      {preview.characters.slice(0, 5).map(character => {
@@ -21360,7 +21421,7 @@ index 0000000000000000000000000000000000000000..bac05b792c99894c96f751f20a0fac49
 +  </div>
 +}
 diff --git a/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx b/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
-index 82319976a166e658f80e794b0033fed81a48d456..5686dd8df617f2c66f6d60411336b5a57eb6a145 100644
+index 82319976a166e658f80e794b0033fed81a48d456..8fcf03cfac88f1c8c3fcd8dbf5063dc0d13f43fb 100644
 --- a/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
 +++ b/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
 @@ -10,2 +10,3 @@ import { isSubmitEnter } from '@/lib/ime'
@@ -21432,7 +21493,7 @@ index 82319976a166e658f80e794b0033fed81a48d456..5686dd8df617f2c66f6d60411336b5a5
 +      characterMode ? DEFAULT_SCALE : info.scale ?? DEFAULT_SCALE,
 +      characterCount
      )
-@@ -364,3 +393,19 @@ export function PetOverlayApp() {
+@@ -364,3 +393,26 @@ export function PetOverlayApp() {
      window.hermesDesktop?.petOverlay?.control({ bounds, type: 'bounds' })
 -  }, [info.enabled, info.spritesheetBase64, info.scale, info.frameW, info.frameH])
 +  }, [info.enabled, info.spritesheetBase64, info.scale, info.frameW, info.frameH, characterCount, characterMode])
@@ -21452,22 +21513,29 @@ index 82319976a166e658f80e794b0033fed81a48d456..5686dd8df617f2c66f6d60411336b5a5
 +    setOutput({ id, request, text: null, loading: true })
 +    api?.control({ type: 'character-output', id, request })
 +  }
++
++  const openOutput = () => {
++    if (!output?.canOpen) {return}
++    const { id, request } = output
++    setOutput({ ...output, canOpen: undefined })
++    window.hermesDesktop?.petOverlay?.control({ type: 'character-output-open', id, request })
++  }
 
-@@ -370,2 +415,8 @@ export function PetOverlayApp() {
+@@ -370,2 +422,8 @@ export function PetOverlayApp() {
 
 +  if (characters) {
 +    return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-end', height: '100vh', paddingBottom: PET_PADDING_BOTTOM, pointerEvents: 'none' }}>
-+      <PetCharacters info={info} onOutput={showOutput} output={output} paused={characters.paused} preview={characters.preview} />
++      <PetCharacters info={info} onOpen={openOutput} onOutput={showOutput} output={output} paused={characters.paused} preview={characters.preview} />
 +    </div>
 +  }
 +
    return (
 diff --git a/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..0257c060556f8033a524e738f13a82b276f3f79a
+index 0000000000000000000000000000000000000000..e845e0641f77b5814ed640a497d18bf00ea67969
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
-@@ -0,0 +1,141 @@
+@@ -0,0 +1,158 @@
 +import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 +import type * as Motion from 'motion/react'
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -21608,6 +21676,23 @@ index 0000000000000000000000000000000000000000..0257c060556f8033a524e738f13a82b2
 +  respond(requests[1], 'late reply after close')
 +  expect(screen.queryByText('late reply after close')).toBeNull()
 +  expect(control).toHaveBeenLastCalledWith({ type: 'character-output-close' })
++})
++
++it('offers Open in Hermes only for the current successful reply', () => {
++  render(<PetOverlayApp />)
++  const payload = preview()
++  Object.assign(payload.characterPreview.characters[0], { outputId: 'current' })
++  act(() => emit(payload))
++  fireEvent.click(screen.getByRole('button', { name: /Latest output/ }))
++  const control = vi.mocked(window.hermesDesktop!.petOverlay!.control)
++  const request = control.mock.lastCall?.[0]
++
++  if (request?.type !== 'character-output') {throw new Error('missing fixture request')}
++  expect(screen.queryByRole('button', { name: 'Open in Hermes' })).toBeNull()
++  act(() => emit({ ...payload, characterOutput: { id: request.id, request: request.request, text: 'saved', canOpen: true } }))
++  fireEvent.click(screen.getByRole('button', { name: 'Open in Hermes' }))
++  expect(control).toHaveBeenLastCalledWith({ type: 'character-output-open', id: request.id, request: request.request })
++  expect(screen.queryByRole('button', { name: 'Open in Hermes' })).toBeNull()
 +})
 diff --git a/apps/desktop/src/app/retirement-view.test.tsx b/apps/desktop/src/app/retirement-view.test.tsx
 index 4097e9f517259a342942edfd4f6d5d6845907ba6..5abd02109d4897c0db3178fed9d94c115278d6f2 100644
@@ -30358,6 +30443,30 @@ index 0000000000000000000000000000000000000000..8d3ded0a0ad892036cef1ff15cb60fc4
 +    </fieldset>
 +  )
 +}
+diff --git a/apps/desktop/src/plugins/hermes-bots/canonical-chat.ts b/apps/desktop/src/plugins/hermes-bots/canonical-chat.ts
+index 33ecf3c1bc56258b6a06341bed2c0aed9b44bf31..23f93f2f9f45c1c9a0464825926a91518ca091dd 100644
+--- a/apps/desktop/src/plugins/hermes-bots/canonical-chat.ts
++++ b/apps/desktop/src/plugins/hermes-bots/canonical-chat.ts
+@@ -357,2 +357,4 @@ interface OpenCanonicalChatOptions {
+   openingStillCurrent?: (() => boolean) | null
++  /** A preview may open its existing named chat only while this registry row still owns it. */
++  expectedRegistryId?: string
+ }
+@@ -611,3 +613,3 @@ export async function openBotCanonicalChat(
+   owner: RosterRow | string,
+-  { background = false, openingStillCurrent = null }: OpenCanonicalChatOptions = {}
++  { background = false, openingStillCurrent = null, expectedRegistryId }: OpenCanonicalChatOptions = {}
+ ): Promise<{ openedId: string; registryId: string } | null> {
+@@ -615,2 +617,4 @@ export async function openBotCanonicalChat(
+
++  if (expectedRegistryId !== undefined && existing?.id !== expectedRegistryId) {return null}
++
+   if (existing?.id && typeof host.openSession === 'function') {
+@@ -636,3 +640,3 @@ export async function openBotCanonicalChat(
+   // of creating a fresh forever-chat under their feet.
+-  if (background) {
++  if (background || expectedRegistryId !== undefined) {
+     return null
 diff --git a/apps/desktop/src/plugins/hermes-bots/canonical-group-labels.ts b/apps/desktop/src/plugins/hermes-bots/canonical-group-labels.ts
 index 5ad29e8ffb94d4e8d7345b2a8a310f6e5de725c1..ebefef8293f33b87a04e6e31c63e873cfaecfd96 100644
 --- a/apps/desktop/src/plugins/hermes-bots/canonical-group-labels.ts
@@ -32679,10 +32788,10 @@ index abe8afb7e670b207a192ac15fb797fb8dfed168e..2b2824a97bb7cfd9d21057f4efdfd811
              <SelectContent>
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..0a0c93a5b581b32cbc37713359c5c5f8fa3bd40e
+index 0000000000000000000000000000000000000000..d4afa88c10378213042d13e86d8dafd20067cdfc
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx
-@@ -0,0 +1,244 @@
+@@ -0,0 +1,293 @@
 +import { atom, host, type PluginProfileRoute } from '@hermes/plugin-sdk'
 +import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -32696,7 +32805,7 @@ index 0000000000000000000000000000000000000000..0a0c93a5b581b32cbc37713359c5c5f8
 +// eslint-disable-next-line no-restricted-imports
 +import { $petCharacterPreview } from '@/store/pet-characters'
 +// eslint-disable-next-line no-restricted-imports
-+import { initPetOverlayBridge, popInPet } from '@/store/pet-overlay'
++import { initPetOverlayBridge, type PetOverlayControl, popInPet } from '@/store/pet-overlay'
 +
 +import { $botMeta } from './data'
 +import { EditProfileDialog } from './edit-profile-dialog'
@@ -32707,6 +32816,7 @@ index 0000000000000000000000000000000000000000..0a0c93a5b581b32cbc37713359c5c5f8
 +import type { RosterRow } from './types'
 +
 +let off: () => void, locales: () => void
++let overlayControl: (value: PetOverlayControl) => void
 +const open = vi.fn()
 +let request: ReturnType<typeof vi.spyOn>
 +const ready = { available: true, key: 'ready', label: 'Ready', tone: 'good' } as const
@@ -32721,7 +32831,9 @@ index 0000000000000000000000000000000000000000..0a0c93a5b581b32cbc37713359c5c5f8
 +  request = vi.spyOn(host, 'request')
 +  locales = registerPluginLocales('hermes-bots', BOTS_LOCALES)
 +  Object.defineProperty(window, 'hermesDesktop', { configurable: true, value: { petOverlay: {
-+    open: vi.fn(async () => ({})), close: vi.fn(async () => ({})), pushState: vi.fn(), onControl: () => () => {}
++    open: vi.fn(async () => ({})), close: vi.fn(async () => ({})), pushState: vi.fn(), onControl: (listener: typeof overlayControl) => {overlayControl = listener;
++
++ return () => {}}
 +  } } })
 +  off = initPetOverlayBridge()
 +  setPluginCtx(createPluginContext('hermes-bots'))
@@ -32927,15 +33039,62 @@ index 0000000000000000000000000000000000000000..0a0c93a5b581b32cbc37713359c5c5f8
 +  })
 +  expect($petCharacterPreview.get()?.characters).toEqual([])
 +})
++
++it('opens only the previewed canonical registry owner, without adopting or creating another chat', async () => {
++  const route = { connectionId: 'local', mode: 'local' as const, profile: 'writer', targetProfile: 'writer' }
++  const bot = row('writer', { route, installId: 'owned', canonical_session: { id: 'root', resolved_id: 'tip' } })
++  const navigate = vi.spyOn(host, 'openSession').mockResolvedValue(undefined)
++  const create = vi.spyOn(host, 'newChat')
++  const notice = vi.spyOn(host, 'notify').mockReturnValue('notice')
++  const current = { id: 'root', resolved_id: 'live-tip', title: 'Bot Chat', message_count: 2 }
++  let finish!: (value: { sessions: typeof current[] }) => void
++
++  const routed = vi.spyOn(host, 'requestProfile')
++    .mockResolvedValueOnce({ text: 'first preview' })
++    .mockResolvedValueOnce({ sessions: [{ ...current, id: 'replacement-root' }] })
++    .mockResolvedValueOnce({ text: 'second preview' })
++    .mockImplementationOnce(() => new Promise(resolve => {finish = resolve}))
++    .mockResolvedValueOnce({ text: 'third preview' })
++    .mockResolvedValueOnce({ sessions: [current] })
++
++  render(<BotMonitor now={2_000_000} onOpen={open} rows={[bot]} />)
++  fireEvent.click(screen.getByRole('button', { name: 'Show bot characters' }))
++  const id = $petCharacterPreview.get()!.characters[0].outputId!
++
++  const gesture = async (request: number) => {
++    await act(async () => overlayControl({ type: 'character-output', id, request }))
++    await act(async () => overlayControl({ type: 'character-output-open', id, request }))
++  }
++
++  await gesture(1)
++  expect(navigate).not.toHaveBeenCalled()
++  expect(notice).toHaveBeenCalledOnce()
++  await gesture(2)
++  await act(async () => {
++    overlayControl({ type: 'character-output-close' })
++    finish({ sessions: [current] })
++  })
++  expect(navigate).not.toHaveBeenCalled()
++  await gesture(3)
++  await act(async () => overlayControl({ type: 'character-output-open', id, request: 3 }))
++  expect(navigate).toHaveBeenCalledExactlyOnceWith('live-tip', expect.objectContaining({ route, profile: 'writer', workspaceMode: 'bots' }))
++  expect(routed.mock.calls.map(([, method]) => method)).toEqual([
++    'profiles.latest_output', 'session.list', 'profiles.latest_output', 'session.list', 'profiles.latest_output', 'session.list'
++  ])
++  expect(routed.mock.calls.every(([owner]) => (owner as PluginProfileRoute).connectionId === 'local')).toBe(true)
++  expect(create).not.toHaveBeenCalled()
++  expect(request).not.toHaveBeenCalled()
++})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..39fa21d2bf843eed80cee57cfb472110a2788ab3
+index 0000000000000000000000000000000000000000..36ca02f86b4e27fae1fb6483605dae11d84253f5
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx
-@@ -0,0 +1,133 @@
+@@ -0,0 +1,147 @@
 +import { atom, Button, host, type PetCharacterPublisher, useValue } from '@hermes/plugin-sdk'
 +import { useEffect, useMemo, useRef, useState } from 'react'
 +
++import { notifyBotOpenFailure, openBotCanonicalChat } from './canonical-chat'
 +import { type CharacterSpriteTarget, createCharacterSpriteLoader } from './character-sprites'
 +import { $botMeta, botRosterKey } from './data'
 +import { useBots } from './i18n'
@@ -32943,7 +33102,7 @@ index 0000000000000000000000000000000000000000..39fa21d2bf843eed80cee57cfb472110
 +import type { BotMonitorProps } from './monitor'
 +import { botRosterMeta, requestForBot, resolveBotConnectionRoute } from './routing'
 +import { activeWorkerSessions, workerProgress } from './row-helpers'
-+import { getPluginCtx } from './shared'
++import { bumpBotOpenGeneration, getBotOpenGeneration, getPluginCtx } from './shared'
 +
 +const unavailable = atom(false)
 +const noClarification = atom(null)
@@ -33009,14 +33168,27 @@ index 0000000000000000000000000000000000000000..39fa21d2bf843eed80cee57cfb472110
 +      const awaitingInput = row === waitingRow
 +
 +      if (row.working || row.needsAttention || awaitingInput) {
-+        const bot = { ...row.bot, sourceScoped: true }
-+        const { route } = resolveBotConnectionRoute(bot)
-+        const canonical = bot.canonical_session?.resolved_id || bot.canonical_session?.id
++        const { route } = resolveBotConnectionRoute({ ...row.bot, sourceScoped: true })
++        const bot = { ...row.bot, sourceScoped: true, route: route ?? undefined }
++        const registryId = bot.canonical_session?.id
++        const canonical = bot.canonical_session?.resolved_id || registryId
 +
-+        const output = route && canonical ? {
-+          key: JSON.stringify([route, bot.installId, canonical]),
++        const output = route && registryId && canonical ? {
++          key: JSON.stringify([route, bot.installId, registryId, canonical]),
 +          read: async () => (await requestForBot<{ text: string | null }>(bot, 'profiles.latest_output',
-+            { canonical_id: canonical }, { timeoutMs: 8000 })).text
++            { canonical_id: canonical }, { timeoutMs: 8000 })).text,
++          open: async (current: () => boolean) => {
++            const generation = bumpBotOpenGeneration()
++            const stillCurrent = () => current() && generation === getBotOpenGeneration()
++
++            try {
++              const opened = await openBotCanonicalChat(bot, { expectedRegistryId: registryId, openingStillCurrent: stillCurrent })
++
++              if (!opened && stillCurrent()) {notifyBotOpenFailure(new Error('The previewed Bot Chat is no longer available'), bot, 'open', row.name)}
++            } catch (error) {
++              if (generation === getBotOpenGeneration()) {notifyBotOpenFailure(error, bot, 'open', row.name)}
++            }
++          }
 +        } : undefined
 +
 +        const detail = row.needsAttention ? row.attentionHint : awaitingInput
@@ -42823,10 +42995,10 @@ index b0eb473252b6e6e149f1f0711a6d8de535e87d8e..ad1ef8e2c1e29ef4fed05dc9d0fac09d
  
 diff --git a/apps/desktop/src/store/pet-characters.ts b/apps/desktop/src/store/pet-characters.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..dcbe634e983de851b666b87cf45b5b9979acf9db
+index 0000000000000000000000000000000000000000..9f34ed26b363d7f7afdb67eedaff1f613765d254
 --- /dev/null
 +++ b/apps/desktop/src/store/pet-characters.ts
-@@ -0,0 +1,115 @@
+@@ -0,0 +1,136 @@
 +import { atom } from 'nanostores'
 +
 +import { boundedCharacterSprite } from '@/lib/pet-character-sprite'
@@ -42846,6 +43018,7 @@ index 0000000000000000000000000000000000000000..dcbe634e983de851b666b87cf45b5b99
 +interface OutputSource {
 +  key: string
 +  read: () => Promise<string | null>
++  open?: (stillCurrent: () => boolean) => Promise<void>
 +}
 +
 +export interface PetCharacterOutput {
@@ -42853,6 +43026,7 @@ index 0000000000000000000000000000000000000000..dcbe634e983de851b666b87cf45b5b99
 +  request: number
 +  text: string | null
 +  unavailable?: true
++  canOpen?: true
 +}
 +
 +export interface PetCharacterPublisher {
@@ -42876,15 +43050,34 @@ index 0000000000000000000000000000000000000000..dcbe634e983de851b666b87cf45b5b99
 +
 +
 +/** An output address is valid only while the current preview still publishes it. */
-+export async function readPetCharacterOutput(id: string): Promise<Pick<PetCharacterOutput, 'text' | 'unavailable'> | undefined> {
-+  const binding = [...outputBindings.values()].find(value => value.id === id)
++function currentOutputBinding(id: string) {
++  if (($petCharacterPreview.get()?.expiresAt ?? 0) <= Date.now()) {return undefined}
 +
-+  if (!binding || ($petCharacterPreview.get()?.expiresAt ?? 0) <= Date.now()) {return undefined}
++  return [...outputBindings.values()].find(value => value.id === id)
++}
 +
-+  const result = await binding.read().then(text => ({ text: typeof text === 'string' ? sanitizePetText(text, 1200) || null : null }),
-+    () => ({ text: null, unavailable: true as const }))
++export async function readPetCharacterOutput(id: string): Promise<Pick<PetCharacterOutput, 'text' | 'unavailable' | 'canOpen'> | undefined> {
++  const binding = currentOutputBinding(id)
 +
-+  return [...outputBindings.values()].includes(binding) && ($petCharacterPreview.get()?.expiresAt ?? 0) > Date.now() ? result : undefined
++  if (!binding) {return undefined}
++
++  try {
++    const text = await binding.read()
++
++    return currentOutputBinding(id) === binding ? {
++      text: typeof text === 'string' ? sanitizePetText(text, 1200) || null : null,
++      ...(typeof binding.open === 'function' ? { canOpen: true } : {})
++    } : undefined
++  } catch {
++    return currentOutputBinding(id) === binding ? { text: null, unavailable: true } : undefined
++  }
++}
++
++export async function openPetCharacterOutput(id: string, popoverCurrent: () => boolean): Promise<void> {
++  const binding = currentOutputBinding(id)
++
++  if (!popoverCurrent() || typeof binding?.open !== 'function') {return}
++  await binding.open(() => popoverCurrent() && currentOutputBinding(id) === binding)
 +}
 +
 +/** One replaceable preview owns the shared overlay; old publishers cannot revive it. */
@@ -42943,12 +43136,12 @@ index 0000000000000000000000000000000000000000..dcbe634e983de851b666b87cf45b5b99
 +  }
 +}
 diff --git a/apps/desktop/src/store/pet-overlay.ts b/apps/desktop/src/store/pet-overlay.ts
-index d47f67023fb8b820d6f6cbd455562a591600413b..cbe098d1b7263d197867a30603fcdb6b00b5af54 100644
+index d47f67023fb8b820d6f6cbd455562a591600413b..585b69352848ef1a3c30407cd7d1b3525c63d9fc 100644
 --- a/apps/desktop/src/store/pet-overlay.ts
 +++ b/apps/desktop/src/store/pet-overlay.ts
 @@ -5,2 +5,3 @@ import { persistBoolean, persistString, storedBoolean, storedString } from '@/li
  import { $petActivity, $petInfo, $petUnread, clearPetUnread, type PetActivity, type PetInfo } from '@/store/pet'
-+import { $petCharacterPreview, type PetCharacterOutput, type PetCharacterPreview, readPetCharacterOutput } from '@/store/pet-characters'
++import { $petCharacterPreview, openPetCharacterOutput, type PetCharacterOutput, type PetCharacterPreview, readPetCharacterOutput } from '@/store/pet-characters'
  import { $petPluginMessages, type PetPluginMessage } from '@/store/pet-plugin-messages'
 @@ -53,2 +54,5 @@ export interface PetOverlayStatePayload {
    pluginMessages?: PetPluginMessage[]
@@ -42956,12 +43149,13 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..cbe098d1b7263d197867a30603fcdb6b
 +  charactersPaused?: boolean
 +  characterOutput?: PetCharacterOutput
  }
-@@ -58,2 +62,4 @@ export type PetOverlayControl =
+@@ -58,2 +62,5 @@ export type PetOverlayControl =
    | { type: 'ready' }
 +  | { type: 'character-output'; id: string; request: number }
 +  | { type: 'character-output-close' }
++  | { type: 'character-output-open'; id: string; request: number }
    | { type: 'submit'; text: string }
-@@ -132,5 +138,5 @@ const OVERLAY_MIN_H = 300
+@@ -132,5 +139,5 @@ const OVERLAY_MIN_H = 300
   */
 -export function overlayWindowSize(frameW: number, frameH: number, scale: number): { width: number; height: number } {
 +export function overlayWindowSize(frameW: number, frameH: number, scale: number, characterCount = 0): { width: number; height: number } {
@@ -42969,40 +43163,46 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..cbe098d1b7263d197867a30603fcdb6b
 -    width: Math.max(OVERLAY_MIN_W, Math.round(frameW * scale + OVERLAY_PAD_X)),
 +    width: Math.max(OVERLAY_MIN_W, Math.round(frameW * scale + OVERLAY_PAD_X), Math.min(5, characterCount) * 120 + 32),
      height: Math.max(OVERLAY_MIN_H, Math.round(frameH * scale + OVERLAY_PAD_Y))
-@@ -153,3 +159,4 @@ function currentPayload(): PetOverlayStatePayload {
+@@ -153,3 +160,4 @@ function currentPayload(): PetOverlayStatePayload {
      reaction: $petReaction.get(),
 -    pluginMessages: $petPluginMessages.get()
 +    pluginMessages: $petPluginMessages.get(),
 +    characterPreview: $petCharacterPreview.get()
    }
-@@ -191,3 +198,4 @@ function openOverlay(request: PetOverlayOpenRequest): void {
+@@ -191,3 +199,4 @@ function openOverlay(request: PetOverlayOpenRequest): void {
      $petReaction.subscribe(pushNow),
 -    $petPluginMessages.subscribe(pushNow)
 +    $petPluginMessages.subscribe(pushNow),
 +    $petCharacterPreview.subscribe(pushNow)
    ]
-@@ -282,4 +290,17 @@ export function initPetOverlayBridge(): () => void {
+@@ -282,4 +291,23 @@ export function initPetOverlayBridge(): () => void {
 
-+  let pendingOutput: Extract<PetOverlayControl, { type: 'character-output' }> | null = null
++  let activeOutput: { id: string; request: number; canOpen?: true; opened?: true } | null = null
    controlUnsub = api.onControl(payload => {
 -    if (payload?.type === 'pop-in') {
 +    if (payload?.type === 'character-output') {
-+      pendingOutput = payload
 +      const { id, request } = payload
++      const action: NonNullable<typeof activeOutput> = { id, request }
++      activeOutput = action
 +      void readPetCharacterOutput(id).then(reply => {
-+        if (pendingOutput !== payload || !$petOverlayActive.get()) {return}
-+        pendingOutput = null
-+
-+        if (reply) {api.pushState({ ...currentPayload(), characterOutput: { ...reply, id, request } })}
++        if (activeOutput !== action || !$petOverlayActive.get() || !reply) {return}
++        action.canOpen = reply.canOpen
++        api.pushState({ ...currentPayload(), characterOutput: { ...reply, id, request } })
 +      })
++    } else if (payload?.type === 'character-output-open') {
++      const action = activeOutput
++
++      if (!action?.canOpen || action.opened || action.id !== payload.id || action.request !== payload.request) {return}
++      action.opened = true
++      void openPetCharacterOutput(action.id, () => activeOutput === action && $petOverlayActive.get())
 +    } else if (payload?.type === 'character-output-close') {
-+      pendingOutput = null
++      activeOutput = null
 +    } else if (payload?.type === 'pop-in') {
-+      pendingOutput = null
++      activeOutput = null
        popInPet()
-@@ -307,2 +328,3 @@ export function initPetOverlayBridge(): () => void {
+@@ -307,2 +335,3 @@ export function initPetOverlayBridge(): () => void {
    return () => {
-+    pendingOutput = null
++    activeOutput = null
      controlUnsub?.()
 diff --git a/apps/desktop/src/store/session-control.ts b/apps/desktop/src/store/session-control.ts
 index 0046d47826fe8c53df69858c9b22999ab8717597..c750a6537775a6f6450f159696861e444e4b3484 100644

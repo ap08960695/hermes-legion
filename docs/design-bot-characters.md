@@ -338,5 +338,7 @@ its saved canonical Chat. The overlay receives one plain-text excerpt, up to
 expire with the current owner binding. The main process checks which window
 sent the request and discards late replies after dismissal or loss of visibility.
 The popover and label accept clicks. The animation and transparent margins pass
-through on platforms that support it. Chat navigation and file actions remain
-open, along with the five-character resource budget.
+through on platforms that support it. [Open in Hermes](verification.md#open-the-full-bot-chat-from-its-character-unreleased)
+uses one action scoped to the displayed output and rechecks the owning
+profile's named chat before opening it. A replaced or missing chat requires a
+fresh preview. File actions and the five-character resource budget remain open.
