@@ -287,6 +287,34 @@ Local. Native scoped inventory drops windows not classified visible/minimized;
 visibility/Space association is a hypothesis, not established root cause.
 Foreground success does not establish cold inactive or background pixel support.
 
+### Minimized native AX recapture
+
+A separate isolated production Local Monitor passes three app + window scoped
+provider/common-tool snapshots while its original window is minimized. Each maps
+47 native refs/75 elements; one backend session, three snapshot IDs and disjoint
+indices. Fresh own-Electron state, events and 100 ms samples bind the same
+PID/window generation/native ID. Thirteen witness rows span 1,215 ms, bracket all
+three reads and report minimized/unfocused throughout, with maximum gap 102 ms.
+This supports no target-window focus observed in that interval, not absence of
+every transient focus or an independent OS visibility/current-Space audit.
+
+CUA baseline AX/pixels precede minimization. The final CUA observer runs only after
+native work finishes, restores the window and matches Monitor/nonce/default/
+Connected before the bound final ACK. These are restored pixels, not minimized
+CUA AX or minimized pixels. The first case remains failed: restoration occurred
+during its follow-up CUA AX observation and the fresh minimized ACK refused it,
+before any native capture. Another case stops on a ScreenCaptureKit parameter
+error before minimization. A shared fixture bundle ID was found; the successful
+case uses a distinct ID, but that does not establish the error's cause.
+
+The successful case passes 60 seconds Local and all existing scope/ref/resource/
+lease/deadline guards, then closes in 107.92 s with zero survivors. Sampled peak:
+four product processes/six including OS utilities, 946,978,816 B including guardian;
+external CUA/advisors/build/controllers are excluded. No product code change,
+native input, model call, provider image, whole-task RAM or savings claim. Cold
+inactive/other-OS/input acceptance remains open. Private baseline/restored proof:
+`../evidence/agent-desktop-minimized-capture-20261117`.
+
 ### Background capture diagnosis
 
 Two fresh isolated production Local trials remain failed. The first uses a

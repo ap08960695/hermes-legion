@@ -64,6 +64,8 @@ Workspace snapshot-ref writes and the canonical native input lease need separate
 authorization in the isolated trial. Full-production Local Monitor capture now
 passes through the provider/common tool with 50 native refs and a CUA comparison.
 App + window selection passes three foreground Monitor captures in one session.
+Three minimized-window native AX reads also pass, with own-window telemetry and
+a restored CUA comparison; this does not establish minimized pixels or cold start.
 Use a unique app scope and a fresh trusted native window ID; IDs can be reused.
 Earlier window-only output proof did not establish inventory isolation. Input
 acceptance remains open. See the [capture boundary](docs/design-agent-desktop.md#snapshot-and-input-write-authorization).

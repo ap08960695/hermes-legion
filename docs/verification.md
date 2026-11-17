@@ -1,3 +1,40 @@
+# Minimized native Monitor AX recapture — accepted, unreleased
+
+One distinct isolated production Local fixture from kit `de783fc` passes three
+actual app + window scoped agent-desktop provider/common-tool snapshots while the
+original Monitor window is minimized. Each maps 47 refs/75 elements, with one
+backend session, three snapshot IDs, disjoint indices and the same owned process/
+window generation/native ID/nonce/refmap. Fresh fourth-slot/headroom admissions
+and the existing Local/write/lease/deadline guards remain.
+
+Own-Electron events and 100 ms state samples confirm minimized/unfocused across
+all three reads: 13 rows, 1,215 ms, maximum gap 102 ms, including a sample after
+native completion. No focus is observed within that interval; every transient
+focus and OS visibility/current Space are not independently proven. CUA baseline
+AX/pixels precede minimization; only after native work finishes does the final
+CUA observer restore the window and capture matching Monitor/nonce/default/
+Connected AX/pixels. Final bound ACK passes. No minimized CUA AX/pixel claim;
+the narrow table remains below-fold AX evidence.
+
+The first case remains failed: follow-up CUA AX observation coincides with restore
+584 ms after minimize, so fresh minimized acknowledgment refuses before native
+capture. A second case fails ScreenCaptureKit parameter validation before
+minimization. Its fixture shares a bundle ID with the first; the accepted case
+uses a distinct ID. This correlation is not a proven cause. Failed STOPs remain.
+
+Accepted closure: 107.92 s, zero survivors, gateway/model-server stopped, 60-second
+Local gate passed. Sampled peak four product/six including OS utilities,
+946,978,816 B including guardian; external CUA/advisor/build/controllers excluded.
+No whole-task bound/savings, native input/model call/provider image, cold inactive,
+other-OS or owner-app adoption claim. Twelve fixture configs and three geometry
+absences restored; eleven UI/two provider source hashes preserved. Desktop SSH 0,
+new ai SSH 0; unrelated preexisting sessions left untouched.
+
+Product code, native patch/manifest and test selection are unchanged. Private guard
+controls reject stale/foreign/state-transition/gap/deadline/trigger failures;
+these controls do not prove runtime coverage on other platforms. Baseline/restored
+evidence: `../evidence/agent-desktop-minimized-capture-20261117`.
+
 # v0.34.0 — Bot Monitor source-release review
 
 The capability batch is accepted for the scoped source-kit handoff described in
