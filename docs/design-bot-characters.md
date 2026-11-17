@@ -367,6 +367,14 @@ the single matching report in the existing Monitor dialog. Replacing the
 report or its canonical Bot Chat invalidates the old output action. No
 additional report fetch is needed.
 
+The isolated Mac Local lifecycle test held a loopback model reply while the
+actual delegation worker read a fixture file, appeared as working, and
+recorded a heartbeat. After completion the same delegation was delivered
+to its Bot Chat. The working actor cleared, and its completed-worker
+character opened the matching saved summary and Monitor report. The
+worker, canonical parent and ledger identifiers matched through teardown.
+Model replies, timing and usage were simulated.
+
 The popover and label accept clicks. The animation and transparent margins pass
 through on platforms that support it. [Open in Hermes](verification.md#open-the-full-bot-chat-from-its-character-unreleased)
 uses one action scoped to the displayed output and rechecks the owning
