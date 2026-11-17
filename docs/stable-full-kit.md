@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1126-path** Legion source, interface and optimization alternative
+This is the complete **1127-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -18,6 +18,13 @@ work. Session clear/Stop and backend switches clear that review snapshot; live
 worker counts and native goal authority stay unchanged. Native Local before/after
 screenshots and terminal-failure retention pass. This is an accepted development
 step; complete autonomous goal execution remains open. [Proof and limits](verification.md#captain-plan-and-worker-results--native-local-step-accepted-unreleased).
+
+The native goal workflow now has a scripted regression: real `/goal` creation,
+tool-written plan, delegation, parent evidence verification and judge-owned Done.
+An isolated Local desktop run observes waiting/running through completed plan,
+worker result and Goal done. This validates orchestration with fixture model
+replies; provider reasoning and owner Stop/block/budget acceptance remain open.
+[Workflow evidence](verification.md#captain-native-goal-workflow--scripted-local-acceptance-unreleased).
 
 ## Bot Monitor capability batch — v0.34.0
 

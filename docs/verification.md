@@ -1,3 +1,48 @@
+# Captain native goal workflow — scripted Local acceptance, unreleased
+
+A new native regression creates a goal through `slash.exec`, submits its real
+kickoff directive, writes the task plan through `todo_list`, delegates a native
+file read, receives completion and verifies its evidence in the parent through
+`read_file`. Native goal judging parks on the active delegation and reaches Done
+after two turns. The fixture never writes the tested goal's metadata directly or
+patches the judge/runner. Judge approval requires recorded child evidence and a
+verified parent tool result. All parent/worker/judge/retry requests share a cap
+of 16; the accepted case uses ten scripted localhost exchanges. The independent
+goal is paused through native slash commands and remains unchanged.
+
+The canonical per-file test runner passes the one new regression in 17.3 seconds.
+Task-local launcher adaptation keeps scratch inside the authorized workspace,
+uses a socket-safe short path and syntax-checks only this new file instead of
+the unchanged full precompile. A Python audit guard denies shell startup
+snapshots, matching the native fixture. No product runtime change is needed.
+One new patch section passes apply/hash/reverse; unrelated sections stay exact.
+The stable kit now contains 1,127 targets; Desktop selection remains unchanged.
+
+The current production renderer is reused with matching source hashes and
+unmodified preload. A fresh isolated Local native run has original-window
+480×620 AX/pixel acknowledgments for waiting/running and terminal states.
+Catch up shows the tool-written plan, running worker and Goal waiting at 1/20,
+then tasks 2/2, worker evidence and Goal done after two turns. Goal waiting clears
+on actual delegation completion; no extra owner prompt is sent. Both profile
+configs remain unchanged during the case. Private captures and receipts:
+`../evidence/captain-goal-workflow-20261117`.
+
+The accepted native run lasts 122.57 seconds, passes 60 seconds Local, peaks at
+four product processes and 1,196,621,824 B RSS including guardian, and closes with
+zero owned survivors. App/helper exit precedes gateway/model shutdown. Seven
+fixture config/env files and one geometry absence are restored; Desktop SSH zero.
+External observers/controllers are excluded; no whole-task RAM or savings claim.
+
+Preparatory failures remain failed: forbidden `/var/tmp` runner scratch, a long
+socket path falling back to forbidden `/tmp`, and shell environment snapshots
+exceeding the stricter source-check process guard. The latter's initial closure
+receipt reports a survivor; an explicit PID/birth wait confirms it closed.
+Subsequent source check stays within its guard; no native trial fails this round.
+Terminal capture has some left-edge clipping, so no general layout acceptance is
+claimed. Full provider reasoning, owner Stop/block/budget cases, agent-desktop
+input, other-host/ai connection and owner-app adoption remain unproven/ungranted.
+No owner data/settings, ESTOP/pause/timer/permissions change, version or release.
+
 # Captain plan and worker results — native Local step accepted, unreleased
 
 Catch up shows the bound chat's received plan, native worker progress and latest

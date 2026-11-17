@@ -108,6 +108,14 @@ paused. Child navigation and owner isolation have focused offline coverage.
 Provider-backed autonomous execution and Stop/block/budget acceptance remain open;
 this step does not authorize a capability release or owner-app adoption.
 
+The native workflow also passes a bounded scripted Local case: `/goal` creates
+the contract and kickoff, tool calls write a plan and delegate a file read, the
+Captain verifies the result against the file, and the native judge reaches Done.
+Catch up observes waiting at turn 1/20 through completed tasks, worker evidence
+and Goal done after two turns. Independent paused work remains paused. This
+is orchestration evidence with scripted model/judge replies, not proof of a
+provider-backed Captain making its own decisions.
+
 ## Supply the skill and decision policy
 
 Review [goal-driven-execution](../skills/goal-driven-execution/SKILL.md) and install its directory into the intended profile's native skills directory using your normal skill workflow. Have the Captain discover/read it for multi-step objectives; select specialist skills according to the actual task. Keep skill bodies on demand rather than rebuilding a live conversation's system prefix.

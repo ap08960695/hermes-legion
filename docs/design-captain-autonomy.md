@@ -69,6 +69,16 @@ This proves configuration, not autonomous execution or tool approval.
    recorded attempts and existing permission boundaries.
 4. Release the complete visible batch with plain-language notes and screenshots.
 
+The deterministic native `/goal` path now has a reusable regression and Local
+desktop active/terminal observations. The slash command creates the contract and
+kickoff directive; real tools write the plan, delegate one file read, and verify
+the returned evidence in the parent. Native judging parks on the live delegation,
+then reaches Done after two turns. The goal under test is never written directly.
+All parent/worker/judge requests share a fixture cap; judge Done requires recorded
+child evidence and parent verification. An independent paused goal and both
+profile configs remain unchanged. These scripted replies prove orchestration;
+provider reasoning and owner Stop/block/budget acceptance remain open.
+
 Do not use owner state or enable an ESTOP/pause/timer. First ai connection and
 owner-app adoption remain lead/owner-only. Agent-desktop input's separate native
 lock-write exception stays ungranted; it is not needed for these CUA fixture checks.

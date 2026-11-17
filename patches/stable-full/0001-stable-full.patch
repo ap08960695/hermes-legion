@@ -68556,6 +68556,272 @@ index a46dcf76ec4b4a16d41fdc6c48d70ff19061b7a0..db0e0ccff88b8fca139ef7e9f8c97c8c
 -    monkeypatch.setattr(run, '_load_gateway_config', lambda: {'platform_toolsets': {'cli': []}})
 +    monkeypatch.setattr(run, '_load_gateway_config', lambda config_path=None: {'platform_toolsets': {'cli': []}})
      store = SessionStore(tmp_path / 'sessions', GatewayConfig())
+diff --git a/tests/gateway/test_captain_goal_native_lifecycle.py b/tests/gateway/test_captain_goal_native_lifecycle.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..57e612753515e544368916972ff3e8a96264a2ca
+--- /dev/null
++++ b/tests/gateway/test_captain_goal_native_lifecycle.py
+@@ -0,0 +1,260 @@
++"""Native goal orchestration with scripted localhost replies, not model reasoning."""
++import asyncio
++from http.server import ThreadingHTTPServer
++import json
++import os
++from pathlib import Path
++import sys
++import threading
++
++from websockets.asyncio.client import connect
++
++from tests.gateway.fixtures.local_recovery_probe import rpc
++from tests.gateway.test_bot_monitor_native_lifecycle import _Model, _rows
++from tests.gateway.test_normal_runtime_boot import control
++from tests.waiting import async_wait_until
++
++
++MARKER = 'CAPTAIN_NATIVE_FILE_EVIDENCE'
++FINAL = 'Verified delegated read against local file: ' + MARKER
++
++
++def goal_state(home, sid):
++    rows = _rows(home, 'SELECT value FROM state_meta WHERE key=?', ('goal:' + sid,))
++    return json.loads(rows[0]['value']) if rows else None
++
++
++class GoalModel(_Model):
++    def metadata(self, value):
++        data = json.dumps(value).encode()
++        self.send_response(200)
++        self.send_header('Content-Type', 'application/json')
++        self.send_header('Content-Length', str(len(data)))
++        self.end_headers()
++        self.wfile.write(data)
++
++    def do_GET(self):
++        if self.path != '/v1/models':
++            return self.send_error(404)
++        self.metadata({'object': 'list', 'data': [{'id': 'loopback-fixture', 'object': 'model'}]})
++
++    def tool(self, tools, name, args, identifier, decision=None):
++        if name not in tools:
++            assert name == 'todo_list' and 'tool_call' in tools, tools
++            name, args = 'tool_call', {'calls': [{'name': name, 'arguments': args}]}
++        return {'role': 'assistant', 'content': decision, 'tool_calls': [{
++            'index': 0, 'id': identifier, 'type': 'function',
++            'function': {'name': name, 'arguments': json.dumps(args)}}]}
++
++    def do_POST(self):
++        try:
++            size = int(self.headers['Content-Length'])
++            assert 0 < size < 2 * 1024 ** 2
++            body = json.loads(self.rfile.read(size))
++            if self.path == '/api/show':
++                return self.metadata({'model_info': {'fixture.context_length': 131072}})
++            assert self.path == '/v1/chat/completions'
++            with self.server.lock:
++                self.server.requests += 1
++                assert self.server.requests <= 16, 'shared model request cap'
++            messages = body['messages']
++            tools = {item['function']['name'] for item in body.get('tools', [])}
++            results = {item.get('tool_call_id'): str(item.get('content', ''))
++                       for item in messages if item['role'] == 'tool'}
++            message = {'role': 'assistant', 'content': None}
++            if body['model'] == 'goal-judge-fixture':
++                if any(FINAL in str(item.get('content')) for item in messages):
++                    assert self.server.verified
++                    children = _rows(self.server.home, 'SELECT id,ended_at FROM sessions WHERE parent_session_id=?',
++                                     (self.server.parent,))
++                    assert len(children) == 1 and children[0]['ended_at'] is not None
++                    assert any(MARKER in row['content'] for row in _rows(
++                        self.server.home, "SELECT content FROM messages WHERE session_id=? AND role='tool'",
++                        (children[0]['id'],)))
++                    kind, verdict = 'judge-done', {'verdict': 'done', 'reason': 'Native child and parent file verification recorded'}
++                else:
++                    kind, verdict = 'judge-wait', {'verdict': 'wait', 'wait_for_seconds': 600,
++                                                  'reason': 'Native delegated file read is still running'}
++                message['content'] = json.dumps(verdict)
++            elif 'delegate_task' in tools:
++                delivered = any(item['role'] == 'user' and str(item.get('content', '')).startswith(
++                    '[ASYNC DELEGATION BATCH COMPLETE') for item in messages)
++                if delivered:
++                    assert any('status=completed' in str(item.get('content')) for item in messages)
++                    if 'captain-verify' not in results:
++                        kind = 'parent-verify'
++                        message = self.tool(tools, 'read_file', {'path': str(self.server.path), 'offset': 1, 'limit': 5},
++                                            'captain-verify')
++                    elif 'captain-finish-plan' not in results:
++                        assert MARKER in results['captain-verify']
++                        self.server.verified = True
++                        kind = 'finish-plan'
++                        message = self.tool(tools, 'todo_list', {'todos': [
++                            {'id': 'read', 'content': 'Delegate local file read', 'status': 'completed'},
++                            {'id': 'verify', 'content': 'Verify delegated evidence', 'status': 'completed'}]},
++                            'captain-finish-plan')
++                    else:
++                        assert self.server.verified and 'completed' in results['captain-finish-plan']
++                        kind, message['content'] = 'parent-final', FINAL
++                elif 'captain-plan' not in results:
++                    kind = 'plan'
++                    message = self.tool(tools, 'todo_list', {'todos': [
++                        {'id': 'read', 'content': 'Delegate local file read', 'status': 'in_progress'},
++                        {'id': 'verify', 'content': 'Verify delegated evidence', 'status': 'pending'}]},
++                        'captain-plan', 'Decision: delegate a read-only check, then verify its evidence locally.')
++                elif 'captain-delegate' not in results:
++                    kind = 'delegate'
++                    message = self.tool(tools, 'delegate_task', {'tasks': [{
++                        'goal': 'Read the local file and return its evidence marker.', 'toolsets': ['file']}]},
++                        'captain-delegate')
++                else:
++                    kind, message['content'] = 'parent-wait', 'Waiting for native delegated file evidence.'
++            elif not results:
++                kind = 'child-read'
++                message = self.tool(tools, 'read_file', {'path': str(self.server.path), 'offset': 1, 'limit': 5}, 'child-read')
++            else:
++                assert MARKER in results['child-read']
++                kind, message['content'] = 'child-result', 'Worker read evidence: ' + MARKER
++                self.server.read_done.set()
++                assert self.server.release.wait(300), 'native UI latch expired'
++            with self.server.lock:
++                self.server.calls.append(kind)
++                assert len(self.server.calls) <= 16 and self.server.calls.count(kind) == 1, self.server.calls
++            frame = {'id': 'captain-' + kind, 'model': body['model'], 'choices': [{
++                'index': 0, 'delta' if body.get('stream') else 'message': message,
++                'finish_reason': 'tool_calls' if message.get('tool_calls') else 'stop'}],
++                'usage': {'prompt_tokens': 17, 'completion_tokens': 5, 'total_tokens': 22}}
++            if body.get('stream'):
++                data = ('data: ' + json.dumps(frame) + '\n\ndata: [DONE]\n\n').encode()
++                self.send_response(200)
++                self.send_header('Content-Type', 'text/event-stream')
++                self.send_header('Content-Length', str(len(data)))
++                self.end_headers()
++                self.wfile.write(data)
++            else:
++                self.metadata(frame)
++        except Exception as error:
++            self.server.errors.append(repr(error))
++            self.send_error(500)
++
++
++async def exercise_goal(ws, home, peer, observe):
++    async def result(method, **params):
++        value = await rpc(ws, method, **params)
++        assert 'result' in value, value
++        return value['result']
++
++    side = (await result('session.create', request_id='paused-control', source='gui', hidden=True,
++                         cwd=str(peer.path.parent), title='Independent paused control'))['session_id']
++    await result('slash.exec', session_id=side, command='goal Preserve independent paused work')
++    await result('slash.exec', session_id=side, command='goal pause')
++    paused = goal_state(home, side)
++    assert paused['status'] == 'paused' and not peer.calls
++    parent = (await result('session.create', request_id='captain-goal', source='gui',
++                           cwd=str(peer.path.parent), title='Captain goal workflow'))['session_id']
++    peer.parent = parent
++    command = ('goal Review local evidence\noutcome: Read and verify the local file\n'
++               'verification: Delegate read, then inspect its evidence against the file\n'
++               'constraints: Read-only local fixture; no publication or network services')
++    directive = await result('slash.exec', session_id=parent, command=command)
++    assert directive['type'] == 'send' and 'Completion contract:' in directive['message']
++    created = goal_state(home, parent)
++    assert created['status'] == 'active' and created['turns_used'] == 0 and not peer.calls
++    await result('prompt.submit', session_id=parent, input_id='goal-kickoff', text=directive['message'])
++    assert await asyncio.to_thread(peer.read_done.wait, 30), peer.errors
++    active = await async_wait_until(lambda: (state := goal_state(home, parent)) and state['last_verdict'] == 'wait' and state,
++                                   timeout=30, what='native goal parks on delegated evidence')
++    assert active['status'] == 'active' and active['waiting_on_delegations'] == 1
++    assert active['turns_used'] == 1 and active['max_turns'] == created['max_turns']
++    children = _rows(home, 'SELECT id,ended_at FROM sessions WHERE parent_session_id=?', (parent,))
++    assert len(children) == 1 and children[0]['ended_at'] is None
++    await observe('active', {'parent': parent, 'child': children[0]['id'], 'goal': active, 'calls': list(peer.calls)})
++    peer.release.set()
++    terminal = await async_wait_until(lambda: (state := goal_state(home, parent)) and state['status'] == 'done' and state,
++                                     timeout=45, what='native judge terminal goal')
++    assert terminal['last_verdict'] == 'done' and terminal['turns_used'] == 2
++    assert terminal['max_turns'] == created['max_turns'] and not terminal['waiting_until']
++    assert goal_state(home, side) == paused
++    await async_wait_until(lambda: (rows := _rows(home, 'SELECT delivery_state FROM async_delegations WHERE parent_session_id=?',
++                                                 (parent,))) and rows[0]['delivery_state'] == 'delivered',
++                           timeout=15, what='native result delivery accounted')
++    assert any(row['content'] == FINAL for row in _rows(home, "SELECT content FROM messages WHERE session_id=? AND role='assistant'", (parent,)))
++    assert set(peer.calls) == {'plan', 'delegate', 'parent-wait', 'child-read', 'child-result', 'judge-wait',
++                               'parent-verify', 'finish-plan', 'parent-final', 'judge-done'}
++    assert not peer.errors, peer.errors
++    receipt = {'parent': parent, 'child': children[0]['id'], 'goal': terminal, 'calls': list(peer.calls),
++               'independent_pause_preserved': True, 'scripted_loopback_not_provider_reasoning': True}
++    await observe('terminal', receipt)
++    return receipt
++
++
++def test_native_goal_finishes_only_after_delegated_evidence(tmp_path, monkeypatch):
++    home, user = tmp_path / 'state', tmp_path / 'user'
++    home.mkdir()
++    user.mkdir()
++    monkeypatch.setenv('HOME', str(user))
++    monkeypatch.setenv('USERPROFILE', str(user))
++    monkeypatch.setenv('HERMES_HOME', str(home))
++    monkeypatch.setattr(Path, 'home', lambda: user)
++    import hermes_state
++    monkeypatch.setattr(hermes_state, 'DEFAULT_DB_PATH', hermes_state._IMPORT_DEFAULT_DB_PATH)
++    monkeypatch.setenv('PATH', str(Path(sys.executable).parent) + os.pathsep + os.environ.get('PATH', ''))
++    path = tmp_path / 'native-file.txt'
++    path.write_text(MARKER + '\n')
++    peer = ThreadingHTTPServer(('127.0.0.1', 0), GoalModel)
++    peer.daemon_threads = True
++    peer.path, peer.home, peer.calls, peer.errors, peer.verified = path, home, [], [], False
++    peer.requests = 0
++    peer.lock, peer.read_done, peer.release = threading.Lock(), threading.Event(), threading.Event()
++    thread = threading.Thread(target=peer.serve_forever, kwargs={'poll_interval': .05}, daemon=True)
++    thread.start()
++    url = f'http://127.0.0.1:{peer.server_port}/v1'
++    config = {'agent': {'environment_probe': False}, 'gateway': {'multiplex_profiles': False},
++              'model': {'provider': 'custom', 'default': 'loopback-fixture', 'base_url': url},
++              'goals': {'max_turns': 6},
++              'auxiliary': {'title_generation': {'enabled': False}, 'goal_judge': {
++                  'provider': 'custom', 'model': 'goal-judge-fixture', 'base_url': url, 'api_key': 'loopback-only'}},
++              'platform_toolsets': {key: ['delegation', 'file', 'todo'] for key in ['cli', 'local', 'desktop']},
++              'delegation': {'max_concurrent_children': 1, 'max_spawn_depth': 1, 'orchestrator_enabled': False},
++              'compression': {'enabled': False},
++              'telemetry': {'shared_metrics': {'enabled': False, 'send': False, 'offer_version': 2}}}
++    (home / 'config.yaml').write_text(json.dumps(config))
++    baseline = (home / 'config.yaml').read_bytes()
++    monkeypatch.setenv('OPENAI_API_KEY', 'loopback-only')
++    monkeypatch.setenv('OPENAI_BASE_URL', url)
++    observations = []
++
++    async def observe(stage, info):
++        observations.append((stage, info))
++
++    async def run():
++        from gateway import run as gateway
++        task = asyncio.create_task(gateway.start_gateway())
++        runner = None
++        try:
++            def ready():
++                assert not task.done(), task.exception() if task.done() else None
++                value = gateway._gateway_runner_ref()
++                return value if value and value.session_runtime_descriptor.get('state') == 'ready' else None
++            runner = await async_wait_until(ready, timeout=30, what='native gateway ready')
++            desc = runner.session_runtime_descriptor
++            grant = await asyncio.to_thread(control, home, 'session-ticket', {
++                'profile_id': str(home), 'instance_id': desc['instance_id'], 'purpose': 'interactive', 'scope': 'host'})
++            async with connect(runner.session_api.api_origin.replace('http:', 'ws:') + '/api/ws', subprotocols=[
++                    'hermes-gateway-v1', 'hermes-gateway-ticket.' + grant['ticket']]) as ws:
++                await exercise_goal(ws, home, peer, observe)
++        finally:
++            peer.release.set()
++            if runner is not None:
++                await asyncio.wait_for(runner.stop(), 15)
++            await asyncio.wait_for(task, 15)
++    try:
++        asyncio.run(run())
++        assert [stage for stage, _ in observations] == ['active', 'terminal']
++        assert (home / 'config.yaml').read_bytes() == baseline
++    finally:
++        peer.release.set()
++        peer.shutdown()
++        peer.server_close()
++        thread.join(5)
++        assert not thread.is_alive()
 diff --git a/tests/gateway/test_config_policy_recovery.py b/tests/gateway/test_config_policy_recovery.py
 index a338fefee85e09bcdd9b66982540611d62b26b18..4389454e38092ec2ab16fbeab88830e29c3eae47 100644
 --- a/tests/gateway/test_config_policy_recovery.py
