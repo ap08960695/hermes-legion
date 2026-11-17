@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1133-path** Legion source, interface and optimization alternative
+This is the complete **1135-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -9,6 +9,17 @@ an account installer, a prebuilt application or an in-place migration script.
 The [manifest](../patches/stable-full/manifest.json) pins every before/after file hash.
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
+
+## Pet creator preview (unreleased)
+
+`hermes pets show --cycle --once` now visits all seven canonical activity states,
+including wave, run and jump, and exits after one sequence. Explicit `--state`
+still takes precedence; cursor restoration and renderer fallbacks remain intact.
+Eight focused source tests and the actual CLI in an isolated native terminal pass.
+The synthetic atlas proves state dispatch and loop count, not real artwork or
+desktop animation. This is the first creator-tooling step of the
+[bot characters design](design-bot-characters.md); overlay, packs and performance
+acceptance remain open. [Evidence and limits](verification.md#pet-creator-preview--native-terminal-acceptance-unreleased).
 
 ## Captain work visibility (unreleased)
 

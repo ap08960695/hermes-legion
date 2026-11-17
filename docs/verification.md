@@ -1,3 +1,43 @@
+# Pet creator preview — native terminal acceptance, unreleased
+
+The character creator tooling now previews every canonical pet activity through
+the existing `hermes pets show --cycle --once` command. Literal atlas row names
+previously excluded wave, run and jump, and the outer loop repeated the selected
+sequence once per selected state. The fix uses the canonical state sequence and
+exits after one full sequence; the renderer resolves its existing aliases and
+legacy fallbacks. Explicit state selection still wins over `--cycle`.
+
+Six new source cases assert the explicit seven-state order and frame count,
+single waiting/default idle, explicit-state precedence and cursor restoration on
+both interruption and render error. The all-state case fails on the original
+source; all six plus two existing pet-toggle cases pass through the canonical
+runner with one worker. An earlier runner setup failed before collection because
+its scratch path escaped the isolated write boundary; that is not a product
+regression. Directing scratch files into the owned test root resolved it.
+
+Before and after native PTY trials run the actual CLI parser, pet store, atlas
+decoder and renderer with identical isolated input:
+`hermes pets show preview-fixture --cycle --once --mode unicode --scale 0.1`.
+Executable, imported module path/hash and process lifetimes are recorded. Before:
+idle/failed/waiting/review repeated four times, 16 state visits, 19.61 seconds.
+After: idle/wave/run/failed/review/jump/waiting exactly once, seven visits,
+9.41 seconds. Each hides and restores the cursor once, leaves configuration
+unchanged and closes every owned process. No model, download or network is used.
+
+The small synthetic color atlas establishes dispatch, loop count, CLI wiring and
+cleanup, not real character-pack compatibility, artwork quality, desktop overlay
+behavior or a RAM/CPU saving. Sampled peaks including the observer were
+156,450,816 bytes before and 159,301,632 after, with at most three product
+processes; these are not whole-service measurements. Private ANSI recordings,
+receipts and test output: `../uitest-v090-c2q4iijp/characters-r208`.
+
+Only `hermes_cli/pets.py` and the new test target are exported against pinned
+`bf0203a794a07aac3ff764972ab9087baa4e4f4e`; changed sections apply, match after
+hashes, reverse and match before hashes. Unrelated patch sections are retained.
+Python test selection appends the new file. Desktop overlay, interactions,
+latest-output popover, pack format/creator skill and five-character resource
+budgets remain unimplemented. No version or release for this development slice.
+
 # Captain provider acceptance — readiness only, unreleased
 
 The real-provider acceptance contract now specifies one consistent read-only
