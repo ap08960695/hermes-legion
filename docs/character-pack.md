@@ -1,10 +1,11 @@
 # Make a native-atlas character pack
 
-The current development kit can **lint a local folder** before installation.
-It checks creator metadata and the same atlas geometry/pixels used by generated
-Hermes pets. A passing result does not install the pack or make its metadata
-active in Desktop. This is the draft native-atlas subset of the characters
-feature; pack import, bot assignment and extended interactions are still open.
+The current development kit can **lint and preview a local folder** before
+installation. It checks creator metadata and the same atlas geometry/pixels used
+by generated Hermes pets, then uses the existing terminal renderer for preview.
+This does not install the pack or make its metadata active in Desktop. This is
+the draft native-atlas subset; pack import, bot assignment and extended
+interactions are still open.
 
 ## Start with the original example
 
@@ -13,6 +14,7 @@ Use a Hermes Python environment with Pillow and this source patch applied:
 ```sh
 python examples/character-pack/make_example.py ./lanternling
 hermes pets validate ./lanternling
+hermes pets show --pack ./lanternling --cycle --once
 ```
 
 The output folder must be new. The generator creates the complete original
@@ -72,9 +74,14 @@ or a safe installer for hostile concurrent directory changes.
 4. Fill the manifest with your name and actual permission/licence statement.
 5. Run `hermes pets validate ./my-character`. Fix errors before sharing it.
    To check an image alone, use `hermes pets validate ./my-character/spritesheet.png`.
-6. Inspect the exported sheet in your image editor. Pack-based animation preview
-   and installation are not wired yet. Existing **installed** pets can still be
-   previewed with `hermes pets show <slug> --cycle --once`.
+6. In a terminal, run `hermes pets show --pack ./my-character --cycle --once`
+   to preview all seven current activity states. Use `--state run --once` for
+   one state; explicit `--state` takes priority over `--cycle`. Without either,
+   preview uses idle; omit `--once` to loop until Ctrl+C. Use `--mode unicode`
+   if needed.
+7. Installation and bot assignment are still future steps. Existing **installed**
+   pets keep `hermes pets show <slug> --cycle --once`; do not combine a slug with
+   `--pack`.
 
 | Row, from top | Native atlas name | Generator cells | Existing activity alias |
 |---|---|---:|---|
@@ -94,6 +101,20 @@ must contain a populated idle row. A warning does not establish that a missing
 activity will look correct: fill the native rows before seeking visual acceptance.
 The shared validator also reports empty atlases, undersized/collapsed poses,
 multi-pose outliers and invisible pixels retaining RGB colour.
+
+## Preview without adopting the pack
+
+`show --pack` uses the exact bytes that passed validation, copied into a private
+bounded temporary snapshot. It uses the supplied pack directly and leaves pet
+settings unchanged. The temporary snapshot lasts through rendering and is removed on
+normal exit, Ctrl+C or a handled error. Pack/source bytes stay unchanged.
+The existing terminal graphics detection and default scale apply; `--scale`
+can override the preview size. No TTY means a clear refusal with exit 1.
+
+Lint permits missing rows with warnings. Preview reports an error before drawing
+if a requested state has no frames: fill that row or request a populated state.
+Previewing the native atlas does not implement the future interaction events,
+select a bot character or prove its Desktop appearance/CPU/RAM budget.
 
 ## Read the result
 

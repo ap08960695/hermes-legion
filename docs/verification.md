@@ -1,3 +1,46 @@
+# Pre-install creator pack preview — native terminal step, unreleased
+
+`hermes pets show --pack DIRECTORY --cycle --once` previews the existing seven
+canonical activities without installing/selecting a pet. The shared loader
+returns the exact bounded bytes it validated; `validate_pack` keeps its previous
+report-only API. A trusted private temporary snapshot feeds the existing renderer
+and animation loop. Pack mode branches before pet-config/installed resolution.
+Slug+pack, malformed input, missing requested frames and unavailable TTY report
+errors. Snapshot cleanup and cursor restoration cover normal exit and Ctrl+C;
+handled I/O/value errors report failure, unexpected errors still propagate after
+cleanup. Existing installed-show loop/precedence/error behavior is preserved.
+
+Three intended RED journeys first reject the absent `--pack` option. The first
+new-suite attempt instead hits a test-fixture TTY seam: pytest replaces its
+capture stream after setup. Patching the current stream at call time fixes that
+fixture; no renderer fix is inferred. Sixteen real parser/Pillow cases now pass,
+including exact seven-state colours/once count, explicit-state precedence,
+default idle, immutable source-to-snapshot bytes even after source replacement,
+WebP, bad packs, conflicts, no TTY, snapshot-write/init/animation error cleanup,
+Ctrl+C and missing frames. Six installed-preview plus50validation cases also
+pass (72total), one canonical worker/no retry. Only external stream capability
+and sleeps are controlled; real renderer/pixel encoding runs. Scoped Ruff passes.
+
+Three sequential bounded native PTYs run the actual source CLI from owned homes,
+with no renderer/time/TTY stubs. A coloured native atlas emits the seven canonical
+states in order,42frames, one cycle and exit0 (11.719s). Original CC0 Lanternling
+emits39frames/20distinct encoded chunks, with4distinct idle chunks (10.231s).
+Its infinite idle preview receives SIGINT only after a real rendered frame and
+returns0 with cursor restored (1.499s). Every case restores the cursor once,
+keeps source-pack/config bytes unchanged, creates no installed pet store and
+leaves zero snapshots or recorded survivors. Source hashes bind both modules.
+The highest native sampled RSS including guardian is190595072bytes, at most
+3product processes; the external shell/controller is excluded. These are
+terminal-output/cleanup checks, not physical font/graphics appearance, Desktop
+movement, full-task memory savings or five-character CPU/RAM acceptance.
+
+Three changed source/test sections apply/hash/reverse/hash against pinned
+`bf0203a`; unrelated sections stay exact. One Python selection appends. Required
+companion/tracked-copy/directory+history gates are recorded privately. No native
+Hermes.app/CUA/permission retry or owner app/config/data change, no otherhost/ai,
+ESTOP/pause/timer action. No version/tag/release/adoption. Pack install/assign,
+extended format/events and full native character acceptance remain open.
+
 # Character creator folder lint — unreleased development step
 
 `hermes pets validate DIRECTORY` reads a draft schema-1 `hermes-native-atlas`

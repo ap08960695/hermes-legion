@@ -62,8 +62,24 @@ invalid-template/no-overwrite checks pass. No installer or profile change.
 FPS, anchor and custom state mappings are deliberately absent until a runtime
 consumes them; unknown fields fail rather than imply support. Lint does not
 establish installability, playability, licence ownership or resource budgets.
-ZIP, GIF/APNG/Lottie, bot assignment, pack-based preview and extended event
-interactions remain open, as does the full character-pack-creator skill.
+ZIP, GIF/APNG/Lottie, bot assignment and extended event interactions remain
+open, as does the full character-pack-creator skill. Native pack terminal preview
+is covered below.
+
+## Pre-install pack preview: completed terminal slice
+
+`pets show --pack DIRECTORY` reuses the existing terminal renderer and state
+loop with a private snapshot of exact validated bytes. It bypasses installed-pet
+and pet-config resolution; conflicting slug+pack fails early.
+The shared animation helper preserves installed preview and cursor restoration;
+temporary snapshots clean up on success/error/CtrlC. Missing requested frames
+fail before drawing. The validator report API stays unchanged while its loader
+also exposes exact checked bytes to the preview. This is current native-atlas
+terminal preview, not Desktop, installation or the full interaction contract.
+Sixteen new parser/Pillow cases, six installed-preview cases and fifty validation
+cases pass. Native PTYs confirm all seven aliases, finite once behavior and
+Ctrl+C cleanup. The original example emits changing terminal frames; physical
+screen/graphics appearance and Desktop resource acceptance are not established.
 
 ## Active-character overlay preview: offline source step
 
@@ -151,8 +167,9 @@ actual budget miss and trade-off before release; no budget claim from unit tests
 The draft native-atlas folder contract, metadata lint, original example recipe,
 blank template and starter guide are now included. The full runtime format still
 needs per-event animations/fallbacks, size/fps/anchor controls, extended formats,
-pack preview/install/assign and the creator skill. Reuse current stores/renderer
-rather than introducing another atlas taxonomy. Only original/owned art; no
+pack install/assign and the creator skill. Native-atlas terminal preview is
+included. Reuse current stores/renderer rather than introducing another atlas
+taxonomy. Only original/owned art; no
 borrowed character designs or copied reference art.
 
 Keep these items explicitly unimplemented until their source and native evidence
