@@ -1,4 +1,60 @@
+# Captain direct Stop — native Local acceptance, unreleased
+
+Completed native development step: a fresh source-bound Local Hermes at 480×620
+shows direct composer Stop while the parent is idle and its worker runs. One
+normal AX button click interrupts the owned worker and pauses the owning goal
+at turn 1/20. The normal parent interrupted-result response appears; the direct
+Stop button disappears after work stops. Before/after screenshots and matching
+full AX are retained in `../evidence/captain-background-stop-20261117`.
+The BEFORE is an older source baseline from a separate failed203 generation;
+the new active/stopped/terminal frames are one original206 generation.
+
+The real native helper proves child ended, interrupted delegation ledger and
+accounted delivery/normal parent result BEFORE releasing the held server reply.
+Then goal, child metadata, ledger and admissions stay exact for three seconds;
+no goal continuation/new judge is admitted. Independent paused work and profile
+configs stay unchanged. Original-chat UI_READY, UI_STOPPED and UI_VERIFIED ACKs
+pass, followed by `goal-acceptance.json` accepted=true. Seven scripted loopback
+requests (cap16 across parent/worker/judge/retry attempts) exercise real /goal,
+plan, delegation, read_file and session Stop. They establish orchestration, not
+provider reasoning, paid usage, real savings or arrival at a cancelled client's
+callback; server-handler completion is the narrower late-reply evidence.
+
+The fresh renderer binds to the three composer source hashes in committed112b6c2
+and current Stop runtime/helper sources. Main/preload reused byte-exact. Prior203
+five-file/88-case source tests, types and scoped lint are reused with exact hash
+match; renderer build passes fresh. No runtime, patch, default, dependency,
+permission, test-selection, version, tag or release change this acceptance round.
+Existing ownership/persistence/Done/Pause regressions retain their prior scope.
+
+One fresh trial only: Local60/zeroSSH before CUA; original PID/birth/window/URL/
+generation with fresh single-use5s admissions, minimum20s observation reserve,
+335s acceptance/360s total/25s cleanup, max4 product processes/<3.5GiB retained.
+Invocation-local app selection avoids the prior cross-cell binding failure.
+Normal History navigation settles this time; no additional input replay, menu,
+keyboard, coordinate, DOM/store or control-API injection. The prepared one-shot
+unmet-predicate AX/pixel diagnostic and independent guardian5s watchdog are never
+invoked. Six diagnostic failure controls and existing1positive10phase refusals
+pass offline; capture-hang enforcement is not livevalidated. Normal5s flights
+remain; diagnostic-only minimum25s admission would be stricter than normal20s.
+This pass does not explain the earlier AX/native URL disagreement.
+
+Native elapsed186.20s, peak4 product/8 all children,1,185,759,232B sampled RSS
+including guardian; external CUA/advisors/controllers excluded. These are fixture
+bounds, not whole-task RAM/savings. All recorded generations and API/model ports
+close, seven fixture config/env files restore byte-exact, geometry absence
+restores, DesktopSSH0. App exits before gateway/model teardown. Raw:
+`../uitest-v090-c2q4iijp/captain-r206-stopbutton-capture/evidence`.
+
+Earlier201–205 failures stay failed with original evidence. Native button before/
+after, interruption/paused goal and bounded held-server-reply/terminal ACK are
+accepted here. Provider-backed autonomous decisions, owner adoption and first ai
+connection remain separate open/owner-only work. Complete Captain capability is
+still unreleased.
+
 # Direct Stop for background workers — source step, unreleased
+
+Historical round203 handoff below; fresh native206 acceptance is recorded above.
 
 Native baseline AX/pixels show a waiting Captain with a running worker and no
 composer Stop after its parent turn settles. The working composer now subscribes
@@ -42,13 +98,16 @@ Their sampled peaks are four product processes each, respectively 1,004,978,176 
 controllers are excluded; these are not whole-task RAM or savings measurements.
 New fixture: `../uitest-v090-c2q4iijp/captain-r203-stopbutton-capture/evidence`.
 
-The source improvement is complete with offline coverage. Native button before/
-after, actual interruption/paused goal and ordered held-server-reply/terminal ACK
-remain open. Existing Stop gateway evidence below retains its stated scope.
+At the round203 handoff, the source improvement has offline coverage; native
+button/interruption/paused-goal/held-server-reply/terminal ACK remain open then.
+Fresh206 acceptance above closes that bounded scenario. Existing Stop gateway evidence below retains its stated scope.
 Provider reasoning, cancelled-client callback arrival, ai and owner adoption are
 unproven. No version, tag or release is created for this development step.
 
 # Captain session Stop — fix and qualified desktop observations, unreleased
+
+Historical round201 observations below remain qualified/failed as stated. Fresh
+206 direct-button acceptance above does not relabel those trials.
 
 Completed source fix: native session Stop previously cancelled a waiting worker
 but left its goal active. A real gateway regression fails on that exact state

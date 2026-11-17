@@ -23,30 +23,32 @@ The native goal workflow now has a scripted regression: real `/goal` creation,
 tool-written plan, delegation, parent evidence verification and judge-owned Done.
 An isolated Local desktop run observes waiting/running through completed plan,
 worker result and Goal done. This validates orchestration with fixture model
-replies; provider reasoning and full worker Stop acceptance remain open.
+replies; provider reasoning remains open. The bounded native direct Stop scenario now passes.
 [Workflow evidence](verification.md#captain-native-goal-workflow--scripted-local-acceptance-unreleased).
 
 Native boundary checks now preserve owner Pause through completed worker-result
 handling, keep a scripted external blocker paused despite delegated choices, and
 enforce a configured two-turn budget. Desktop Pause has before/paused/result
 captures. These checks add no runtime code or default changes. Pause allows
-already running work and its result follow-up to finish; full worker cancellation
-remains a separate acceptance item. [Checks and limits](verification.md#captain-pause-and-goal-limits--native-local-acceptance-unreleased).
+already running work and its result follow-up to finish; native direct Stop
+cancellation is covered separately below. [Checks and limits](verification.md#captain-pause-and-goal-limits--native-local-acceptance-unreleased).
 
 Session Stop now pauses only its owning active goal before cancelling delegated
 work. Compression/profile ownership and failed-write cancellation have focused
 coverage; the real gateway Stop/held-reply regression and Done/Pause controls
-pass. Desktop `/stop` shows interrupted work and Goal paused 1/20, but its full
-late-reply scenario remains unaccepted after the observation-budget guard stopped
-the trial. [Qualified evidence](verification.md#captain-session-stop--fix-and-qualified-desktop-observations-unreleased).
+pass. A fresh native direct Stop trial now shows interrupted work and Goal paused
+1/20, then passes held-server-reply/three-second quiet-state and terminal ACK.
+Earlier failed `/stop` observations retain their qualified scope.
+[Native evidence](verification.md#captain-direct-stop--native-local-acceptance-unreleased).
 
 The working composer now adds a direct Stop beside its existing primary action
 while the bound runtime chat has live background workers. It uses the existing
 live count and queue-parking cancellation handler; Send, drafts and busy-parent
 behavior retain their existing paths. Five focused files pass 88 tests, renderer
 types/lint/build pass, and changed patch sections roundtrip. Native button
-acceptance remains open after an initial CUA capture error.
-[Scope and remaining proof](verification.md#direct-stop-for-background-workers--source-step-unreleased).
+before/after and the full bounded Stop/held-server-reply/terminal ACK now pass.
+Provider reasoning and owner adoption remain open.
+[Scope and limits](verification.md#captain-direct-stop--native-local-acceptance-unreleased).
 
 ## Bot Monitor capability batch — v0.34.0
 

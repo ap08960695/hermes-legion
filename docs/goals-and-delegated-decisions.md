@@ -105,7 +105,7 @@ Existing goal state remains authoritative. This adapter adds no background polls
 or work engine. Native Local before/after acceptance now covers received plan,
 running worker and failed result after parent follow-up, with the goal still
 paused. Child navigation and owner isolation have focused offline coverage.
-Provider-backed autonomous execution and full worker Stop acceptance remain open;
+Provider-backed autonomous execution remains open; bounded native Stop now passes;
 this step does not authorize a capability release or owner-app adoption.
 
 The native workflow also passes a bounded scripted Local case: `/goal` creates
@@ -128,7 +128,7 @@ Separate native checks preserve a scripted external-blocker verdict even when
 routine decisions are delegated, and pause at an actually configured two-turn
 limit without admitting another goal turn. These establish native state handling
 and turn-budget enforcement; they do not prove real provider reasoning or
-credential policy. Full worker Stop acceptance remains open.
+credential policy. A separate native direct Stop/held-server-reply scenario now passes.
 
 ### Stop the session's current work
 
@@ -136,7 +136,8 @@ The working composer offers **Stop** while the current chat has queued/running
 background workers, even when its parent turn is idle. It stays available in
 narrow controls and beside Send when a draft exists. It parks that chat's queued
 prompts through the existing Stop handler. The button has source regression
-coverage; native on-screen acceptance is still open.
+coverage and native Local acceptance: direct Stop, interrupted worker, paused
+goal and unchanged state after the held server reply.
 
 Use `/stop` in the intended Desktop chat to cancel its current turn and owned
 delegations. The working patch also pauses that chat's active goal, so the
@@ -146,11 +147,13 @@ the result and goal before explicitly resuming work. Stop is not a rollback of
 tool effects that already happened, and an interrupted-result follow-up may still
 use a model call.
 
-A real gateway regression covers child cancellation, parent result delivery and
-unchanged state after a held server reply is released. Desktop observations show
-the interrupted worker and Goal paused at 1/20, but the complete desktop
-late-reply scenario remains unaccepted after its observation guard stopped it.
-[Evidence and limits](verification.md#captain-session-stop--fix-and-qualified-desktop-observations-unreleased).
+A real gateway regression and a fresh Local Desktop trial cover child cancellation,
+normal parent interrupted-result delivery and Goal paused at 1/20. Child metadata,
+delegation ledger, goal and admissions stay exact for three seconds after the
+held server reply is released; the original-window terminal ACK passes. This
+proves scripted orchestration, not provider reasoning or arrival at a cancelled
+client callback. Earlier failed trials remain failed.
+[Evidence and limits](verification.md#captain-direct-stop--native-local-acceptance-unreleased).
 
 ## Supply the skill and decision policy
 

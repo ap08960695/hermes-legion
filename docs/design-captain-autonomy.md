@@ -77,7 +77,8 @@ then reaches Done after two turns. The goal under test is never written directly
 All parent/worker/judge requests share a fixture cap; judge Done requires recorded
 child evidence and parent verification. An independent paused goal and both
 profile configs remain unchanged. These scripted replies prove orchestration;
-provider reasoning and full worker Stop/cancellation acceptance remain open.
+provider reasoning remains open. The bounded native direct Stop/cancellation
+scenario now passes with held-server-reply and terminal ACK evidence.
 
 Session Stop now pauses the owning active goal before cancelling its delegated
 work, matching CLI interrupt intent. Resolve the physical compression tip and
@@ -90,9 +91,10 @@ The real gateway Stop regression ends the child and delivers its interrupted
 result before releasing the held model reply, then checks unchanged goal, child,
 ledger and admissions for three seconds. Normal parent result follow-up remains
 allowed. Desktop `/stop` observations show interrupted work and Goal paused 1/20;
-the full desktop late-reply scenario is unaccepted after an observation-budget
-refusal. Keep that failed trial and do not equate server-handler completion with
-arrival at the cancelled client's callback. Provider reasoning remains open.
+that earlier desktop trial remains failed after its observation-budget refusal.
+A fresh direct-button trial now passes the bounded held-server-reply/quiet-state/
+terminal ACK scenario. Do not equate server-handler completion with arrival at
+the cancelled client's callback. Provider reasoning remains open.
 
 Native stop-condition regressions now cover owner goal Pause, an external-blocker
 verdict with delegated choices enabled, and actual exhaustion of a configured
@@ -177,11 +179,17 @@ to retain the interrupted row when native ledger and normal parent result prove
 it. Preserve the draft and queue parking through the existing handler. No claim
 about cancelled-client callback arrival or provider reasoning.
 
-Implementation status: the three composer files now implement this step. Controls
-regression first fails on missing Stop, then five focused files pass 88 tests;
-types, scoped lint and a fresh production renderer pass. A new source-bound Local
-fixture binds and raises the original window, then stops during the History
-step (ScreenCaptureKit invalid parameters). Native URL reaches History, but its
-post-action frame is absent; no Local60, actual Stop or UI ACK. It is not native acceptance
-or evidence of a product fault. The two earlier diagnostic failures remain failed.
-No release is cut; the native button and ordered late-reply acceptance remain open.
+Implementation status: the three composer files implement this step. Missing-button
+regression RED then five focused files/88 tests, types/lint and production renderer
+pass. A fresh source-bound native Local trial now clicks direct Stop once while
+the parent waits: worker interruption, normal parent result and Goal paused1/20.
+The child ends and its ledger/delivery settle before held-server-reply release;
+state/admissions remain exact three seconds, then original-window terminal ACK
+passes. Before/after gallery: `../evidence/captain-background-stop-20261117`.
+
+Earlier201–205 observation/capture/binding/navigation failures remain failed.
+Round206 normal History navigation settles; the prepared unmet-predicate diagnostic
+and independent5s capture watchdog never fire. This does not explain the prior
+AX/native URL disagreement or livevalidate capture-hang handling. Source/runtime/
+renderer logic is unchanged this acceptance round; existing source is bound to
+the fresh build. No full capability release: provider behavior remains open.
