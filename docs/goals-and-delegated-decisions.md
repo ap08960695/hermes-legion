@@ -155,6 +155,80 @@ proves scripted orchestration, not provider reasoning or arrival at a cancelled
 client callback. Earlier failed trials remain failed.
 [Evidence and limits](verification.md#captain-direct-stop--native-local-acceptance-unreleased).
 
+## Prepare real-provider acceptance
+
+This procedure prepares the remaining provider-backed Captain milestone. It does
+not authorize another model request. The historical [live-card ledger](live-captain-cards-20261109.md)
+used all 56 authorized requests; no verified newer allowance is recorded here.
+The scripted Local Done/Pause/Stop checks establish orchestration readiness.
+
+### Establish the allowance before launch
+
+Record current authorization, remaining project allowance, account/provider/model
+binding and route from task-owned metadata. Confirm current provider availability
+without exposing credentials. Both project allowance and provider quota must
+permit the case; a provider quota reset does not reset the project's spent ledger.
+Missing evidence means **blocked before inference**, with no fresh counter,
+invented 16-request budget, provider/model switch, paid fallback or auth refresh
+against owner state. The fixture's scripted cap16 is not a real-provider grant.
+
+Use a counted request boundary that reserves from the verified shared allowance
+before every upstream attempt: Captain, worker, native judge, retry and error
+recovery all count. Keep enough of that allowance for verification, final reply
+and judge. A missing controller, exhausted allowance, ambiguous in-flight request
+or route mismatch stops the attempt; do not replay it. This guide is a contract,
+not a new quota controller or a way to infer remaining credit from configuration.
+
+### Use one consistent, read-only goal
+
+Create a fresh isolated Local home and one public fixture containing exactly:
+
+```text
+A: 2 + 3 = 5
+B: 1 + 4 = 5
+```
+
+Replace `<absolute-fixture-path>` below with that fixture's absolute path before
+using the normal `/goal` command. Confirm the intended session has no existing
+goal; preserve other paused/completed work. Keep existing model routes, profile
+permissions, turn limits and hardware guards. Do not copy owner conversations,
+credentials or profile state into public evidence.
+
+```text
+/goal Choose one allowed representation from <absolute-fixture-path>, delegate a read-only check, and verify its evidence.
+outcome: Choose A or B without a routine owner question; report the chosen representation and result 5 with concrete evidence.
+verification: Write a short native plan, record why you chose A or B, delegate the fixture read, then re-read the same fixture in the parent and compare the returned evidence before the final reply.
+constraints: Read-only fixture data; use the current authorized model, route, permissions and remaining request allowance; no paid fallback, shell execution, network tools or publication.
+boundaries: Supplied fixture only; native goal, plan and delegation records in this isolated home.
+stop_when: Quota or required access is unavailable, account/route binding is uncertain, or the evidence conflicts.
+```
+
+Both choices are valid. The provider chooses; do not preselect a letter, supply a
+scripted tool-call sequence, inject a judge verdict or write terminal goal metadata.
+The verification read is explicitly allowed, avoiding the contradictory earlier
+"do not reread" case. The normal post-turn judge must consume actual tool evidence.
+
+### Accept only the observed provider result
+
+Retain private source/build, run, profile, goal, child and request identities.
+Record the provider response and actual plan/decision/delegation/readback/result,
+not only the Captain's claim. Require a nonempty child result, parent comparison
+against the fixture, concrete evidence in the final reply, native judge `done`,
+persisted Goal done and accounted delivery. Keep independent paused work and
+unrelated configuration unchanged. Count any calls after verified completion;
+no new continuation or judge should be admitted merely to repeat a done result.
+
+Capture active and terminal Goal/Catch up views through the guarded original
+Local window. Keep the existing Mac 4-product-process/<3.5GiB and bounded cleanup
+policy; never connect to ai or another execution host. Owner Stop/Pause remains
+available. Restore fixture config and close owned processes/ports afterward.
+
+Report separately: contract/parser check, scripted orchestration, actual provider
+behavior and native UI evidence. A parsed prompt or scripted Done does not pass
+this provider milestone. A successful bounded case also does not certify every
+model, task or production profile. Keep transcripts, account bindings, quota
+receipts and screenshots private; publish only a qualified synthetic summary.
+
 ## Supply the skill and decision policy
 
 Review [goal-driven-execution](../skills/goal-driven-execution/SKILL.md) and install its directory into the intended profile's native skills directory using your normal skill workflow. Have the Captain discover/read it for multi-step objectives; select specialist skills according to the actual task. Keep skill bodies on demand rather than rebuilding a live conversation's system prefix.

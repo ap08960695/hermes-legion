@@ -69,6 +69,13 @@ This proves configuration, not autonomous execution or tool approval.
    recorded attempts and existing permission boundaries.
 4. Release the complete visible batch with plain-language notes and screenshots.
 
+The remaining [real-provider acceptance contract](goals-and-delegated-decisions.md#prepare-real-provider-acceptance)
+uses a consistent read-only choice/delegate/readback case. It requires verified
+current project allowance and account/route binding before inference. The earlier
+56-request allowance is exhausted; no fresh allowance is established by a model
+configuration, this document or the scripted cap16. Until verified allowance
+exists, actual-provider behavior stays owner-blocked; offline readiness can pass.
+
 The deterministic native `/goal` path now has a reusable regression and Local
 desktop active/terminal observations. The slash command creates the contract and
 kickoff directive; real tools write the plan, delegate one file read, and verify

@@ -45,3 +45,11 @@ opposite.
 The Captain re-read the card after completing it. That verification step cost one
 request and was reasonable under the goal-driven skill. A tighter prompt can skip it
 when the completion result is already authoritative.
+
+## Next authorized provider case
+
+The [current acceptance contract](goals-and-delegated-decisions.md#prepare-real-provider-acceptance)
+provides a consistent read-only choice/delegation/readback prompt and separates
+provider behavior from scripted/native UI evidence. This historical ledger remains
+spent at 56. No current allowance is established here, and no new requests may
+be inferred from a provider quota reset or the later scripted fixture cap16.

@@ -1,3 +1,26 @@
+# Captain provider acceptance — readiness only, unreleased
+
+The real-provider acceptance contract now specifies one consistent read-only
+choice/delegation/parent-readback case, current allowance/account/route gates,
+shared counting for every upstream attempt, and actual judge-owned Done/native
+UI evidence. It reuses the normal native `/goal` parser and first-turn contract;
+there is no new runner, model route, request budget, configuration or runtime code.
+
+The historical real-card allowance was raised to56 and fully used. No newer
+verified allowance is established this round; actual-provider acceptance remains
+owner-blocked. Selected read-only local model configuration metadata does not
+prove account binding, available project allowance or provider quota. No credential
+values are copied or published, and no Hermes provider inference is attempted.
+The separately requested advisor consultation is not a new Hermes test allowance.
+
+A fresh isolated offline check parses the documented goal with the actual native
+parser and verifies all five contract fields reach its first-turn kickoff. It
+also checks the two public fixture alternatives both evaluate to5. This proves
+syntax and contract propagation only, not that a provider chose, delegated,
+verified or reached Done. Existing scripted native acceptance below retains its
+scope. No native UI/source/runtime/patch/default/selection/version/tag/release
+change, owner-app adoption, other-host/ai connection or paid fallback.
+
 # Captain direct Stop — native Local acceptance, unreleased
 
 Completed native development step: a fresh source-bound Local Hermes at 480×620
