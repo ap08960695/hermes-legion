@@ -1,3 +1,23 @@
+# Read a bot’s latest saved reply from its character (unreleased)
+
+With the character overlay enabled in Monitor, select an underlined bot label
+to open its latest saved reply. The overlay requests one bounded, plain-text
+result from that bot’s exact canonical Chat. The regressions cover a newer user
+message, hidden messages, empty and file-only replies, the text limit, and
+identical chat IDs on different profiles. Renderer and IPC tests also cover
+stale bindings, forged IDs, late replies and closing during a read.
+
+An isolated Mac Desktop with a canonical Local gateway showed the seeded
+assistant reply in the overlay. The click produced exactly one authenticated
+read. Moving across the transparent area restored click-through. Closing the
+popover left the character overlay active without another read. The fixture
+used persisted messages and synthetic worker activity with no model request.
+A second Local run opened a long reply, scrolled its body while the header
+and close control stayed visible, then dismissed it without a second read.
+Both trials passed 60 seconds with zero Desktop SSH, used at most four product
+processes and exited. Chat navigation, attachment actions and worker results
+remain open.
+
 # Monitor character shows the focused bot’s pending clarification (unreleased)
 
 Monitor uses the existing waiting pose while the focused canonical Bot Chat

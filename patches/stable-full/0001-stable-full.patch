@@ -8224,10 +8224,10 @@ index 2c784ec2a2e709f7fc953d88399b3078aaa5e12b..5492eec425bbd695225966f3bc91032d
  }
 diff --git a/apps/desktop/electron/pet-overlay-ipc.test.ts b/apps/desktop/electron/pet-overlay-ipc.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..128ea1637f027ec2ac7f8ee6c69b682fee980d90
+index 0000000000000000000000000000000000000000..083a435ed6bed8dc04f698712dbebded77d4f560
 --- /dev/null
 +++ b/apps/desktop/electron/pet-overlay-ipc.test.ts
-@@ -0,0 +1,73 @@
+@@ -0,0 +1,109 @@
 +import { EventEmitter } from 'node:events'
 +
 +import { afterEach, expect, it, vi } from 'vitest'
@@ -8301,27 +8301,82 @@ index 0000000000000000000000000000000000000000..128ea1637f027ec2ac7f8ee6c69b682f
 +  powerMonitor.emit('lock-screen'); main.emit('hide')
 +  expect(overlay.webContents.send).toHaveBeenCalledTimes(calls)
 +})
++
++it('relays only current overlay output requests and never retains reply text on lock or close', () => {
++  const main = Object.assign(new EventEmitter(), { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, webContents: { send: vi.fn() } })
++  const overlay = Object.assign(new EventEmitter(), { isDestroyed: () => false, webContents: { send: vi.fn() } })
++  registerPetOverlayIpc({ getMainWindow: () => main as never, getPetOverlayWindow: () => overlay as never, openPetOverlay: vi.fn(), closePetOverlay: vi.fn() })
++  const state = io.on.get('hermes:pet-overlay:state')!, control = io.on.get('hermes:pet-overlay:control')!
++  const preview = { characterPreview: { characters: [{ outputId: 'owned' }], expiresAt: Date.now() + 15_000 } }
++  state({ sender: main.webContents }, preview)
++  const command = { type: 'character-output', id: 'owned', request: 1 }
++
++  const reply = (request: number, sender: unknown = main.webContents) => state({ sender }, { ...preview,
++    characterOutput: { id: 'owned', request, text: 'owned result' } })
++
++  control({ sender: main.webContents }, command)
++  control({ sender: overlay.webContents }, { ...command, id: 'forged' })
++  expect(main.webContents.send).not.toHaveBeenCalled()
++  control({ sender: overlay.webContents }, { ...command, profile: 'untrusted' })
++  expect(main.webContents.send).toHaveBeenLastCalledWith('hermes:pet-overlay:control', command)
++  reply(1, overlay.webContents)
++  expect(overlay.webContents.send.mock.lastCall?.[1].characterOutput).toBeUndefined()
++  control({ sender: overlay.webContents }, { ...command, request: 2 })
++  reply(1)
++  expect(overlay.webContents.send.mock.lastCall?.[1].characterOutput).toBeUndefined()
++  reply(2)
++  expect(overlay.webContents.send.mock.lastCall?.[1].characterOutput?.text).toBe('owned result')
++  control({ sender: overlay.webContents }, { ...command, request: 3 })
++  control({ sender: overlay.webContents }, { type: 'character-output-close' })
++  state({ sender: main.webContents }, preview)
++  reply(3)
++  expect(overlay.webContents.send.mock.lastCall?.[1].characterOutput).toBeUndefined()
++  control({ sender: overlay.webContents }, { ...command, request: 4 })
++  powerMonitor.emit('lock-screen')
++  powerMonitor.emit('unlock-screen')
++  reply(4)
++  expect(overlay.webContents.send.mock.lastCall?.[1].characterOutput).toBeUndefined()
++})
 diff --git a/apps/desktop/electron/pet-overlay-ipc.ts b/apps/desktop/electron/pet-overlay-ipc.ts
-index 59d8dd527dae029c695a8520996f6051d75df371..1ebc20300e7174e17d71820f1be12b29dca022af 100644
+index 59d8dd527dae029c695a8520996f6051d75df371..f91f4f65fdc263711a2b910a8ce90d91e44f2692 100644
 --- a/apps/desktop/electron/pet-overlay-ipc.ts
 +++ b/apps/desktop/electron/pet-overlay-ipc.ts
-@@ -2,3 +2,3 @@
+@@ -2,3 +2,6 @@
  // main.ts; window handles stay injected because main.ts owns their lifecycle.
 -import { type BrowserWindow, ipcMain, screen } from 'electron'
 +import { type BrowserWindow, ipcMain, powerMonitor, screen } from 'electron'
++
++import type { PetCharacterOutput } from '../src/store/pet-characters'
++import type { PetCharacterPreview } from '../src/store/pet-characters'
 
-@@ -36,2 +36,83 @@ export function registerPetOverlayIpc({
+@@ -36,2 +39,100 @@ export function registerPetOverlayIpc({
  }: PetOverlayIpcDeps) {
 +  let lastCharacterPayload: Record<string, unknown> | null = null
++  let pendingOutput: Pick<PetCharacterOutput, 'id' | 'request'> | null = null
 +  let stopObserving: (() => void) | null = null
 +  let locked = false, suspended = false
 +
++  const charactersPaused = () => {
++    const main = getMainWindow()
++
++    return locked || suspended || !main || main.isDestroyed() || !main.isVisible() || main.isMinimized()
++  }
++
++  const visibleOutput = (id: string) => {
++    const preview = lastCharacterPayload?.characterPreview as PetCharacterPreview | undefined
++
++    return !charactersPaused() && preview && preview.expiresAt > Date.now() &&
++      Array.isArray(preview.characters) && preview.characters.slice(0, 5).some(actor => actor?.outputId === id)
++  }
++
 +  const sendCharacters = () => {
-+    const main = getMainWindow(), overlay = getPetOverlayWindow()
++    const overlay = getPetOverlayWindow()
 +
 +    if (!lastCharacterPayload || !overlay || overlay.isDestroyed()) {return}
-+    const charactersPaused = locked || suspended || !main || main.isDestroyed() || !main.isVisible() || main.isMinimized()
-+    overlay.webContents.send('hermes:pet-overlay:state', { ...lastCharacterPayload, charactersPaused })
++    const paused = charactersPaused()
++
++    if (pendingOutput && !visibleOutput(pendingOutput.id)) {pendingOutput = null}
++    overlay.webContents.send('hermes:pet-overlay:state', { ...lastCharacterPayload, charactersPaused: paused })
 +  }
 +
 +  const observeCharacterVisibility = () => {
@@ -8359,6 +8414,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..1ebc20300e7174e17d71820f1be12b29
 +      stopObserving?.()
 +      stopObserving = null
 +      lastCharacterPayload = null
++      pendingOutput = null
 +    }
 +
 +    const closed = () => {
@@ -8394,20 +8450,70 @@ index 59d8dd527dae029c695a8520996f6051d75df371..1ebc20300e7174e17d71820f1be12b29
 +  }
 +
    // `request` is `{ bounds, screen }`. A fresh pop-out passes viewport-space
-@@ -145,2 +226,13 @@ export function registerPetOverlayIpc({
-   ipcMain.on('hermes:pet-overlay:state', (_event, payload) => {
+@@ -144,3 +245,33 @@ export function registerPetOverlayIpc({
+   // Main renderer → overlay: forward the latest pet state for the overlay to render.
+-  ipcMain.on('hermes:pet-overlay:state', (_event, payload) => {
++  ipcMain.on('hermes:pet-overlay:state', (event, payload) => {
 +    if (payload?.characterPreview) {
-+      lastCharacterPayload = payload
++      const { characterOutput, ...snapshot } = payload
++
++      if (characterOutput) {
++        const overlay = getPetOverlayWindow(), main = getMainWindow()
++        const { id, request, text, unavailable } = characterOutput
++
++        if (!main || event.sender !== main.webContents || !overlay || overlay.isDestroyed() ||
++            !pendingOutput || id !== pendingOutput.id || request !== pendingOutput.request || !visibleOutput(id) ||
++            !(text === null || (typeof text === 'string' && text.length <= 1200))) {return}
++
++        pendingOutput = null
++        overlay.webContents.send('hermes:pet-overlay:state', { ...lastCharacterPayload, charactersPaused: false,
++          characterOutput: { id, request, text, ...(unavailable === true ? { unavailable: true } : {}) } })
++
++        return
++      }
++
++      lastCharacterPayload = snapshot
 +      observeCharacterVisibility()
 +      sendCharacters()
 +
 +      return
 +    }
 +
++    if (payload?.characterOutput) {return}
 +    lastCharacterPayload = null
++    pendingOutput = null
 +    stopObserving?.()
 +    stopObserving = null
      const petOverlayWindow = getPetOverlayWindow()
+@@ -152,3 +283,3 @@ export function registerPetOverlayIpc({
+   // Overlay → main renderer: control messages (pop back in, composer submit).
+-  ipcMain.on('hermes:pet-overlay:control', (_event, payload) => {
++  ipcMain.on('hermes:pet-overlay:control', (event, payload) => {
+     const mainWindow = getMainWindow()
+@@ -159,2 +290,23 @@ export function registerPetOverlayIpc({
+
++    if (payload?.type === 'character-output' || payload?.type === 'character-output-close') {
++      const overlay = getPetOverlayWindow()
++
++      if (!overlay || overlay.isDestroyed() || event.sender !== overlay.webContents) {return}
++
++      if (payload.type === 'character-output-close') {
++        pendingOutput = null
++        mainWindow.webContents.send('hermes:pet-overlay:control', { type: payload.type })
++
++        return
++      }
++
++      const { id, request } = payload
++
++      if (typeof id !== 'string' || !Number.isSafeInteger(request) || request <= 0 || !visibleOutput(id)) {return}
++      pendingOutput = { id, request }
++      mainWindow.webContents.send('hermes:pet-overlay:control', { type: payload.type, id, request })
++
++      return
++    }
++
+     // Double-click toggles the app window: hide it away if it's up front, bring it
 diff --git a/apps/desktop/electron/plugin-profile-routes.ts b/apps/desktop/electron/plugin-profile-routes.ts
 index d8c15a6c4ebfb032daeb38d34baaabf3a00f878c..36e0974b669d3c66ba717f4bc6ea17e3d151543f 100644
 --- a/apps/desktop/electron/plugin-profile-routes.ts
@@ -21172,25 +21278,30 @@ index de446bdb6a589e02ff3634ae483fe46d4a108ff2..447b3cacb7b6af2b6d1aca49f9487795
   *
 diff --git a/apps/desktop/src/app/pet-overlay/pet-characters.tsx b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..882fa882cda1c196f3a4c0046fa9bef31c91b486
+index 0000000000000000000000000000000000000000..bac05b792c99894c96f751f20a0fac49c08705aa
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
-@@ -0,0 +1,49 @@
+@@ -0,0 +1,77 @@
 +import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 +import { useEffect, useState } from 'react'
 +
 +import { PetSprite } from '@/components/pet/pet-sprite'
 +import type { PetInfo } from '@/store/pet'
-+import type { PetCharacterPreview } from '@/store/pet-characters'
++import type { PetCharacterOutput, PetCharacterPreview } from '@/store/pet-characters'
 +
 +interface PetCharactersProps {
 +  info: PetInfo
 +  preview: PetCharacterPreview
 +  paused: boolean
++  output: (PetCharacterOutput & { loading?: true }) | null
++  onOutput: (id: string | null) => void
 +}
 +
-+/** Read-only snapshot: no gateway, navigation, global composer or per-actor process. */
-+export function PetCharacters({ info, preview, paused }: PetCharactersProps) {
++const labelStyle = { display: 'block', width: '100%', fontSize: 12, borderRadius: 8, padding: 6,
++  color: 'inherit', background: 'var(--ui-bg-elevated)', overflow: 'hidden' } as const
++
++/** The overlay displays snapshots. Only the main renderer resolves output addresses. */
++export function PetCharacters({ info, preview, paused, output, onOutput }: PetCharactersProps) {
 +  const reduced = useReducedMotion()
 +  const [expiredAt, setExpiredAt] = useState(0)
 +  useEffect(() => {
@@ -21203,11 +21314,35 @@ index 0000000000000000000000000000000000000000..882fa882cda1c196f3a4c0046fa9bef3
 +  if (paused || (preview.expiresAt > 0 && preview.expiresAt <= Math.max(Date.now(), expiredAt))) {return null}
 +
 +
-+  return <div style={{ display: 'flex', alignItems: 'flex-end', pointerEvents: 'none' }}>
++  const outputActor = output && preview.characters.find(actor => actor.outputId === output.id)
++
++  return <div style={{ display: 'flex', alignItems: 'flex-end', pointerEvents: 'none', position: 'relative' }}>
++    {output && outputActor && <section aria-label={`Latest output · ${outputActor.name}`} data-pet-output-target="true"
++      onKeyDown={event => {if (event.key === 'Escape') {onOutput(null)}}} role="region"
++      style={{ position: 'fixed', zIndex: 1, top: 10, left: '50%', transform: 'translateX(-50%)',
++        width: 'min(320px, calc(100vw - 20px))', padding: 10, borderRadius: 8, pointerEvents: 'auto',
++        background: 'var(--ui-bg-elevated)', color: 'var(--ui-text-primary)', border: '1px solid var(--ui-stroke-secondary)',
++        boxShadow: '0 4px 14px #0005', fontSize: 12 }}>
++      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
++        <strong>Latest output · {outputActor.name}</strong>
++        <button aria-label="Close latest output" onClick={() => onOutput(null)} type="button">×</button>
++      </div>
++      <p role="status" style={{ margin: '4px 0 0', overflowY: 'auto', maxHeight: 96, overflowWrap: 'anywhere' }}>
++        {output.loading ? 'Loading…' : output.unavailable ? 'Output unavailable' : output.text || 'No text output yet'}
++      </p>
++    </section>}
 +    <AnimatePresence>
 +      {preview.characters.slice(0, 5).map(character => {
 +        const sprite = character.sprite ?? info
 +        const sheet = { ...sprite, scale: Math.min(sprite.scale ?? 0.33, 96 / (sprite.frameW ?? 192), 104 / (sprite.frameH ?? 208)) }
++
++        const { outputId } = character
++
++        const label = <>
++          <strong style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: outputId ? 'underline' : undefined }}>{character.name}</strong>
++          <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{character.source}</span>
++          {character.detail && <span style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }} title={character.detail}>{character.detail}</span>}
++        </>
 +
 +        return <motion.figure
 +        animate={{ opacity: 1, y: 0 }} aria-label={`${character.name} · ${character.source}`}
@@ -21215,60 +21350,79 @@ index 0000000000000000000000000000000000000000..882fa882cda1c196f3a4c0046fa9bef3
 +        initial={reduced ? false : { opacity: 0, y: 18 }} key={character.id}
 +        style={{ margin: 0, width: 120, padding: 6, textAlign: 'center', color: 'var(--ui-text-primary)' }}
 +        transition={{ duration: reduced ? 0 : 0.18 }}>
-+        <div style={{ fontSize: 12, borderRadius: 8, padding: 6, background: 'var(--ui-bg-elevated)', overflow: 'hidden' }}>
-+          <strong style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{character.name}</strong>
-+          <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{character.source}</span>
-+          {character.detail && <div style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }} title={character.detail}>{character.detail}</div>}
-+        </div>
++        {outputId ? <button aria-expanded={output?.id === outputId} aria-label={`Latest output · ${character.name} · ${character.source}`}
++          data-pet-output-target="true" onClick={() => onOutput(outputId)}
++          style={{ ...labelStyle, cursor: 'pointer', border: 0, pointerEvents: 'auto' }} type="button">{label}</button>
++          : <div style={labelStyle}>{label}</div>}
 +        <PetSprite animate={!reduced} info={sheet} maxFps={15} stateOverride={character.state} />
 +      </motion.figure>})}
 +    </AnimatePresence>
 +  </div>
 +}
 diff --git a/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx b/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
-index 82319976a166e658f80e794b0033fed81a48d456..baa0ea098ff0e172d1ce92180e10d5cfa452224c 100644
+index 82319976a166e658f80e794b0033fed81a48d456..5686dd8df617f2c66f6d60411336b5a57eb6a145 100644
 --- a/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
 +++ b/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
 @@ -10,2 +10,3 @@ import { isSubmitEnter } from '@/lib/ime'
  import { $petActivity, $petInfo, setPetInfo } from '@/store/pet'
-+import type { PetCharacterPreview } from '@/store/pet-characters'
++import type { PetCharacterOutput, PetCharacterPreview } from '@/store/pet-characters'
  import { overlayWindowSize } from '@/store/pet-overlay'
 @@ -14,2 +15,4 @@ import { setAwaitingResponse, setBusy } from '@/store/session'
 
 +import { PetCharacters } from './pet-characters'
 +
  // Fallbacks mirror pet-sprite's defaults; the gateway normally sends real values.
-@@ -67,2 +70,5 @@ export function PetOverlayApp() {
+@@ -27,2 +30,3 @@ const PET_PADDING_BOTTOM = 24
+ const ALPHA_HIT_THRESHOLD = 16
++let nextOutputRequest = 0
+
+@@ -67,2 +71,7 @@ export function PetOverlayApp() {
    const [composerOpen, setComposerOpen] = useState(false)
 +  const [characters, setCharacters] = useState<{ preview: PetCharacterPreview; paused: boolean } | null>(null)
++  const [output, setOutput] = useState<(PetCharacterOutput & { loading?: true }) | null>(null)
 +  const characterMode = Boolean(characters)
++  const outputTargets = characters?.paused ? '' : characters?.preview.characters.map(character => character.outputId).join(',')
 +  const characterCount = Math.min(5, characters?.preview.characters.length ?? 0)
    const [draft, setDraft] = useState('')
-@@ -94,2 +100,6 @@ export function PetOverlayApp() {
+@@ -94,2 +103,15 @@ export function PetOverlayApp() {
      const off = window.hermesDesktop?.petOverlay?.onState(payload => {
 +      const preview = payload.characterPreview ?? null
 +      setCharacters(preview ? { preview, paused: payload.charactersPaused !== false } : null)
 +
++      setOutput(current => {
++        if (!current || payload.charactersPaused !== false ||
++            !preview?.characters.some(character => character.outputId === current.id)) {return null}
++
++        const reply = payload.characterOutput
++
++        return reply?.id === current.id && reply.request === current.request ? reply : current
++      })
++
 +      if (preview) {setComposerOpen(false)}
        setPetInfo(payload.info)
-@@ -104,3 +114,3 @@ export function PetOverlayApp() {
+@@ -104,3 +126,3 @@ export function PetOverlayApp() {
 
 -      if (lastReactionRef.current === null) {
 +      if (preview || lastReactionRef.current === null) {
          lastReactionRef.current = reaction?.id ?? 0
-@@ -122,2 +132,6 @@ export function PetOverlayApp() {
+@@ -122,2 +144,6 @@ export function PetOverlayApp() {
 
 +  useEffect(() => {
 +    if (characterMode) {setIgnore(true)}
-+  }, [characterMode])
++  }, [characterMode, outputTargets])
 +
    // Click-through: make only the *solid* sprite pixels (plus the bubble / mail
-@@ -316,3 +330,3 @@ export function PetOverlayApp() {
+@@ -138,2 +164,4 @@ export function PetOverlayApp() {
+
++      if (target?.closest('[data-pet-output-target]')) {return true}
++
+       if (!pet || !target || !pet.contains(target)) {
+@@ -316,3 +344,3 @@ export function PetOverlayApp() {
 
 -  usePetZoomGesture(petRef, onScale, Boolean(info.enabled && info.spritesheetBase64))
 +  usePetZoomGesture(petRef, onScale, Boolean(info.enabled && info.spritesheetBase64 && !characterMode))
 
-@@ -331,5 +345,6 @@ export function PetOverlayApp() {
+@@ -331,5 +359,6 @@ export function PetOverlayApp() {
      const { width, height } = overlayWindowSize(
 -      info.frameW ?? DEFAULT_FRAME_W,
 -      info.frameH ?? DEFAULT_FRAME_H,
@@ -21278,26 +21432,42 @@ index 82319976a166e658f80e794b0033fed81a48d456..baa0ea098ff0e172d1ce92180e10d5cf
 +      characterMode ? DEFAULT_SCALE : info.scale ?? DEFAULT_SCALE,
 +      characterCount
      )
-@@ -364,3 +379,3 @@ export function PetOverlayApp() {
+@@ -364,3 +393,19 @@ export function PetOverlayApp() {
      window.hermesDesktop?.petOverlay?.control({ bounds, type: 'bounds' })
 -  }, [info.enabled, info.spritesheetBase64, info.scale, info.frameW, info.frameH])
 +  }, [info.enabled, info.spritesheetBase64, info.scale, info.frameW, info.frameH, characterCount, characterMode])
++
++  const showOutput = (id: string | null) => {
++    const api = window.hermesDesktop?.petOverlay
++
++    if (id === null) {
++      setOutput(null)
++      setIgnore(true)
++      api?.control({ type: 'character-output-close' })
++
++      return
++    }
++
++    const request = ++nextOutputRequest
++    setOutput({ id, request, text: null, loading: true })
++    api?.control({ type: 'character-output', id, request })
++  }
 
-@@ -370,2 +385,8 @@ export function PetOverlayApp() {
+@@ -370,2 +415,8 @@ export function PetOverlayApp() {
 
 +  if (characters) {
 +    return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-end', height: '100vh', paddingBottom: PET_PADDING_BOTTOM, pointerEvents: 'none' }}>
-+      <PetCharacters info={info} paused={characters.paused} preview={characters.preview} />
++      <PetCharacters info={info} onOutput={showOutput} output={output} paused={characters.paused} preview={characters.preview} />
 +    </div>
 +  }
 +
    return (
 diff --git a/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..e445cdb49fda5f4a2037a672e17cad6463bab6ce
+index 0000000000000000000000000000000000000000..0257c060556f8033a524e738f13a82b276f3f79a
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
-@@ -0,0 +1,98 @@
+@@ -0,0 +1,141 @@
 +import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 +import type * as Motion from 'motion/react'
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -21337,10 +21507,12 @@ index 0000000000000000000000000000000000000000..e445cdb49fda5f4a2037a672e17cad64
 +it('mirrors explicit character poses and safe labels through the real overlay receiver, without mascot input or stale frames', () => {
 +  const view = render(<PetOverlayApp />)
 +  act(() => emit(normal))
++
 +  const getImageData = vi.fn()
 +    .mockReturnValueOnce({ data: [0, 0, 0, 255] })
 +    .mockReturnValueOnce({ data: [0, 0, 0, 0] })
 +    .mockReturnValue({ data: [0, 0, 0, 255] })
++
 +  const context = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ getImageData } as unknown as CanvasRenderingContext2D)
 +  Object.defineProperty(window.document, 'elementFromPoint', { configurable: true, value: () => screen.getAllByTestId('sprite')[0] })
 +  vi.spyOn(HTMLCanvasElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 16, 16))
@@ -21395,6 +21567,47 @@ index 0000000000000000000000000000000000000000..e445cdb49fda5f4a2037a672e17cad64
 +  Object.assign(payload.characterPreview.characters[0], { sprite: { ...info, displayName: 'Writer own atlas' } })
 +  act(() => emit(payload))
 +  expect(screen.getAllByTestId('sprite').map(canvas => canvas.dataset.slug)).toEqual(['Writer own atlas', 'Owned fixture'])
++})
++
++it('opens output only from a label, keeps text inert, and ignores stale clicks or closed replies', () => {
++  render(<PetOverlayApp />)
++  const payload = preview()
++  Object.assign(payload.characterPreview.characters[0], { outputId: '1' })
++  Object.assign(payload.characterPreview.characters[1], { outputId: '2' })
++  act(() => emit(payload))
++  const control = vi.mocked(window.hermesDesktop!.petOverlay!.control)
++  control.mockClear()
++  const buttons = screen.getAllByRole('button', { name: /Latest output/ })
++  let target: Element | null = buttons[0]
++  Object.defineProperty(window.document, 'elementFromPoint', { configurable: true, value: () => target })
++  fireEvent.mouseMove(window, { clientX: 5, clientY: 5 })
++  expect(ignore).toHaveBeenLastCalledWith(false)
++  expect(control).not.toHaveBeenCalled()
++  fireEvent.click(buttons[0]); fireEvent.click(buttons[1])
++  const requests = control.mock.calls.map(([message]) => message)
++  expect(requests).toEqual([
++    { type: 'character-output', id: '1', request: expect.any(Number) },
++    { type: 'character-output', id: '2', request: expect.any(Number) }
++  ])
++
++  const respond = (message: typeof requests[number], text: string) => {
++    if (message.type === 'character-output') {
++      act(() => emit({ ...payload, characterOutput: { id: message.id, request: message.request, text } }))
++    }
++  }
++
++  respond(requests[1], '<img src=x>')
++  respond(requests[0], 'wrong bot')
++  expect(screen.getByText('<img src=x>')).toBeTruthy()
++  expect(screen.queryByText('wrong bot')).toBeNull()
++  expect(window.document.querySelector('img')).toBeNull()
++  target = screen.getAllByTestId('sprite')[0]
++  fireEvent.mouseMove(window, { clientX: 5, clientY: 5 })
++  expect(ignore).toHaveBeenLastCalledWith(true)
++  fireEvent.click(screen.getByRole('button', { name: 'Close latest output' }))
++  respond(requests[1], 'late reply after close')
++  expect(screen.queryByText('late reply after close')).toBeNull()
++  expect(control).toHaveBeenLastCalledWith({ type: 'character-output-close' })
 +})
 diff --git a/apps/desktop/src/app/retirement-view.test.tsx b/apps/desktop/src/app/retirement-view.test.tsx
 index 4097e9f517259a342942edfd4f6d5d6845907ba6..5abd02109d4897c0db3178fed9d94c115278d6f2 100644
@@ -26349,14 +26562,14 @@ index 7d1c2ea4b9ff9f1908bdb750a838cf1f6f1d2e47..2df76c02c22201edfd89371857f2fb7d
    )
 diff --git a/apps/desktop/src/contrib/plugin-characters.test.ts b/apps/desktop/src/contrib/plugin-characters.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..89861fa9dce9dc151932c99a35fa3c931396584b
+index 0000000000000000000000000000000000000000..868939664fe0cddcf51cdcc5733351d1c2a70a37
 --- /dev/null
 +++ b/apps/desktop/src/contrib/plugin-characters.test.ts
-@@ -0,0 +1,111 @@
+@@ -0,0 +1,142 @@
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 +
 +import { setPetInfo } from '@/store/pet'
-+import { $petCharacterPreview, createPetCharacterPublisher } from '@/store/pet-characters'
++import { $petCharacterPreview, createPetCharacterPublisher, readPetCharacterOutput } from '@/store/pet-characters'
 +import { $petOverlayActive, initPetOverlayBridge, popInPet } from '@/store/pet-overlay'
 +
 +import { createPluginContext } from './plugin'
@@ -26463,6 +26676,37 @@ index 0000000000000000000000000000000000000000..89861fa9dce9dc151932c99a35fa3c93
 +  publisher.update([actor])
 +  expect($petCharacterPreview.get()?.characters).toHaveLength(1)
 +  publisher.dispose()
++})
++
++it('reads only the current opaque binding and drops replies across A → B → A', async () => {
++  const publisher = createPetCharacterPublisher('output-test')
++  const actor = { id: 'same', name: 'Writer', source: 'Local', detail: '', state: 'run' as const }
++  let complete!: (text: string) => void
++  const readA = vi.fn(() => new Promise<string>(resolve => { complete = resolve }))
++  const readB = vi.fn(async () => 'B')
++
++  const publish = (key: string, read: () => Promise<string>) => {
++    publisher.update([{ ...actor, output: { key, read } }])
++
++    return $petCharacterPreview.get()!.characters[0].outputId!
++  }
++
++  try {
++    const first = publish('A', readA)
++    expect(publish('A', readA)).toBe(first)
++    expect(readA).not.toHaveBeenCalled()
++    expect(await readPetCharacterOutput('forged')).toBeUndefined()
++    const delayed = readPetCharacterOutput(first)
++    const second = publish('B', readB)
++    expect(await readPetCharacterOutput(second)).toEqual({ text: 'B' })
++    const again = publish('A', readA)
++    expect(again).not.toBe(first)
++    complete('old A')
++    expect(await delayed).toBeUndefined()
++    expect(await readPetCharacterOutput(second)).toBeUndefined()
++    expect(readA).toHaveBeenCalledTimes(1)
++    expect(readB).toHaveBeenCalledTimes(1)
++  } finally { publisher.dispose() }
 +})
 diff --git a/apps/desktop/src/contrib/plugin.ts b/apps/desktop/src/contrib/plugin.ts
 index d487729ac19e2c5d823d0437d4882b3400114822..d55ea9c3eb031306f2dbbbb806498cd02b328fb5 100644
@@ -32685,11 +32929,11 @@ index 0000000000000000000000000000000000000000..0a0c93a5b581b32cbc37713359c5c5f8
 +})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..4de640462ce869c7087e2e7ffb51ab622260a22d
+index 0000000000000000000000000000000000000000..39fa21d2bf843eed80cee57cfb472110a2788ab3
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx
-@@ -0,0 +1,123 @@
-+import { atom, Button, host, type PetCharacter, type PetCharacterPublisher, useValue } from '@hermes/plugin-sdk'
+@@ -0,0 +1,133 @@
++import { atom, Button, host, type PetCharacterPublisher, useValue } from '@hermes/plugin-sdk'
 +import { useEffect, useMemo, useRef, useState } from 'react'
 +
 +import { type CharacterSpriteTarget, createCharacterSpriteLoader } from './character-sprites'
@@ -32704,7 +32948,7 @@ index 0000000000000000000000000000000000000000..4de640462ce869c7087e2e7ffb51ab62
 +const unavailable = atom(false)
 +const noClarification = atom(null)
 +interface Actor {
-+  character: PetCharacter
++  character: Parameters<PetCharacterPublisher['update']>[0][number]
 +  target?: CharacterSpriteTarget
 +}
 +
@@ -32765,11 +33009,21 @@ index 0000000000000000000000000000000000000000..4de640462ce869c7087e2e7ffb51ab62
 +      const awaitingInput = row === waitingRow
 +
 +      if (row.working || row.needsAttention || awaitingInput) {
++        const bot = { ...row.bot, sourceScoped: true }
++        const { route } = resolveBotConnectionRoute(bot)
++        const canonical = bot.canonical_session?.resolved_id || bot.canonical_session?.id
++
++        const output = route && canonical ? {
++          key: JSON.stringify([route, bot.installId, canonical]),
++          read: async () => (await requestForBot<{ text: string | null }>(bot, 'profiles.latest_output',
++            { canonical_id: canonical }, { timeoutMs: 8000 })).text
++        } : undefined
++
 +        const detail = row.needsAttention ? row.attentionHint : awaitingInput
 +          ? b.group.waitingForAnswer : row.bot.canonical_session?.preview || ''
 +
 +        current.push({ target, character: { id: `${key}:bot`, name: row.name, source,
-+          detail: stripPreviewMarkdown(detail), state: row.needsAttention ? 'failed' : awaitingInput ? 'waiting' : 'run' } })
++          output, detail: stripPreviewMarkdown(detail), state: row.needsAttention ? 'failed' : awaitingInput ? 'waiting' : 'run' } })
 +      }
 +
 +      for (const worker of activeWorkerSessions(row.bot, now)) {
@@ -33128,7 +33382,7 @@ index 0000000000000000000000000000000000000000..2f45745f13788c07ce2187fd791afcfb
 +})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-locales.ts b/apps/desktop/src/plugins/hermes-bots/monitor-locales.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..9c8ee2ef1ab895d7015d849248e58e19775b0edc
+index 0000000000000000000000000000000000000000..fec1f62cdbf038feb2c501c13b92ad30c6c08454
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-locales.ts
 @@ -0,0 +1,488 @@
@@ -33194,7 +33448,7 @@ index 0000000000000000000000000000000000000000..9c8ee2ef1ab895d7015d849248e58e19
 +    characterUnavailable: "Character unavailable",
 +    showCharacters: "Show bot characters",
 +    stopCharacters: "Stop character preview",
-+    charactersHint: "Preview up to five fresh bots/workers while Monitor is open. Choose and enable a pet in Settings first. Read-only preview; no character actions yet.",
++    charactersHint: "Preview up to five fresh bots/workers while Monitor is open. Choose and enable a pet in Settings first. Click a bot label to preview its latest saved reply.",
 +
 +    title: 'Monitor',
 +    recordedIssues: "Recorded issues",
@@ -33242,7 +33496,7 @@ index 0000000000000000000000000000000000000000..9c8ee2ef1ab895d7015d849248e58e19
 +    characterUnavailable: "キャラクターを利用できません",
 +    showCharacters: "ボットキャラクターを表示",
 +    stopCharacters: "キャラクタープレビューを停止",
-+    charactersHint: "モニターを開いている間、最新のボット・ワーカーを最大5体プレビューします。先に設定でペットを選んで有効にしてください。現在は表示のみです。",
++    charactersHint: "モニターを開いている間、最新のボット・ワーカーを最大5体プレビューします。先に設定でペットを選んで有効にしてください。ボットのラベルをクリックすると、最新の保存済み返信を確認できます。",
 +
 +    title: 'モニター',
 +    recordedIssues: "記録済みの問題",
@@ -33290,7 +33544,7 @@ index 0000000000000000000000000000000000000000..9c8ee2ef1ab895d7015d849248e58e19
 +    characterUnavailable: "角色不可用",
 +    showCharacters: "显示机器人角色",
 +    stopCharacters: "停止角色预览",
-+    charactersHint: "监视器打开时预览最多五个有最新状态的机器人或工作者。请先在设置中选择并启用宠物。目前仅供查看，尚无角色操作。",
++    charactersHint: "监视器打开时预览最多五个有最新状态的机器人或工作者。请先在设置中选择并启用宠物。点击机器人标签可查看最新保存的回复。",
 +
 +    title: '监控',
 +    recordedIssues: "已记录的问题",
@@ -33338,7 +33592,7 @@ index 0000000000000000000000000000000000000000..9c8ee2ef1ab895d7015d849248e58e19
 +    characterUnavailable: "角色無法使用",
 +    showCharacters: "顯示機器人角色",
 +    stopCharacters: "停止角色預覽",
-+    charactersHint: "監視器開啟時預覽最多五個有最新狀態的機器人或工作者。請先在設定中選擇並啟用寵物。目前僅供查看，尚無角色操作。",
++    charactersHint: "監視器開啟時預覽最多五個有最新狀態的機器人或工作者。請先在設定中選擇並啟用寵物。點擊機器人標籤可預覽最新儲存的回覆。",
 +
 +    title: '監控',
 +    recordedIssues: "已記錄的問題",
@@ -33386,7 +33640,7 @@ index 0000000000000000000000000000000000000000..9c8ee2ef1ab895d7015d849248e58e19
 +    characterUnavailable: "الشخصية غير متاحة",
 +    showCharacters: "إظهار شخصيات الروبوتات",
 +    stopCharacters: "إيقاف معاينة الشخصيات",
-+    charactersHint: "معاينة حتى خمس شخصيات لروبوتات أو عمّال بحالة حديثة أثناء فتح المراقب. اختر حيوانًا أليفًا وفعّله في الإعدادات أولًا. المعاينة للعرض فقط حاليًا.",
++    charactersHint: "معاينة حتى خمس شخصيات لروبوتات أو عمّال بحالة حديثة أثناء فتح المراقب. اختر حيوانًا أليفًا وفعّله في الإعدادات أولًا. انقر على اسم الروبوت لمعاينة آخر رد محفوظ.",
 +
 +    title: 'المراقبة',
 +    recordedIssues: "المشكلات المسجلة",
@@ -33434,7 +33688,7 @@ index 0000000000000000000000000000000000000000..9c8ee2ef1ab895d7015d849248e58e19
 +    characterUnavailable: "Персонаж недоступен",
 +    showCharacters: "Показать персонажей ботов",
 +    stopCharacters: "Остановить предпросмотр",
-+    charactersHint: "До пяти ботов и исполнителей со свежими данными, пока открыт монитор. Сначала выберите и включите питомца в настройках. Пока только просмотр, без действий.",
++    charactersHint: "До пяти ботов и исполнителей со свежими данными, пока открыт монитор. Сначала выберите и включите питомца в настройках. Нажмите на имя бота, чтобы увидеть последний сохранённый ответ.",
 +
 +    title: 'Монитор',
 +    recordedIssues: "Записанные проблемы",
@@ -33482,7 +33736,7 @@ index 0000000000000000000000000000000000000000..9c8ee2ef1ab895d7015d849248e58e19
 +    characterUnavailable: "Personnage indisponible",
 +    showCharacters: "Afficher les personnages des bots",
 +    stopCharacters: "Arrêter l’aperçu",
-+    charactersHint: "Aperçu de cinq bots ou agents aux données récentes, pendant que le moniteur est ouvert. Choisissez et activez un compagnon dans les réglages. Aperçu sans interaction pour le moment.",
++    charactersHint: "Aperçu de cinq bots ou agents aux données récentes, pendant que le moniteur est ouvert. Choisissez et activez un compagnon dans les réglages. Cliquez sur le nom d’un bot pour voir sa dernière réponse enregistrée.",
 +
 +    title: 'Moniteur',
 +    recordedIssues: "Problèmes enregistrés",
@@ -33530,7 +33784,7 @@ index 0000000000000000000000000000000000000000..9c8ee2ef1ab895d7015d849248e58e19
 +    characterUnavailable: "Figur nicht verfügbar",
 +    showCharacters: "Bot-Figuren anzeigen",
 +    stopCharacters: "Figurenvorschau stoppen",
-+    charactersHint: "Vorschau von bis zu fünf Bots oder Helfern mit aktuellen Daten bei geöffnetem Monitor. Zuerst ein Haustier in den Einstellungen wählen und aktivieren. Vorerst ohne Interaktionen.",
++    charactersHint: "Vorschau von bis zu fünf Bots oder Helfern mit aktuellen Daten bei geöffnetem Monitor. Zuerst ein Haustier in den Einstellungen wählen und aktivieren. Klicke auf den Namen eines Bots, um seine letzte gespeicherte Antwort zu sehen.",
 +
 +    title: 'Monitor',
 +    recordedIssues: "Erfasste Probleme",
@@ -33578,7 +33832,7 @@ index 0000000000000000000000000000000000000000..9c8ee2ef1ab895d7015d849248e58e19
 +    characterUnavailable: "Personaje no disponible",
 +    showCharacters: "Mostrar personajes de bots",
 +    stopCharacters: "Detener vista previa",
-+    charactersHint: "Hasta cinco bots o trabajadores con datos recientes mientras el monitor esté abierto. Primero elige y activa una mascota en Ajustes. Vista previa sin acciones por ahora.",
++    charactersHint: "Hasta cinco bots o trabajadores con datos recientes mientras el monitor esté abierto. Primero elige y activa una mascota en Ajustes. Haz clic en el nombre de un bot para ver su última respuesta guardada.",
 +
 +    title: 'Monitor',
 +    recordedIssues: "Problemas registrados",
@@ -42569,10 +42823,10 @@ index b0eb473252b6e6e149f1f0711a6d8de535e87d8e..ad1ef8e2c1e29ef4fed05dc9d0fac09d
  
 diff --git a/apps/desktop/src/store/pet-characters.ts b/apps/desktop/src/store/pet-characters.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..d952d6c26fcdf0c904f1045e68cf5146d2abe990
+index 0000000000000000000000000000000000000000..dcbe634e983de851b666b87cf45b5b9979acf9db
 --- /dev/null
 +++ b/apps/desktop/src/store/pet-characters.ts
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,115 @@
 +import { atom } from 'nanostores'
 +
 +import { boundedCharacterSprite } from '@/lib/pet-character-sprite'
@@ -42584,14 +42838,27 @@ index 0000000000000000000000000000000000000000..d952d6c26fcdf0c904f1045e68cf5146
 +  name: string
 +  source: string
 +  detail: string
++  outputId?: string
 +  sprite?: PetInfo
 +  state: PetState
++}
++
++interface OutputSource {
++  key: string
++  read: () => Promise<string | null>
++}
++
++export interface PetCharacterOutput {
++  id: string
++  request: number
++  text: string | null
++  unavailable?: true
 +}
 +
 +export interface PetCharacterPublisher {
 +  /** Prepare an immutable bounded atlas snapshot before caching; absent on older shells. */
 +  prepareSprite?: (input: unknown) => PetInfo | null
-+  update: (characters: PetCharacter[], observedAt?: number) => void
++  update: (characters: (PetCharacter & { output?: OutputSource })[], observedAt?: number) => void
 +  dispose: () => void
 +}
 +
@@ -42602,25 +42869,41 @@ index 0000000000000000000000000000000000000000..d952d6c26fcdf0c904f1045e68cf5146
 +
 +export const $petCharacterPreview = atom<PetCharacterPreview | null>(null)
 +let owner: symbol | null = null
++let nextOutputId = 0
++let outputBindings = new Map<string, OutputSource & { id: string }>()
 +let timer: ReturnType<typeof setTimeout> | undefined
 +const states = new Set<PetState>(['idle', 'wave', 'run', 'failed', 'review', 'jump', 'waiting'])
 +
++
++/** An output address is valid only while the current preview still publishes it. */
++export async function readPetCharacterOutput(id: string): Promise<Pick<PetCharacterOutput, 'text' | 'unavailable'> | undefined> {
++  const binding = [...outputBindings.values()].find(value => value.id === id)
++
++  if (!binding || ($petCharacterPreview.get()?.expiresAt ?? 0) <= Date.now()) {return undefined}
++
++  const result = await binding.read().then(text => ({ text: typeof text === 'string' ? sanitizePetText(text, 1200) || null : null }),
++    () => ({ text: null, unavailable: true as const }))
++
++  return [...outputBindings.values()].includes(binding) && ($petCharacterPreview.get()?.expiresAt ?? 0) > Date.now() ? result : undefined
++}
 +
 +/** One replaceable preview owns the shared overlay; old publishers cannot revive it. */
 +export function createPetCharacterPublisher(pluginId: string) {
 +  const token = Symbol(pluginId)
 +  owner = token
 +  clearTimeout(timer)
++  outputBindings.clear()
 +  $petCharacterPreview.set({ characters: [], expiresAt: 0 })
 +
 +  return {
 +    prepareSprite: boundedCharacterSprite,
 +    isCurrent: () => owner === token,
-+    update: (input: PetCharacter[], observedAt = Date.now()) => {
++    update: (input: (PetCharacter & { output?: OutputSource })[], observedAt = Date.now()) => {
 +      if (owner !== token) {return}
 +      const now = Date.now()
 +      const expiresAt = Number.isFinite(observedAt) ? Math.min(now, observedAt) + 15_000 : 0
 +      const characters: PetCharacter[] = [], seen = new Set<string>()
++      const bindings = new Map<string, OutputSource & { id: string }>()
 +
 +      for (const item of (Array.isArray(input) && expiresAt > now ? input : []).slice(0, 20)) {
 +        if (!item || typeof item.id !== 'string' || !item.id || item.id.length > 256 || seen.has(item.id)) {continue}
@@ -42628,42 +42911,57 @@ index 0000000000000000000000000000000000000000..d952d6c26fcdf0c904f1045e68cf5146
 +
 +        if (sprite === null) {continue}
 +        seen.add(item.id)
-+        characters.push({ id: JSON.stringify([pluginId, item.id]), name: sanitizePetText(item.name, 80), source: sanitizePetText(item.source, 80), detail: sanitizePetText(item.detail, 160), state: states.has(item.state) ? item.state : 'idle', ...(sprite ? { sprite } : {}) })
++        const previous = outputBindings.get(item.id)
++        const output = item.output && (previous?.key === item.output.key ? previous : { ...item.output, id: String(++nextOutputId) })
++
++        if (output) {bindings.set(item.id, output)}
++        characters.push({ ...(output ? { outputId: output.id } : {}), id: JSON.stringify([pluginId, item.id]), name: sanitizePetText(item.name, 80), source: sanitizePetText(item.source, 80), detail: sanitizePetText(item.detail, 160), state: states.has(item.state) ? item.state : 'idle', ...(sprite ? { sprite } : {}) })
 +
 +        if (characters.length === 5) {break}
 +      }
 +
 +      clearTimeout(timer)
++      outputBindings = bindings
 +      $petCharacterPreview.set({ characters, expiresAt: characters.length ? expiresAt : 0 })
 +
 +      if (characters.length) {
 +        timer = setTimeout(() => {
-+          if (owner === token) {$petCharacterPreview.set({ characters: [], expiresAt: 0 })}
++          if (owner === token) {
++            outputBindings.clear()
++            $petCharacterPreview.set({ characters: [], expiresAt: 0 })
++          }
 +        }, expiresAt - now)
 +      }
 +    },
 +    dispose: () => {
 +      if (owner !== token) {return}
 +      owner = null
++      outputBindings.clear()
 +      clearTimeout(timer)
 +      $petCharacterPreview.set(null)
 +    }
 +  }
 +}
 diff --git a/apps/desktop/src/store/pet-overlay.ts b/apps/desktop/src/store/pet-overlay.ts
-index d47f67023fb8b820d6f6cbd455562a591600413b..79f2bdd7ff0fe68e38157d13cbc711621e7bc747 100644
+index d47f67023fb8b820d6f6cbd455562a591600413b..cbe098d1b7263d197867a30603fcdb6b00b5af54 100644
 --- a/apps/desktop/src/store/pet-overlay.ts
 +++ b/apps/desktop/src/store/pet-overlay.ts
 @@ -5,2 +5,3 @@ import { persistBoolean, persistString, storedBoolean, storedString } from '@/li
  import { $petActivity, $petInfo, $petUnread, clearPetUnread, type PetActivity, type PetInfo } from '@/store/pet'
-+import { $petCharacterPreview, type PetCharacterPreview } from '@/store/pet-characters'
++import { $petCharacterPreview, type PetCharacterOutput, type PetCharacterPreview, readPetCharacterOutput } from '@/store/pet-characters'
  import { $petPluginMessages, type PetPluginMessage } from '@/store/pet-plugin-messages'
-@@ -53,2 +54,4 @@ export interface PetOverlayStatePayload {
+@@ -53,2 +54,5 @@ export interface PetOverlayStatePayload {
    pluginMessages?: PetPluginMessage[]
 +  characterPreview?: PetCharacterPreview | null
 +  charactersPaused?: boolean
++  characterOutput?: PetCharacterOutput
  }
-@@ -132,5 +135,5 @@ const OVERLAY_MIN_H = 300
+@@ -58,2 +62,4 @@ export type PetOverlayControl =
+   | { type: 'ready' }
++  | { type: 'character-output'; id: string; request: number }
++  | { type: 'character-output-close' }
+   | { type: 'submit'; text: string }
+@@ -132,5 +138,5 @@ const OVERLAY_MIN_H = 300
   */
 -export function overlayWindowSize(frameW: number, frameH: number, scale: number): { width: number; height: number } {
 +export function overlayWindowSize(frameW: number, frameH: number, scale: number, characterCount = 0): { width: number; height: number } {
@@ -42671,18 +42969,41 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..79f2bdd7ff0fe68e38157d13cbc71162
 -    width: Math.max(OVERLAY_MIN_W, Math.round(frameW * scale + OVERLAY_PAD_X)),
 +    width: Math.max(OVERLAY_MIN_W, Math.round(frameW * scale + OVERLAY_PAD_X), Math.min(5, characterCount) * 120 + 32),
      height: Math.max(OVERLAY_MIN_H, Math.round(frameH * scale + OVERLAY_PAD_Y))
-@@ -153,3 +156,4 @@ function currentPayload(): PetOverlayStatePayload {
+@@ -153,3 +159,4 @@ function currentPayload(): PetOverlayStatePayload {
      reaction: $petReaction.get(),
 -    pluginMessages: $petPluginMessages.get()
 +    pluginMessages: $petPluginMessages.get(),
 +    characterPreview: $petCharacterPreview.get()
    }
-@@ -191,3 +195,4 @@ function openOverlay(request: PetOverlayOpenRequest): void {
+@@ -191,3 +198,4 @@ function openOverlay(request: PetOverlayOpenRequest): void {
      $petReaction.subscribe(pushNow),
 -    $petPluginMessages.subscribe(pushNow)
 +    $petPluginMessages.subscribe(pushNow),
 +    $petCharacterPreview.subscribe(pushNow)
    ]
+@@ -282,4 +290,17 @@ export function initPetOverlayBridge(): () => void {
+
++  let pendingOutput: Extract<PetOverlayControl, { type: 'character-output' }> | null = null
+   controlUnsub = api.onControl(payload => {
+-    if (payload?.type === 'pop-in') {
++    if (payload?.type === 'character-output') {
++      pendingOutput = payload
++      const { id, request } = payload
++      void readPetCharacterOutput(id).then(reply => {
++        if (pendingOutput !== payload || !$petOverlayActive.get()) {return}
++        pendingOutput = null
++
++        if (reply) {api.pushState({ ...currentPayload(), characterOutput: { ...reply, id, request } })}
++      })
++    } else if (payload?.type === 'character-output-close') {
++      pendingOutput = null
++    } else if (payload?.type === 'pop-in') {
++      pendingOutput = null
+       popInPet()
+@@ -307,2 +328,3 @@ export function initPetOverlayBridge(): () => void {
+   return () => {
++    pendingOutput = null
+     controlUnsub?.()
 diff --git a/apps/desktop/src/store/session-control.ts b/apps/desktop/src/store/session-control.ts
 index 0046d47826fe8c53df69858c9b22999ab8717597..c750a6537775a6f6450f159696861e444e4b3484 100644
 --- a/apps/desktop/src/store/session-control.ts
@@ -43105,7 +43426,7 @@ index 0000000000000000000000000000000000000000..48fb2a357fec113ea6d7fb268b1af5b0
 +  return Object.fromEntries(entries)
 +}
 diff --git a/apps/shared/src/gateway-contract.generated.ts b/apps/shared/src/gateway-contract.generated.ts
-index 57a5f6d6774588963334c22dccc5a7101a80b7ed..81ec37cf55eb399a8e9eba109c33762adae87c7d 100644
+index 57a5f6d6774588963334c22dccc5a7101a80b7ed..70a35e3fc3ad6a0ebad4c91180c6f8d71b42d6ac 100644
 --- a/apps/shared/src/gateway-contract.generated.ts
 +++ b/apps/shared/src/gateway-contract.generated.ts
 @@ -812,2 +812,26 @@ export interface SharedMetricsDesktopDailyResult {
@@ -43229,50 +43550,64 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..81ec37cf55eb399a8e9eba109c33762a
    worker_session?: ProfileWorkerSession | null
 +  worker_sessions?: ProfileWorkerSession[] | null
    canonical_session?: ProfileCanonicalSession | null
-@@ -6057,2 +6152,4 @@ export type ConnectorErrorReason = 'INVALID_PARAMS' | 'NOT_OWNER' | 'UNSUPPORTED
+@@ -5293,2 +5388,9 @@ export interface CanonicalProfileRow {
+ }
++export interface CanonicalBotOutputParams {
++  profile?: string | null
++  canonical_id: string
++}
++export interface CanonicalBotOutputResult {
++  text: string | null
++}
+ export interface CanonicalAttachedImageResult {
+@@ -6057,2 +6159,4 @@ export type ConnectorErrorReason = 'INVALID_PARAMS' | 'NOT_OWNER' | 'UNSUPPORTED
  export interface RpcMethods {
 +  /** Read per-account quota snapshots. Only refresh=true queries readonly credential-scoped quota endpoints. */
 +  'account.usage': { params: AccountUsageParams; result: AccountUsageResult }
    /** Registry-wide background process summary for ``/agents``. */
-@@ -6323,2 +6420,4 @@ export interface RpcMethods {
+@@ -6323,2 +6427,4 @@ export interface RpcMethods {
    'pet.select': { params: PetSlugParams; result: PetSlugResult }
 +  /** Read one installed character atlas without selecting, installing or enabling the mascot. */
 +  'pet.sprite': { params: PetSlugParams; result: PetInfoResult }
    /** Idle-frame PNG data URI for the picker (desktop CSP breaks CDN <img>). */
-@@ -6353,2 +6452,6 @@ export interface RpcMethods {
+@@ -6353,2 +6459,6 @@ export interface RpcMethods {
    'profiles.set_asset': { params: ProfilesSetAssetParams; result: ProfilesSetAssetResult }
 +  /** Role-specific THINK/ACTION configuration; linkage is not dispatch readiness. */
 +  'profiles.workflow.configure': { params: ProfileWorkflowConfigureParams; result: ProfileWorkflowResult }
 +  /** Role-specific THINK/ACTION configuration; linkage is not dispatch readiness. */
 +  'profiles.workflow.get': { params: ProfileWorkflowGetParams; result: ProfileWorkflowResult }
    /** Structured project facts for a cwd so UIs don't re-sniff the workspace. */
-@@ -6576,2 +6679,3 @@ export type RpcMethod = keyof RpcMethods
+@@ -6576,2 +6686,3 @@ export type RpcMethod = keyof RpcMethods
  export const RPC_METHODS = [
 +  'account.usage',
    'agents.list',
-@@ -6709,2 +6813,3 @@ export const RPC_METHODS = [
+@@ -6709,2 +6820,3 @@ export const RPC_METHODS = [
    'pet.select',
 +  'pet.sprite',
    'pet.thumb',
-@@ -6724,2 +6829,4 @@ export const RPC_METHODS = [
+@@ -6724,2 +6836,4 @@ export const RPC_METHODS = [
    'profiles.set_asset',
 +  'profiles.workflow.configure',
 +  'profiles.workflow.get',
    'project.facts',
-@@ -6872,2 +6979,6 @@ export interface CanonicalRpcMethods {
+@@ -6871,3 +6985,8 @@ export interface CanonicalRpcMethods {
+   'kanban.run': { params: KanbanRunParams; result: KanbanRunResult }
++  'profiles.latest_output': { params: CanonicalBotOutputParams; result: CanonicalBotOutputResult }
    'profiles.list': { params: CanonicalProfilesParams; result: CanonicalProfilesResult }
 +  /** Profile-scoped bot workflow configuration with an expected-revision fence. */
 +  'profiles.workflow.configure': { params: ProfileWorkflowConfigureParams; result: ProfileWorkflowResult }
 +  /** Profile-scoped bot workflow configuration with an expected-revision fence. */
 +  'profiles.workflow.get': { params: ProfileWorkflowGetParams; result: ProfileWorkflowResult }
    /** Retire a still-queued admission; a started one is unaffected. */
-@@ -6941,2 +7052,4 @@ export const CANONICAL_RPC_METHODS = [
+@@ -6940,3 +7059,6 @@ export const CANONICAL_RPC_METHODS = [
+   'kanban.run',
++  'profiles.latest_output',
    'profiles.list',
 +  'profiles.workflow.configure',
 +  'profiles.workflow.get',
    'prompt.cancel',
 diff --git a/apps/shared/src/gateway-contract.openrpc.json b/apps/shared/src/gateway-contract.openrpc.json
-index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..513ed23455bef00f3f6f24828b92937d46e033db 100644
+index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..2fb98bcd0d4918e198ec45e002bcd023e8b8c37c 100644
 --- a/apps/shared/src/gateway-contract.openrpc.json
 +++ b/apps/shared/src/gateway-contract.openrpc.json
 @@ -8,2 +8,20 @@
@@ -43636,7 +43971,57 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..513ed23455bef00f3f6f24828b92937d
 +        "type": "object"
 +      },
        "BrowserAction": {
-@@ -9474,2 +9817,18 @@
+@@ -8269,2 +8612,49 @@
+       },
++      "CanonicalBotOutputParams": {
++        "additionalProperties": false,
++        "properties": {
++          "profile": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Profile"
++          },
++          "canonical_id": {
++            "title": "Canonical Id",
++            "type": "string"
++          }
++        },
++        "required": [
++          "canonical_id"
++        ],
++        "title": "CanonicalBotOutputParams",
++        "type": "object"
++      },
++      "CanonicalBotOutputResult": {
++        "additionalProperties": false,
++        "properties": {
++          "text": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "title": "Text"
++          }
++        },
++        "required": [
++          "text"
++        ],
++        "title": "CanonicalBotOutputResult",
++        "type": "object"
++      },
+       "CanonicalConfigGetResult": {
+@@ -9474,2 +9864,18 @@
            },
 +          "worker_sessions": {
 +            "anyOf": [
@@ -43655,7 +44040,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..513ed23455bef00f3f6f24828b92937d
 +            "title": "Worker Sessions"
 +          },
            "canonical_session": {
-@@ -29273,2 +29632,81 @@
+@@ -29273,2 +29679,81 @@
              "title": "Live Message Count"
 +          },
 +          "input_tokens": {
@@ -43737,7 +44122,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..513ed23455bef00f3f6f24828b92937d
 +            "default": null,
 +            "title": "Delegation Reports"
            }
-@@ -29282,2 +29720,74 @@
+@@ -29282,2 +29767,74 @@
        },
 +      "ProfileDelegationReport": {
 +        "additionalProperties": false,
@@ -43812,7 +44197,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..513ed23455bef00f3f6f24828b92937d
 +        "type": "object"
 +      },
        "ProfileMirrored": {
-@@ -29471,2 +29981,18 @@
+@@ -29471,2 +30028,18 @@
            },
 +          "worker_sessions": {
 +            "anyOf": [
@@ -43831,12 +44216,12 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..513ed23455bef00f3f6f24828b92937d
 +            "title": "Worker Sessions"
 +          },
            "canonical_session": {
-@@ -29583,3 +30109,3 @@
+@@ -29583,3 +30156,3 @@
          "additionalProperties": false,
 -        "description": "Newest kanban/tool worker row, so rosters can show a profile as working.",
 +        "description": "Observed worker metadata, separate from human-facing conversation previews.",
          "properties": {
-@@ -29610,2 +30136,136 @@
+@@ -29610,2 +30183,136 @@
              "title": "Last Active"
 +          },
 +          "last_activity_description": {
@@ -43973,7 +44358,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..513ed23455bef00f3f6f24828b92937d
 +            "default": null,
 +            "title": "Model"
            }
-@@ -29618,2 +30278,145 @@
+@@ -29618,2 +30325,145 @@
        },
 +      "ProfileWorkflowConfigureParams": {
 +        "additionalProperties": false,
@@ -44119,7 +44504,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..513ed23455bef00f3f6f24828b92937d
 +        "type": "object"
 +      },
        "ProfilesConfigureApplied": {
-@@ -36096,2 +36899,37 @@
+@@ -36096,2 +36946,37 @@
              "title": "Index"
 +          },
 +          "title": {
@@ -44157,7 +44542,28 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..513ed23455bef00f3f6f24828b92937d
 +            "default": null,
 +            "title": "Expected Revision"
            }
-@@ -48131,2 +48969,38 @@
+@@ -48113,2 +48998,20 @@
+     },
++    {
++      "name": "profiles.latest_output",
++      "summary": "",
++      "params": [
++        {
++          "name": "params",
++          "schema": {
++            "$ref": "#/components/schemas/CanonicalBotOutputParams"
++          }
++        }
++      ],
++      "result": {
++        "name": "result",
++        "schema": {
++          "$ref": "#/components/schemas/CanonicalBotOutputResult"
++        }
++      }
++    },
+     {
+@@ -48131,2 +49034,38 @@
      },
 +    {
 +      "name": "profiles.workflow.configure",
@@ -45379,7 +45785,7 @@ index 5fdf5536af0b43bd77287c301aede80e7f2811c5..ed2fe18ec44ddd22c885f2c2114a7109
 +
  async def control(connection, ref, params):
 diff --git a/gateway/session_controls.py b/gateway/session_controls.py
-index 65887575dec12b3ddb9f859ebe56156264ea120e..b9d01891079d9487b9aa85628194e8f5bd0480a9 100644
+index 65887575dec12b3ddb9f859ebe56156264ea120e..e893e94cd8d03641e6f1b56877ac9d2a354b46c5 100644
 --- a/gateway/session_controls.py
 +++ b/gateway/session_controls.py
 @@ -93,3 +93,4 @@ _PROFILE_IMPLICIT = frozenset({'session.create', 'session.list', 'session.info',
@@ -45387,7 +45793,7 @@ index 65887575dec12b3ddb9f859ebe56156264ea120e..b9d01891079d9487b9aa85628194e8f5
 -                               'approval.respond', 'clarify.respond'})
 +                               'approval.respond', 'clarify.respond', 'bot_relay.roster.sync',
 +                               'bot_relay.outbox.drain', 'bot_relay.reply'})
- 
+
 @@ -234,2 +235,4 @@ class AuthorityConnection:
          handlers.update(onboarding_handlers(self))
 +        from gateway.session_bot_workflow import handlers as workflow_handlers
@@ -45398,17 +45804,87 @@ index 65887575dec12b3ddb9f859ebe56156264ea120e..b9d01891079d9487b9aa85628194e8f5
 -            # Our own home: the scope is implicit for the strict session verbs, which refuse
 +            # Our own home: the scope is implicit for strict session/relay verbs, which refuse
              # unknown keys; every other handler validates ``profile`` itself.
+@@ -295,3 +298,3 @@ class AuthorityConnection:
+         try:
+-            from gateway.session_group_controls import GROUP_METHODS, dispatch_group_control
++            from gateway.session_group_controls import GROUP_METHODS, PROFILE_READS, dispatch_group_control
+             # Every handler reads config/jobs/policy for the OWNING profile: enter its home so
+@@ -303,3 +306,3 @@ class AuthorityConnection:
+             with owner_scope(self.authority):
+-                if method in GROUP_METHODS or method == 'profiles.list':
++                if method in GROUP_METHODS or method in PROFILE_READS:
+                     result = await dispatch_group_control(self, method, params)
 diff --git a/gateway/session_group_controls.py b/gateway/session_group_controls.py
-index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..97d97e7e458061eaec15550e71711cc0df392888 100644
+index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..bb9923f694a054b1b8154ef19c01fd1468c8df1a 100644
 --- a/gateway/session_group_controls.py
 +++ b/gateway/session_group_controls.py
-@@ -97,3 +97,4 @@ def _group(authority, actor, method, params, *, host_scope=False):
+@@ -2,2 +2,3 @@
+ import asyncio
++import json
+ import logging
+@@ -28,2 +29,3 @@ GROUP_METHODS = {
+ }
++PROFILE_READS = {'profiles.list', 'profiles.latest_output'}
+ _FIELDS = {
+@@ -45,2 +47,3 @@ _FIELDS = {
+     'profiles.list': {'include_sessions'},
++    'profiles.latest_output': {'canonical_id'},
+ }
+@@ -76,2 +79,4 @@ async def dispatch_group_control(connection, method, params):
+                 return _profiles(authority, actor, home, supplied, siblings)
++            if method == 'profiles.latest_output':
++                return _read_bot_output(authority, actor, supplied.get('canonical_id'))
+             try:
+@@ -97,3 +102,4 @@ def _group(authority, actor, method, params, *, host_scope=False):
          status = service.runtime.status()
 -        if not status.get('running') or status.get('stopping'):
 +        # An armed standby owner accepts producers without allocating an idle supervisor.
 +        if not (status.get('running') or status.get('armed')) or status.get('stopping'):
              service = None
-@@ -317,4 +318,8 @@ def _bot_sessions(authority, actor):
+@@ -316,5 +322,51 @@ def _bot_sessions(authority, actor):
+
++def _canonical_bot_chat(conn, subject, operator):
++    from hermes_state_local_migration import LEGACY_PREFIX
++    canonical = conn.execute(f'SELECT * FROM sessions WHERE title=? AND {_LOCAL_CHAT}',
++                             ('Bot Chat', LEGACY_PREFIX)).fetchone()
++    if canonical and not canonical['archived'] and (operator or canonical['user_id'] == subject):
++        return canonical
++    return None
++
++
++def _read_bot_output(authority, actor, canonical_id):
++    from hermes_state_compression import _CHAIN_STEP_SQL, _walk_compression_chain
++    from hermes_state_messages import DISPLAY_VISIBLE_SQL
++
++    if not isinstance(canonical_id, str) or not 1 <= len(canonical_id) <= 256:
++        raise RuntimeStoreError('invalid_params')
++    if authority.retiring or authority.retired:
++        raise RuntimeStoreError('runtime_unavailable')
++    db = authority.db
++    operator = 'session:operator' in actor.capabilities
++    limit = 600
++    with db._read_ctx(reopen=False) as conn:
++        root = _canonical_bot_chat(conn, actor.subject, operator)
++        if root is None:
++            raise RuntimeStoreError('not_found')
++        chain = _walk_compression_chain(root['id'], lambda sid: conn.execute(_CHAIN_STEP_SQL, (sid,)).fetchone())
++        if canonical_id not in (root['id'], chain[-1]):
++            raise RuntimeStoreError('not_found')
++        # Bound text before it leaves SQLite; the newest structured/attachment-only reply is empty.
++        prefix = db._CONTENT_JSON_PREFIX.encode()
++        row = conn.execute(
++            "SELECT CASE WHEN typeof(content)='text' AND substr(CAST(content AS BLOB),1,?) != ? "
++            "THEN substr(content,1,?) END FROM messages JOIN sessions ON sessions.id=messages.session_id "
++            "WHERE session_id IN (SELECT value FROM json_each(?)) AND archived=0 AND (? OR user_id=?) "
++            "AND role='assistant' AND (active=1 OR compacted=1) AND COALESCE(_compressed_summary,0)=0 "
++            "AND COALESCE(display_kind,'')!='hidden' AND COALESCE(tool_calls,'[]')='[]'"
++            + DISPLAY_VISIBLE_SQL + " ORDER BY messages.id DESC LIMIT 1",
++            (len(prefix), prefix, limit + 1, json.dumps(chain), operator, actor.subject),
++        ).fetchone()
++    text = (row[0] or '').strip() if row else ''
++    return {'text': (text[:limit - 1] + '…' if len(text) > limit else text) or None}
++
++
  def _read_bot_sessions(db, subject, operator):
 +    from agent.session_activity import bound_activity_description, session_row_progress, session_row_usage
 +    from hermes_state_bot_reports import canonical_delegation_reports
@@ -45417,7 +45893,7 @@ index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..97d97e7e458061eaec15550e71711cc0
      from hermes_state_sessions import INTERNAL_LISTING_SOURCES
 +    from hermes_cli.session_listing import SUBAGENT_SOURCE
      hidden_sources = ','.join('?' * len(INTERNAL_LISTING_SOURCES))
-@@ -324,4 +329,6 @@ def _read_bot_sessions(db, subject, operator):
+@@ -324,4 +376,6 @@ def _read_bot_sessions(db, subject, operator):
      with db._read_ctx(reopen=False) as conn:
 -        def summary(root):
 -            tip = db._compression_tip_on(conn, root['id'])
@@ -45426,7 +45902,7 @@ index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..97d97e7e458061eaec15550e71711cc0
 +                     if canonical else [])
 +            tip = chain[-1] if chain else db._compression_tip_on(conn, root['id'])
              target = conn.execute('SELECT * FROM sessions WHERE id=?', (tip,)).fetchone() or root
-@@ -337,5 +344,8 @@ def _read_bot_sessions(db, subject, operator):
+@@ -337,10 +391,12 @@ def _read_bot_sessions(db, subject, operator):
                      'last_active': target['last_activity_at'] or target['started_at'] or 0,
 -                    'message_count': target['message_count'] or 0}
 +                    'message_count': target['message_count'] or 0,
@@ -45437,12 +45913,15 @@ index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..97d97e7e458061eaec15550e71711cc0
 +        fields: dict = {'last_session': None, 'worker_session': None, 'canonical_session': None,
 +                        'worker_sessions': []}
          # The named registry is not a recency window and canonical chats are hidden.
-@@ -344,3 +354,3 @@ def _read_bot_sessions(db, subject, operator):
-         if canonical and (canonical['user_id'] == subject or operator) and not canonical['archived']:
+-        canonical = conn.execute(f'SELECT * FROM sessions WHERE title=? AND {_LOCAL_CHAT}',
+-                                 ('Bot Chat', LEGACY_PREFIX)).fetchone()
+-        if canonical and (canonical['user_id'] == subject or operator) and not canonical['archived']:
 -            fields['canonical_session'] = summary(canonical)
++        canonical = _canonical_bot_chat(conn, subject, operator)
++        if canonical:
 +            fields['canonical_session'] = summary(canonical, canonical=True)
          # The newest conversation a picker shows: a hidden row (a Bot Chat, group member plumbing)
-@@ -356,14 +366,22 @@ def _read_bot_sessions(db, subject, operator):
+@@ -356,14 +412,22 @@ def _read_bot_sessions(db, subject, operator):
              fields['last_session'] = summary(latest)
 -        # The profile's freshest worker (#90268, #140977): workers are deny-listed out of every
 -        # conversation listing, so a roster row that only carried conversation fields read "idle"
@@ -45475,12 +45954,12 @@ index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..97d97e7e458061eaec15550e71711cc0
 +        if fields['worker_sessions']:
 +            fields['worker_session'] = fields['worker_sessions'][0]
      return fields
-@@ -392,3 +410,3 @@ def _profiles(authority, actor, home, params, siblings=()):
+@@ -392,3 +456,3 @@ def _profiles(authority, actor, home, params, siblings=()):
      ``_roster_siblings``' snapshot; a sibling with a reader carries the same session fields."""
 -    from hermes_cli.profiles import _profile_info
 +    from hermes_cli.profiles import _profile_info, _read_config_model
      import hermes_yaml as yaml
-@@ -424,5 +442,8 @@ def _profiles(authority, actor, home, params, siblings=()):
+@@ -424,5 +488,8 @@ def _profiles(authority, actor, home, params, siblings=()):
          seen.add(target.resolve())
 +        # The configured route is the config.yaml model block, memoised on the file's signature, so
 +        # a 5 s poll does not re-parse it; the card shows it as configured, not as a live binding.
@@ -45491,7 +45970,7 @@ index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..97d97e7e458061eaec15550e71711cc0
 +                 'model': model or '', 'provider': provider or '', 'description': '',
 +                 'display_name': configured, 'skill_count': 0}
          if include_sessions and reach is not None:
-@@ -432,2 +453,3 @@ def _profiles(authority, actor, home, params, siblings=()):
+@@ -432,2 +499,3 @@ def _profiles(authority, actor, home, params, siblings=()):
              entry['display_name'] = str(meta.get('display_name') or configured)
 +            entry['description'] = str(meta.get('description') or '').strip()
              if isinstance(meta.get('ui_meta'), dict):
@@ -74992,11 +75471,11 @@ index 7f2323ea35ae9b638fc4a392e01d180c466b7529..bd12d861dc5ec2ee464fce1dae6dc000
 +    monkeypatch.setattr(run, '_load_gateway_config', lambda config_path=None: {'platform_toolsets': {'cli': []}})
      monkeypatch.setattr('hermes_cli.lifecycle.invoke_hook', lambda name, **kwargs: None)
 diff --git a/tests/gateway/test_session_group_controls.py b/tests/gateway/test_session_group_controls.py
-index 91f30aa217762d0aa80a9dccfcf5134050a9d3eb..99ee516b0f2a78b5bdb5cc0875890aad4063a1c6 100644
+index 91f30aa217762d0aa80a9dccfcf5134050a9d3eb..b96daa0ece10d9c37c7d2c7bb429b6c5744d4ba9 100644
 --- a/tests/gateway/test_session_group_controls.py
 +++ b/tests/gateway/test_session_group_controls.py
 @@ -201,2 +201,14 @@ def _list_profiles(home):
- 
+
 +def test_profiles_list_sibling_rows_report_model_provider_and_description(tmp_path, monkeypatch):
 +    """Bots page showed "Model not reported" / "No role description recorded" for every bot but the
 +    serving one: discovered rows hardcoded model/provider/description to ''."""
@@ -75010,6 +75489,57 @@ index 91f30aa217762d0aa80a9dccfcf5134050a9d3eb..99ee516b0f2a78b5bdb5cc0875890aad
 +
 +
  def test_profiles_list_survives_an_undecodable_sibling_profile_yaml(tmp_path, monkeypatch, caplog):
+@@ -282 +294,50 @@ def test_profiles_list_cache_sees_changes_inside_one_mtime_tick(tmp_path, monkey
+     assert g._discovered_profile_meta('writer', meta) == {}
++
++
++def test_bot_chat_output_is_one_bounded_assistant_reply_from_the_owning_profile(tmp_path, monkeypatch):
++    from gateway.session_identity import authenticated_subject
++
++    home = tmp_path / 'primary'
++    other = home / 'profiles' / 'writer'
++    other.mkdir(parents=True)
++    monkeypatch.setenv('HERMES_HOME', str(home))
++    (other / 'profile.yaml').write_text('name: writer\n')
++    owner = authenticated_subject({'user_id': 'reader'})
++
++    with SessionDB(home / 'state.db') as main_db, SessionDB(other / 'state.db') as writer_db:
++        runner = SimpleNamespace(session_authorities=[])
++        main = SimpleNamespace(profile_id=str(home), instance_id='main', db=main_db, events={}, sessions={}, runner=runner, retired=False, retiring=False)
++        writer = SimpleNamespace(profile_id=str(other), instance_id='writer', db=writer_db, events={}, sessions={}, runner=runner, retired=False, retiring=False)
++        runner.session_authorities.extend([main, writer])
++        for db in (main_db, writer_db):
++            db.create_session('same', source='gui', user_id=owner, chat_id='local-same')
++            db.set_session_title('same', 'Bot Chat')
++            db.set_session_hidden('same', True)
++
++        async def probe():
++            async def call(params, user='reader', scope='host', capabilities=('session:read',)):
++                connection = AuthorityConnection(main, object(), {'user_id': user, 'profile_scope': scope,
++                    'profile_id': str(home), 'capabilities': list(capabilities)})
++                return await connection.dispatch({'id': 'request', 'method': 'profiles.latest_output', 'params': params})
++
++            primary = {'canonical_id': 'same'}
++            secondary = {**primary, 'profile': 'writer'}
++            assert (await call(primary))['result'] == {'text': None}
++            main_db.append_message('same', 'user', 'never show a user message')
++            assert (await call(primary))['result'] == {'text': None}
++            main_db.append_message('same', 'assistant', 'Main result')
++            writer_db.append_message('same', 'assistant', 'ก' * 900)
++            main_db.append_message('same', 'user', 'newer prompt')
++            main_db.append_message('same', 'assistant', 'hidden', display_kind='hidden')
++            assert (await call(primary))['result'] == {'text': 'Main result'}
++            assert (await call(secondary))['result'] == {'text': 'ก' * 599 + '…'}
++            writer_db.append_message('same', 'assistant', [{'type': 'file', 'path': '/owned/fixture'}])
++            assert (await call(secondary))['result'] == {'text': None}
++            assert (await call(primary, user='another'))['error']['message'] == 'not_found'
++            assert (await call(primary, capabilities=()))['error']['message'] == 'permission_denied'
++            assert (await call(secondary, scope='profile'))['error']['message'] == 'profile_mismatch'
++            assert (await call({'canonical_id': 'missing'}))['error']['message'] == 'not_found'
++            assert (await call({**primary, 'session_id': 'different'}))['error']['message'] == 'invalid_params'
++            assert not main.sessions and not writer.sessions
++
++        asyncio.run(probe())
 diff --git a/tests/gateway/test_session_interrupt_goal.py b/tests/gateway/test_session_interrupt_goal.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..fa1a4166bc8987fe3668a5151b2c9f0bb1ce1fef
@@ -106685,6 +107215,25 @@ index 7572ad12850dde68d70ad0876c10d0a32ff20b16..209cb8dbe9798bcafc95cd2a8436448d
 +    "kanban_unblock", "kanban_reassign", "kanban_unlink", "kanban_extend_runtime", "kanban_continue",
 +    "kanban_archive",  # local patch 24
      "kanban_attach", "kanban_attach_url", "kanban_attachments",
+diff --git a/tui_gateway/contracts/canonical_projections.py b/tui_gateway/contracts/canonical_projections.py
+index 7b8931440e4299f155949b0e5943f89093dbeeaa..d4d385252b9062d04e4a44065ea55e00eb608fd6 100644
+--- a/tui_gateway/contracts/canonical_projections.py
++++ b/tui_gateway/contracts/canonical_projections.py
+@@ -51,2 +51,10 @@ class CanonicalProfilesParams(ProfileParams):
+
++class CanonicalBotOutputParams(ProfileParams):
++    canonical_id: str
++
++
++class CanonicalBotOutputResult(Result):
++    text: str | None
++
++
+ class CanonicalRoomCreateParams(RoomParams):
+@@ -104,2 +112,3 @@ for _name, _params, _result in (
+     ('profiles.list', CanonicalProfilesParams, CanonicalProfilesResult),
++    ('profiles.latest_output', CanonicalBotOutputParams, CanonicalBotOutputResult),
+     ('image.attach_bytes', ImageAttachBytesParams, CanonicalAttachedImageResult),
 diff --git a/tui_gateway/contracts/config_free_tier_control.py b/tui_gateway/contracts/config_free_tier_control.py
 index a7346e3f0a6d57a6ea1eeb0a05517eb943b737d0..da2738697b6257c235c147bd6f5b3662e61439e3 100644
 --- a/tui_gateway/contracts/config_free_tier_control.py

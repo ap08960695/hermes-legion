@@ -330,3 +330,13 @@ request settles. Monitor matches the existing runtime signal to one exact bot
 row by connection, profile and canonical chat ID. The first native proof uses
 synthetic prompt events through the Local gateway. Worker completion still
 needs a reliable link between the worker session and its terminal outcome.
+
+[Latest output](verification.md#read-a-bots-latest-saved-reply-from-its-character-unreleased)
+starts with the underlined label of a current bot character. Only a click reads
+its saved canonical Chat. The overlay receives one plain-text excerpt, up to
+600 characters, through the existing window bridge. Opaque output addresses
+expire with the current owner binding. The main process checks which window
+sent the request and discards late replies after dismissal or loss of visibility.
+The popover and label accept clicks. The animation and transparent margins pass
+through on platforms that support it. Chat navigation and file actions remain
+open, along with the five-character resource budget.
