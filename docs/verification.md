@@ -1,3 +1,36 @@
+# Pet overlay boots without the Desktop shell (unreleased)
+
+The renderer selects `?win=overlay` before loading the Desktop shell,
+app-only stores, providers and clipboard setup. The overlay keeps the
+same URL, shared styles, transparent first paint and native window/IPC
+lifecycle. Normal Desktop, HUD, secondary, browser, quick and wake
+routes retain their existing bootstraps. Seven route tests cover the
+dispatch boundary. The overlay isolation case fails before this split.
+Seven additional theme and character preview cases pass.
+
+The Vite manifests show the static JavaScript reachable from the entry
+and selected overlay branch falling from 147 files (9.22 MiB) to 48
+(3.68 MiB). The app bootstrap stays outside the overlay load graph.
+The local Electron fixture matched the earlier work: five distinct
+moving packs, mascot restoration, then a new overlay window receiving
+and drawing the mascot. Capture and reopen were outside measurement.
+
+| Steady phase, about 20 s each | Mean summed RSS | Mean summed macOS physical footprint | CPU, one core = 100% |
+| --- | ---: | ---: | ---: |
+| Main window without overlay | 259.5 MiB | 68.9 MiB | 0.74% |
+| Existing mascot | 434.0 MiB | 125.0 MiB | 3.12% |
+| Five distinct character packs | 510.1 MiB | 189.7 MiB | 4.38% |
+
+Five-pack RSS overhead was 250.6 MiB, compared with 307.9 MiB in the
+previous fixture run. The current full overhead still misses the target:
+120.8 MiB of summed physical footprint and 3.64 CPU percentage points.
+The overlay renderer itself accounts for 96.2 MiB of the five-pack
+footprint. No prior physical-footprint measurement exists for comparison,
+and the single sample pair establishes no CPU saving. The final fixture
+ran 60.079 seconds with zero Desktop SSH before capture, used at most
+three product processes and left none running. Full Desktop settings
+and Edit Profile to Monitor have not been walked through natively.
+
 # Five character packs — native Mac overlay measurement (unreleased)
 
 The current Desktop renderer and native overlay IPC ran in a fresh, local-only

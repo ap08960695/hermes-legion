@@ -292,3 +292,10 @@ Electron fixture. Preview adds 67.0 MiB over the existing mascot, but starting
 the overlay adds too much versus the no-overlay baseline. Check the overlay's
 renderer footprint before release. The full Edit Profile to Monitor walkthrough,
 real bot events and production resource acceptance remain open.
+
+Selecting the overlay route before importing the app bootstrap cuts its
+reachable JavaScript from 9.22 to 3.68 MiB. The repeated Mac fixture kept
+animation, mascot restoration and a fresh overlay open working. Five packs
+still add 120.8 MiB in summed macOS physical footprint over no overlay, of
+which the overlay renderer accounts for 96.2 MiB. The remaining release
+budget needs work. [Current verification](verification.md#pet-overlay-boots-without-the-desktop-shell-unreleased).
