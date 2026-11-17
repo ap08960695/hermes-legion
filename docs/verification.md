@@ -1,3 +1,53 @@
+# Direct Stop for background workers — source step, unreleased
+
+Native baseline AX/pixels show a waiting Captain with a running worker and no
+composer Stop after its parent turn settles. The working composer now subscribes
+to the existing `sessionBackgroundResume(runtimeSessionId)` live count and adds a
+secondary typed Stop button while the parent is idle. It calls existing `haltRun`:
+park the owning queue and invoke existing session cancellation. It does not
+submit a draft or queue it. Existing Send/voice/busy-parent paths are unchanged;
+no RPC, timer, dependency, permission, model call or new state store is added.
+
+Controls regression first fails on the missing button (3 failures/20 passes).
+After implementation, five focused files pass 88 tests: controls, runtime-owner
+live counts, queue parking, background queue preservation and slash session
+commands. Cases cover an empty minimal composer with canSubmit=false, a draft
+alongside Send, one busy-parent Stop, absent live work and the disabled boundary.
+TypeScript, scoped ESLint and a fresh production renderer pass. Only the three
+changed patch sections are applied, hash-checked, reversed and checked against
+the pinned base; unrelated patch sections and test selection are retained.
+
+Two prior native diagnostic probes remain failed: a newly added focus requirement
+refused before History; a separate scoped AX probe reached the correct waiting
+chat while unfocused, then setValue did not expose the required slash menu. This
+establishes neither an AX editor product defect nor Stop delivery. Baseline:
+`../uitest-v090-c2q4iijp/captain-r203-stopax-capture/evidence/01-goal-active.jpg`.
+
+A distinct fresh fixture binds the new renderer to the three source hashes and
+reuses byte-exact existing native main/preload. Initial owned AX binding and
+normal AX Raise complete. The guarded History step then returns -10005/
+ScreenCaptureKit -3812 invalid parameters; native readiness records #/history,
+but no post-action History frame/receipt exists. The helper invalidates/stops;
+no Local60, actual Stop, UI_READY/UI_STOPPED/UI_VERIFIED or goal acceptance exists.
+A later root error label mistakenly described initial binding failure and
+replaced the helper's STOP/INVALID text; the retained per-call/lifecycle receipts
+correct that label privately. The trial remains failed with no retry. This is an
+unresolved observation failure, not a demonstrated product defect. Do not infer
+a passing after screenshot or reuse any failed trial as acceptance.
+
+All three trials close their recorded generations and model/API ports and restore
+21 fixture config/env files plus three geometry absences; Desktop SSH is zero.
+Their sampled peaks are four product processes each, respectively 1,004,978,176 B,
+1,154,760,704 B and 1,021,591,552 B including guardian. External CUA, advisors and
+controllers are excluded; these are not whole-task RAM or savings measurements.
+New fixture: `../uitest-v090-c2q4iijp/captain-r203-stopbutton-capture/evidence`.
+
+The source improvement is complete with offline coverage. Native button before/
+after, actual interruption/paused goal and ordered held-server-reply/terminal ACK
+remain open. Existing Stop gateway evidence below retains its stated scope.
+Provider reasoning, cancelled-client callback arrival, ai and owner adoption are
+unproven. No version, tag or release is created for this development step.
+
 # Captain session Stop — fix and qualified desktop observations, unreleased
 
 Completed source fix: native session Stop previously cancelled a waiting worker

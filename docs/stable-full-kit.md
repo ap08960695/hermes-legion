@@ -40,6 +40,14 @@ pass. Desktop `/stop` shows interrupted work and Goal paused 1/20, but its full
 late-reply scenario remains unaccepted after the observation-budget guard stopped
 the trial. [Qualified evidence](verification.md#captain-session-stop--fix-and-qualified-desktop-observations-unreleased).
 
+The working composer now adds a direct Stop beside its existing primary action
+while the bound runtime chat has live background workers. It uses the existing
+live count and queue-parking cancellation handler; Send, drafts and busy-parent
+behavior retain their existing paths. Five focused files pass 88 tests, renderer
+types/lint/build pass, and changed patch sections roundtrip. Native button
+acceptance remains open after an initial CUA capture error.
+[Scope and remaining proof](verification.md#direct-stop-for-background-workers--source-step-unreleased).
+
 ## Bot Monitor capability batch — v0.34.0
 
 Bots → Monitor combines current worker observations, recorded bot/worker usage,

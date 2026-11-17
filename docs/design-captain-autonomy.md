@@ -145,3 +145,43 @@ engine. A renderer reload depends on the existing native reports; no new disk
 store, RPC, poll, timer or goal authority. Tests exercise the actual parent-turn
 prune, replacement rather than accumulating batches, reset/owner isolation and
 child navigation; native acceptance must keep Failed visible after follow-up.
+
+
+## Stop while delegated workers run
+
+A native waiting Captain chat can have running workers after its parent turn is
+idle. The composer currently hides Stop then; reaching session Stop requires
+slash entry. Keep Stop reachable directly from this state, including narrow
+controls and an existing draft.
+
+Reuse `sessionBackgroundResume(runtimeSessionId)` for the existing live queued/
+running child count. Add a secondary Stop button only while that signal exists
+and the parent is idle. Call the existing `haltRun` callback, which parks that
+chat's queue and invokes its existing session Stop. Keep Send/voice and the
+parent busy-submit rules unchanged. Use the current Stop label/icon/button/tooltip;
+no new model request, setting, RPC, timer, worker or store.
+
+Alternatives considered: broadening the parent's busy flag would alter submit,
+steer and voice behavior; another Stop control panel duplicates an existing
+handler. The secondary button is the maintainer's narrow UI choice under the
+standing owner goal. Existing absent/terminal/foreign worker state must not show
+it, and a busy parent keeps only its original Stop affordance.
+
+Scope: composer index wiring, existing controls and nearest controls tests;
+existing live-count ownership tests, changed source patch sections and inventory.
+Acceptance: visible native before/after, real Stop callback to interrupted native
+ledger/paused goal, ordinary parent interrupted-result follow-up, held-server
+reply release and stable state, then original-window terminal acknowledgment.
+The existing Stop reset clears activity shelves; do not require a cleared shelf
+to retain the interrupted row when native ledger and normal parent result prove
+it. Preserve the draft and queue parking through the existing handler. No claim
+about cancelled-client callback arrival or provider reasoning.
+
+Implementation status: the three composer files now implement this step. Controls
+regression first fails on missing Stop, then five focused files pass 88 tests;
+types, scoped lint and a fresh production renderer pass. A new source-bound Local
+fixture binds and raises the original window, then stops during the History
+step (ScreenCaptureKit invalid parameters). Native URL reaches History, but its
+post-action frame is absent; no Local60, actual Stop or UI ACK. It is not native acceptance
+or evidence of a product fault. The two earlier diagnostic failures remain failed.
+No release is cut; the native button and ordered late-reply acceptance remain open.

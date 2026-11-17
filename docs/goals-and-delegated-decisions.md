@@ -132,6 +132,12 @@ credential policy. Full worker Stop acceptance remains open.
 
 ### Stop the session's current work
 
+The working composer offers **Stop** while the current chat has queued/running
+background workers, even when its parent turn is idle. It stays available in
+narrow controls and beside Send when a draft exists. It parks that chat's queued
+prompts through the existing Stop handler. The button has source regression
+coverage; native on-screen acceptance is still open.
+
 Use `/stop` in the intended Desktop chat to cancel its current turn and owned
 delegations. The working patch also pauses that chat's active goal, so the
 interrupted worker's ordinary result follow-up cannot start another goal turn.
