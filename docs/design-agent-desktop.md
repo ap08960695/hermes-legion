@@ -246,6 +246,32 @@ absent. Private before/after: `../evidence/agent-desktop-window-capture-20261117
 Never accept a prefix merely to make an identity check pass. The earlier tiny
 synthetic-renderer capture and unknown click outcome retain their narrow scope.
 
+### Background capture diagnosis
+
+Two fresh isolated production Local trials remain failed. The first uses a
+fixture-only `showInactive` reveal; during CUA app selection, Electron reports
+activation and the guard stops before native capture. The second avoids
+CUA and passes 60 seconds Local with no target focus/activation observed across
+581 Electron witness rows (maximum gap 207 ms). Its first exact-window native
+snapshot returns `ACTION_NOT_SUPPORTED` / `window_without_accessibility_element`.
+No complete snapshot or recapture loop is accepted. These are not pixel evidence,
+an independent continuous macOS activation witness, or unchanged startup proof.
+
+The provider now maps only that supported protocol2.6 snapshot failure to fixed
+guidance about the target app's accessibility support. Native error titles,
+window IDs and suggestions are never copied into the error; other/malformed
+failures keep generic guidance. Failure still invalidates previous refs and does
+not focus, retry or fall back. Three regressions fail before the change; the
+backend/action source files then pass 110 tests. Replaying the retained native
+failure through the actual common tool confirms the new message without another
+native operation. That is offline replay, not a successful after-fix UI trial.
+
+Both trials close all owned processes; eight configs and two geometry absences
+are restored. Private diagnosis: `../evidence/agent-desktop-background-diagnostics-20261117`.
+The app already has a renderer-accessibility helper; the cause of cold inactive
+window exposure remains unresolved. Investigate it before adding another enable
+switch. Background CUA/pixel and native act/verify acceptance remain open.
+
 ### Snapshot and input write authorization
 
 The pinned 1.3.1 [snapshot command](https://github.com/vercel-labs/agent-desktop/blob/b0b7277bea09b770ef9d1fb45aad667bc432cd57/crates/core/src/commands/snapshot.rs)

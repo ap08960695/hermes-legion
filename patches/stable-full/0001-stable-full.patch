@@ -63886,10 +63886,10 @@ index 0000000000000000000000000000000000000000..8f3cf4e89bc381d03d081175d14a5daf
 +    assert sessions[0] != sessions[1]
 diff --git a/tests/computer_use/test_agent_desktop_backend.py b/tests/computer_use/test_agent_desktop_backend.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..e6179263e50e7f78222e1cf3f343fbe4d62e29d3
+index 0000000000000000000000000000000000000000..78f01ec3e41e5c2827c57c43f016d7dc78345925
 --- /dev/null
 +++ b/tests/computer_use/test_agent_desktop_backend.py
-@@ -0,0 +1,347 @@
+@@ -0,0 +1,411 @@
 +"""Opt-in AX-only agent-desktop provider through the existing backend contract."""
 +import json
 +from types import SimpleNamespace
@@ -64237,6 +64237,70 @@ index 0000000000000000000000000000000000000000..e6179263e50e7f78222e1cf3f343fbe4
 +        backend.capture(mode='ax', window_id=42)
 +    result = backend.click(element=old)
 +    assert not result.ok and result.code == 'capture_required' and len(calls) == 2
++
++
++def unavailable_window():
++    return {'version': '2.6', 'ok': False, 'command': 'snapshot', 'error': {
++        'code': 'ACTION_NOT_SUPPORTED', 'message': 'PRIVATE_WINDOW_TITLE',
++        'suggestion': 'PRIVATE_DRIVER_GUIDANCE',
++        'details': {'kind': 'window_without_accessibility_element', 'window_id': 'PRIVATE_WINDOW_ID'}}}
++
++
++@pytest.mark.parametrize('scope', [{'app': 'Fixture'}, {'window_id': 42}])
++def test_inaccessible_window_has_safe_guidance_and_invalidates_prior_refs(adapter, monkeypatch, scope):
++    module, backend, calls = adapter
++    prior = backend.capture(mode='ax', app='Fixture').elements[2].index
++    def probe(argv, **kwargs):
++        calls.append((argv, kwargs))
++        return SimpleNamespace(returncode=1, stdout=json.dumps(unavailable_window()), stderr='PRIVATE_STDERR')
++    monkeypatch.setattr(module.driver, 'bounded_probe_run', probe)
++    with pytest.raises(RuntimeError) as error:
++        backend.capture(mode='ax', **scope)
++    assert str(error.value) == ('agent-desktop AX snapshot failed: target window is not exposed to accessibility; '
++                                'inspect the target app accessibility support before capturing again')
++    import traceback
++    assert 'PRIVATE_' not in ''.join(traceback.format_exception(error.value))
++    assert backend.click(element=prior).code == 'capture_required'
++    assert len(calls) == 2
++
++
++def test_common_tool_explains_inaccessible_window_without_driver_payload_or_retry(adapter, monkeypatch):
++    module, _, calls = adapter
++    from hermes_cli import config
++    from tools.computer_use import tool
++    def probe(argv, **kwargs):
++        calls.append((argv, kwargs))
++        return SimpleNamespace(returncode=1, stdout=json.dumps(unavailable_window()), stderr='PRIVATE_STDERR')
++    monkeypatch.setattr(module.driver, 'bounded_probe_run', probe)
++    monkeypatch.setattr(config, 'load_config_readonly', lambda: {'computer_use': {'backend': 'agent-desktop'}})
++    tool.reset_backend_for_tests()
++    try:
++        result = json.loads(tool.handle_computer_use({'action': 'capture', 'mode': 'ax', 'window_id': 42}, session_id='inaccessible-window'))
++        assert 'target window is not exposed to accessibility' in result['error']
++        assert 'PRIVATE_' not in str(result) and len(calls) == 1
++        assert 'elements' not in result
++    finally:
++        tool.reset_backend_for_tests()
++
++
++@pytest.mark.parametrize('change', [
++    lambda v: v.update(version='99.0'), lambda v: v.update(command='click'),
++    lambda v: v.update(ok=True), lambda v: v['error'].update(code='PRIVATE_UNKNOWN_CODE'),
++    lambda v: v.update(error=None), lambda v: v['error'].update(details=None),
++    lambda v: v['error']['details'].update(kind='PRIVATE_UNKNOWN_KIND'),
++])
++def test_only_supported_native_window_failure_gets_specific_guidance(adapter, monkeypatch, change):
++    module, backend, calls = adapter
++    value = unavailable_window()
++    change(value)
++    def probe(argv, **kwargs):
++        calls.append((argv, kwargs))
++        return SimpleNamespace(returncode=1, stdout=json.dumps(value), stderr='PRIVATE_STDERR')
++    monkeypatch.setattr(module.driver, 'bounded_probe_run', probe)
++    with pytest.raises(RuntimeError) as error:
++        backend.capture(mode='ax', window_id=42)
++    assert str(error.value) == 'agent-desktop AX snapshot failed; check target, permissions and protocol'
++    assert len(calls) == 1
 diff --git a/tests/computer_use/test_agent_desktop_scroll.py b/tests/computer_use/test_agent_desktop_scroll.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..ff30395b586edf69ad7ad82e50c3b61003791f51
@@ -96892,10 +96956,10 @@ index 0000000000000000000000000000000000000000..5f4f0a82734efaf57c8a6b426ca1e2a1
 +    return 0
 diff --git a/tools/computer_use/agent_desktop_backend.py b/tools/computer_use/agent_desktop_backend.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..26e042c59981d000598c2994ba59668ea4d952d8
+index 0000000000000000000000000000000000000000..afa9fc949224aefdbc84c7f8ce32c657a68fec16
 --- /dev/null
 +++ b/tools/computer_use/agent_desktop_backend.py
-@@ -0,0 +1,263 @@
+@@ -0,0 +1,269 @@
 +"""Scoped AX reads and single-use semantic refs; no physical input or raw logging."""
 +from __future__ import annotations
 +
@@ -96990,14 +97054,20 @@ index 0000000000000000000000000000000000000000..26e042c59981d000598c2994ba59668e
 +            if app is not None or type(window_id) is not int or not 0 < window_id < 2**53:
 +                raise ValueError('agent-desktop AX window_id must be a positive exact JSON integer without app')
 +            selector = ['--window-id', f'w-{window_id}']
++        failure_message = 'agent-desktop AX snapshot failed; check target, permissions and protocol'
 +        try:
 +            result = driver.bounded_probe_run(
 +                [self._binary, 'snapshot', *selector, '--session', self._session],
 +                timeout=10, env=driver._environment())
-+            if result is None or result.returncode != 0 or len(result.stdout.encode('utf-8')) > 1024 * 1024:
++            if result is None or len(result.stdout.encode('utf-8')) > 1024 * 1024:
 +                raise ValueError('Probe failed')
 +            envelope = json.loads(result.stdout)
-+            if not isinstance(envelope, dict) or envelope.get('version') != '2.6' or envelope.get('ok') is not True or envelope.get('command') != 'snapshot':
++            if isinstance(envelope, dict) and envelope.get('version') == '2.6' and envelope.get('command') == 'snapshot' and envelope.get('ok') is False:
++                error = envelope.get('error')
++                if isinstance(error, dict) and error.get('code') == 'ACTION_NOT_SUPPORTED' and isinstance(error.get('details'), dict) and error['details'].get('kind') == 'window_without_accessibility_element':
++                    failure_message = ('agent-desktop AX snapshot failed: target window is not exposed to accessibility; '
++                                       'inspect the target app accessibility support before capturing again')
++            if result.returncode != 0 or not isinstance(envelope, dict) or envelope.get('version') != '2.6' or envelope.get('ok') is not True or envelope.get('command') != 'snapshot':
 +                raise ValueError('Invalid envelope')
 +            data = envelope['data']
 +            canonical_app = data['app']
@@ -97056,7 +97126,7 @@ index 0000000000000000000000000000000000000000..26e042c59981d000598c2994ba59668e
 +            return (CaptureResult(mode='ax', width=0, height=0, elements=elements, app=canonical_app,
 +                                  window_title=window['title'], note='AX refs; read a fresh capture after every input attempt. type(text, element) inserts at the caret; set_value replaces the value. scroll requires a scrollarea element. No screenshots or physical input.'), targets)
 +        except Exception:
-+            raise RuntimeError('agent-desktop AX snapshot failed; check target, permissions and protocol') from None
++            raise RuntimeError(failure_message) from None
 +
 +    def _input_result(self, action, ok=False, code=None):
 +        return ActionResult(ok=ok, action=action, code=code, path='ax' if ok else None, delivery_mode='background' if ok else None,

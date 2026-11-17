@@ -65,6 +65,10 @@ passes through the provider/common tool with 50 native refs and a CUA comparison
 Exact window selection also passes with a long app name whose native label
 differs. Obtain a fresh trusted native window ID; IDs can be reused. Input
 acceptance remains open. See the [capture boundary](docs/design-agent-desktop.md#snapshot-and-input-write-authorization).
+When a native window lacks an accessibility element, capture now reports that
+specific limitation and directs you to inspect the target app's accessibility
+support. Native titles and guidance stay private; no automatic focus or retry.
+Cold inactive-window acceptance remains failed; see the [background diagnosis](docs/design-agent-desktop.md#background-capture-diagnosis).
 
 ## What is included
 

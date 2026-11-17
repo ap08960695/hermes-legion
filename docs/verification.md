@@ -554,6 +554,46 @@ Native after-fix degraded paint, canonical navigation, nonempty reports and live
 terminal progress still gate the Bot Monitor batch release. No version/release,
 owner app/data, remote host/ai, ESTOP, pause, timer or permission change.
 
+# Inaccessible native window guidance — unreleased
+
+Two isolated production Local background trials fail and remain failed. The
+fixture changes only reveal to `showInactive`; real renderer/main/preload remain.
+First, Electron reports activation during CUA selection; the trial stops before
+native capture and closes in 23.77 s. Second, no CUA observer is used: after 60 seconds
+Local, the first native exact-window snapshot reports `ACTION_NOT_SUPPORTED` /
+`window_without_accessibility_element`. It closes in 63.14 s. No successful AX
+capture, three-read loop or background pixel acceptance is claimed.
+
+The second trial records 581 Electron witness rows with no target focus/activation
+observed and maximum gap 207 ms. Original PID/birth/executable/window generation,
+native window, nonce and admission guards remain; no continuous native activation
+witness exists. A fourth-slot reservation blocks new fixture helper spawns and
+requires a fresh three-process/headroom guardian sample before the native child.
+Offline controls: focus 1 positive/18 negative, native-only phase 1/13, reserved
+slot 1/6 and two helper-provenance substitutions refused. These controls do not
+prove successful capture or witness completeness. CUA/pixel acceptance is not
+replaced by native-only evidence.
+
+The observed user-facing defect is lost failure guidance. The provider now emits
+a fixed accessibility-exposure explanation only for that exact supported error;
+malformed/foreign failures retain generic guidance. No private native message,
+window ID, title or suggestion is echoed. Previous refs expire; no automatic
+focus/retry is added. Actual regression: 3 fail/75 pass before implementation,
+then backend/actions pass 110 tests with one worker. Retained native-error replay
+through the actual common tool returns the new message in one probe, without a
+native spawn. No post-fix live success is implied. The underlying exposure cause
+is unresolved; an existing renderer-accessibility helper already enables the API.
+
+Both runtime trees close with zero survivors and gateway/model-server stopped.
+Sampled peaks four product processes, 908,394,496 B / 939,622,400 B including
+guardian; CUA/advisor/build/controllers excluded. No whole-task bound or savings
+claim. Eight fixture configs/two geometry absences restored; eleven UI source
+hashes unchanged each, two intentional source changes match the patch. Native
+input/model calls/provider images remain absent; no owner app or ai connection.
+Private diagnosis: `../evidence/agent-desktop-background-diagnostics-20261117`.
+Two changed patch sections apply/hash/reverse against the pinned upstream;
+unrelated sections, 1,120 targets and test selection remain unchanged.
+
 # Explicit native window capture — unreleased
 
 The selected agent-desktop provider now accepts the common tool's existing
