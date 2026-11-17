@@ -285,3 +285,10 @@ stays in place. Installed-only requests skip Petdex entirely. The full gallery
 still fetches its public catalog when explicitly requested. Native screen
 evidence, per-event interactions and five-character resource measurements
 remain release conditions.
+
+The [native overlay measurement](verification.md#five-character-packs--native-mac-overlay-measurement-unreleased)
+now confirms five distinct moving atlases and mascot restoration in an isolated
+Electron fixture. Preview adds 67.0 MiB over the existing mascot, but starting
+the overlay adds too much versus the no-overlay baseline. Check the overlay's
+renderer footprint before release. The full Edit Profile to Monitor walkthrough,
+real bot events and production resource acceptance remain open.

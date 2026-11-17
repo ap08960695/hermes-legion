@@ -1,3 +1,37 @@
+# Five character packs — native Mac overlay measurement (unreleased)
+
+The current Desktop renderer and native overlay IPC ran in a fresh, local-only
+Electron fixture with no gateway, saved connections or inference. After 60.063
+seconds in overlay mode with zero Desktop SSH processes, the exact overlay
+renderer captured the mascot, five simultaneous distinct packs and the restored
+mascot. Eight source frames contained all five assigned colors in order. Each
+sprite moved through six observed positions. The local GIF retains seven
+encoded frames. Image checks normalize each embedded display profile to sRGB.
+The independent app-scoped agent-desktop capture returned `WINDOW_NOT_FOUND`;
+the image evidence comes from the owned Electron window's `capturePage`.
+
+| Steady phase, about 20 s each | Mean summed RSS | CPU, one core = 100% | Product processes |
+| --- | ---: | ---: | ---: |
+| Main window without overlay | 273.2 MiB | 1.45% | 2 |
+| Existing mascot | 514.1 MiB | 3.61% | 3 |
+| Five distinct character packs | 581.1 MiB | 3.88% | 3 |
+
+Five packs added 67.0 MiB and 0.27 percentage points over the mascot. The full
+overlay added 307.9 MiB and 2.43 points over the no-overlay main window, missing
+the approximately 60–80 MB and 1–2% budgets in this fixture. RSS can count shared
+pages more than once. This is one comparison with synthetic sprites, without
+full Desktop startup, Edit Profile and Monitor interaction, real bot events or
+a production memory claim. Screenshots and the GIF were taken outside the
+sampled phases. The run closed all three product processes, with 695.6 MiB peak
+sampled RSS including the observer.
+
+The first trial stopped after a premature mode change and a changing baseline
+process set. The second reached Local60 but stopped at a raw RGB check. The saved
+frame reproduced the check failure and passed embedded-profile conversion.
+Both failures remain recorded separately. A fresh final trial used identical
+production bundles with the corrected private observer. No product source,
+dependency, release or version changed.
+
 # Installed characters stay offline — Local Desktop dispatch (unreleased)
 
 The existing Desktop WebSocket admits these RPCs through its shared handlers
