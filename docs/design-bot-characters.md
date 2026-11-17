@@ -312,6 +312,13 @@ physical footprint with the same CPU use. Keep the hint under the current
 Electron setup. Evaluate atlas residency separately before changing storage
 or pixel fidelity.
 
+A matched Mac run tested decoding just the active row of each character's
+sprite sheet. Five moving characters used 32.8 MiB less physical footprint
+than with full sheets, but used 0.23 percentage points more of one CPU core.
+The candidate added 79.5 MiB and 2.96 CPU points over no overlay. Keep the
+full-sheet path for now. The release budget still needs a change that reduces
+rendering cost without losing movement or click-through.
+
 The [cross-panel regression](verification.md#edit-profile-to-monitor-character-handoff-unreleased)
 verifies that the saved character reaches Monitor after a roster reload, even
 with the optimistic metadata cache cleared. The isolated Mac walkthrough
