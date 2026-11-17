@@ -368,6 +368,10 @@ report from the authorized Monitor snapshot. Replacing the report, changing
 its status, or changing its canonical Bot Chat invalidates the old action.
 The popover adds no report fetch.
 
+A stopped worker leaves the working overlay when its live observation ends.
+Its saved interruption remains **Stopped** in Monitor and creates no
+Completed or Error character of its own.
+
 The isolated Mac Local lifecycle test held a loopback model reply while the
 actual delegation worker read a fixture file, appeared as working, and
 recorded a heartbeat. After completion the same delegation was delivered
