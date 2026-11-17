@@ -63,8 +63,7 @@ FPS, anchor and custom state mappings are deliberately absent until a runtime
 consumes them; unknown fields fail rather than imply support. Lint does not
 establish installability, playability, licence ownership or resource budgets.
 ZIP, GIF/APNG/Lottie, bot assignment and extended event interactions remain
-open, as does the full character-pack-creator skill. Native pack terminal preview
-is covered below.
+open. The native-atlas creator skill and terminal preview are covered below.
 
 ## Pre-install pack preview: completed terminal slice
 
@@ -102,7 +101,24 @@ Darwin `renamex_np`/`RENAME_EXCL=4` was checked in the installed SDK.
 Native Mac filesystem regressions and the actual isolated CLI lifecycle pass,
 including races, I/O faults, original metadata, non-selection and restoration.
 Linux/Windows code paths await native acceptance. Per-bot assignment, extended
-formats/events, creator skill and Desktop/resource proof remain open.
+formats/events and Desktop/resource proof remain open.
+
+## Native-atlas creator skill: completed guidance slice
+
+The self-contained [character-pack-creator skill](../skills/character-pack-creator/SKILL.md)
+turns an authorized description/reference into a state plan, owned/original frames,
+exact atlas assembly with the existing composer, lint and terminal preview.
+It carries the current geometry/schema so an installed one-file copy works
+without the Legion checkout. Image tools remain optional and within existing
+rights/allowance. Provenance and actual permission terms stay explicit.
+
+Creation does not imply import/selection. Requested import uses the existing
+no-replace command and profile scope; selection stays a separate global action.
+No new provider, generator, dependency, configuration or renderer. Native
+skill discovery/read, the exact embedded assembly recipe (including existing
+output/wrong-frame refusal) and actual isolated CLI workflow are verified.
+This is deterministic fixture evidence; autonomous artistry, image-tool behavior,
+Desktop characters and full interaction/format/resource acceptance are unproved.
 
 ## Active-character overlay preview: offline source step
 
@@ -190,8 +206,8 @@ actual budget miss and trade-off before release; no budget claim from unit tests
 The draft native-atlas folder contract, metadata lint, original example recipe,
 blank template and starter guide are now included. The full runtime format still
 needs per-event animations/fallbacks, size/fps/anchor controls, extended formats,
-per-bot assignment and the creator skill. Native-atlas lint, terminal preview
-and Mac-tested no-overwrite import are included. Reuse current stores/renderer
+per-bot assignment. Native-atlas creator guidance, lint, terminal preview and
+Mac-tested no-overwrite import are included. Reuse current stores/renderer
 rather than introducing another atlas taxonomy. Only original/owned art; no
 borrowed character designs or copied reference art.
 

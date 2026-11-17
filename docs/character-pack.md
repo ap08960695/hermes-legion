@@ -27,6 +27,31 @@ For your own art, copy
 `manifest.json`, fill the three empty text fields and add your atlas. The blank
 template intentionally fails validation until you supply those fields and art.
 
+## Create with a Hermes agent
+
+The [character-pack-creator skill](../skills/character-pack-creator/SKILL.md)
+guides a description or permitted reference image through state planning,
+original/owned frames, exact local atlas assembly, lint and terminal preview.
+It uses the existing composer and pets commands; it adds no image provider,
+dependency or runtime setting. It can be copied alone into the intended
+profile's native skills directory (for example, its
+`skills/creative/character-pack-creator/SKILL.md`). Preserve any existing copy;
+installing a skill is separate from importing or selecting a character.
+
+Once available to that profile, ask the agent: "Use character-pack-creator to
+make an original lantern gardener in a new folder; preview it, without importing
+or selecting it." Supply the author and actual permission/licence terms for
+your art. The skill records provenance in `creator-notes.md`; lint cannot prove
+that statement. An authorized image tool is optional; original programmatic art
+or your own frames also work. It preserves existing import authorization without
+treating a creation-only request as permission to install or change selection.
+
+The one-file copy includes the supported geometry/manifest and native composer
+recipe. Its installed native discovery/read, embedded recipe and isolated CLI
+workflow are checked. This is deterministic tooling evidence, not proof that an
+artist agent or image model will produce good art or obey every instruction.
+Extended formats/events and per-bot assignment remain future work.
+
 ## Folder contract, schema 1
 
 ```text
@@ -161,8 +186,7 @@ or metadata. Validation does not install a pet, select a profile, change setting
 start a model or fetch an asset.
 
 FPS, anchor/footprint, custom per-event mappings, sounds, ZIP import, GIF/APNG/
-Lottie decoding, per-bot assignment and a pack creation skill are future parts
-of the full format. They are rejected or absent here rather than silently
-advertised as working options. Existing native geometry and animation scheduling
+Lottie decoding and per-bot assignment are future parts of the full format.
+They are rejected or absent here rather than silently advertised as working options. Existing native geometry and animation scheduling
 remain in control. Lint is not proof of the five-character CPU/RAM budget or
 of enter/exit, handoff, retry, review or group-celebration behavior.

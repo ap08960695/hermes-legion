@@ -1,3 +1,49 @@
+# Character-pack creator skill — native tooling slice, unreleased
+
+The self-contained `skills/character-pack-creator/SKILL.md` guides a brief or
+permitted reference through state planning, original/owned frames, exact native
+atlas assembly, lint, terminal preview and requested import. It uses the existing
+composer/CLI/store; no provider, generator, dependency, runtime configuration or
+stable patch change. It preserves actual art permission/provenance and separates
+creation/import from global selection. Extended formats/events and per-bot
+assignment are explicitly outside the current contract.
+
+Frontmatter validation passes. A one-file copy in a new isolated profile is
+found/read by native `find_all_skills`/`skill_view`; the returned bytes match the
+shipped skill. Home, config, skills/search roots and pets destination are checked
+inside owned directories before use. The exact embedded recipe is executed from
+an unrelated cwd using original CC0 Lanternling example frames: all nine atlas
+rows lint without warnings. It refuses an existing output without changing its
+bytes and rejects wrong-sized input before creating output. The manifest example
+is parsed and filled with the fixture's actual author/licence.
+
+Twelve native operations have expected observed exits: skill/read/assembly,
+three command helps, folder lint, invalid manifest, non-TTY preview refusal,
+actual pack PTY preview, import, list, duplicate refusal and removal. Preview
+emits39encodedframes/20distinct with one cursor restoration; this is terminal
+output, not physical appearance. Only the test import is removed; source pack,
+prior entry and config remain byteexact. No automatic selection, leftover staging
+or recorded survivors. Seven relevant source hashes match unchanged patched files or the pinned
+upstream base; prior source suites are not rerun or added to this count.
+
+Private harness attempt1 failed generated-entry escaping before source imports.
+The repaired attempt passes discovery/assembly/help/lint/error behavior, then
+stops because its expected no-TTY message differs from the real diagnostic;
+exit1 and the source identity are correct. Both failed receipts stay failed.
+After checking the actual diagnostic offline, only the five unexecuted commands
+run in a bounded continuation in that owned profile. No product fix, full-sequence
+retry, extra advisor review chain or acceptance of a failed scenario.
+Repaired run9.648s and continuation16.024s; sampled peak164151296B including
+guardian, at most3product processes. These costs do not prove Desktop or saving
+budgets. Original syntax failure adds0.072s/31784960B sampled separately.
+
+This verifies deterministic tooling/discovery and embedded recipe behavior only.
+No independent artist-agent/image-tool evaluation or new art-generation request;
+creative quality, instruction-following, physical/Desktop visual evidence and
+five-character CPU/RAM acceptance remain open. Only Mac native runtime checked.
+No owner app/data, backend switch, connection, model inference, permission retry,
+ESTOP, pause or timer action. The full characters feature remains unreleased.
+
 # No-overwrite creator pack import — Mac CLI step, unreleased
 
 `pets import DIRECTORY SLUG` uses the existing bounded snapshot loader and pet
