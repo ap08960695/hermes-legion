@@ -69,8 +69,24 @@ and local font stacks remain; normal main/HUD/secondary windows still load and
 deduplicate theme fonts. Suppressed fonts do not poison that cache. Four new
 regression cases and 23 neighboring theme cases pass, as do scoped lint,
 renderer types and the fixed renderer build. This guards the theme-font branch,
-not every custom CSS or asset URL. No native trial after the fix, Local60, CUA,
-screenshots or character resource acceptance is claimed. [Evidence and limits](verification.md#bot-character-overlay-preview--offline-source-step-unreleased).
+not every custom CSS or asset URL. A fresh contained native fixture subsequently
+reached Local60 with the fixed production artifact, zero Desktop SSH and no
+font/network refusal. CUA paired screenshots show only its control window's
+normal-to-actors button transition. Overlay receiver telemetry stayed null;
+actors, motion and mascot restoration are unproved. Observation admission
+refused insufficient remaining reserve before the next action and closed the
+trial permanently. Raw phase measurements cannot establish character CPU/RAM.
+The fixture also lost console error text by using an obsolete callback shape;
+a prepared offline repair preserves full event details but has not been run
+natively in that round. A later diagnostic captured the missing fixture method
+`onPreviewFileChanged`: production preload provides the passive event listener,
+while the isolated host omitted it. Reusing that real subscription fixes the
+fixture's bootstrap: a distinct host receives a run-bound overlay ACK and
+reaches Local60 with unchanged renderer/native IPC artifacts. This identifies a
+fixture defect; no product-source fix is inferred. Its app-filtered window
+inventory lists control only, so overlay images, five actors, motion and resource
+acceptance remain open. The later expanded visual attempt also ended at its
+deadline. No completed character acceptance is claimed. [Evidence and limits](verification.md#bot-character-overlay-preview--offline-source-step-unreleased).
 
 Persistent all-bot tracking, character interactions/open controls, per-bot packs,
 display-only sleep handling and actual visibility/reduced-motion/resource

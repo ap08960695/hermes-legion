@@ -91,8 +91,9 @@ paint, theme/mode changes and a later normal paint reusing the same module to
 check the skipped font was not cached. Scoped lint has zero errors/warnings;
 renderer types and a separate fixed production renderer build pass. Failed
 native artifact hashes are kept separately from the fixed artifact hashes.
-No native run after the fix, Local60, CUA, screenshot, actual Monitor/bot flow,
-five-character CPU/RAM or whole-task saving is claimed. Failed raw state and
+At completion of round210 no native run after the fix, Local60, CUA,
+screenshot, actual Monitor/bot flow, five-character CPU/RAM or whole-task saving
+was claimed. The following attempt records the later, limited startup evidence. Failed raw state and
 receipts remain at `../uitest-v090-c2q4iijp/characters-r210`.
 
 Two source/test sections are exported against the same pinned upstream base,
@@ -101,6 +102,128 @@ The kit now has 1151 paths. Desktop selection appends this test (179 total);
 Python selection remains 1536, with prior ordering/other keys unchanged. No
 version, tag, adoption or release. Next is a fresh contained Local-only native
 trial of the fixed overlay; full characters capability remains incomplete.
+
+# Character preview native attempt — startup progress, UI proof blocked
+
+Round211 reused 18 still-matching feature/theme source hashes from committed
+`a4c3a2d`; no product source, patch section, target or test-selection change.
+Fresh renderer and native IPC builds pass under the bounded runner. The launched
+fixture binds its actual source/build/guard hashes and exact loaded overlay URL;
+27 theme cases and earlier feature unit results are reused, not rerun or summed.
+The Chromium sandbox, guarded Node I/O/network, OS-contained child processes,
+per-session URL/navigation/IPC fences and isolated Cocoa/home/app-data paths
+remain. They do not establish equivalent outer OS protection for privileged
+Electron. Nineteen URL/IPC controls and one positive/19 negative observer
+controls pass offline; no permission or owner-data changes.
+
+One fresh native trial loaded the control and production overlay document.
+Local60 passed after 60.060 seconds in overlay mode: DesktopSSH0, no gateway,
+model or external request/refusal. The round210 Google font refusal did not
+recur. Original PID/birth/nonce, main+overlay IDs/URLs, native visibility/unlocked
+state and artifact identity are checked before/after CUA observations. Screen
+was unlocked before launch; no input to owner apps or other machines.
+
+CUA paired AX/images show only the control window: Mode normal, then Mode actors
+after its real Preview button. They are not pictures of a mascot or five actors.
+The overlay preload receiver's telemetry remained null. No actual overlay-state
+receipt, five-character frame, motion or mascot restoration is established.
+The next stop-preview request was refused because the acceptance reserve was
+below 20 seconds; no stop-preview input occurred. Permanent INVALID/STOP then
+closed all three native product processes, 217.870 seconds, sampled peak
+594,821,120 bytes including guardian, zero survivors. This is an observation-
+budget refusal, not proof the 240-second total deadline expired. No second trial
+or changed live criteria. CUA completion summary was sent once.
+
+Raw phase metrics were generated for windows named no-overlay/main, mascot and
+actors. Those labels do not prove the rendered states. Receiver acknowledgement
+and visual actor/motion evidence are absent, so the measurements are explicitly
+unaccepted for 13c CPU/RAM comparison. `measurements_completed` in the original
+closure means the sampler collected a phase, not that characters rendered.
+Original measurement/closure files remain unchanged beside a separate
+`acceptance-qualification.json`; no budget or saving claim follows from them.
+
+Read-only attribution found a fixture evidence-loss defect: installed Electron44
+`electron.d.ts` gives event details as the first console-message argument and a
+deprecated numeric level as the second. The fixture read the second as details,
+logging only `3`; its error-severity check could not fire. The missing message
+cannot be recovered, and the renderer's cause remains unknown. A separate
+next-attempt adapter now projects first-argument message/source/line/severity
+and explicitly rejects numeric/malformed events. Ten synthetic contract cases
+and syntax checks pass; this adapter was not part of the failed native trial
+and proves no native error recovery or product fix.
+
+Private paired observations and limits:
+`../evidence/bot-characters-native-attempt-20261117-r211`. Raw states, signed
+fixture metadata, launched scripts/build hashes, receiver/console records,
+closure and offline preparation: `../uitest-v090-c2q4iijp/characters-r211`.
+Next: use readable console attribution and mount/state-ack fail-fast gates,
+predeclare an owned-overlay capture path and shorter sequence, then one fresh
+contained Local-only attempt. Full characters acceptance remains incomplete.
+No COMMIT-MSG for this unfinished item; no version, release or adoption.
+
+# Overlay bootstrap diagnosis — fixture repair proven, visual acceptance open
+
+Round212 completes startup attribution and a fixture-only fidelity repair.
+Product source remains committed `a4c3a2d`; 18 feature/theme hashes, production
+renderer and native IPC artifact hashes stay unchanged. No patch or selection
+change, version or release. Earlier failed attempts remain failed.
+
+One fresh 120-second diagnostic uses the corrected Electron console listener,
+early overlay opening and run-bound receiver ACK gate. It stops after 6.013
+seconds with the actual error: `onPreviewFileChanged is not a function` in the
+production SDK chunk. Peak 506,970,112 bytes including guardian, three native
+product processes, zero survivors. No Local60 or UI action occurred. Source
+trace: plugin initialization calls runtime-loader's required preview-file
+subscription; production `electron/preload.ts` provides it, but the private
+minimal fixture preload did not. This identifies a fixture contract omission,
+not a Hermes product defect.
+
+A meaningful VM/EventEmitter regression fails on the old preload's missing
+function. The repaired fixture reuses production's actual passive channel and
+callback/unsubscribe behavior. Tests prove payload delivery, independent
+unsubscription and zero outbound IPC; no fake/noop native capability or product
+edit. Scope was explicitly amended before one distinct repaired fixture: two
+round212 native trials total, no failed-generation revival or third launch.
+
+The repaired host reuses the same current production renderer/native IPC and
+all prior containment. Its real overlay receiver acknowledges the fixture
+nonce and normal state; Local60 passes at 60.061 seconds without the earlier
+console or font refusal. Chromium sandbox, Node I/O/network guards, OS-contained
+children, own Cocoa paths and session URL/IPC fences stay. This is not equivalent
+to outer OS containment of compromised privileged Electron. Resource bounds
+stay at four native product processes and under 3.5 GiB.
+
+The installed agent-desktop read-only `list-windows --app UNIQUE_NAME` returns
+only the control window. Its PID/process instance matches the owned app; the
+transparent panel is absent from that inventory. No guessed window ID,
+unscoped/screen capture, permission change or mutation follows. The driver
+closes cleanly; combined native/driver/observers sampled peak 602,357,760 bytes.
+No overlay image or screenshot command was obtained. This does not prove the
+driver cannot capture a panel by another properly bound native target.
+
+No actor input, five-actor phase, motion, restoration or metrics acceptance.
+The expanded visual trial remained incomplete and its guardian ultimately
+fired the native total deadline; final closure is 240.872 seconds, sampled peak
+565,313,536 bytes including guardian, three product processes, zero survivors.
+This is not a strict 240-second total pass. The runner had waited until the total
+limit instead of ending acceptance at 215 seconds to preserve cleanup reserve.
+A separate next-attempt runner corrects that stop boundary; it is not yet
+native-verified. No further native launch this round. CUA functions were prepared
+outside the native clock; no CUA app binding/input/AX/image operation ran, and
+one completion summary closed that preparation.
+
+Installed Electron declarations document `getMediaSourceId()` as a native
+window identifier whose macOS component is CGWindowID. A next-attempt telemetry
+copy and strict parser prepare a run-bound own-panel target for an explicit
+app+window screenshot. Two positive/eight negative synthetic parser cases pass.
+No live media ID or panel capture is claimed; this is a diagnostic lead, not
+permission to guess IDs or remove app scope. Resolve the capture path and
+prepare every step before a fresh trial starts.
+
+Completed handoff is diagnosis/fixture-bootstrap evidence only, suitable for a
+documentation commit. Full visual/interaction/resource acceptance is open.
+Raw original and repaired records:
+`../uitest-v090-c2q4iijp/characters-r212` and `characters-r212-fixed`.
 
 # Pet creator preview — native terminal acceptance, unreleased
 
