@@ -235,6 +235,21 @@ startup. Under the same OS/audit fences, actual imports pass; fixture-first gate
 shadowing and a foreign capture helper both fail before startup. The original
 failed trial is retained, with no live retry or capture-success claim.
 
+A later fresh trial carries that import guard into the real launch: the production
+gateway, main and renderer reach the original 480x620 Local window. CUA selection
+returns AX text for the exact app/connection nonce, default profile and Connected
+state. The next controller call loses its app binding before Raise dispatch;
+there is no screenshot, 60-second gate or provider capture. INVALID/STOP closes
+all owned processes. Normal guardian cleanup exit does not make this trial pass.
+
+Future controller templates declare the app binding at top level and enclose
+admission, argument evaluation, API calls and capture in an outer error boundary.
+Offline JavaScript checks reproduce the old missing-binding escape before helper
+entry, then prove INVALID/STOP for that error and admission/operation/capture
+failures without any real UI call. These templates are not live-validated; the
+failed trial and its collector remain unchanged. No same-round retry, native
+input, permission or guard relaxation follows this preparation result.
+
 Next fresh trial: one default profile, unchanged production renderer/main/preload,
 one common-tool AX capture in the existing gateway process, and one exact
 snapshot subprocess admission. Compare nonce content, PID/birth/executable,

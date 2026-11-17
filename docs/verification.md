@@ -581,6 +581,31 @@ native input and the agent-desktop feature release remain open.
 
 The earlier tiny-renderer capture evidence below retains its original scope.
 
+A subsequent fresh full-production trial passes the import boundary and starts
+the real Local gateway/main/renderer. CUA app selection returns the original
+window's AX text with app/connection nonce, default profile and Connected state.
+That tool-returned observation is not a saved AX/pixel pair or native provider
+capture. The next controller call raises a missing-app-binding error during
+argument evaluation, before Raise or capture dispatch. INVALID/STOP terminates
+the trial without retry. No 60-second gate, screenshot, model prompt or native
+driver operation occurs. Earlier failed trials remain failed.
+
+Guardian cleanup exits normally after 42.48 seconds with zero survivors and a
+gateway/model-server stop receipt; this is closure evidence, not acceptance.
+Sampled peak is four product processes, six including OS utilities, 919,797,760
+bytes including the guardian. A transient gateway-ensure Python occupies the
+fourth slot; this does not prove a free driver slot at capture time. External
+CUA/advisors/build/controllers are outside that runtime sample.
+
+Future-only controller templates declare the app binding outside the block and
+wrap the entire call. Offline JavaScript controls reproduce the old argument
+error escaping the operation helper, then prove INVALID/STOP before any UI API
+for a missing binding and on admission, operation and capture failures. A
+synthetic selection checks the declaration shape; actual CUA binding persistence
+and full-production provider capture remain unverified. Four configs/geometry
+absence restored, eleven source hashes unchanged, owned processes closed and
+sized disposable artifacts removed. No product/default/patch behavior changes.
+
 The actual common tool and selected provider parse a complete macOS native
 snapshot with five refs from an isolated production main/preload and synthetic
 renderer. Private checks bind live PID/birth/exe, nonce content, window and
