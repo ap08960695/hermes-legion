@@ -341,4 +341,10 @@ The popover and label accept clicks. The animation and transparent margins pass
 through on platforms that support it. [Open in Hermes](verification.md#open-the-full-bot-chat-from-its-character-unreleased)
 uses one action scoped to the displayed output and rechecks the owning
 profile's named chat before opening it. A replaced or missing chat requires a
-fresh preview. File actions and the five-character resource budget remain open.
+fresh preview.
+
+Opening a [web link](verification.md#open-web-links-from-a-bots-saved-reply-unreleased)
+uses the existing default-browser opener. A complete plain-text reply can show
+up to two distinct standalone HTTP or HTTPS destinations. Electron keeps the
+validated destinations for the current popover and accepts one explicit link
+click. File actions and the five-character resource budget remain open.

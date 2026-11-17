@@ -1,3 +1,19 @@
+# Open web links from a bot’s saved reply (unreleased)
+
+The character popover shows up to two distinct standalone HTTP or HTTPS
+destinations from a complete saved reply. Select the full URL to send it to
+the default browser. Long destinations wrap. Truncated replies, Markdown
+links, file paths and malformed URLs appear as plain text. A preview accepts
+one link click, and **Open in Hermes** remains available afterward.
+
+The isolated Mac Local run used a reply with two destinations and a duplicate.
+The popover displayed two choices and made one authenticated output read.
+Selecting the second destination handed its exact URL, including the query
+and fragment, to Electron’s browser opener once. The fixture intercepted that
+handoff without launching a browser. The app passed the 60-second zero-SSH
+check and all fixture processes exited. Renderer and IPC regressions cover
+stale or replayed clicks, forged payloads and incomplete or unsafe links.
+
 # Open the full Bot Chat from its character (unreleased)
 
 **Open in Hermes** appears after the overlay loads the bot's saved output.
