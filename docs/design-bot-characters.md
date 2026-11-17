@@ -323,3 +323,10 @@ then saved an installed pack through Edit Profile, read it back through a
 separate authenticated Local request, and confirmed its art for the bot and
 worker in the shared overlay. The preview was exercised with a synthetic
 activity row. Real events and overlay resource acceptance remain open.
+
+The [clarification walkthrough](verification.md#monitor-character-shows-the-focused-bots-pending-clarification-unreleased)
+shows the waiting pose for the focused canonical Bot Chat until its pending
+request settles. Monitor matches the existing runtime signal to one exact bot
+row by connection, profile and canonical chat ID. The first native proof uses
+synthetic prompt events through the Local gateway. Worker completion still
+needs a reliable link between the worker session and its terminal outcome.

@@ -32435,11 +32435,11 @@ index abe8afb7e670b207a192ac15fb797fb8dfed168e..2b2824a97bb7cfd9d21057f4efdfd811
              <SelectContent>
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..c278092453116ddee9d92008b84de7993b25bd98
+index 0000000000000000000000000000000000000000..0a0c93a5b581b32cbc37713359c5c5f8fa3bd40e
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx
-@@ -0,0 +1,207 @@
-+import { host, type PluginProfileRoute } from '@hermes/plugin-sdk'
+@@ -0,0 +1,244 @@
++import { atom, host, type PluginProfileRoute } from '@hermes/plugin-sdk'
 +import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 +
@@ -32514,6 +32514,43 @@ index 0000000000000000000000000000000000000000..c278092453116ddee9d92008b84de799
 +  expect($petCharacterPreview.get()?.characters).toHaveLength(3)
 +  view.unmount()
 +  expect($petCharacterPreview.get()).toBeNull()
++})
++
++it('waits only for the current canonical clarification on the exact ready owner', () => {
++  const $clarification = atom<null | { connectionId: string; profile: string; storedSessionId: string }>(null)
++  const original = Object.getOwnPropertyDescriptor(host.state, 'focusedClarification')
++  Object.defineProperty(host.state, 'focusedClarification', { configurable: true, value: $clarification })
++
++  try {
++    const local = { ...row('writer', { canonical_session: { id: 'root', resolved_id: 'tip' } }), working: false }
++    const other = row('writer', { connectionId: 'other', canonical_session: { id: 'root', resolved_id: 'tip' } })
++    const view = render(<BotMonitor now={2_000_000} onOpen={open} rows={[local, other]} />)
++    fireEvent.click(screen.getByRole('button', { name: 'Show bot characters' }))
++    const states = () => $petCharacterPreview.get()?.characters.map(({ source, state }) => [source, state])
++
++    expect(states()).toEqual([['other', 'run']])
++    act(() => $clarification.set({ connectionId: 'local', profile: 'writer', storedSessionId: 'tip' }))
++    expect(states()).toEqual([['local', 'waiting'], ['other', 'run']])
++
++    view.rerender(<BotMonitor now={2_000_000} onOpen={open} rows={[{ ...local, needsAttention: true }, other]} />)
++    expect(states()).toEqual([['local', 'failed'], ['other', 'run']])
++    view.rerender(<BotMonitor now={2_000_000} onOpen={open} rows={[local, other]} stale />)
++    expect(states()).toEqual([])
++
++    view.rerender(<BotMonitor now={2_000_000} onOpen={open} rows={[local, { ...local, bot: { ...local.bot, name: 'writer-alias',
++      route: { connectionId: 'local', mode: 'local', profile: 'writer', targetProfile: 'writer' } } }]} />)
++    expect(states()).toEqual([])
++    view.rerender(<BotMonitor now={2_000_000} onOpen={open} rows={[local, other]} />)
++    act(() => $clarification.set({ connectionId: 'local', profile: 'writer', storedSessionId: 'side-chat' }))
++    expect(states()).toEqual([['other', 'run']])
++    act(() => $clarification.set({ connectionId: 'local', profile: 'writer', storedSessionId: 'root' }))
++    expect(states()).toEqual([['local', 'waiting'], ['other', 'run']])
++    act(() => $clarification.set(null))
++    expect(states()).toEqual([['other', 'run']])
++  } finally {
++    if (original) {Object.defineProperty(host.state, 'focusedClarification', original)}
++    else {Reflect.deleteProperty(host.state, 'focusedClarification')}
++  }
 +})
 +
 +it('does not reinterpret historical failures or idle/unknown/unqualified sources as current actors; caps to five and stops on request', () => {
@@ -32648,11 +32685,11 @@ index 0000000000000000000000000000000000000000..c278092453116ddee9d92008b84de799
 +})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..fc40c87334cc253b3adbf3f59d0c0498585aff1e
+index 0000000000000000000000000000000000000000..4de640462ce869c7087e2e7ffb51ab622260a22d
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx
-@@ -0,0 +1,105 @@
-+import { atom, Button, type PetCharacter, type PetCharacterPublisher, useValue } from '@hermes/plugin-sdk'
+@@ -0,0 +1,123 @@
++import { atom, Button, host, type PetCharacter, type PetCharacterPublisher, useValue } from '@hermes/plugin-sdk'
 +import { useEffect, useMemo, useRef, useState } from 'react'
 +
 +import { type CharacterSpriteTarget, createCharacterSpriteLoader } from './character-sprites'
@@ -32665,6 +32702,7 @@ index 0000000000000000000000000000000000000000..fc40c87334cc253b3adbf3f59d0c0498
 +import { getPluginCtx } from './shared'
 +
 +const unavailable = atom(false)
++const noClarification = atom(null)
 +interface Actor {
 +  character: PetCharacter
 +  target?: CharacterSpriteTarget
@@ -32674,6 +32712,7 @@ index 0000000000000000000000000000000000000000..fc40c87334cc253b3adbf3f59d0c0498
 +export function MonitorCharacters({ rows, now, stale }: Pick<BotMonitorProps, 'rows' | 'now' | 'stale'>) {
 +  const b = useBots(), pet = getPluginCtx()?.pet
 +  const visible = useValue(pet?.visible || unavailable), metadata = useValue($botMeta)
++  const clarification = useValue(host.state.focusedClarification || noClarification)
 +  const preview = useRef<PetCharacterPublisher | null>(null)
 +  const loader = useRef<ReturnType<typeof createCharacterSpriteLoader> | null>(null)
 +  const [active, setActive] = useState(false), [spriteVersion, setSpriteVersion] = useState(0)
@@ -32689,6 +32728,18 @@ index 0000000000000000000000000000000000000000..fc40c87334cc253b3adbf3f59d0c0498
 +    const current: Actor[] = []
 +
 +    if (!active || !visible || stale) {return current}
++
++    const waiting = clarification ? rows.filter(({ bot }) => {
++      const session = bot.canonical_session
++
++      if (session?.id !== clarification.storedSessionId && session?.resolved_id !== clarification.storedSessionId) {return false}
++
++      const { route } = resolveBotConnectionRoute({ ...bot, sourceScoped: true })
++
++      return route?.connectionId === clarification.connectionId && route.profile === clarification.profile
++    }) : []
++
++    const waitingRow = waiting.length === 1 ? waiting[0] : null
 +
 +    for (const row of [...rows].sort((a, z) => botRosterKey(a.bot).localeCompare(botRosterKey(z.bot)))) {
 +      if (!row.bot.connectionId || row.bot.retained || row.bot.ghost || row.source.key !== 'ready' || !row.source.available) {continue}
@@ -32711,10 +32762,14 @@ index 0000000000000000000000000000000000000000..fc40c87334cc253b3adbf3f59d0c0498
 +          } }
 +      }
 +
-+      if (row.working || row.needsAttention) {
++      const awaitingInput = row === waitingRow
++
++      if (row.working || row.needsAttention || awaitingInput) {
++        const detail = row.needsAttention ? row.attentionHint : awaitingInput
++          ? b.group.waitingForAnswer : row.bot.canonical_session?.preview || ''
++
 +        current.push({ target, character: { id: `${key}:bot`, name: row.name, source,
-+          detail: stripPreviewMarkdown(row.needsAttention ? row.attentionHint : row.bot.canonical_session?.preview || ''),
-+          state: row.needsAttention ? 'failed' : 'run' } })
++          detail: stripPreviewMarkdown(detail), state: row.needsAttention ? 'failed' : awaitingInput ? 'waiting' : 'run' } })
 +      }
 +
 +      for (const worker of activeWorkerSessions(row.bot, now)) {
@@ -32731,7 +32786,7 @@ index 0000000000000000000000000000000000000000..fc40c87334cc253b3adbf3f59d0c0498
 +    }
 +
 +    return current
-+  }, [active, visible, stale, rows, now, metadata, b])
++  }, [active, visible, stale, rows, now, metadata, b, clarification])
 +
 +  useEffect(() => {loader.current?.update(actors.flatMap(actor => actor.target ? [actor.target] : []))}, [actors])
 +  useEffect(() => {
@@ -40839,6 +40894,43 @@ index 565db36838c541199b323f69f99a33b9f4833c8e..ac4bf2bddbabf1dbf39c18b613ba891b
 -    return takeSessionDraft(stored).text || null
 +    return takeSessionDraft(stored, owner).text || null
    },
+diff --git a/apps/desktop/src/sdk/host-state.test.ts b/apps/desktop/src/sdk/host-state.test.ts
+index d8b9185feafc444a121334f59a46cfc131171ef2..495f5ed9ff15616861732a3aca0b2769f2c0a665 100644
+--- a/apps/desktop/src/sdk/host-state.test.ts
++++ b/apps/desktop/src/sdk/host-state.test.ts
+@@ -151,2 +151,32 @@ describe('host.state.focusedSessionProfile', () => {
+
++  it('exposes only a pending clarification for the bound stored session and unique owner', async () => {
++    const { host, session, states } = await setup()
++    const { $clarifyRequests } = await import('@/store/clarify')
++
++    session.$activeSessionId.set('runtime')
++    session.$selectedStoredSessionId.set('chat')
++    session.$sessions.set([{ id: 'chat', profile: 'worker', connection_id: 'local' } as never])
++    states.$sessionStates.set({ runtime: { storedSessionId: 'chat', needsInput: true } as never })
++    expect(host.state.focusedClarification.get()).toBeNull()
++
++    $clarifyRequests.set({ runtime: { sessionId: 'runtime' } as never })
++    expect(host.state.focusedClarification.get()).toEqual({ connectionId: 'local', profile: 'worker', storedSessionId: 'chat' })
++
++    session.$sessions.set([{ id: 'chat', profile: 'worker', connection_id: 'local' } as never,
++      { id: 'chat', profile: 'worker', connection_id: 'another' } as never])
++    expect(host.state.focusedClarification.get()).toBeNull()
++
++    session.$sessions.set([{ id: 'chat', profile: 'worker', connection_id: 'local' } as never])
++    states.$sessionStates.set({ runtime: { storedSessionId: null, needsInput: true } as never })
++    expect(host.state.focusedClarification.get()).toBeNull()
++
++    states.$sessionStates.set({ runtime: { storedSessionId: 'chat', needsInput: true } as never })
++    $clarifyRequests.set({})
++    expect(host.state.focusedClarification.get()).toBeNull()
++    states.$sessionStates.set({})
++    session.$activeSessionId.set(null)
++    session.$selectedStoredSessionId.set(null)
++    session.$sessions.set([])
++  })
++
+   it('fails closed when duplicate stored or lineage ids resolve to different connections', async () => {
 diff --git a/apps/desktop/src/sdk/index.test.ts b/apps/desktop/src/sdk/index.test.ts
 index 24bf8b26c27fef8286c4bb1b8ceaa56e3562ea95..1da04ebc77ee47e6f0ece49d7b073ef71bfec2b1 100644
 --- a/apps/desktop/src/sdk/index.test.ts
@@ -40875,10 +40967,36 @@ index 24bf8b26c27fef8286c4bb1b8ceaa56e3562ea95..1da04ebc77ee47e6f0ece49d7b073ef7
 +    stashSessionDraft('stored-stash', 'runtime-addressed', [], 'default')
 
 diff --git a/apps/desktop/src/sdk/index.ts b/apps/desktop/src/sdk/index.ts
-index 1771079ce633e58b6cc4374d95417cb169b71984..949cc1b2cd5d4e82d9a3f68a8c63de1952394611 100644
+index 1771079ce633e58b6cc4374d95417cb169b71984..c100adcdc188c9b21c989fe743c11eaa12db337e 100644
 --- a/apps/desktop/src/sdk/index.ts
 +++ b/apps/desktop/src/sdk/index.ts
-@@ -1264,2 +1264,9 @@ export const host = {
+@@ -52,2 +52,3 @@ import { traceIdentityChange } from '@/lib/identity-trace'
+ import { completeMcpDesktopOAuth } from '@/lib/mcp-dashboard-oauth'
++import { $clarifyRequests } from '@/store/clarify'
+ import {
+@@ -214,2 +215,16 @@ const $focusedSessionOwner = computed(
+
++// A remembered needsInput bit can survive reconnect. Require the pending
++// request on this runtime and the same stored session currently in view.
++const $focusedClarificationId = computed(
++  [$focusedRuntimeId, $focusedSessionState, $focusedStoredSessionId, $clarifyRequests],
++  (runtimeId, state, storedId, requests) =>
++    runtimeId && storedId && state?.storedSessionId === storedId && state.needsInput &&
++    requests[runtimeId]?.sessionId === runtimeId ? storedId : null
++)
++
++const $focusedClarification = computed(
++  [$focusedClarificationId, $focusedSessionOwner],
++  (storedSessionId, owner) => storedSessionId && owner ? { ...owner, storedSessionId } : null
++)
++
+ const $focusedSessionProfile = computed(
+@@ -595,2 +610,4 @@ export const host = {
+     cwd: readonlyAtom<string>($currentCwd),
++    /** Pending clarification on the focused stored chat with a known owner. */
++    focusedClarification: readonlyAtom($focusedClarification),
+     /** Runtime id of the FOCUSED chat session — the interacted tile, else the
+@@ -1264,2 +1281,9 @@ export const host = {
 
 +  /** Update an open workspace caption without remounting its content or moving focus. */
 +  setWorkspaceTitle: (id: string, title: string): void => {
@@ -40888,7 +41006,7 @@ index 1771079ce633e58b6cc4374d95417cb169b71984..949cc1b2cd5d4e82d9a3f68a8c63de19
 +  },
 +
    /** Name a workspace owner on its tabs (a bot's display name). A canonical
-@@ -1854,2 +1861,3 @@ export { type BudgetedLoop, type BudgetedLoopOptions, createBudgetedLoop } from
+@@ -1854,2 +1878,3 @@ export { type BudgetedLoop, type BudgetedLoopOptions, createBudgetedLoop } from
  export { CHAT_EMPTY_AREA, type ChatEmptyContribution, type ChatEmptyProps } from '@/lib/chat-empty'
 +export { isMissingRpcMethod } from '@/lib/gateway-rpc'
  /** THE confirm flow for guarded model switches — when a gateway model-switch

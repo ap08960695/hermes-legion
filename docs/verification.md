@@ -1,3 +1,23 @@
+# Monitor character shows the focused bot’s pending clarification (unreleased)
+
+Monitor uses the existing waiting pose while the focused canonical Bot Chat
+has a pending clarification for one matching connection and profile. It clears
+the pose when the request settles. The renderer regressions cover lost runtime
+bindings, missing or ambiguous owners, retained rows, and error precedence.
+
+The isolated Mac Desktop used its canonical Local gateway. A synthetic
+clarification appeared in Chat. After opening Monitor and enabling the preview,
+the owned overlay showed the amber waiting pose next to cyan activity. The
+settle event cleared amber while cyan remained. Both captures were checked
+in sRGB. The first run switched profiles after the prompt arrived and captured
+no waiting pose. The successful retry selected the mascot’s profile before
+opening Chat and kept that profile through both captures.
+
+Each run passed at least 60 seconds with zero Desktop SSH. The peak was four
+product processes and 1.09 GiB of sampled RSS including the observer. All test
+processes exited. Model-generated clarifications, worker completion, output
+preview and the five-pack resource target remain open.
+
 # Saved character reaches the native Mac Monitor overlay (unreleased)
 
 An isolated Electron control first opened a plain Character disclosure and
