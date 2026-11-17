@@ -334,6 +334,15 @@ smaller window fell short of the required repeatable CPU or memory
 savings. Keep the current height so the existing output popover has
 room. The five-character resource budget remains open.
 
+A matched Mac comparison tested CSS background positioning in place of
+canvas drawing at the same size and cadence, using the full sprite sheets.
+Captured frames showed five moving characters, the same caption positions
+and a transparent backdrop. CSS used 177.7–185.9 MiB
+more physical footprint than canvas. It added 295.6–296.6 MiB
+and 3.01–3.28 CPU points over no overlay. Keep canvas and
+test whether a shared paint region can reduce CPU with active-row residency.
+The five-character resource budget remains open.
+
 The [cross-panel regression](verification.md#edit-profile-to-monitor-character-handoff-unreleased)
 verifies that the saved character reaches Monitor after a roster reload, even
 with the optimistic metadata cache cleared. The isolated Mac walkthrough
