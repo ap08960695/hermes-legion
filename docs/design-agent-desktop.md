@@ -355,11 +355,17 @@ Native input's existing `InteractionLease` instead creates/manages the canonical
 (macOS resolves `/tmp` through `/private/tmp`). A no-UI source-function probe
 previously reproduced the workspace write refusal there. This is a necessary
 fixture blocker, not proof of the earlier click's exact failure provenance.
-The owner has not granted the narrow exception for that canonical mechanism.
-Workspace refstore access, Accessibility permission and the desired feature do
-not grant it. Do not attempt input to probe that write, relocate/bypass the lock,
-weaken the sandbox or change permissions. Capture does not establish input
-readiness; ordinary installations are not subject to this trial's write rule.
+At those earlier trials, no narrow write exception had been established for
+that canonical mechanism. Workspace refstore access and a permission status did
+not prove input readiness; those failed trials remain failed.
+
+Later GOAL lead notes report Mac Screen Recording granted and ask to continue
+input-lease work on an isolated test app. The capture-permission blocker is
+cleared by that report; native lease acquisition/act/verify is still untested.
+Bind future input to the test app and the applicable write scope, retaining the
+canonical lease instead of relocating/bypassing it or changing system permission
+settings. Ordinary installations are not subject to the earlier fixture's write
+rule. No permission audit or input is performed in the runtime-boundary round.
 
 ## Remaining capability set
 

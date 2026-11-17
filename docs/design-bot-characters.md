@@ -211,6 +211,12 @@ startup because its interpreter runtime was under the denied tree. Both native
 attempts remain unaccepted; no third launch or boundary weakening. This is not
 native UI, per-bot animated pack assignment, or character/resource acceptance.
 
+The subsequent workspace-runtime preflight now passes the strict owner-read,
+child-inheritance and exec/protocol controls, with no tested owner runtime
+dependency. Its one actual-pytest trial still stops before RPC on a local Git
+version-metadata subprocess. Runtime preparation is complete; handler/UI
+acceptance remains open. [Boundary evidence](native-checks-and-test-memory.md#workspace-runtime-under-a-strict-hermes-home-read-fence).
+
 ## Remaining capability work
 
 The first overlay slice must map actual active bots/workers to bounded actors in

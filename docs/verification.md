@@ -1,3 +1,37 @@
+# Workspace runtime boundary — controls complete, native handler proof incomplete
+
+A reusable workspace copy of the public interpreter/runtime/test packages now
+boots inside the unchanged strict owner-Hermes-home read fence. Source tools and
+owner state are not modified. Fresh venv/path handling keeps copied executable
+`.pth` hooks inactive and resolves all symlinks within the bundle. The complete
+repaired preflight passes:413module origins/405libraries avoid owner runtime,
+parent/child read-deny controls pass, the resolved transport-helper executable is
+denied, and Git file transport is refused. Exact guard/interpreter hashes bind
+this to the later trial. [Scope and procedure](native-checks-and-test-memory.md#workspace-runtime-under-a-strict-hermes-home-read-fence).
+
+Original preflight remains failed at `copy2` system-flag metadata preparation.
+Before another operation, a public/private plan amendment permits one distinct
+byte-only exec-control, one complete preflight and then one actual pytest only
+if all controls pass. The repaired preflight passes; no guard weakening.
+
+That one actual pytest fails before pet RPC assertions. Normal package import
+requests workspace-local Git version metadata; its unexpected-subprocess audit
+blocks the attempt before execution. No RPC/startup/UI acceptance, retry or
+subprocess exception is claimed. Runtime/controls are the completed milestone;
+full native source-isolation acceptance is still open. Round218 failures remain
+failed. One fresh actual handler trial, two consultations, no review chain.
+
+No product source, patch section, test selection, dependency lock, defaults,
+version/tag/release or owner-app adoption changes. The7matching source hashes
+reuse38UI/type/build evidence rather than rerun it. Current required companion,
+tracked-copy verifier and secret gates remain mandatory. No owner app, ai/other
+host, permission retry, input, Hermes inference, ESTOP, pause or timer action.
+
+New GOAL lead notes report Monitorv0.34.0 released/tagged/pushed and Mac Screen
+Recording granted. These close the stale release/capture-grant statuses; they
+do not prove app adoption or native input/act/verify. This round performs neither
+permission audit nor input. Canonical lease behavior stays untested.
+
 # Pet picker source isolation — offline source fix, unreleased
 
 PetTab formerly queried the active gateway and cached thumbnails by slug even

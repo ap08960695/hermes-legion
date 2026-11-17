@@ -1,5 +1,57 @@
 # Native checks and bounded QA memory
 
+## Workspace runtime under a strict Hermes-home read fence
+
+The current Mac fixture now has an independently located interpreter and tested
+package closure inside the workspace. It reuses copies of the installed public
+standalone Python3.14.9 distribution and exact runtime/test package directories;
+no owner profile, auth, database or app settings are copied. Sources stay intact.
+The reusable tool bundle contains595338551logicalbytes before its small venv and
+receipts; APFS clonecopy was used, so physical allocation/savings are unmeasured.
+It is retained for subsequent checks rather than recreated each round.
+
+A fresh venv points only to the copied base. Its only added `.pth` contains two
+workspace package paths. The dependency directory's executable `.pth` entries
+are inspected but not processed; the editable Hermes finder is not activated.
+All copied symlinks resolve inside the bundle. The successful guarded preflight
+checks interpreter/prefixes, all413loaded module origins, and405loaded libraries;
+no tested load depends on the owner Hermes tree. This is the tested import set,
+not a claim about every possible Hermes dependency or native app startup.
+
+OS fences precede interpreter initialization: owner Hermes-home reads, outbound
+networking and SSH/Git transport-helper execution are denied, with workspace-only
+writes. Owned parent/child sentinel reads prove denial and allowed-sibling access.
+A resolved executable with the transport-helper basename is denied; positive
+execution works. Git's file protocol is refused with global config/protocols
+restricted. No owner-path probe is used. Guard and interpreter hashes bind the
+preflight to the subsequent actual-pytest attempt.
+
+The first preflight remains failed: `copy2` reaches a restricted system-flag copy
+while preparing its negative exec-control. Negative exec/protocol checks have
+not run then. An explicit prospective amendment prepares a distinct byte-identical
+`0755` control before the sandbox, runs one complete new preflight, and permits
+one actual pytest only on full pass. That preflight passes; no fence or acceptance
+criterion changes. It takes0.399s,113410048B sampled including guardian, at most
+three controlled processes. These are fixture costs, not production savings.
+
+The single actual-pytest attempt subsequently fails before RPC: importing
+`hermes_cli` asks Git for checkout version metadata (`rev-parse HEAD`), and the
+unexpected-subprocess audit stops it before execution. Its raw failure remains;
+no retry, subprocess exception or native handler/startup/UI acceptance follows.
+It closes in2.884s,197132288B including guardian,0recorded survivors. Next review
+only the required workspace-local version reads while preserving the owner-read,
+network, transport and process limits. Do not replace the fence with an owner
+exception or reinterpret the earlier uncontained run as accepted.
+
+The completed milestone is the reusable runtime/test-boundary preparation and
+verified controls. Round218's owner-repository probe and strict interpreter-start
+failures remain unaccepted. Current source/patch/selection/defaults are unchanged;
+matching38UI/type/build evidence is reused without another broad source sweep.
+Two advisor consultations used supplied facts, not independent inspection.
+
+
+## Earlier native QA and resource evidence
+
 All twelve native blocking check groups pass on Linux against the previous native
 commit, using the pinned tools, read-only source files and one check at a time.
 The previous 41 Ruff findings and nine ownership/platform findings are resolved;
