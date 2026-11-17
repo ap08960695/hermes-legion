@@ -79,6 +79,21 @@ child evidence and parent verification. An independent paused goal and both
 profile configs remain unchanged. These scripted replies prove orchestration;
 provider reasoning and full worker Stop/cancellation acceptance remain open.
 
+Session Stop now pauses the owning active goal before cancelling its delegated
+work, matching CLI interrupt intent. Resolve the physical compression tip and
+profile; preserve absent, paused and completed goals. Verify persistence because
+the native manager's write is best-effort. Cancellation still runs if saving or
+reading the pause fails, and that failure reaches the caller. Publish the existing
+control snapshot; no new UI state or scheduler.
+
+The real gateway Stop regression ends the child and delivers its interrupted
+result before releasing the held model reply, then checks unchanged goal, child,
+ledger and admissions for three seconds. Normal parent result follow-up remains
+allowed. Desktop `/stop` observations show interrupted work and Goal paused 1/20;
+the full desktop late-reply scenario is unaccepted after an observation-budget
+refusal. Keep that failed trial and do not equate server-handler completion with
+arrival at the cancelled client's callback. Provider reasoning remains open.
+
 Native stop-condition regressions now cover owner goal Pause, an external-blocker
 verdict with delegated choices enabled, and actual exhaustion of a configured
 two-turn budget. Each uses the canonical per-file process isolation. Pause is

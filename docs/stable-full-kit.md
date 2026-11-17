@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1130-path** Legion source, interface and optimization alternative
+This is the complete **1133-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -32,6 +32,13 @@ enforce a configured two-turn budget. Desktop Pause has before/paused/result
 captures. These checks add no runtime code or default changes. Pause allows
 already running work and its result follow-up to finish; full worker cancellation
 remains a separate acceptance item. [Checks and limits](verification.md#captain-pause-and-goal-limits--native-local-acceptance-unreleased).
+
+Session Stop now pauses only its owning active goal before cancelling delegated
+work. Compression/profile ownership and failed-write cancellation have focused
+coverage; the real gateway Stop/held-reply regression and Done/Pause controls
+pass. Desktop `/stop` shows interrupted work and Goal paused 1/20, but its full
+late-reply scenario remains unaccepted after the observation-budget guard stopped
+the trial. [Qualified evidence](verification.md#captain-session-stop--fix-and-qualified-desktop-observations-unreleased).
 
 ## Bot Monitor capability batch — v0.34.0
 

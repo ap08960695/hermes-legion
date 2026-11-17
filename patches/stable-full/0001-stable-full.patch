@@ -42364,21 +42364,36 @@ index fabd763235b15b0790ef708a5eb6f9846889c6b8..65d849eb5e9e070b264d054b7a627270
 +                    handle = os.fdopen(fd, 'r+', buffering=4096, encoding='utf-8')  # windows-footgun: ok — write-only
                      try:
 diff --git a/gateway/session_authority.py b/gateway/session_authority.py
-index 3bc6c596c77c495c1cf318495a84319c211dd523..ae00972b7a37fe1dac25d8c731523be69c2e3ce3 100644
+index 3bc6c596c77c495c1cf318495a84319c211dd523..95d024cb2bbde15bae57bfa4b814cd445e6c2b13 100644
 --- a/gateway/session_authority.py
 +++ b/gateway/session_authority.py
-@@ -1373,3 +1373,3 @@ def backfill_compression_created_sources(db):
- 
+@@ -887,6 +887,10 @@ class SessionAuthority:
+         from tools.async_delegation import interrupt_for_session
+-        if agent is not None:
+-            request_hard_interrupt(agent)
+-        for parent in dict.fromkeys((ref.session_id, self.physical_target(ref))):
+-            interrupt_for_session(session_key=live.route, parent_session_id=parent, reason='user_stop')
++        from gateway.session_control_actions import pause_goal_on_interrupt
++        try:
++            pause_goal_on_interrupt(self, ref)
++        finally:
++            if agent is not None:
++                request_hard_interrupt(agent)
++            for parent in dict.fromkeys((ref.session_id, self.physical_target(ref))):
++                interrupt_for_session(session_key=live.route, parent_session_id=parent, reason='user_stop')
+         return self._handle(ref)
+@@ -1373,3 +1377,3 @@ def backfill_compression_created_sources(db):
+
 -async def initialize_session_authority(runner, *, profile_id, instance_id, db=None, register=True):
 +async def initialize_session_authority(runner, *, profile_id, instance_id, db=None, register=True, store_io=None):
      """Call after exclusive profile ownership, before connecting adapters/API.
-@@ -1379,2 +1379,5 @@ async def initialize_session_authority(runner, *, profile_id, instance_id, db=No
+@@ -1379,2 +1383,5 @@ async def initialize_session_authority(runner, *, profile_id, instance_id, db=No
      """
 +    if store_io is None:
 +        from gateway.session_bootstrap_io import profile_store_io
 +        store_io = profile_store_io
      if db is None:
-@@ -1384,11 +1387,11 @@ async def initialize_session_authority(runner, *, profile_id, instance_id, db=No
+@@ -1384,11 +1391,11 @@ async def initialize_session_authority(runner, *, profile_id, instance_id, db=No
      from pathlib import Path
 -    db_key = await asyncio.to_thread(Path(db.db_path).resolve)
 -    epoch = await asyncio.to_thread(begin_runtime_epoch, db, instance_id=instance_id)
@@ -42396,7 +42411,7 @@ index 3bc6c596c77c495c1cf318495a84319c211dd523..ae00972b7a37fe1dac25d8c731523be6
 +    await store_io(backfill_legacy_session_owners, db)
 +    await store_io(backfill_compression_created_sources, db)
      authority = SessionAuthority(runner, profile_id=profile_id, instance_id=instance_id, db=db, epoch=epoch)
-@@ -1397,3 +1400,3 @@ async def initialize_session_authority(runner, *, profile_id, instance_id, db=No
+@@ -1397,3 +1404,3 @@ async def initialize_session_authority(runner, *, profile_id, instance_id, db=No
      from gateway.session_local_adoption import adopt_local_compressions
 -    await adopt_local_compressions(authority)
 +    await adopt_local_compressions(authority, store_io=store_io)
@@ -42494,6 +42509,34 @@ index 0000000000000000000000000000000000000000..04868875b5317ae995baac923e434c7d
 +def handlers(connection):
 +    return {'profiles.workflow.get': partial(_get, connection),
 +            'profiles.workflow.configure': partial(_configure, connection)}
+diff --git a/gateway/session_control_actions.py b/gateway/session_control_actions.py
+index 5fdf5536af0b43bd77287c301aede80e7f2811c5..ed2fe18ec44ddd22c885f2c2114a7109c59d1d1d 100644
+--- a/gateway/session_control_actions.py
++++ b/gateway/session_control_actions.py
+@@ -99,2 +99,23 @@ def publish(authority, session_id, *, only_if_present=False, only_if_changed=Fal
+
++def pause_goal_on_interrupt(authority, ref):
++    """Stop must not let an interrupted worker's follow-up restart its owner's goal."""
++    from pathlib import Path
++    from gateway.run import _profile_runtime_scope
++    from gateway.session_ancillary import physical_target
++    from hermes_cli.goals import GoalManager, GoalState
++    target = physical_target(authority, ref)
++    target = authority.db.get_compression_tip(target) or target
++    raw = authority.db.get_meta('goal:' + target)
++    if not raw or GoalState.from_json(raw).status != 'active':
++        return
++    try:
++        with _profile_runtime_scope(Path(authority.profile_id)):
++            paused = GoalManager(session_id=target).pause(reason='user-interrupted (Stop)')
++        # GoalManager persistence is best-effort; returning from pause is not a write receipt.
++        if paused is None or authority.db.get_meta('goal:' + target) != paused.to_json():
++            raise RuntimeStoreError('storage_unavailable')
++    finally:
++        publish(authority, ref.session_id, only_if_present=True)
++
++
+ async def control(connection, ref, params):
 diff --git a/gateway/session_controls.py b/gateway/session_controls.py
 index 65887575dec12b3ddb9f859ebe56156264ea120e..b9d01891079d9487b9aa85628194e8f5bd0480a9 100644
 --- a/gateway/session_controls.py
@@ -68582,10 +68625,10 @@ index 0000000000000000000000000000000000000000..507b9ffd51abab6d8888ac1c78195275
 +    _run_native_goal_case(tmp_path, monkeypatch, 'budget')
 diff --git a/tests/gateway/test_captain_goal_native_lifecycle.py b/tests/gateway/test_captain_goal_native_lifecycle.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..f5c0fa0b75cd936fe2a2895c58e309099e6b2c5f
+index 0000000000000000000000000000000000000000..7fcec5745736fdbbc2fb1e7f423453e6cd8774e7
 --- /dev/null
 +++ b/tests/gateway/test_captain_goal_native_lifecycle.py
-@@ -0,0 +1,311 @@
+@@ -0,0 +1,378 @@
 +"""Native goal orchestration with scripted localhost replies, not model reasoning."""
 +import asyncio
 +from http.server import ThreadingHTTPServer
@@ -68607,6 +68650,7 @@ index 0000000000000000000000000000000000000000..f5c0fa0b75cd936fe2a2895c58e30909
 +
 +MARKER = 'CAPTAIN_NATIVE_FILE_EVIDENCE'
 +FINAL = 'Verified delegated read against local file: ' + MARKER
++STOPPED = 'Stopped delegated work after owner Stop.'
 +
 +
 +def goal_state(home, sid):
@@ -68675,8 +68719,11 @@ index 0000000000000000000000000000000000000000..f5c0fa0b75cd936fe2a2895c58e30909
 +                delivered = any(item['role'] == 'user' and str(item.get('content', '')).startswith(
 +                    '[ASYNC DELEGATION BATCH COMPLETE') for item in messages)
 +                if delivered:
-+                    assert any('status=completed' in str(item.get('content')) for item in messages)
-+                    if 'captain-verify' not in results:
++                    if getattr(self.server, 'goal_outcome', '') == 'stop':
++                        assert any('status=interrupted' in str(item.get('content')) for item in messages)
++                        kind, message['content'] = 'parent-stopped', STOPPED
++                    elif 'captain-verify' not in results:
++                        assert any('status=completed' in str(item.get('content')) for item in messages)
 +                        kind = 'parent-verify'
 +                        message = self.tool(tools, 'read_file', {'path': str(self.server.path), 'offset': 1, 'limit': 5},
 +                                            'captain-verify')
@@ -68728,13 +68775,19 @@ index 0000000000000000000000000000000000000000..f5c0fa0b75cd936fe2a2895c58e30909
 +                self.wfile.write(data)
 +            else:
 +                self.metadata(frame)
++        except (BrokenPipeError, ConnectionResetError) as error:
++            if getattr(self.server, 'goal_outcome', '') != 'stop' or locals().get('kind') != 'child-result':
++                self.server.errors.append(repr(error))
 +        except Exception as error:
 +            self.server.errors.append(repr(error))
 +            self.send_error(500)
++        finally:
++            if getattr(self.server, 'goal_outcome', '') == 'stop' and locals().get('kind') == 'child-result':
++                self.server.reply_done.set()
 +
 +
 +async def exercise_goal(ws, home, peer, observe, outcome='done'):
-+    assert outcome in {'done', 'pause', 'blocked', 'budget'}
++    assert outcome in {'done', 'pause', 'blocked', 'budget', 'stop'}
 +    async def result(method, **params):
 +        value = await rpc(ws, method, **params)
 +        assert 'result' in value, value
@@ -68768,6 +68821,8 @@ index 0000000000000000000000000000000000000000..f5c0fa0b75cd936fe2a2895c58e30909
 +    await async_wait_until(lambda: (rows := _rows(home, 'SELECT status FROM session_admissions WHERE target_session_id=?', (parent,))) and all(row['status'] == 'terminal' for row in rows),
 +                           timeout=20, what='kickoff admission settles before owner controls')
 +    await observe('active', {'parent': parent, 'child': children[0]['id'], 'goal': active, 'calls': list(peer.calls)})
++    if outcome == 'stop':
++        return await _exercise_stopped_goal(home, peer, observe, parent, children[0]['id'], side, paused)
 +    paused_target = goal_state(home, parent) if outcome == 'pause' else None
 +    if paused_target is not None:
 +        assert paused_target['status'] == 'paused' and paused_target['turns_used'] == 1
@@ -68819,6 +68874,55 @@ index 0000000000000000000000000000000000000000..f5c0fa0b75cd936fe2a2895c58e30909
 +    return receipt
 +
 +
++async def _exercise_stopped_goal(home, peer, observe, parent, child, side, paused):
++    stopped_goal = goal_state(home, parent)
++    assert stopped_goal['status'] == 'paused', stopped_goal
++    assert stopped_goal['turns_used'] == 1 and not stopped_goal['waiting_until']
++    await async_wait_until(lambda: _rows(home, 'SELECT ended_at FROM sessions WHERE id=?', (child,))[0]['ended_at'] is not None,
++                           timeout=20, what='session Stop ends child before held reply release')
++    await async_wait_until(lambda: (rows := _rows(home, 'SELECT * FROM async_delegations WHERE parent_session_id=?', (parent,))) and rows[0]['delivery_state'] == 'delivered',
++                           timeout=20, what='interrupted delegation delivered through native completion')
++    ledger, = _rows(home, 'SELECT * FROM async_delegations WHERE parent_session_id=?', (parent,))
++    item, = json.loads(ledger['result_json'])['results']
++    assert ledger['state'] == 'error' and item['status'] == item['exit_reason'] == 'interrupted'
++    assert MARKER not in (item['summary'] or '')
++    await async_wait_until(lambda: any(row['content'] == STOPPED for row in _rows(
++        home, "SELECT content FROM messages WHERE session_id=? AND role='assistant'", (parent,))),
++        timeout=20, what='normal parent interrupted-result follow-up')
++    def admissions():
++        return _rows(home, 'SELECT request_id,status,generation FROM session_admissions WHERE target_session_id=? ORDER BY seq', (parent,))
++    await async_wait_until(lambda: all(row['status'] == 'terminal' for row in admissions()),
++                           timeout=20, what='interrupted-result admission settles')
++    snapshot = admissions()
++    stopped = _rows(home, 'SELECT ended_at,api_call_count FROM sessions WHERE id=?', (child,))[0]
++    calls = list(peer.calls)
++    assert set(calls) == {'plan', 'delegate', 'parent-wait', 'child-read', 'judge-wait', 'parent-stopped'}
++    assert len(snapshot) == 2 and snapshot[0]['request_id'] == 'goal-kickoff'
++    assert json.loads(snapshot[1]['request_id'])[0] == 'async_delegation'
++    assert goal_state(home, parent) == stopped_goal
++    await observe('stopped', {'parent': parent, 'child': child, 'goal': stopped_goal, 'ledger': ledger})
++    peer.release.set()
++    assert await asyncio.to_thread(peer.reply_done.wait, 5), 'held server handler did not finish'
++    deadline = time.monotonic() + 3
++    def quiet():
++        assert goal_state(home, parent) == stopped_goal and goal_state(home, side) == paused
++        assert admissions() == snapshot
++        assert _rows(home, 'SELECT ended_at,api_call_count FROM sessions WHERE id=?', (child,))[0] == stopped
++        assert _rows(home, 'SELECT * FROM async_delegations WHERE parent_session_id=?', (parent,))[0] == ledger
++        assert not any(MARKER in (row['content'] or '') for row in _rows(
++            home, "SELECT content FROM messages WHERE session_id=? AND role='assistant'", (child,)))
++        assert set(peer.calls) == set(calls) | {'child-result'} and not peer.errors, peer.errors
++        return time.monotonic() >= deadline
++    await async_wait_until(quiet, timeout=5, what='late server reply cannot change stopped state')
++    receipt = {'parent': parent, 'child': child, 'goal': stopped_goal, 'calls': list(peer.calls),
++               'independent_pause_preserved': True, 'scripted_loopback_not_provider_reasoning': True,
++               'outcome': 'stop', 'settled_observation_seconds': 3, 'goal_continuations': 0,
++               'native_admissions': snapshot, 'interrupted_result': item,
++               'server_handler_finished_not_client_arrival_proof': True}
++    await observe('terminal', receipt)
++    return receipt
++
++
 +def _run_native_goal_case(tmp_path, monkeypatch, outcome):
 +    home, user = tmp_path / 'state', tmp_path / 'user'
 +    home.mkdir()
@@ -68838,6 +68942,7 @@ index 0000000000000000000000000000000000000000..f5c0fa0b75cd936fe2a2895c58e30909
 +    peer.requests = 0
 +    peer.goal_outcome = outcome
 +    peer.lock, peer.read_done, peer.release = threading.Lock(), threading.Event(), threading.Event()
++    peer.reply_done = threading.Event()
 +    thread = threading.Thread(target=peer.serve_forever, kwargs={'poll_interval': .05}, daemon=True)
 +    thread.start()
 +    url = f'http://127.0.0.1:{peer.server_port}/v1'
@@ -68877,6 +68982,11 @@ index 0000000000000000000000000000000000000000..f5c0fa0b75cd936fe2a2895c58e30909
 +                    if outcome == 'pause' and stage == 'active':
 +                        result = await rpc(ws, 'session.control', session_id=info['parent'], action='goal.pause', args={})
 +                        assert 'result' in result, result
++                    elif outcome == 'stop' and stage == 'active':
++                        view = await rpc(ws, 'session.resume', session_id=info['parent'])
++                        result = await rpc(ws, 'session.interrupt', session_id=info['parent'],
++                                           execution_generation=view['result']['execution_generation'])
++                        assert 'result' in result, result
 +                await exercise_goal(ws, home, peer, observe, outcome)
 +        finally:
 +            peer.release.set()
@@ -68885,7 +68995,7 @@ index 0000000000000000000000000000000000000000..f5c0fa0b75cd936fe2a2895c58e30909
 +            await asyncio.wait_for(task, 15)
 +    try:
 +        asyncio.run(run())
-+        assert [stage for stage, _ in observations] == ['active', 'terminal']
++        assert [stage for stage, _ in observations] == (['active', 'stopped', 'terminal'] if outcome == 'stop' else ['active', 'terminal'])
 +        assert (home / 'config.yaml').read_bytes() == baseline
 +    finally:
 +        peer.release.set()
@@ -68909,6 +69019,18 @@ index 0000000000000000000000000000000000000000..8a834b7d0f5b9765a4dfcb71c7f2f428
 +
 +def test_native_goal_pause(tmp_path, monkeypatch):
 +    _run_native_goal_case(tmp_path, monkeypatch, 'pause')
+diff --git a/tests/gateway/test_captain_goal_stop_native.py b/tests/gateway/test_captain_goal_stop_native.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..32e152c42e446a1370098ea1a0927c910844ae15
+--- /dev/null
++++ b/tests/gateway/test_captain_goal_stop_native.py
+@@ -0,0 +1,6 @@
++"""Session Stop cancels delegated work and pauses its goal before late replies."""
++from tests.gateway.test_captain_goal_native_lifecycle import _run_native_goal_case
++
++
++def test_native_goal_session_stop(tmp_path, monkeypatch):
++    _run_native_goal_case(tmp_path, monkeypatch, 'stop')
 diff --git a/tests/gateway/test_config_policy_recovery.py b/tests/gateway/test_config_policy_recovery.py
 index a338fefee85e09bcdd9b66982540611d62b26b18..4389454e38092ec2ab16fbeab88830e29c3eae47 100644
 --- a/tests/gateway/test_config_policy_recovery.py
@@ -71632,6 +71754,84 @@ index 91f30aa217762d0aa80a9dccfcf5134050a9d3eb..99ee516b0f2a78b5bdb5cc0875890aad
 +
 +
  def test_profiles_list_survives_an_undecodable_sibling_profile_yaml(tmp_path, monkeypatch, caplog):
+diff --git a/tests/gateway/test_session_interrupt_goal.py b/tests/gateway/test_session_interrupt_goal.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..fa1a4166bc8987fe3668a5151b2c9f0bb1ce1fef
+--- /dev/null
++++ b/tests/gateway/test_session_interrupt_goal.py
+@@ -0,0 +1,72 @@
++"""Stop pauses only its current goal; a dropped pause write cannot suppress cancellation."""
++import asyncio
++import json
++
++import pytest
++
++from gateway.session_contract import Principal, SessionRef
++from hermes_cli import goals
++from hermes_state_runtime import RuntimeStoreError
++from tests.gateway.test_session_authority_cancel_settlement import _authority
++
++
++@pytest.mark.parametrize('status', ['active', 'paused', 'done', 'cleared', None])
++def test_stop_preserves_other_goals_and_resolves_compression_tip(tmp_path, monkeypatch, status):
++    db, authority = _authority(tmp_path, monkeypatch)
++    authority.profile_id = str(tmp_path)
++    actor = Principal('human', str(tmp_path), frozenset({'session:control'}), 'cli')
++    ref = SessionRef(str(tmp_path), 's')
++    db.publish_compression_child(parent_session_id='s', child_session_id='tip', source='test',
++                                 messages=[{'role': 'user', 'content': 'summary'}], require_compression_lease=False)
++    manager = goals.GoalManager('tip')
++    if status:
++        manager.set('Keep this goal and its budget')
++        if status == 'paused':
++            manager.pause('existing owner pause')
++        elif status == 'done':
++            manager.mark_done('already verified')
++        elif status == 'cleared':
++            manager.clear()
++    control = goals.GoalManager('independent')
++    control.set('Independent goal')
++    control.pause('independent owner pause')
++    before = db.get_meta('goal:tip')
++    independent = db.get_meta('goal:independent')
++    generation = authority._handle(ref).execution_generation
++    async def run():
++        with pytest.raises(RuntimeStoreError, match='stale_generation'):
++            await authority.interrupt(actor, ref, (generation or 0) + 1)
++        assert db.get_meta('goal:tip') == before
++        foreign = Principal('foreign', 'another-profile', actor.capabilities, 'cli')
++        with pytest.raises(RuntimeStoreError):
++            await authority.interrupt(foreign, ref, generation)
++        assert db.get_meta('goal:tip') == before
++        await authority.interrupt(actor, ref, generation)
++    with db:
++        asyncio.run(run())
++        after = db.get_meta('goal:tip')
++        if status == 'active':
++            state = json.loads(after)
++            assert state['status'] == 'paused' and state['turns_used'] == 0
++            assert state['paused_reason'] == 'user-interrupted (Stop)'
++        else:
++            assert after == before
++        assert db.get_meta('goal:s') is None and db.get_meta('goal:independent') == independent
++
++
++def test_pause_persistence_failure_still_cancels_and_reports_failure(tmp_path, monkeypatch):
++    from tools import async_delegation
++    db, authority = _authority(tmp_path, monkeypatch)
++    authority.profile_id = str(tmp_path)
++    actor = Principal('human', str(tmp_path), frozenset({'session:control'}), 'cli')
++    ref = SessionRef(str(tmp_path), 's')
++    goals.GoalManager('s').set('Do not lose Stop if pause cannot be saved')
++    before = db.get_meta('goal:s')
++    cancelled = []
++    monkeypatch.setattr(goals, 'save_goal', lambda *args: None)
++    monkeypatch.setattr(async_delegation, 'interrupt_for_session', lambda **args: cancelled.append(args))
++    with db:
++        with pytest.raises(RuntimeStoreError, match='storage_unavailable'):
++            asyncio.run(authority.interrupt(actor, ref, authority._handle(ref).execution_generation))
++        assert cancelled == [{'session_key': 'route', 'parent_session_id': 's', 'reason': 'user_stop'}]
++        assert db.get_meta('goal:s') == before
 diff --git a/tests/gateway/test_session_kanban_aux_accounting.py b/tests/gateway/test_session_kanban_aux_accounting.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..bfbae9f44d5768b7bf47c0e4dc99ac4bbdb52cc8

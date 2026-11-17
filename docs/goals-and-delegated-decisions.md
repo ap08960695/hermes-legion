@@ -130,6 +130,22 @@ limit without admitting another goal turn. These establish native state handling
 and turn-budget enforcement; they do not prove real provider reasoning or
 credential policy. Full worker Stop acceptance remains open.
 
+### Stop the session's current work
+
+Use `/stop` in the intended Desktop chat to cancel its current turn and owned
+delegations. The working patch also pauses that chat's active goal, so the
+interrupted worker's ordinary result follow-up cannot start another goal turn.
+Existing paused/completed goals and independent chats keep their state. Inspect
+the result and goal before explicitly resuming work. Stop is not a rollback of
+tool effects that already happened, and an interrupted-result follow-up may still
+use a model call.
+
+A real gateway regression covers child cancellation, parent result delivery and
+unchanged state after a held server reply is released. Desktop observations show
+the interrupted worker and Goal paused at 1/20, but the complete desktop
+late-reply scenario remains unaccepted after its observation guard stopped it.
+[Evidence and limits](verification.md#captain-session-stop--fix-and-qualified-desktop-observations-unreleased).
+
 ## Supply the skill and decision policy
 
 Review [goal-driven-execution](../skills/goal-driven-execution/SKILL.md) and install its directory into the intended profile's native skills directory using your normal skill workflow. Have the Captain discover/read it for multi-step objectives; select specialist skills according to the actual task. Keep skill bodies on demand rather than rebuilding a live conversation's system prefix.

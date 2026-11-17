@@ -1,3 +1,55 @@
+# Captain session Stop — fix and qualified desktop observations, unreleased
+
+Completed source fix: native session Stop previously cancelled a waiting worker
+but left its goal active. A real gateway regression fails on that exact state
+before the fix. Shared authority Stop now pauses only the owning active goal,
+using its physical compression tip and profile, verifies the persisted pause,
+and publishes the existing control snapshot. Absent/paused/completed goals stay
+unchanged. Saving/readback failure still runs cancellation and reaches the caller.
+No frontend, dependency, default, quota or permission change.
+
+Five canonical isolated files pass 11 tests in 23.6 seconds: actual native Stop,
+ownership/compression/status/refusal and failed-persistence controls, plus existing
+pre-adoption/adopted/late Stop handling. Done and Pause controls pass separately
+in 38.3 seconds. The full Stop regression ends the child and accounts its
+interrupted delegation/normal parent follow-up before releasing the held model
+reply; child metadata, delegation ledger, goal and admissions remain exact for
+three more seconds. Independent paused work and config remain intact. All model,
+worker and judge request attempts share a cap of 16; this is scripted localhost
+orchestration, not provider reasoning. Server-handler completion does not prove
+arrival at the cancelled client's completion callback.
+
+Two separate desktop attempts remain FAILED, with no full native acceptance.
+The first observer incorrectly required a document URL in the owned macOS Window
+menu and stopped before the 60-second Local gate. After closure/restoration, a
+fresh fixture used a menu-specific identity check, retaining native URL/window/
+generation checks before and after it. One positive and three refusal controls
+pass; the normal document guard is unchanged.
+
+The second fixture passes 60 seconds Local. Original 480×620 AX/image observations
+show a running worker and goal waiting, actual Desktop `/stop`, then interrupted
+work and Goal paused 1/20. Native readback proves ended child, interrupted ledger,
+accounted delivery and parent interrupted-result response BEFORE held reply
+release. UI_READY is acknowledged. A later observer admission refuses insufficient
+remaining phase budget before UI_STOPPED acknowledgment. No UI_STOPPED,
+UI_VERIFIED, goal-acceptance or accepted late-reply desktop result exists. Do not
+relabel either trial or restart it. Captures are qualified observations only:
+`../evidence/captain-goal-stop-20261117`; raw trials and STOPs are retained.
+
+Both trials close every owned generation and model/API port. Seven config/env
+files and one geometry absence are restored per trial; Desktop SSH is zero.
+The second trial lasts 227.31 seconds, peaks at four product processes and
+1,196,507,136 B sampled RSS including guardian; external controllers are excluded.
+The first closes in 54.65 seconds at four product processes/971,767,808 B. These
+are fixture bounds, not whole-task memory or savings evidence. The initial
+screen-state parser error was corrected to read the root IOConsoleLocked=false
+before any CUA binding; no locked-screen input occurred.
+
+The source fix has regression and on-screen interruption/pause observations;
+full desktop late-reply and provider behavior remain open. No version, tag,
+release, owner-app adoption, owner state/control change, or other-host/ai use.
+The earlier acceptance sections below retain their original scope.
+
 # Captain Pause and goal limits — native Local acceptance, unreleased
 
 Four native regression files pass through the canonical single-worker runner:
