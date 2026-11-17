@@ -29,6 +29,44 @@ Eight focused source tests and the real source CLI through an isolated native
 PTY pass with a synthetic atlas. This is terminal preview, not the new desktop
 overlay. [Evidence and limits](verification.md#pet-creator-preview--native-terminal-acceptance-unreleased).
 
+## Active-character overlay preview: offline source step
+
+The working source adds **Show bot characters** in Monitor. A loaded, enabled
+pet is required. It previews at most five current source-qualified bot/worker
+observations in the existing transparent overlay, using that pet's sheet and
+PetSprite. Bounded name/source/latest signal and reported step remain plain
+text. Current work uses the run pose; reported bot attention uses failed.
+It does not infer reasoning, human waiting, completion or progress percentages.
+
+The existing plugin pet door now exposes a scoped replaceable display publisher.
+One preview owns the shared overlay; a superseded/disposed publisher cannot
+revive or clear the newer snapshot. Identities include plugin, source and stable
+bot/worker identity; no worker array-index fallback. Empty replacements cross
+IPC. Monitor error/stale/retained/unqualified observations are excluded. The
+15-second lease is anchored to the source snapshot time, with independent
+receiver expiry. Unmount/unload clears the publisher; stopping restores the
+previous mascot mode. No extra polling, model, gateway or per-actor OS window.
+
+The read-only actor stage replaces the global mascot composer while previewing.
+It uses short enter/exit transitions and a 15 fps sprite ceiling; reduced motion
+uses static poses which still reflect semantic state changes. Native IPC gates
+the stage on main-window hide/minimize and lock/suspend, preserves a known lock
+through resume, and retires retained state/listeners when the overlay closes.
+Normal mascot behavior has regression coverage. All nine Monitor locales have
+the new control and its installed-pet/read-only scope hint.
+
+Offline tests/types/lint and renderer/changed-IPC builds pass. Two isolated
+native control renderers failed sandbox initialization before loading the
+production overlay. Both were closed; no Local60, CUA, screenshots or resource
+measurements passed. A launch-path difference from the working native harness
+is a diagnostic lead, not a proven cause. Do not weaken a sandbox or infer an
+overlay defect from those failures. [Evidence and limits](verification.md#bot-character-overlay-preview--offline-source-step-unreleased).
+
+Persistent all-bot tracking, character interactions/open controls, per-bot packs,
+display-only sleep handling and actual visibility/reduced-motion/resource
+acceptance remain open. No version or release for this development step, and
+no claim that the five-character CPU/RAM target is met.
+
 ## Remaining capability work
 
 The first overlay slice must map actual active bots/workers to bounded actors in

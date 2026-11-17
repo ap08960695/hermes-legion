@@ -7995,6 +7995,192 @@ index 2c784ec2a2e709f7fc953d88399b3078aaa5e12b..5492eec425bbd695225966f3bc91032d
 +
 +  return { dispose: () => linux?.dispose(), show }
  }
+diff --git a/apps/desktop/electron/pet-overlay-ipc.test.ts b/apps/desktop/electron/pet-overlay-ipc.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..128ea1637f027ec2ac7f8ee6c69b682fee980d90
+--- /dev/null
++++ b/apps/desktop/electron/pet-overlay-ipc.test.ts
+@@ -0,0 +1,73 @@
++import { EventEmitter } from 'node:events'
++
++import { afterEach, expect, it, vi } from 'vitest'
++
++const io = vi.hoisted(() => ({ on: new Map<string, (...args: any[]) => void>() }))
++vi.mock('electron', async () => {
++  const { EventEmitter } = await import('node:events')
++
++  return { ipcMain: { on: (name: string, fn: (...args: any[]) => void) => io.on.set(name, fn), handle: vi.fn() },
++    screen: { getAllDisplays: () => [] }, powerMonitor: Object.assign(new EventEmitter(), { getSystemIdleState: () => 'active' }) }
++})
++import { powerMonitor } from 'electron'
++
++import { registerPetOverlayIpc } from './pet-overlay-ipc'
++
++afterEach(() => { powerMonitor.removeAllListeners(); io.on.clear() })
++
++it('pauses character snapshots on main hide/minimize and screen lock/suspend; retires observers in mascot mode', () => {
++  const main = Object.assign(new EventEmitter(), { isDestroyed: () => false, isVisible: (): boolean => true, isMinimized: (): boolean => false })
++  const send = vi.fn()
++  const overlay = Object.assign(new EventEmitter(), { isDestroyed: () => false, webContents: { send } })
++  registerPetOverlayIpc({ getMainWindow: () => main as never, getPetOverlayWindow: () => overlay as never, openPetOverlay: vi.fn(), closePetOverlay: vi.fn() })
++  const publish = (payload: unknown) => io.on.get('hermes:pet-overlay:state')!({}, payload)
++  const payload = { info: { enabled: true }, characterPreview: { characters: [{ id: 'owner' }], expiresAt: Date.now() + 15000 } }
++  publish(payload)
++  expect(send.mock.lastCall?.[1].charactersPaused).toBe(false)
++  main.isVisible = () => false
++  main.emit('hide')
++  expect(send.mock.lastCall?.[1].charactersPaused).toBe(true)
++  main.isVisible = () => true
++  main.emit('show')
++  expect(send.mock.lastCall?.[1].charactersPaused).toBe(false)
++  main.isMinimized = () => true
++  main.emit('minimize')
++  expect(send.mock.lastCall?.[1].charactersPaused).toBe(true)
++  main.isMinimized = () => false
++  main.emit('restore')
++  expect(send.mock.lastCall?.[1].charactersPaused).toBe(false)
++  powerMonitor.emit('lock-screen')
++  publish(payload)
++  expect(send.mock.lastCall?.[1].charactersPaused).toBe(true)
++  powerMonitor.emit('suspend')
++  powerMonitor.emit('resume')
++  expect(send.mock.lastCall?.[1].charactersPaused).toBe(true)
++  powerMonitor.emit('unlock-screen')
++  expect(send.mock.lastCall?.[1].charactersPaused).toBe(false)
++  powerMonitor.emit('suspend')
++  expect(send.mock.lastCall?.[1].charactersPaused).toBe(true)
++  powerMonitor.emit('resume')
++  expect(send.mock.lastCall?.[1].charactersPaused).toBe(false)
++  const normal = { info: { enabled: true }, characterPreview: null }
++  publish(normal)
++  expect(send.mock.lastCall?.[1]).toBe(normal)
++  const calls = send.mock.calls.length
++  main.emit('hide'); powerMonitor.emit('lock-screen')
++  expect(send).toHaveBeenCalledTimes(calls)
++  expect(main.listenerCount('hide')).toBe(0)
++  expect(powerMonitor.listenerCount('lock-screen')).toBe(0)
++})
++
++it('drops retained snapshots and native observers when the overlay closes without a final state push', () => {
++  const main = Object.assign(new EventEmitter(), { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false })
++  const overlay = Object.assign(new EventEmitter(), { isDestroyed: () => false, webContents: { send: vi.fn() } })
++  registerPetOverlayIpc({ getMainWindow: () => main as never, getPetOverlayWindow: () => overlay as never, openPetOverlay: vi.fn(), closePetOverlay: vi.fn() })
++  io.on.get('hermes:pet-overlay:state')!({}, { characterPreview: { characters: [], expiresAt: 0 } })
++  expect(powerMonitor.listenerCount('lock-screen')).toBe(1)
++  overlay.emit('closed')
++  expect(powerMonitor.listenerCount('lock-screen')).toBe(0)
++  expect(main.listenerCount('hide')).toBe(0)
++  const calls = overlay.webContents.send.mock.calls.length
++  powerMonitor.emit('lock-screen'); main.emit('hide')
++  expect(overlay.webContents.send).toHaveBeenCalledTimes(calls)
++})
+diff --git a/apps/desktop/electron/pet-overlay-ipc.ts b/apps/desktop/electron/pet-overlay-ipc.ts
+index 59d8dd527dae029c695a8520996f6051d75df371..1ebc20300e7174e17d71820f1be12b29dca022af 100644
+--- a/apps/desktop/electron/pet-overlay-ipc.ts
++++ b/apps/desktop/electron/pet-overlay-ipc.ts
+@@ -2,3 +2,3 @@
+ // main.ts; window handles stay injected because main.ts owns their lifecycle.
+-import { type BrowserWindow, ipcMain, screen } from 'electron'
++import { type BrowserWindow, ipcMain, powerMonitor, screen } from 'electron'
+
+@@ -36,2 +36,83 @@ export function registerPetOverlayIpc({
+ }: PetOverlayIpcDeps) {
++  let lastCharacterPayload: Record<string, unknown> | null = null
++  let stopObserving: (() => void) | null = null
++  let locked = false, suspended = false
++
++  const sendCharacters = () => {
++    const main = getMainWindow(), overlay = getPetOverlayWindow()
++
++    if (!lastCharacterPayload || !overlay || overlay.isDestroyed()) {return}
++    const charactersPaused = locked || suspended || !main || main.isDestroyed() || !main.isVisible() || main.isMinimized()
++    overlay.webContents.send('hermes:pet-overlay:state', { ...lastCharacterPayload, charactersPaused })
++  }
++
++  const observeCharacterVisibility = () => {
++    if (stopObserving) {return}
++    const main = getMainWindow()
++
++    if (!main || main.isDestroyed()) {return}
++    suspended = false
++
++    try {
++      const state = powerMonitor.getSystemIdleState(1)
++      locked = state === 'locked' || state === 'unknown'
++    } catch { locked = true }
++
++    const lock = () => { locked = true; sendCharacters() }
++
++    const unlock = () => { locked = false; sendCharacters() }
++
++    const suspend = () => { suspended = true; sendCharacters() }
++
++    const resume = () => {
++      suspended = false
++
++      try {
++        const state = powerMonitor.getSystemIdleState(1)
++        locked = locked || state === 'locked' || state === 'unknown'
++      } catch { locked = true }
++
++      sendCharacters()
++    }
++
++    const overlay = getPetOverlayWindow()
++
++    const retire = () => {
++      stopObserving?.()
++      stopObserving = null
++      lastCharacterPayload = null
++    }
++
++    const closed = () => {
++      locked = true
++      sendCharacters()
++      retire()
++    }
++
++    overlay?.once('closed', retire)
++
++    main.on('hide', sendCharacters)
++    main.on('show', sendCharacters)
++    main.on('minimize', sendCharacters)
++    main.on('restore', sendCharacters)
++    main.on('closed', closed)
++    powerMonitor.on('lock-screen', lock)
++    powerMonitor.on('unlock-screen', unlock)
++    powerMonitor.on('suspend', suspend)
++    powerMonitor.on('resume', resume)
++
++    stopObserving = () => {
++      main.removeListener('hide', sendCharacters)
++      main.removeListener('show', sendCharacters)
++      main.removeListener('minimize', sendCharacters)
++      main.removeListener('restore', sendCharacters)
++      main.removeListener('closed', closed)
++      overlay?.removeListener('closed', retire)
++      powerMonitor.removeListener('lock-screen', lock)
++      powerMonitor.removeListener('unlock-screen', unlock)
++      powerMonitor.removeListener('suspend', suspend)
++      powerMonitor.removeListener('resume', resume)
++    }
++  }
++
+   // `request` is `{ bounds, screen }`. A fresh pop-out passes viewport-space
+@@ -145,2 +226,13 @@ export function registerPetOverlayIpc({
+   ipcMain.on('hermes:pet-overlay:state', (_event, payload) => {
++    if (payload?.characterPreview) {
++      lastCharacterPayload = payload
++      observeCharacterVisibility()
++      sendCharacters()
++
++      return
++    }
++
++    lastCharacterPayload = null
++    stopObserving?.()
++    stopObserving = null
+     const petOverlayWindow = getPetOverlayWindow()
 diff --git a/apps/desktop/electron/plugin-profile-routes.ts b/apps/desktop/electron/plugin-profile-routes.ts
 index d8c15a6c4ebfb032daeb38d34baaabf3a00f878c..36e0974b669d3c66ba717f4bc6ea17e3d151543f 100644
 --- a/apps/desktop/electron/plugin-profile-routes.ts
@@ -20745,6 +20931,205 @@ index b4da7a42c45061d676c88b5b49f77b66aabcf4a7..dd0f767c20a1375503ad34189617448d
 -    }
 +    openSessionTile(storedSessionId, 'center', undefined, undefined, tileScope)
  
+diff --git a/apps/desktop/src/app/pet-overlay/pet-characters.tsx b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..74c3f907cd09767d56ee2fc4bdb9d9ebe3fe26c0
+--- /dev/null
++++ b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
+@@ -0,0 +1,45 @@
++import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
++import { useEffect, useState } from 'react'
++
++import { PetSprite } from '@/components/pet/pet-sprite'
++import type { PetInfo } from '@/store/pet'
++import type { PetCharacterPreview } from '@/store/pet-characters'
++
++interface PetCharactersProps {
++  info: PetInfo
++  preview: PetCharacterPreview
++  paused: boolean
++}
++
++/** Read-only snapshot: no gateway, navigation, global composer or per-actor process. */
++export function PetCharacters({ info, preview, paused }: PetCharactersProps) {
++  const reduced = useReducedMotion()
++  const [expiredAt, setExpiredAt] = useState(0)
++  useEffect(() => {
++    if (!preview.expiresAt) {return}
++    const timer = setTimeout(() => setExpiredAt(preview.expiresAt), Math.max(0, preview.expiresAt - Date.now()))
++
++    return () => clearTimeout(timer)
++  }, [preview.expiresAt])
++
++  if (paused || (preview.expiresAt > 0 && preview.expiresAt <= Math.max(Date.now(), expiredAt))) {return null}
++  const sheet = { ...info, scale: Math.min(info.scale ?? 0.33, 96 / (info.frameW ?? 192), 104 / (info.frameH ?? 208)) }
++
++  return <div style={{ display: 'flex', alignItems: 'flex-end', pointerEvents: 'none' }}>
++    <AnimatePresence>
++      {preview.characters.slice(0, 5).map(character => <motion.figure
++        animate={{ opacity: 1, y: 0 }} aria-label={`${character.name} · ${character.source}`}
++        exit={reduced ? { opacity: 0 } : { opacity: 0, y: 18 }}
++        initial={reduced ? false : { opacity: 0, y: 18 }} key={character.id}
++        style={{ margin: 0, width: 120, padding: 6, textAlign: 'center', color: 'var(--ui-text-primary)' }}
++        transition={{ duration: reduced ? 0 : 0.18 }}>
++        <div style={{ fontSize: 12, borderRadius: 8, padding: 6, background: 'var(--ui-bg-elevated)', overflow: 'hidden' }}>
++          <strong style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{character.name}</strong>
++          <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{character.source}</span>
++          {character.detail && <div style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }} title={character.detail}>{character.detail}</div>}
++        </div>
++        <PetSprite animate={!reduced} info={sheet} maxFps={15} stateOverride={character.state} />
++      </motion.figure>)}
++    </AnimatePresence>
++  </div>
++}
+diff --git a/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx b/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
+index 82319976a166e658f80e794b0033fed81a48d456..baa0ea098ff0e172d1ce92180e10d5cfa452224c 100644
+--- a/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
++++ b/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
+@@ -10,2 +10,3 @@ import { isSubmitEnter } from '@/lib/ime'
+ import { $petActivity, $petInfo, setPetInfo } from '@/store/pet'
++import type { PetCharacterPreview } from '@/store/pet-characters'
+ import { overlayWindowSize } from '@/store/pet-overlay'
+@@ -14,2 +15,4 @@ import { setAwaitingResponse, setBusy } from '@/store/session'
+
++import { PetCharacters } from './pet-characters'
++
+ // Fallbacks mirror pet-sprite's defaults; the gateway normally sends real values.
+@@ -67,2 +70,5 @@ export function PetOverlayApp() {
+   const [composerOpen, setComposerOpen] = useState(false)
++  const [characters, setCharacters] = useState<{ preview: PetCharacterPreview; paused: boolean } | null>(null)
++  const characterMode = Boolean(characters)
++  const characterCount = Math.min(5, characters?.preview.characters.length ?? 0)
+   const [draft, setDraft] = useState('')
+@@ -94,2 +100,6 @@ export function PetOverlayApp() {
+     const off = window.hermesDesktop?.petOverlay?.onState(payload => {
++      const preview = payload.characterPreview ?? null
++      setCharacters(preview ? { preview, paused: payload.charactersPaused !== false } : null)
++
++      if (preview) {setComposerOpen(false)}
+       setPetInfo(payload.info)
+@@ -104,3 +114,3 @@ export function PetOverlayApp() {
+
+-      if (lastReactionRef.current === null) {
++      if (preview || lastReactionRef.current === null) {
+         lastReactionRef.current = reaction?.id ?? 0
+@@ -122,2 +132,6 @@ export function PetOverlayApp() {
+
++  useEffect(() => {
++    if (characterMode) {setIgnore(true)}
++  }, [characterMode])
++
+   // Click-through: make only the *solid* sprite pixels (plus the bubble / mail
+@@ -316,3 +330,3 @@ export function PetOverlayApp() {
+
+-  usePetZoomGesture(petRef, onScale, Boolean(info.enabled && info.spritesheetBase64))
++  usePetZoomGesture(petRef, onScale, Boolean(info.enabled && info.spritesheetBase64 && !characterMode))
+
+@@ -331,5 +345,6 @@ export function PetOverlayApp() {
+     const { width, height } = overlayWindowSize(
+-      info.frameW ?? DEFAULT_FRAME_W,
+-      info.frameH ?? DEFAULT_FRAME_H,
+-      info.scale ?? DEFAULT_SCALE
++      characterMode ? DEFAULT_FRAME_W : info.frameW ?? DEFAULT_FRAME_W,
++      characterMode ? DEFAULT_FRAME_H : info.frameH ?? DEFAULT_FRAME_H,
++      characterMode ? DEFAULT_SCALE : info.scale ?? DEFAULT_SCALE,
++      characterCount
+     )
+@@ -364,3 +379,3 @@ export function PetOverlayApp() {
+     window.hermesDesktop?.petOverlay?.control({ bounds, type: 'bounds' })
+-  }, [info.enabled, info.spritesheetBase64, info.scale, info.frameW, info.frameH])
++  }, [info.enabled, info.spritesheetBase64, info.scale, info.frameW, info.frameH, characterCount, characterMode])
+
+@@ -370,2 +385,8 @@ export function PetOverlayApp() {
+
++  if (characters) {
++    return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-end', height: '100vh', paddingBottom: PET_PADDING_BOTTOM, pointerEvents: 'none' }}>
++      <PetCharacters info={info} paused={characters.paused} preview={characters.preview} />
++    </div>
++  }
++
+   return (
+diff --git a/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..d202700aaff6f7ed5bc0801d86da770445d5527c
+--- /dev/null
++++ b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
+@@ -0,0 +1,75 @@
++import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
++import type * as Motion from 'motion/react'
++import { afterEach, beforeEach, expect, it, vi } from 'vitest'
++
++import { setPetInfo } from '@/store/pet'
++import type { PetOverlayStatePayload } from '@/store/pet-overlay'
++
++import { PetOverlayApp } from './pet-overlay-app'
++
++const io = vi.hoisted(() => ({ reduced: false }))
++vi.mock('motion/react', async original => ({ ...(await original<typeof Motion>()), useReducedMotion: () => io.reduced }))
++vi.mock('@/components/pet/pet-sprite', () => ({ PetSprite: (props: any) => <canvas data-animate={String(props.animate)} data-fps={props.maxFps} data-state={props.stateOverride} data-testid="sprite" /> }))
++let emit: (payload: PetOverlayStatePayload) => void
++const ignore = vi.fn(), off = vi.fn()
++const info = { enabled: true, displayName: 'Owned fixture', spritesheetBase64: 'synthetic', frameW: 16, frameH: 16, scale: 1 }
++const normal = { info, activity: {}, busy: false, awaiting: false, unread: false, reaction: null }
++
++const preview = () => ({ ...normal, charactersPaused: false, characterPreview: { expiresAt: Date.now() + 15000, characters: [
++  { id: 'local::writer', name: '<img> Writer', source: 'This device', detail: 'Read fixture · step 2/5', state: 'run' as const },
++  { id: 'second::writer', name: 'Writer', source: 'Second source', detail: 'Reported error', state: 'failed' as const }
++] } })
++
++beforeEach(() => {
++  vi.useFakeTimers(); io.reduced = false
++  Object.defineProperty(window, 'hermesDesktop', { configurable: true, value: { petOverlay: {
++    onState: (listener: typeof emit) => { emit = listener;
++
++ return off }, control: vi.fn(), setBounds: vi.fn(), setFocusable: vi.fn(), setIgnoreMouse: ignore
++  } } })
++})
++afterEach(() => {
++  cleanup(); setPetInfo({ enabled: false }); vi.clearAllTimers(); vi.useRealTimers(); vi.clearAllMocks()
++  delete (window as unknown as { hermesDesktop?: unknown }).hermesDesktop
++  delete (window.document as unknown as { elementFromPoint?: unknown }).elementFromPoint
++})
++
++it('mirrors explicit character poses and safe labels through the real overlay receiver, without mascot input or stale frames', () => {
++  const view = render(<PetOverlayApp />)
++  act(() => emit(normal))
++  Object.defineProperty(window.document, 'elementFromPoint', { configurable: true, value: () => screen.getByTestId('sprite') })
++  fireEvent.mouseMove(window, { clientX: 0, clientY: 0 })
++  expect(ignore).toHaveBeenLastCalledWith(false)
++  const payload = preview()
++  act(() => emit(payload))
++  expect(screen.getAllByRole('figure')).toHaveLength(2)
++  expect(screen.getByText('<img> Writer')).toBeTruthy()
++  expect(window.document.querySelector('img')).toBeNull()
++  expect(screen.getByText('Read fixture · step 2/5')).toBeTruthy()
++  expect(screen.getAllByTestId('sprite').map(canvas => canvas.dataset.state)).toEqual(['run', 'failed'])
++  expect(screen.getAllByTestId('sprite').every(canvas => canvas.dataset.fps === '15')).toBe(true)
++  expect(screen.queryByRole('textbox')).toBeNull()
++  expect(ignore).toHaveBeenLastCalledWith(true)
++  act(() => emit({ ...payload, charactersPaused: true }))
++  expect(screen.queryAllByTestId('sprite')).toHaveLength(0)
++  act(() => emit(payload))
++  expect(screen.getAllByRole('figure')).toHaveLength(2)
++  act(() => vi.advanceTimersByTime(15000))
++  expect(screen.queryAllByTestId('sprite')).toHaveLength(0)
++  act(() => emit(payload))
++  expect(screen.queryAllByTestId('sprite')).toHaveLength(0)
++  act(() => emit({ ...normal, characterPreview: null }))
++  expect(screen.getAllByTestId('sprite')).toHaveLength(1)
++  expect(screen.queryAllByRole('figure')).toHaveLength(0)
++  view.unmount(); expect(off).toHaveBeenCalledTimes(1)
++})
++
++it('uses static poses for reduced motion and bounds an oversized mirrored list', () => {
++  io.reduced = true
++  render(<PetOverlayApp />)
++  const payload = preview()
++  payload.characterPreview.characters = Array.from({ length: 9 }, (_, i) => ({ ...payload.characterPreview.characters[0], id: `actor-${i}` }))
++  act(() => emit(payload))
++  expect(screen.getAllByTestId('sprite')).toHaveLength(5)
++  expect(screen.getAllByTestId('sprite').every(canvas => canvas.dataset.animate === 'false')).toBe(true)
++})
 diff --git a/apps/desktop/src/app/retirement-view.test.tsx b/apps/desktop/src/app/retirement-view.test.tsx
 index 4097e9f517259a342942edfd4f6d5d6845907ba6..5abd02109d4897c0db3178fed9d94c115278d6f2 100644
 --- a/apps/desktop/src/app/retirement-view.test.tsx
@@ -24961,6 +25346,73 @@ index 64d8d4fcfba6a2fc30a68e0416bd0af72543cb76..056e851b30eaf014823130e8cd4b975e
 +        // (--z-modal-backdrop and up), so dialogs always cover the pet.
 +        zIndex: 45
        }}
+diff --git a/apps/desktop/src/components/pet/pet-sprite.test.tsx b/apps/desktop/src/components/pet/pet-sprite.test.tsx
+index f7e418de0684778cec8c96a9cb599ebb3b6ae5c6..22e36e7ba89a2a544358240bac4358f613086319 100644
+--- a/apps/desktop/src/components/pet/pet-sprite.test.tsx
++++ b/apps/desktop/src/components/pet/pet-sprite.test.tsx
+@@ -110,2 +110,28 @@ describe('PetSprite RAF scheduling', () => {
+
++  it('renders a static pose without animation timers and repaints a changed explicit state', () => {
++    const raf = installRaf()
++    const info = { ...INFO, stateRows: ['idle', 'run'] }
++    mount.render(<PetSprite animate={false} info={info} stateOverride="idle" />)
++    act(() => raf.runNext(0))
++    expect(drawImage).toHaveBeenCalledTimes(1)
++    expect(vi.getTimerCount()).toBe(0)
++    expect(raf.pending()).toBe(0)
++    mount.render(<PetSprite animate={false} info={info} stateOverride="run" />)
++    act(() => raf.runNext(1))
++    expect(drawImage.mock.lastCall?.[2]).toBe(16)
++    expect(vi.getTimerCount()).toBe(0)
++    expect(raf.pending()).toBe(0)
++  })
++
++  it('caps a fast sheet at the caller frame budget', () => {
++    const raf = installRaf()
++    mount.render(<PetSprite info={{ ...INFO, framesPerState: 100, loopMs: 100 }} maxFps={15} />)
++    act(() => raf.runNext(0))
++    expect(raf.pending()).toBe(0)
++    act(() => vi.advanceTimersByTime(65))
++    expect(raf.request).toHaveBeenCalledTimes(1)
++    act(() => vi.advanceTimersByTime(2))
++    expect(raf.request).toHaveBeenCalledTimes(2)
++  })
++
+   it('sleeps between visible sprite frames instead of chaining RAFs', () => {
+diff --git a/apps/desktop/src/components/pet/pet-sprite.tsx b/apps/desktop/src/components/pet/pet-sprite.tsx
+index cd3436e3cc2daac40af3d0121de65d63cfa8f418..86f88b9e9ce790986b1c14c10671bbd19d6c70c9 100644
+--- a/apps/desktop/src/components/pet/pet-sprite.tsx
++++ b/apps/desktop/src/components/pet/pet-sprite.tsx
+@@ -135,2 +135,6 @@ interface PetSpriteProps {
+   info: PetInfo
++  /** Static pose for reduced motion; semantic state changes still repaint. */
++  animate?: boolean
++  /** Per-sprite ceiling for bounded multi-character previews. */
++  maxFps?: number
+   /** Opt in to pausing on blur; visible pets animate by default. */
+@@ -160,3 +164,3 @@ interface PetSpriteProps {
+  */
+-function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUnfocused = false }: PetSpriteProps) {
++function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUnfocused = false, animate = true, maxFps = Infinity }: PetSpriteProps) {
+   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+@@ -352,5 +356,5 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
+       // differ; counts vary per row so derive the cadence here, not once.
+-      const stepMs = loopMs / count
++      const stepMs = Math.max(loopMs / count, 1000 / maxFps)
+
+-      if (now - lastStep >= stepMs) {
++      if (animate && now - lastStep >= stepMs) {
+         frame += 1
+@@ -380,3 +384,3 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
+
+-      scheduleFrame(Math.max(0, stepMs - (now - lastStep)))
++      if (animate) {scheduleFrame(Math.max(0, stepMs - (now - lastStep)))}
+     }
+@@ -402,3 +406,3 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
+     }
+-  }, [image, frameW, frameH, frames, framesByState, framesByRow, loopMs, backingW, backingH, rows, pauseWhenUnfocused])
++  }, [image, frameW, frameH, frames, framesByState, framesByRow, loopMs, backingW, backingH, rows, pauseWhenUnfocused, animate, maxFps])
+
 diff --git a/apps/desktop/src/components/pet/roam-geometry.test.ts b/apps/desktop/src/components/pet/roam-geometry.test.ts
 index 0a882daa657707c4aad7cdd02f4edd17408a794a..5f6b52fecd8ed7a0a3a0264d949a9c2c737a1c73 100644
 --- a/apps/desktop/src/components/pet/roam-geometry.test.ts
@@ -25629,6 +26081,151 @@ index 7d1c2ea4b9ff9f1908bdb750a838cf1f6f1d2e47..2df76c02c22201edfd89371857f2fb7d
 +      <Toolbar onClose={() => onOpenChange(false)} onCopy={onCopy} reset={reset} zoomIn={zoomIn} zoomOut={zoomOut} />
 +    </DialogContent>
    )
+diff --git a/apps/desktop/src/contrib/plugin-characters.test.ts b/apps/desktop/src/contrib/plugin-characters.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..104b3126d7b887a633812a0a8eb81668dbceffb7
+--- /dev/null
++++ b/apps/desktop/src/contrib/plugin-characters.test.ts
+@@ -0,0 +1,84 @@
++import { afterEach, beforeEach, expect, it, vi } from 'vitest'
++
++import { setPetInfo } from '@/store/pet'
++import { $petCharacterPreview, createPetCharacterPublisher } from '@/store/pet-characters'
++import { $petOverlayActive, initPetOverlayBridge, popInPet } from '@/store/pet-overlay'
++
++import { createPluginContext } from './plugin'
++
++let dispose: (() => void) | undefined
++beforeEach(() => vi.useFakeTimers())
++afterEach(() => {
++  dispose?.()
++  popInPet()
++  setPetInfo({ enabled: false })
++  vi.clearAllTimers()
++  vi.useRealTimers()
++  delete (window as unknown as { hermesDesktop?: unknown }).hermesDesktop
++})
++
++it('replaces a scoped preview, bounds display fields, expires stale actors and rejects superseded publishers', () => {
++  const old = createPetCharacterPublisher('first'), current = createPetCharacterPublisher('second')
++  current.update(Array.from({ length: 9 }, (_, i) => ({ id: `source::writer:worker:${i}`, name: 'x'.repeat(100), source: 'Device\u202e\n two', detail: '<b>task</b>\u0000', state: 'run' as const })))
++  const snapshot = $petCharacterPreview.get()!
++  expect(snapshot.characters).toHaveLength(5)
++  expect(snapshot.characters[0]).toMatchObject({ name: 'x'.repeat(79) + '…', source: 'Device two', detail: '<b>task</b>', state: 'run' })
++  expect(snapshot.characters[0].id).toBe(JSON.stringify(['second', 'source::writer:worker:0']))
++  old.update([{ id: 'foreign', name: 'Wrong owner', source: '', detail: '', state: 'failed' }])
++  old.dispose()
++  expect($petCharacterPreview.get()).toBe(snapshot)
++  vi.advanceTimersByTime(15_000)
++  expect($petCharacterPreview.get()?.characters).toEqual([])
++  current.update([{ id: 'source::writer', name: 'Writer', source: 'Device', detail: '', state: 'idle' }])
++  expect($petCharacterPreview.get()?.characters).toHaveLength(1)
++  current.dispose()
++  current.update([{ id: 'revive', name: 'Wrong revival', source: '', detail: '', state: 'run' }])
++  expect($petCharacterPreview.get()).toBeNull()
++  expect(vi.getTimerCount()).toBe(0)
++})
++
++it('keeps only unique bounded identities, with neutral unknown poses and empty replacement', () => {
++  const publisher = createPetCharacterPublisher('bots')
++  publisher.update([
++    { id: 'one', name: 'Writer', source: 'Local', detail: 'Reported step 1/4', state: 'guess' as never },
++    { id: 'one', name: 'Duplicate', source: '', detail: '', state: 'failed' },
++    { id: '', name: 'No identity', source: '', detail: '', state: 'run' },
++    { id: 'x'.repeat(257), name: 'Oversized', source: '', detail: '', state: 'run' }
++  ])
++  expect($petCharacterPreview.get()?.characters).toEqual([{ id: JSON.stringify(['bots', 'one']), name: 'Writer', source: 'Local', detail: 'Reported step 1/4', state: 'idle' }])
++  const future = Date.now() + 3_600_000
++  publisher.update([{ id: 'future', name: 'Bounded', source: '', detail: '', state: 'run' }], future)
++  expect($petCharacterPreview.get()?.expiresAt).toBe(Date.now() + 15_000)
++  vi.advanceTimersByTime(15_000)
++  expect($petCharacterPreview.get()?.characters).toEqual([])
++  publisher.update([{ id: 'invalid', name: 'Invalid timestamp', source: '', detail: '', state: 'run' }], Number.NaN)
++  expect($petCharacterPreview.get()?.characters).toEqual([])
++  publisher.update([{ id: 'old', name: 'Stale', source: '', detail: '', state: 'run' }], Date.now() - 15_000)
++  expect($petCharacterPreview.get()?.characters).toEqual([])
++  publisher.update([])
++  expect($petCharacterPreview.get()?.characters).toEqual([])
++  publisher.dispose()
++})
++
++it('publishes through the real plugin door and overlay mirror, including empty updates and unload cleanup', async () => {
++  const pushState = vi.fn(), close = vi.fn(async () => ({})), open = vi.fn(async () => ({}))
++  Object.defineProperty(window, 'hermesDesktop', { configurable: true, value: { petOverlay: { open, close, pushState, onControl: () => () => {} } } })
++  dispose = initPetOverlayBridge()
++  const disposers: Array<() => void> = []
++  const ctx = createPluginContext('bots', off => disposers.push(off))
++  expect(ctx.pet.previewCharacters!({ x: 0, y: 0, width: 40, height: 40 })).toBeNull()
++  setPetInfo({ enabled: true, spritesheetBase64: 'owned-fixture' })
++  const publisher = ctx.pet.previewCharacters!({ x: 5, y: 6, width: 40, height: 40 })!
++  expect(publisher).toBeTruthy()
++  publisher.update([{ id: 'local::writer', name: 'Writer', source: 'This device', detail: 'Read fixture', state: 'run' }])
++  await Promise.resolve()
++  expect(open).toHaveBeenCalledTimes(1)
++  expect($petOverlayActive.get()).toBe(true)
++  expect(pushState.mock.lastCall?.[0].characterPreview.characters[0].name).toBe('Writer')
++  publisher.update([])
++  expect(pushState.mock.lastCall?.[0].characterPreview.characters).toEqual([])
++  disposers.forEach(off => off())
++  expect($petCharacterPreview.get()).toBeNull()
++  expect($petOverlayActive.get()).toBe(false)
++  expect(ctx.pet.previewCharacters!({ x: 0, y: 0, width: 40, height: 40 })).toBeNull()
++})
+diff --git a/apps/desktop/src/contrib/plugin.ts b/apps/desktop/src/contrib/plugin.ts
+index d487729ac19e2c5d823d0437d4882b3400114822..94116bf0c085d62a468e8a4062d98897d8aefdb8 100644
+--- a/apps/desktop/src/contrib/plugin.ts
++++ b/apps/desktop/src/contrib/plugin.ts
+@@ -28,2 +28,4 @@ import { dispatchPluginNativeNotification, type PluginNativeNotificationInput }
+ import { $petActive } from '@/store/pet'
++import { createPetCharacterPublisher, type PetCharacterPublisher } from '@/store/pet-characters'
++import { $petOverlayActive, type PetOverlayBounds, popInPet, popOutPet } from '@/store/pet-overlay'
+ import { clearPetMessages, type PetSayOptions, sayPetMessage } from '@/store/pet-plugin-messages'
+@@ -42,2 +44,3 @@ export type { PluginAppActionId, PluginAppActionInfo, PluginRunActionResult } fr
+ export type { PluginNativeNotificationInput, PluginNotificationAction } from '@/store/native-notifications'
++export type { PetCharacter, PetCharacterPublisher } from '@/store/pet-characters'
+ export type { PetMessageTone, PetSayOptions } from '@/store/pet-plugin-messages'
+@@ -91,2 +94,6 @@ export interface PluginOs {
+ export interface PluginPet {
++  /** Explicit user action only: preview up to five display-only characters in
++   * the existing overlay. Updates replace the list; dispose restores the
++   * previous mascot mode. Returns null without a loaded pet/native bridge. */
++  previewCharacters?: (anchor: PetOverlayBounds) => PetCharacterPublisher | null
+   /** Show one plain-text line (no HTML; control characters stripped, capped
+@@ -275,4 +282,34 @@ function createPluginPet(pluginId: string, track: (dispose: () => void) => () =>
+   let tracked = false
++  let preview: PetCharacterPublisher | null = null
++  let previewTracked = false
++  let disposed = false
+
+   return {
++    previewCharacters: anchor => {
++      if (disposed || !$petActive.get() || !window.hermesDesktop?.petOverlay) {return null}
++
++      if (!previewTracked) {
++        previewTracked = true
++        track(() => {
++          disposed = true
++          preview?.dispose()
++        })
++      }
++
++      preview?.dispose()
++      const alreadyOpen = $petOverlayActive.get()
++      const publisher = createPetCharacterPublisher(pluginId)
++      preview = {
++        update: publisher.update,
++        dispose: () => {
++          const current = publisher.isCurrent()
++          publisher.dispose()
++
++          if (current && !alreadyOpen) {popInPet()}
++        }
++      }
++      popOutPet(anchor)
++
++      return preview
++    },
+     clear: id => clearPetMessages(pluginId, id),
 diff --git a/apps/desktop/src/global.d.ts b/apps/desktop/src/global.d.ts
 index b266da09084b763017fd34ad93e0aba8dda2d700..76c566ee81539ad0239eb3c64d11b04a990d4d9d 100644
 --- a/apps/desktop/src/global.d.ts
@@ -30716,6 +31313,170 @@ index abe8afb7e670b207a192ac15fb797fb8dfed168e..2b2824a97bb7cfd9d21057f4efdfd811
 +              </SelectTrigger>
 +            </Tip>
              <SelectContent>
+diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..4dd7db0246ebc417263c0351446623efc033ed84
+--- /dev/null
++++ b/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx
+@@ -0,0 +1,86 @@
++import { host } from '@hermes/plugin-sdk'
++import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
++import { afterEach, beforeEach, expect, it, vi } from 'vitest'
++
++// eslint-disable-next-line no-restricted-imports
++import { createPluginContext } from '@/contrib/plugin'
++// eslint-disable-next-line no-restricted-imports
++import { registerPluginLocales } from '@/i18n/plugin-i18n'
++// eslint-disable-next-line no-restricted-imports
++import { setPetInfo } from '@/store/pet'
++// eslint-disable-next-line no-restricted-imports
++import { $petCharacterPreview } from '@/store/pet-characters'
++// eslint-disable-next-line no-restricted-imports
++import { initPetOverlayBridge, popInPet } from '@/store/pet-overlay'
++
++import { BOTS_LOCALES } from './i18n'
++import { BotMonitor } from './monitor'
++import { setPluginCtx } from './shared'
++import type { RosterRow } from './types'
++
++let off: () => void, locales: () => void
++const open = vi.fn()
++let request: ReturnType<typeof vi.spyOn>
++const ready = { available: true, key: 'ready', label: 'Ready', tone: 'good' } as const
++
++function row(name: string, bot: Partial<RosterRow> = {}) {
++  return { name, working: true, needsAttention: false, attentionHint: '', source: ready,
++    bot: { name, connectionId: 'local', sourceReachable: true, ...bot } }
++}
++
++beforeEach(() => {
++  vi.useFakeTimers(); vi.setSystemTime(2_000_000)
++  request = vi.spyOn(host, 'request')
++  locales = registerPluginLocales('hermes-bots', BOTS_LOCALES)
++  Object.defineProperty(window, 'hermesDesktop', { configurable: true, value: { petOverlay: {
++    open: vi.fn(async () => ({})), close: vi.fn(async () => ({})), pushState: vi.fn(), onControl: () => () => {}
++  } } })
++  off = initPetOverlayBridge()
++  setPluginCtx(createPluginContext('hermes-bots'))
++  setPetInfo({ enabled: true, spritesheetBase64: 'owned-fixture' })
++})
++afterEach(() => {
++  cleanup(); off(); locales(); popInPet(); setPluginCtx(null); setPetInfo({ enabled: false })
++  vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks(); vi.clearAllMocks()
++  delete (window as unknown as { hermesDesktop?: unknown }).hermesDesktop
++})
++
++it('previews only after explicit opt-in, uses source-qualified live observations and clears stale/unmounted data', () => {
++  const rows = [row('writer', { worker_sessions: [
++    { id: 'live', title: 'Read fixture', last_active: 2000, iteration: 2, max_iterations: 5 },
++    { id: 'ended', last_active: 2000, ended_at: 1999 },
++    { id: 'old', last_active: 1800 },
++    { last_active: 2000, title: 'No stable worker identity' }
++  ] }), row('offline', { sourceReachable: false, retained: true }), row('writer', { connectionId: 'second', connectionLabel: 'Second device' })]
++
++  rows[1].source = { ...ready, key: 'unavailable', available: false } as never
++  const view = render(<BotMonitor now={2_000_000} onOpen={open} rows={rows} />)
++  expect($petCharacterPreview.get()).toBeNull()
++  fireEvent.click(screen.getByRole('button', { name: 'Show bot characters' }))
++  expect($petCharacterPreview.get()?.characters.map(actor => actor.id)).toEqual([
++    JSON.stringify(['hermes-bots', 'local::writer:bot']), JSON.stringify(['hermes-bots', 'local::writer:worker:live']),
++    JSON.stringify(['hermes-bots', 'second::writer:bot'])
++  ])
++  expect($petCharacterPreview.get()?.characters[1].detail).toContain('step 2/5')
++  expect($petCharacterPreview.get()?.characters[2].source).toBe('Second device')
++  expect(open).not.toHaveBeenCalled(); expect(request).not.toHaveBeenCalled()
++  view.rerender(<BotMonitor now={2_000_000} onOpen={open} rows={rows} stale />)
++  expect($petCharacterPreview.get()?.characters).toEqual([])
++  view.rerender(<BotMonitor now={2_000_001} onOpen={open} rows={rows} />)
++  expect($petCharacterPreview.get()?.characters).toHaveLength(3)
++  view.unmount()
++  expect($petCharacterPreview.get()).toBeNull()
++})
++
++it('does not reinterpret historical failures or idle/unknown/unqualified sources as current actors; caps to five and stops on request', () => {
++  const idle = { ...row('idle', { canonical_session: { delegation_reports: [{ delegation_id: 'past', task_index: null, status: 'error' as const, completed_at: 1900, goal: 'Old failure', summary: '', error: 'Old error' }] } }), working: false }
++  const unknown = { ...row('unknown'), source: { ...ready, key: 'unknown' as const } }
++  const rows = [row('unqualified', { connectionId: undefined }), idle, unknown, ...Array.from({ length: 8 }, (_, i) => row(`bot-${i}`))]
++  render(<BotMonitor now={2_000_000} onOpen={open} rows={rows} />)
++  fireEvent.click(screen.getByRole('button', { name: 'Show bot characters' }))
++  expect($petCharacterPreview.get()?.characters.map(actor => actor.name)).toEqual(['bot-0', 'bot-1', 'bot-2', 'bot-3', 'bot-4'])
++  act(() => vi.advanceTimersByTime(15_000))
++  expect($petCharacterPreview.get()?.characters).toEqual([])
++  fireEvent.click(screen.getByRole('button', { name: 'Stop character preview' }))
++  expect($petCharacterPreview.get()).toBeNull()
++})
+diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..283e78270c354e16ff715a04f55886ff904e83b4
+--- /dev/null
++++ b/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx
+@@ -0,0 +1,66 @@
++import { atom, Button, type PetCharacter, type PetCharacterPublisher, useValue } from '@hermes/plugin-sdk'
++import { useEffect, useRef, useState } from 'react'
++
++import { botRosterKey } from './data'
++import { useBots } from './i18n'
++import { stripPreviewMarkdown } from './labels'
++import type { BotMonitorProps } from './monitor'
++import { activeWorkerSessions, workerProgress } from './row-helpers'
++import { getPluginCtx } from './shared'
++
++const unavailable = atom(false)
++
++// shortcut: Monitor-scoped snapshots only; use a shared activity publisher for persistent tracking.
++export function MonitorCharacters({ rows, now, stale }: Pick<BotMonitorProps, 'rows' | 'now' | 'stale'>) {
++  const b = useBots(), pet = getPluginCtx()?.pet
++  const visible = useValue(pet?.visible || unavailable)
++  const preview = useRef<PetCharacterPublisher | null>(null)
++  const [active, setActive] = useState(false)
++
++  useEffect(() => () => preview.current?.dispose(), [])
++  useEffect(() => {
++    if (!preview.current) {return}
++    const characters: PetCharacter[] = []
++
++    if (visible && !stale) {
++      for (const row of [...rows].sort((a, z) => botRosterKey(a.bot).localeCompare(botRosterKey(z.bot)))) {
++        if (!row.bot.connectionId || row.bot.retained || row.bot.ghost || row.source.key !== 'ready' || !row.source.available) {continue}
++        const key = botRosterKey(row.bot), source = row.bot.connectionLabel || row.bot.connectionId
++
++        if (row.working || row.needsAttention) {
++          characters.push({ id: `${key}:bot`, name: row.name, source,
++            detail: stripPreviewMarkdown(row.needsAttention ? row.attentionHint : row.bot.canonical_session?.preview || ''),
++            state: row.needsAttention ? 'failed' : 'run' })
++        }
++
++        for (const worker of activeWorkerSessions(row.bot, now)) {
++          if (!worker.id) {continue}
++          const progress = workerProgress(worker, now)
++          characters.push({ id: `${key}:worker:${worker.id}`, name: `${row.name} · ${b.monitor.worker}`, source,
++            detail: [stripPreviewMarkdown(worker.last_activity_description || worker.current_tool || worker.title || ''),
++              progress.step ? b.roster.workerStep(progress.step.n, progress.step.max) : ''].filter(Boolean).join(' · '), state: 'run' })
++
++          if (characters.length >= 5) {break}
++        }
++
++        if (characters.length >= 5) {break}
++      }
++    }
++
++    preview.current.update(characters, now)
++  }, [rows, now, stale, visible, active, b])
++
++  return <Button aria-pressed={active} disabled={!pet?.previewCharacters || (!visible && !active)}
++    onClick={event => {
++      if (preview.current) {
++        preview.current.dispose()
++        preview.current = null
++        setActive(false)
++      } else {
++        preview.current = pet?.previewCharacters?.(event.currentTarget.getBoundingClientRect()) || null
++        setActive(Boolean(preview.current))
++      }
++    }} size="sm" title={b.monitor.charactersHint} variant={active ? 'secondary' : 'ghost'}>
++    {active ? b.monitor.stopCharacters : b.monitor.showCharacters}
++  </Button>
++}
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-desktop-bridge.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-desktop-bridge.test.tsx
 new file mode 100644
 index 0000000000000000000000000000000000000000..2f45745f13788c07ce2187fd791afcfb0f37b2a3
@@ -31032,13 +31793,16 @@ index 0000000000000000000000000000000000000000..2f45745f13788c07ce2187fd791afcfb
 +})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-locales.ts b/apps/desktop/src/plugins/hermes-bots/monitor-locales.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..3c6cbc600baa928027ff53e2ad62f52bbb950f8d
+index 0000000000000000000000000000000000000000..acbdc3b9d7f263241f74185b236245e21c0dd5a1
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-locales.ts
-@@ -0,0 +1,409 @@
+@@ -0,0 +1,448 @@
 +import type { CANONICAL_GROUP_LOCALES } from './canonical-group-locales'
 +
 +export interface MonitorMessages {
++  showCharacters: string
++  stopCharacters: string
++  charactersHint: string
 +  title: string
 +  recordedIssues: string
 +  hint: string
@@ -31085,6 +31849,10 @@ index 0000000000000000000000000000000000000000..3c6cbc600baa928027ff53e2ad62f52b
 +
 +export const BOT_MONITOR_LOCALES = {
 +  en: {
++    showCharacters: "Show bot characters",
++    stopCharacters: "Stop character preview",
++    charactersHint: "Preview up to five fresh bots/workers while Monitor is open. Choose and enable a pet in Settings first. Read-only preview; no character actions yet.",
++
 +    title: 'Monitor',
 +    recordedIssues: "Recorded issues",
 +    hint: 'Recent worker observations, up to 20 per bot. Missing or stale data does not prove inactivity. Uses the existing roster refresh.',
@@ -31125,6 +31893,10 @@ index 0000000000000000000000000000000000000000..3c6cbc600baa928027ff53e2ad62f52b
 +    counts: (bots, workers) => `Bots: ${bots} · Current worker observations: ${workers}`
 +  },
 +  ja: {
++    showCharacters: "ボットキャラクターを表示",
++    stopCharacters: "キャラクタープレビューを停止",
++    charactersHint: "モニターを開いている間、最新のボット・ワーカーを最大5体プレビューします。先に設定でペットを選んで有効にしてください。現在は表示のみです。",
++
 +    title: 'モニター',
 +    recordedIssues: "記録済みの問題",
 +    hint: 'ボットごとに最大20件の最近のワーカー観測です。情報の欠落や古さは停止の証拠ではありません。既存の名簿更新を使用します。',
@@ -31165,6 +31937,10 @@ index 0000000000000000000000000000000000000000..3c6cbc600baa928027ff53e2ad62f52b
 +    counts: (bots, workers) => `ボット: ${bots} · 現在のワーカー観測: ${workers}`
 +  },
 +  zh: {
++    showCharacters: "显示机器人角色",
++    stopCharacters: "停止角色预览",
++    charactersHint: "监视器打开时预览最多五个有最新状态的机器人或工作者。请先在设置中选择并启用宠物。目前仅供查看，尚无角色操作。",
++
 +    title: '监控',
 +    recordedIssues: "已记录的问题",
 +    hint: '每个机器人最多显示20条近期工作进程观测。缺失或过时的数据不能证明没有活动。使用现有名单刷新。',
@@ -31205,6 +31981,10 @@ index 0000000000000000000000000000000000000000..3c6cbc600baa928027ff53e2ad62f52b
 +    counts: (bots, workers) => `机器人：${bots} · 当前工作进程观测：${workers}`
 +  },
 +  'zh-hant': {
++    showCharacters: "顯示機器人角色",
++    stopCharacters: "停止角色預覽",
++    charactersHint: "監視器開啟時預覽最多五個有最新狀態的機器人或工作者。請先在設定中選擇並啟用寵物。目前僅供查看，尚無角色操作。",
++
 +    title: '監控',
 +    recordedIssues: "已記錄的問題",
 +    hint: '每個機器人最多顯示20筆近期工作程序觀測。缺失或過時的資料不能證明沒有活動。使用現有名冊重新整理。',
@@ -31245,6 +32025,10 @@ index 0000000000000000000000000000000000000000..3c6cbc600baa928027ff53e2ad62f52b
 +    counts: (bots, workers) => `機器人：${bots} · 目前工作程序觀測：${workers}`
 +  },
 +  ar: {
++    showCharacters: "إظهار شخصيات الروبوتات",
++    stopCharacters: "إيقاف معاينة الشخصيات",
++    charactersHint: "معاينة حتى خمس شخصيات لروبوتات أو عمّال بحالة حديثة أثناء فتح المراقب. اختر حيوانًا أليفًا وفعّله في الإعدادات أولًا. المعاينة للعرض فقط حاليًا.",
++
 +    title: 'المراقبة',
 +    recordedIssues: "المشكلات المسجلة",
 +    hint: 'ملاحظات حديثة للعاملين، بحد أقصى 20 لكل بوت. البيانات المفقودة أو القديمة لا تثبت عدم النشاط. تستخدم تحديث القائمة الحالي.',
@@ -31285,6 +32069,10 @@ index 0000000000000000000000000000000000000000..3c6cbc600baa928027ff53e2ad62f52b
 +    counts: (bots, workers) => `البوتات: ${bots} · ملاحظات العاملين الحالية: ${workers}`
 +  },
 +  ru: {
++    showCharacters: "Показать персонажей ботов",
++    stopCharacters: "Остановить предпросмотр",
++    charactersHint: "До пяти ботов и исполнителей со свежими данными, пока открыт монитор. Сначала выберите и включите питомца в настройках. Пока только просмотр, без действий.",
++
 +    title: 'Монитор',
 +    recordedIssues: "Записанные проблемы",
 +    hint: 'Недавние наблюдения за исполнителями: до 20 на бота. Отсутствующие или устаревшие данные не доказывают бездействие. Используется текущее обновление списка.',
@@ -31325,6 +32113,10 @@ index 0000000000000000000000000000000000000000..3c6cbc600baa928027ff53e2ad62f52b
 +    counts: (bots, workers) => `Боты: ${bots} · Текущие наблюдения исполнителей: ${workers}`
 +  },
 +  fr: {
++    showCharacters: "Afficher les personnages des bots",
++    stopCharacters: "Arrêter l’aperçu",
++    charactersHint: "Aperçu de cinq bots ou agents aux données récentes, pendant que le moniteur est ouvert. Choisissez et activez un compagnon dans les réglages. Aperçu sans interaction pour le moment.",
++
 +    title: 'Moniteur',
 +    recordedIssues: "Problèmes enregistrés",
 +    hint: 'Observations récentes des agents de travail, au plus 20 par bot. Des données absentes ou anciennes ne prouvent pas une inactivité. Utilise le rafraîchissement existant.',
@@ -31365,6 +32157,10 @@ index 0000000000000000000000000000000000000000..3c6cbc600baa928027ff53e2ad62f52b
 +    counts: (bots, workers) => `Bots : ${bots} · Observations actuelles des agents : ${workers}`
 +  },
 +  de: {
++    showCharacters: "Bot-Figuren anzeigen",
++    stopCharacters: "Figurenvorschau stoppen",
++    charactersHint: "Vorschau von bis zu fünf Bots oder Helfern mit aktuellen Daten bei geöffnetem Monitor. Zuerst ein Haustier in den Einstellungen wählen und aktivieren. Vorerst ohne Interaktionen.",
++
 +    title: 'Monitor',
 +    recordedIssues: "Erfasste Probleme",
 +    hint: 'Aktuelle Worker-Beobachtungen, bis zu 20 pro Bot. Fehlende oder veraltete Daten beweisen keine Inaktivität. Nutzt die vorhandene Listenaktualisierung.',
@@ -31405,6 +32201,10 @@ index 0000000000000000000000000000000000000000..3c6cbc600baa928027ff53e2ad62f52b
 +    counts: (bots, workers) => `Bots: ${bots} · Aktuelle Worker-Beobachtungen: ${workers}`
 +  },
 +  es: {
++    showCharacters: "Mostrar personajes de bots",
++    stopCharacters: "Detener vista previa",
++    charactersHint: "Hasta cinco bots o trabajadores con datos recientes mientras el monitor esté abierto. Primero elige y activa una mascota en Ajustes. Vista previa sin acciones por ahora.",
++
 +    title: 'Monitor',
 +    recordedIssues: "Problemas registrados",
 +    hint: 'Observaciones recientes de trabajadores, hasta 20 por bot. Los datos ausentes o antiguos no prueban inactividad. Usa la actualización existente de la lista.',
@@ -32652,21 +33452,22 @@ index 0000000000000000000000000000000000000000..54c8da1e446cc1efd20ce1b91fa2d78c
 +})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor.tsx b/apps/desktop/src/plugins/hermes-bots/monitor.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..73e9039f27c69417cdddf84b1d95cd90a9e9801f
+index 0000000000000000000000000000000000000000..46ca8c403779edb390baf2fb572422880437797c
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor.tsx
-@@ -0,0 +1,218 @@
+@@ -0,0 +1,220 @@
 +import { Button, Codicon, compactNumber, EmptyState, SearchField, SegmentedControl } from '@hermes/plugin-sdk'
 +import { useState } from 'react'
 +
 +import { botRosterKey, type botSourceStatus } from './data'
 +import { type BotsText, useBots } from './i18n'
 +import { stripPreviewMarkdown } from './labels'
++import { MonitorCharacters } from './monitor-characters'
 +import { BotMonitorReports, botRecordedIssue } from './monitor-reports'
 +import { activeWorkerSessions, workerProgress } from './row-helpers'
 +import type { RosterRow, WorkerSession } from './types'
 +
-+interface BotMonitorProps {
++export interface BotMonitorProps {
 +  now: number
 +  stale?: boolean
 +  rows: {
@@ -32791,6 +33592,7 @@ index 0000000000000000000000000000000000000000..73e9039f27c69417cdddf84b1d95cd90
 +        {stale && <p className="mt-2 text-sm" role="status">{m.refreshFailed}</p>}
 +      </div>
 +      <div className="flex flex-wrap items-center gap-4">
++        <MonitorCharacters now={now} rows={rows} stale={stale} />
 +        {rows.length > 0 && <SearchField aria-label={m.search} onChange={value => {
 +          setSearch(value)
 +          setLimit(60)
@@ -38519,6 +39321,15 @@ index 1771079ce633e58b6cc4374d95417cb169b71984..949cc1b2cd5d4e82d9a3f68a8c63de19
  export { CHAT_EMPTY_AREA, type ChatEmptyContribution, type ChatEmptyProps } from '@/lib/chat-empty'
 +export { isMissingRpcMethod } from '@/lib/gateway-rpc'
  /** THE confirm flow for guarded model switches — when a gateway model-switch
+diff --git a/apps/desktop/src/sdk/plugin-contract.ts b/apps/desktop/src/sdk/plugin-contract.ts
+index 898b1885a86ec74d89eced94871a190258a89959..cad6bd3e0cf852e51c3b54e29f78df7e029cec70 100644
+--- a/apps/desktop/src/sdk/plugin-contract.ts
++++ b/apps/desktop/src/sdk/plugin-contract.ts
+@@ -4,2 +4,4 @@ export type {
+   HermesPlugin,
++  PetCharacter,
++  PetCharacterPublisher,
+   PetMessageTone,
 diff --git a/apps/desktop/src/sdk/profile-request.ts b/apps/desktop/src/sdk/profile-request.ts
 index 1b24565de7a5173919d7b7a5362b6e2b63f07dc2..5090366b249535dbd25c17aeda68bdc4f10660cc 100644
 --- a/apps/desktop/src/sdk/profile-request.ts
@@ -40067,6 +40878,114 @@ index b0eb473252b6e6e149f1f0711a6d8de535e87d8e..ad1ef8e2c1e29ef4fed05dc9d0fac09d
 -  const enumerate = vi.spyOn(window.localStorage, 'key')
 +  const enumerate = vi.spyOn(Storage.prototype, 'key')
  
+diff --git a/apps/desktop/src/store/pet-characters.ts b/apps/desktop/src/store/pet-characters.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..803cc5b8bd3fac9e5bc2904d63a096c417b2ba49
+--- /dev/null
++++ b/apps/desktop/src/store/pet-characters.ts
+@@ -0,0 +1,69 @@
++import { atom } from 'nanostores'
++
++import type { PetState } from '@/store/pet'
++import { sanitizePetText } from '@/store/pet-plugin-messages'
++
++export interface PetCharacter {
++  id: string
++  name: string
++  source: string
++  detail: string
++  state: PetState
++}
++
++export interface PetCharacterPublisher {
++  update: (characters: PetCharacter[], observedAt?: number) => void
++  dispose: () => void
++}
++
++export interface PetCharacterPreview {
++  characters: PetCharacter[]
++  expiresAt: number
++}
++
++export const $petCharacterPreview = atom<PetCharacterPreview | null>(null)
++let owner: symbol | null = null
++let timer: ReturnType<typeof setTimeout> | undefined
++const states = new Set<PetState>(['idle', 'wave', 'run', 'failed', 'review', 'jump', 'waiting'])
++
++
++/** One replaceable preview owns the shared overlay; old publishers cannot revive it. */
++export function createPetCharacterPublisher(pluginId: string) {
++  const token = Symbol(pluginId)
++  owner = token
++  clearTimeout(timer)
++  $petCharacterPreview.set({ characters: [], expiresAt: 0 })
++
++  return {
++    isCurrent: () => owner === token,
++    update: (input: PetCharacter[], observedAt = Date.now()) => {
++      if (owner !== token) {return}
++      const now = Date.now()
++      const expiresAt = Number.isFinite(observedAt) ? Math.min(now, observedAt) + 15_000 : 0
++      const characters: PetCharacter[] = [], seen = new Set<string>()
++
++      for (const item of (Array.isArray(input) && expiresAt > now ? input : []).slice(0, 20)) {
++        if (!item || typeof item.id !== 'string' || !item.id || item.id.length > 256 || seen.has(item.id)) {continue}
++        seen.add(item.id)
++        characters.push({ id: JSON.stringify([pluginId, item.id]), name: sanitizePetText(item.name, 80), source: sanitizePetText(item.source, 80), detail: sanitizePetText(item.detail, 160), state: states.has(item.state) ? item.state : 'idle' })
++
++        if (characters.length === 5) {break}
++      }
++
++      clearTimeout(timer)
++      $petCharacterPreview.set({ characters, expiresAt: characters.length ? expiresAt : 0 })
++
++      if (characters.length) {
++        timer = setTimeout(() => {
++          if (owner === token) {$petCharacterPreview.set({ characters: [], expiresAt: 0 })}
++        }, expiresAt - now)
++      }
++    },
++    dispose: () => {
++      if (owner !== token) {return}
++      owner = null
++      clearTimeout(timer)
++      $petCharacterPreview.set(null)
++    }
++  }
++}
+diff --git a/apps/desktop/src/store/pet-overlay.ts b/apps/desktop/src/store/pet-overlay.ts
+index d47f67023fb8b820d6f6cbd455562a591600413b..79f2bdd7ff0fe68e38157d13cbc711621e7bc747 100644
+--- a/apps/desktop/src/store/pet-overlay.ts
++++ b/apps/desktop/src/store/pet-overlay.ts
+@@ -5,2 +5,3 @@ import { persistBoolean, persistString, storedBoolean, storedString } from '@/li
+ import { $petActivity, $petInfo, $petUnread, clearPetUnread, type PetActivity, type PetInfo } from '@/store/pet'
++import { $petCharacterPreview, type PetCharacterPreview } from '@/store/pet-characters'
+ import { $petPluginMessages, type PetPluginMessage } from '@/store/pet-plugin-messages'
+@@ -53,2 +54,4 @@ export interface PetOverlayStatePayload {
+   pluginMessages?: PetPluginMessage[]
++  characterPreview?: PetCharacterPreview | null
++  charactersPaused?: boolean
+ }
+@@ -132,5 +135,5 @@ const OVERLAY_MIN_H = 300
+  */
+-export function overlayWindowSize(frameW: number, frameH: number, scale: number): { width: number; height: number } {
++export function overlayWindowSize(frameW: number, frameH: number, scale: number, characterCount = 0): { width: number; height: number } {
+   return {
+-    width: Math.max(OVERLAY_MIN_W, Math.round(frameW * scale + OVERLAY_PAD_X)),
++    width: Math.max(OVERLAY_MIN_W, Math.round(frameW * scale + OVERLAY_PAD_X), Math.min(5, characterCount) * 120 + 32),
+     height: Math.max(OVERLAY_MIN_H, Math.round(frameH * scale + OVERLAY_PAD_Y))
+@@ -153,3 +156,4 @@ function currentPayload(): PetOverlayStatePayload {
+     reaction: $petReaction.get(),
+-    pluginMessages: $petPluginMessages.get()
++    pluginMessages: $petPluginMessages.get(),
++    characterPreview: $petCharacterPreview.get()
+   }
+@@ -191,3 +195,4 @@ function openOverlay(request: PetOverlayOpenRequest): void {
+     $petReaction.subscribe(pushNow),
+-    $petPluginMessages.subscribe(pushNow)
++    $petPluginMessages.subscribe(pushNow),
++    $petCharacterPreview.subscribe(pushNow)
+   ]
 diff --git a/apps/desktop/src/store/session-control.ts b/apps/desktop/src/store/session-control.ts
 index 0046d47826fe8c53df69858c9b22999ab8717597..c750a6537775a6f6450f159696861e444e4b3484 100644
 --- a/apps/desktop/src/store/session-control.ts

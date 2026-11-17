@@ -1,3 +1,66 @@
+# Bot character overlay preview — offline source step, unreleased
+
+The working source adds an explicit Monitor character preview through the
+existing plugin pet door, overlay IPC and PetSprite. No new model request,
+roster polling, gateway or per-character process/window is added. A loaded,
+enabled pet is required; its sheet is shared as display input. The first slice
+is read-only and cannot use the global mascot composer to submit a prompt.
+
+Source tests cover the real plugin publisher and overlay mirror, source/stable
+identities and deterministic five-actor limit, replacement/empty updates,
+superseded/disposed ownership, bounded safe text and old/future snapshot lease
+bounds. The lease expires 15 seconds after the source observation; clicking
+preview cannot refresh old work. Monitor tests exclude retained/unavailable,
+unknown/unqualified and idle historical-error rows, ended/stale/identity-less
+workers, and clear on read error, unmount and explicit Stop. No request or chat
+open is caused by those snapshots. Nine locale bundles have the new copy.
+
+The actual receiver is tested with safe text, explicit poses, a bounded list,
+paused/stale frames, reduced-motion static poses and normal-mascot restoration.
+Canvas scheduler tests prove static semantic-state repaint without animation
+timers and a 15 fps sprite ceiling. Native IPC tests cover hide/minimize,
+lock/suspend/resume lock preservation, return to mascot mode and disposal on
+overlay closure without a final state push. These are source/unit contracts;
+mocked native events and canvas contexts are not macOS visual acceptance.
+
+Meaningful RED cases precede the missing plugin door, source observation expiry,
+sprite cadence/static rendering, Monitor opt-in, receiver behavior, lock latch
+and native overlay-close cleanup. Focused UI run: 58 cases pass; after affected
+code changes, 24 impacted cases pass again. The final native IPC suite passes
+two cases. Renderer and Electron types pass. Scoped lint has no errors; one
+unchanged pre-existing `document` warning remains in the sprite test. Production
+renderer and the changed native IPC bundle build; the existing Vite
+ineffective-dynamic-import warning remains. No full unchanged engine/Desktop
+or mock sweep is claimed.
+
+Two distinct fresh native hosts attempted the actual production overlay
+artifact with an owned geometric atlas and synthetic observations. Each main
+control renderer crashed before control HTML/overlay-window creation, reporting
+`Failed to initialize sandbox.` The IPC module was imported, but the production
+overlay renderer never loaded. Trial one closed two processes after 2.65s,
+sampled peak 181,157,888 bytes including guardian. Trial two verified owned
+Cocoa home/temp/appData/log/crash paths, then failed identically and closed two
+processes after 2.62s, peak 191,823,872 bytes. Neither reached Local60, CUA,
+screenshots, five characters, or performance measurement. These startup peaks
+are not overlay RAM measurements. No further native trial this round.
+
+The narrow sandboxd query had no matching records. Static comparison found that
+the earlier working harness leaves Electron to Chromium's sandbox under Node
+guards, whereas these trials also applied an outer Seatbelt profile. That is a
+diagnostic lead, not a demonstrated cause. Existing crash/startup evidence must
+be attributed before another launch; no sandbox or permission bypass was used.
+Raw failures, ownership/closure receipts, scripts and source checks remain at
+`../uitest-v090-c2q4iijp/characters-r209`. No owner app/data, other host or ai
+connection, credential, permission, ESTOP, pause or timer change.
+
+Only 16 changed source/test sections are exported against pinned
+`bf0203a794a07aac3ff764972ab9087baa4e4f4e`, with apply/after-hash/reverse/before-hash
+checks and unrelated sections retained. Desktop selection appends the affected
+tests; Python selection stays unchanged. This completes an offline development
+step only. Full native rendering, persistent tracking, interactions/output
+preview, packs, display-only sleep and five-character CPU/RAM acceptance remain
+open. No version, tag, adoption or release.
+
 # Pet creator preview — native terminal acceptance, unreleased
 
 The character creator tooling now previews every canonical pet activity through
