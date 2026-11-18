@@ -1,3 +1,44 @@
+# Measure import-time character rows
+
+The real pack validator and atomic importer ran in a disposable Mac
+profile. The experiment encoded populated rows from the exact validated
+PNG or lossless WebP bytes after confirming the installed source matched.
+Four offline controls checked partial alpha, a combined source-and-row
+4 MiB cap, fallback for gamma metadata and replacement between validation
+and import. Across five synthetic packs, four rows per pack added
+44.6 KiB of encoded data.
+
+Three fresh signed Mac Local fixtures compared no overlay, full sheets
+and import-time strips with one renderer. Five characters rotated
+through mixed running, waiting and failed states. 96 of 120
+drawn frame hashes matched. Canvas identity, geometry and cadence passed.
+After the cycle, strips used 35.7 MiB less than full sheets across the
+app processes. They added 76.7 MiB and 2.59 CPU points above no
+overlay. The candidate met the 80 MiB memory ceiling and
+exceeded the 2-point CPU ceiling in this pair. Each run recorded zero
+Desktop SSH after 60 seconds and no survivors. Production delivery
+continues to use full sheets.
+
+All 24 mismatches in the benchmark came from one of the two WebP
+packs. A fourth signed Local fixture compared 36 test crops from
+both WebP sources in Chromium. Full PNG transcodes matched 18/36
+against full WebP and PNG strips matched 18/36. Full PNG and
+PNG strips matched 36/36. Lossless WebP strips matched
+36/36 against full WebP. The PNG strips differed by up to three RGB levels per channel.
+Alpha matched in all 36 frames.
+The codec control recorded zero Desktop SSH and no survivors.
+The mismatch reproduced without slicing the atlas. Keeping WebP in
+the derived row preserved the drawn pixels for these two source packs.
+
+A fifth signed Local trial kept PNG rows in PNG and WebP rows in
+lossless WebP. It used the original full-sheet and no-overlay runs as
+controls with the same renderer build and state sequence. This time
+120 of 120 drawn frame hashes matched. After the cycle the
+same-format strips used 28.1 MiB less than full sheets. They added 84.3 MiB
+and 3.36 CPU points above no overlay. CPU was +1.06 points
+relative to full sheets. The run exceeded both resource ceilings. It recorded zero
+Desktop SSH after 60 seconds and left no survivors.
+
 # Measure runtime row cropping in the character producer
 
 Three signed isolated Mac Local runs compared no overlay, full PNG

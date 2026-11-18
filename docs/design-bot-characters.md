@@ -349,6 +349,17 @@ was 101.6 MiB and 3.98 CPU points. This is an unreleased
 fixture measurement with synthetic PNG art.
 [Runtime cropping proof](verification.md#measure-runtime-row-cropping-in-the-character-producer).
 
+An isolated Mac import experiment encoded populated rows from the
+validated bytes of three PNG and two lossless WebP sheets. It kept the
+originals and capped their combined encoded size with the derivatives.
+Five mixed-state characters matched 96 of 120 drawn frame hashes.
+After the state cycle the strips used 35.7 MiB less than full sheets.
+They added 76.7 MiB and 2.59 CPU points above no overlay.
+In a follow-up, retaining PNG or lossless WebP per source matched
+120 of 120 drawn frame hashes and added 84.3 MiB and
+3.36 CPU points above no overlay. Product delivery still uses full sheets.
+[Import experiment](verification.md#measure-import-time-character-rows).
+
 A follow-up Mac run measured 111.6 MiB and 2.81 CPU points of five-pack
 overhead before tracing. About 1.51 CPU points came from the overlay
 renderer and 1.29 from the main process, which hosted Chromium's GPU
