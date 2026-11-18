@@ -332,6 +332,14 @@ over no overlay. Treat these strips as a running-state fixture. A
 product approach still needs state transitions and the CPU gate.
 [Measurement method](verification.md#compare-resident-character-sprite-sheets).
 
+A signed Local prototype drove five strip sprites from running to
+waiting, failed and running again through owned overlay IPC. It
+matched 120 canvas-frame hashes against full sheets. The mounted
+canvas regression covers pending, superseded and failed image
+loads. The strip prototype used 28.6 MiB less after the state
+cycle. Product delivery still accepts full packs.
+[Transition proof](verification.md#exercise-row-strip-transitions-in-the-character-overlay).
+
 A follow-up Mac run measured 111.6 MiB and 2.81 CPU points of five-pack
 overhead before tracing. About 1.51 CPU points came from the overlay
 renderer and 1.29 from the main process, which hosted Chromium's GPU

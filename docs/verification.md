@@ -1,3 +1,20 @@
+# Exercise row-strip transitions in the character overlay
+
+A signed, isolated Mac fixture sent five characters through running,
+waiting, failed and running again with one production renderer.
+Full-sheet and strip snapshots matched 120 drawn frame hashes,
+canvas identities within each run, viewport geometry and cadence.
+The offline image-load regression checks one mounted canvas.
+Pending and failed decodes leave its pixels in place. An earlier
+load arriving after the newest image draws schedules no new frame.
+
+In one 20-second sample after the transitions, strips used 28.6 MiB
+less than the full sheets. Their overhead was 70.5 MiB and 2.53 CPU
+points above no overlay. The test used fixture-supplied sprites at
+the owned IPC receiver. Gateway delivery of one-row sprites and
+the broader release budget remain open. Three runs recorded zero
+Desktop SSH after 60 seconds and no survivors.
+
 # Compare resident character sprite sheets
 
 Seven fresh isolated Electron runs used the same production renderer.
