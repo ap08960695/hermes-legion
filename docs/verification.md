@@ -1,3 +1,19 @@
+# Expand a loaded file preview in a bot character
+
+The file preview header offers **Expand preview** and **Reduce preview**
+for an already loaded text or PNG snapshot. The toggle works in the
+existing popover and sends no IPC. New output starts compact. On image
+decode failure the larger view closes and the unavailable state appears.
+
+An isolated signed Mac Local fixture exercised PNG and literal text
+through Bots and Monitor with the loopback gateway. The image grew from
+68 to 192 px high. Complete visible text lines grew from 2
+to 4, with the same header position while the preview
+scrolled. There were two file reads for the two files and no toggle IPC.
+The Local60 check found zero Desktop SSH. All owned processes stopped.
+Tests cover preserving the loaded content, retaining the toggle's focus
+target, resetting for a new output and clearing a failed image.
+
 # Measure shared timing with naturally loaded full sprite sheets
 
 Five signed Mac Local fixtures used one build and the same full PNG

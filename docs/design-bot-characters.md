@@ -536,6 +536,11 @@ metadata and international text metadata. The popover shows the snapshot
 with the usual **File path** and **Copy path** controls. An outside-workspace
 PNG offers the path without an image.
 
+**Expand preview** grows the existing text or PNG view after loading.
+The header remains reachable while the file preview scrolls. **Reduce
+preview** restores the compact view. A new output starts compact.
+[Local expansion proof](verification.md#expand-a-loaded-file-preview-in-a-bot-character).
+
 ## Match a running character to its worker
 
 The owning session’s `subagent.list` can include `child_session_id` for a
