@@ -522,6 +522,11 @@ click only for the current popover and reports the clipboard result.
 [PDF deliveries](verification.md#copy-a-delivered-pdf-path-from-a-character)
 show the same selectable path and **Copy path** action, including for
 mixed-case extensions. The PDF stays unopened.
+In the [Local PDF fixture](verification.md#measure-pdf-rendering-in-an-isolated-local-window),
+an empty iframe sandbox prevented the PDF page from painting. A separate
+window with no preload rendered the blob with its own temporary session.
+That fixture still needs an application-level integration and resource test
+before the character can offer a PDF viewer.
 
 [Preview file](verification.md#preview-a-delivered-text-file-in-a-bots-character-unreleased)
 can read one small UTF-8 `.txt`, `.md` or `.csv` file directly inside the

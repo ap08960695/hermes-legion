@@ -1,3 +1,21 @@
+# Measure PDF rendering in an isolated Local window
+
+A signed standalone Mac fixture used Electron 44.9.3 and the same
+one-page blue document in two successive windows. Both windows used
+Chromium's renderer sandbox, context isolation, no preload, and
+temporary sessions. The ordinary blob iframe painted 45,796 blue
+pixels in the page. The iframe with an empty `sandbox` attribute
+painted zero. Both captured 2,464 pixels of the orange HTML control.
+An independent macOS image conversion also rendered the source page.
+
+Fixture controls exercised a denied localhost fetch, top navigation,
+popup, download, and geolocation permission. The inspected host and
+PDF frames exposed no Hermes bridge, Node bindings, or opener.
+The separate-window experiment used no running Hermes app or gateway.
+The character continues to offer **Copy path** for PDFs. Production
+viewer authority, PDF actions, and process and memory overhead in Hermes
+remain release gates.
+
 # Copy a delivered PDF path from a character
 
 A complete reply with one standalone PDF delivery shows the exact path in
