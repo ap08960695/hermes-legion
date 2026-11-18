@@ -2,7 +2,7 @@
 
 ## Finding work and conversations
 
-The rail offers **New chat**, **History** and **Search**. New chat opens a native blank tab, retaining any earlier unsent draft. Search first lists recent conversations and commands; choose **Search all saved chats** to carry the exact query into the native History full-text search. This is not limited to the newest conversation page. Native profile, archive, pin and project rules still apply.
+The rail offers **New chat**, **History** and **Search**. New chat opens a native blank tab from a chat, retaining any earlier unsent draft. Choose a chat zone first or drag **New chat** to the zone's tab strip to place the new tab there. Ctrl+T (⌘T on Mac) opens a new tab in the focused chat zone. Search first lists recent conversations and commands. Choose **Search all saved chats** to carry the exact query into the native History full-text search across saved conversations. Native profile, archive, pin and project rules still apply.
 
 Open **Settings** from the navigation rail in Focus or Workspace. In a compact window it sits beside **History**. The Settings shortcut (⌘, on Mac, Ctrl+, on Windows and Linux) and the command palette also open Settings. Standalone chat windows have a Settings gear in their titlebar.
 
@@ -15,6 +15,8 @@ A collection search names its scope. No matches are distinct from an empty colle
 **Fit graph** fits both dimensions. Large graphs may need small overview text; select a destination to highlight its recorded ancestry and use **Focus selected card** to return that task to readable size. Focusing scrolls after the scaled layout is committed. Bot journeys remain based on recorded runs and dependencies. No animation fabricates progress or dispatches work.
 
 ## Choosing and creating bots
+
+Use **New bot** or **New group chat** in the Bots workspace header. In **Manage team**, the roster toolbar has a separate **New section** button. The standalone Bots roster keeps its creation menu.
 
 Cards show the model and provider already reported by the roster. Missing values say **not reported**. These are configured profile values: an existing chat can retain a different model. They do not prove provider readiness or remaining allowance. The display adds no provider or quota probe.
 

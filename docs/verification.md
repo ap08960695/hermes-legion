@@ -1,3 +1,66 @@
+# Desktop control cleanup fixture captures
+
+Linux Electron screenshots use fresh local fixture profiles. The History
+before capture includes the upstream navigation row. The accessible-name
+check also found the flat header icon before cleanup. The date-divider test
+covers the same action in grouped History lists.
+
+| Screen | Before | After |
+| --- | --- | --- |
+| Chat history | [Upstream New session row](images/ui-cleanup-history-before.webp) | [Rail New chat](images/ui-cleanup-history-after.webp) |
+| Chat tabs | [New session tab icon](images/ui-cleanup-chat-before.webp) | [Rail New chat](images/ui-cleanup-chat-after.webp) |
+| Layout editor | [Interface-mode cards](images/ui-cleanup-layout-before.webp) | [Wide editor and rail toggle](images/ui-cleanup-layout-after.webp), [compact editor cards](images/ui-cleanup-layout-compact.webp) |
+| Bots management | [Duplicate creation menu](images/ui-cleanup-bots-before.webp) | [Header creation buttons and New section](images/ui-cleanup-bots-after.webp) |
+
+With the updated build, Ctrl+N opened the composer from History and Ctrl+T
+added a chat tab. The rail context menu exposed **Open in split**. The
+Bots fixture also opened **New section** with Enter. Component tests cover
+standalone windows, Browser tabs and the exact native split placement callback.
+
+# Create bots and group chats from the Bots header
+
+The **Manage team** roster shows a labeled **New section** button in place
+of the upstream creation menu. The Bots header supplies **New bot** and
+**New group chat**. The standalone roster keeps its capability-gated menu.
+
+The roster toolbar tests cover section creation and standalone group
+eligibility. The Linux Electron fixture checks that the header exposes
+one of each creation action and Enter opens the section dialog.
+
+# Switch interface mode from the rail in wide windows
+
+The main-window Layout editor uses the rail's **Focus** and **Workspace**
+switch above 640 px. The editor keeps its mode cards at compact widths and
+in windows without the rail. Layout templates, the custom grid editor and
+the Appearance setting remain available.
+
+Layout Picker component tests cover all three contexts. The Linux Electron
+fixture checks the rail and mode cards at 1280 and 640 px.
+
+# Open chat tabs from the main-window rail
+
+The rail's **New chat** replaces the upstream **New session tab** icon in
+main-window chat strips. Focus a zone first or drag **New chat** to its
+strip to place the tab there. Ctrl/Cmd+T and the command palette keep their
+native action. Pane-specific controls such as Browser's **New tab** and chat
+strips in windows without the rail still offer their own tab creation.
+
+The tree group component test exercises the rail, standalone and Browser
+cases. The Focus navigation regression checks the rail's built-in command.
+
+# Start chats from the Focus rail in History and Projects
+
+The rail's **New chat** replaces the upstream **New session** navigation
+row and the **New session** icons in the flat Sessions header and date
+dividers. The rail uses
+the native drag-to-place handler and **Open in split** context menu.
+Ctrl/Cmd+N, the command palette and scoped project/profile actions remain available.
+Windows without the rail keep their original controls.
+
+The Focus context, New chat and Sessions section tests cover main-window
+navigation, the native split callback and grouped lists. Linux Electron fixture
+captures show the History page at 1280 px.
+
 # Named Local profiles preserve gateway probe failures
 
 When a named profile has no control socket of its own, Hermes probes
