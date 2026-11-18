@@ -1,3 +1,27 @@
+# Walk and turn near the desktop corner
+
+Mac desktop pets take short walks between their idle or working poses.
+Each pet has a staggered cycle and varies its travel distance within its
+slot. Directional atlas rows follow travel. A one-direction pack mirrors
+the running row and preserves alpha hit testing. Focus, hover, output and
+drag pause walking. Reduced motion keeps the static pose.
+
+In the signed Mac Local fixture, all five Lanternling sprites drew the
+left, right, and working atlas rows and traveled 34–43 points with
+Hermes minimized. The same run passed four-corner drag, transparent
+release, and latest-output popover checks.
+
+| Preview | CPU, percent of one core | Mean physical footprint |
+| --- | ---: | ---: |
+| Off | 0.98% | 541.4 MiB |
+| Five moving pets | 2.76% | 579.5 MiB |
+| Increase | 1.79 percentage points | 38.2 MiB |
+
+The warmed 20-second samples include Electron and the local gateway.
+GPU and networking ran in-process. Local60 saw zero Desktop SSH links
+and the fixture stopped cleanly. Default GPU and multi-display
+performance still need verification.
+
 # Drag Mac desktop pets to the screen edges
 
 The Mac character panel covers the connected work areas. Each pet moves
@@ -17,9 +41,9 @@ one connected display.
 
 | Preview | CPU, percent of one core | Mean physical footprint |
 | --- | ---: | ---: |
-| Off | {off['cpu_one_core_pct']:.2f}% | {off['footprint_mean_mib']:.1f} MiB |
-| Five moving pets | {on['cpu_one_core_pct']:.2f}% | {on['footprint_mean_mib']:.1f} MiB |
-| Increase | {cpu:.2f} percentage points | {ram:.1f} MiB |
+| Off | 0.91% | 532.1 MiB |
+| Five moving pets | 2.39% | 589.6 MiB |
+| Increase | 1.48 percentage points | 57.6 MiB |
 
 The warmed 20-second samples include Electron and the loopback gateway.
 GPU and networking ran in-process for the fixture. Local60 reported

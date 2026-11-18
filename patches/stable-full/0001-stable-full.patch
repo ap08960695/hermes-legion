@@ -22644,14 +22644,14 @@ index de446bdb6a589e02ff3634ae483fe46d4a108ff2..447b3cacb7b6af2b6d1aca49f9487795
   *
 diff --git a/apps/desktop/src/app/pet-overlay/pet-characters.tsx b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..3457118a142163fae629a9f1872e7a07bbdd67a0
+index 0000000000000000000000000000000000000000..d5d9a2ddc0405cafa79187d7979f3d641dffccfa
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
-@@ -0,0 +1,326 @@
+@@ -0,0 +1,406 @@
 +import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-+import { type CSSProperties, useEffect, useRef, useState } from 'react'
++import { type CSSProperties, type RefObject, useEffect, useRef, useState } from 'react'
 +
-+import { PetSprite } from '@/components/pet/pet-sprite'
++import { DEFAULT_STATE_ROWS, PetSprite, roamWalkRow } from '@/components/pet/pet-sprite'
 +import { isMacPlatform } from '@/lib/platform'
 +import type { PetInfo } from '@/store/pet'
 +import type { PetCharacter, PetCharacterFileContent, PetCharacterOutput, PetCharacterPreview } from '@/store/pet-characters'
@@ -22682,7 +22682,8 @@ index 0000000000000000000000000000000000000000..3457118a142163fae629a9f1872e7a07
 +  if (!rect.width || !rect.height || !ctx) {return false}
 +
 +  try {
-+    const px = Math.floor((x - rect.left) * canvas.width / rect.width)
++    const pixel = Math.floor((x - rect.left) * canvas.width / rect.width)
++    const px = canvas.closest('[data-pet-mirrored]') ? canvas.width - 1 - pixel : pixel
 +    const py = Math.floor((y - rect.top) * canvas.height / rect.height)
 +
 +    return ctx.getImageData(px, py, 1, 1).data[3] >= 16
@@ -22694,6 +22695,8 @@ index 0000000000000000000000000000000000000000..3457118a142163fae629a9f1872e7a07
 +const steps = new Map([['ArrowLeft', [-8, 0]], ['ArrowRight', [8, 0]], ['ArrowUp', [0, -8]], ['ArrowDown', [0, 8]]])
 +
 +type Point = { x: number; y: number }
++type WalkDirection = -1 | 0 | 1
++type WalkClock = { actors: Set<() => void>; timer: number | null }
 +
 +function fitDesktopPoint(desktop: PetCharacterDesktop, point: Point, width: number, height: number, cursor = point) {
 +  const distance = ({ x, y, width, height }: PetCharacterDesktop['areas'][number]) => {
@@ -22709,8 +22712,9 @@ index 0000000000000000000000000000000000000000..3457118a142163fae629a9f1872e7a07
 +    y: Math.max(area.y, Math.min(area.y + area.height - height, point.y)), area }
 +}
 +
-+function Character({ actor, desktop, foreground, info, slot, fromRight, reduced, open, onGrab, onOutput }: {
++function Character({ actor, clock, desktop, foreground, info, slot, fromRight, reduced, open, onGrab, onOutput }: {
 +  actor: PetCharacter
++  clock: RefObject<WalkClock>
 +  desktop?: PetCharacterDesktop
 +  info: PetInfo
 +  slot: number
@@ -22722,10 +22726,14 @@ index 0000000000000000000000000000000000000000..3457118a142163fae629a9f1872e7a07
 +  onOutput: PetCharactersProps['onOutput']
 +}) {
 +  const [position, setPosition] = useState<Point | null>(null)
-+  const [held, setHeld] = useState(false)
++  const [dragPhase, setDragPhase] = useState<'held' | 'moving' | null>(null)
++  const held = dragPhase !== null
 +  const [hint, setHint] = useState(false)
-+  const drag = useRef<{ pointer: number; x: number; y: number; start: Point; original: Point | null } | null>(null)
++  const drag = useRef<{ pointer: number; x: number; y: number; start: Point; original: Point | null; walkTick: number; walkOffset: string } | null>(null)
 +  const clickArmed = useRef(false)
++  const walkRef = useRef<HTMLDivElement>(null)
++  const walkCycle = useRef({ tick: Math.round(slot / 8), scale: 1 })
++  const [direction, setDirection] = useState<WalkDirection>(0)
 +  const { outputId, actionsOnly } = actor
 +  const sprite = actor.sprite ?? info
 +  const width = sprite.frameW ?? 192
@@ -22740,17 +22748,79 @@ index 0000000000000000000000000000000000000000..3457118a142163fae629a9f1872e7a07
 +
 +  const current = position ?? anchor
 +  const fitted = desktop ? fitDesktopPoint(desktop, current, w, h) : null
++  const roomLeft = fitted ? fitted.x - fitted.area.x : 0
++  const roomRight = fitted ? fitted.area.x + fitted.area.width - fitted.x - w : 0
++  const stride = Math.min(48, Math.max(0, 96 - w))
++  const distance = roomLeft >= roomRight ? -Math.min(roomLeft, stride) : Math.min(roomRight, stride)
++  const canWalk = !reduced && distance !== 0 && (actor.state === 'idle' || actor.state === 'run')
++  const parked = held || hint || open
++  const walking = canWalk && !parked
++
++  const walk = roamWalkRow(walking ? direction : 0,
++    (sprite.stateRows ?? DEFAULT_STATE_ROWS).filter(row => sprite.framesByRow?.[row] !== 0))
++
++  useEffect(() => {
++    const node = walkRef.current
++
++    if (!node) {return}
++
++    if (!canWalk) {
++      node.style.removeProperty('--pet-walk-offset')
++
++      return
++    }
++
++    if (!walking) {return}
++    const shared = clock.current
++    const cycle = walkCycle.current
++    let lastDirection: WalkDirection | undefined
++    const outbound: WalkDirection = distance < 0 ? -1 : 1
++
++    const move = () => {
++      const phase = cycle.tick++ % 90
++
++      if (phase === 0) {cycle.scale = 0.75 + Math.random() * 0.25}
++      // Rest at home, walk out, show the activity pose, then walk back.
++      const progress = phase < 12 ? 0 : phase < 42 ? (phase - 11) / 30 : phase < 60 ? 1 : (89 - phase) / 30
++      const offset = `${Math.round(progress * distance * cycle.scale)}px`
++      const next = phase < 12 ? 0 : phase < 42 ? outbound : phase < 60 ? 0 : outbound === 1 ? -1 : 1
++
++      if (node.style.getPropertyValue('--pet-walk-offset') !== offset) {node.style.setProperty('--pet-walk-offset', offset)}
++
++      if (next !== lastDirection) {
++        lastDirection = next
++        setDirection(next)
++      }
++    }
++
++    shared.actors.add(move)
++    shared.timer ??= window.setInterval(() => {
++      if (window.document.visibilityState === 'visible') {shared.actors.forEach(update => update())}
++    }, 100)
++
++    return () => {
++      shared.actors.delete(move)
++
++      if (!shared.actors.size && shared.timer !== null) {
++        window.clearInterval(shared.timer)
++        shared.timer = null
++      }
++    }
++  }, [canWalk, clock, distance, walking])
 +
 +  const finish = (pointer: number, cancel = false) => {
 +    if (drag.current?.pointer !== pointer) {return}
 +
 +    if (cancel) {
 +      setPosition(drag.current.original)
++      walkCycle.current.tick = drag.current.walkTick
++
++      if (desktop) {walkRef.current?.style.setProperty('--pet-walk-offset', drag.current.walkOffset)}
 +      clickArmed.current = false
 +    }
 +
 +    drag.current = null
-+    setHeld(false)
++    setDragPhase(null)
 +  }
 +
 +  const bounded = (x: number, y: number, cursor?: Point) => desktop ? fitDesktopPoint(desktop, { x, y }, w, h, cursor) : ({
@@ -22765,15 +22835,15 @@ index 0000000000000000000000000000000000000000..3457118a142163fae629a9f1872e7a07
 +      : { position: 'absolute', margin: 0, '--pet-x': `${current.x}px`, '--pet-y': `${current.y}px`,
 +        left: `clamp(64px, calc(${slot}% + var(--pet-x)), calc(100% - 64px))`,
 +        bottom: 'clamp(8px, calc(20px - var(--pet-y)), calc(100% - 112px))', translate: '-50% 0' } as CSSProperties}>
-+    <div className={reduced || held || hint || open ? undefined : 'pet-character-wander'}
-+      style={{ animationDelay: `-${Math.round(slot) * 100}ms`, ...(fitted ? {
-+        '--pet-wander-left': `${Math.max(-12, fitted.area.x - fitted.x)}px`,
-+        '--pet-wander-right': `${Math.min(12, fitted.area.x + fitted.area.width - fitted.x - w)}px`
-+      } : {}) } as CSSProperties}>
++    <div className={desktop || reduced || parked ? undefined : 'pet-character-wander'} ref={walkRef}
++      style={desktop ? { '--pet-walk-left': `${-roomLeft}px`, '--pet-walk-right': `${roomRight}px`,
++        transform: 'translateX(clamp(var(--pet-walk-left), var(--pet-walk-offset, 0px), var(--pet-walk-right)))'
++      } as CSSProperties : { animationDelay: `-${Math.round(slot) * 100}ms` }}>
 +      <button aria-expanded={outputId ? open : undefined}
 +        aria-label={outputId ? `${actionsOnly ? 'Worker actions' : 'Latest output'} · ${label}` : `Move ${label}`}
 +        className="focus-visible:outline focus-visible:outline-2" data-pet-caption={actor.id}
 +        data-pet-dragging={held ? '' : undefined}
++        data-pet-mirrored={walk.mirror ? '' : undefined}
 +        onBlur={() => setHint(false)}
 +        onClick={event => {
 +          if (outputId && (event.detail === 0 || clickArmed.current) && !(event.ctrlKey && isMacPlatform())) {
@@ -22819,10 +22889,11 @@ index 0000000000000000000000000000000000000000..3457118a142163fae629a9f1872e7a07
 +          const start = desktop && rect ? { x: event.screenX - event.clientX + rect.left,
 +            y: event.screenY - event.clientY + rect.top } : current
 +
-+          drag.current = { pointer: event.pointerId, x: event.screenX, y: event.screenY, start, original: position }
++          drag.current = { pointer: event.pointerId, x: event.screenX, y: event.screenY, start, original: position,
++            walkTick: walkCycle.current.tick, walkOffset: walkRef.current?.style.getPropertyValue('--pet-walk-offset') ?? '' }
 +
 +          if (desktop) {onGrab(actor.id)}
-+          setHeld(true)
++          setDragPhase('held')
 +        }}
 +        onPointerLeave={() => setHint(false)}
 +        onPointerMove={event => {
@@ -22838,13 +22909,21 @@ index 0000000000000000000000000000000000000000..3457118a142163fae629a9f1872e7a07
 +          const y = event.screenY - active.y
 +
 +          if (clickArmed.current && Math.hypot(x, y) <= 3) {return}
++
++          if (clickArmed.current && desktop) {
++            walkRef.current?.style.removeProperty('--pet-walk-offset')
++            walkCycle.current.tick = 0
++          }
++
 +          clickArmed.current = false
++          setDragPhase('moving')
 +          setPosition(bounded(active.start.x + x, active.start.y + y, { x: event.screenX, y: event.screenY }))
 +        }}
 +        onPointerUp={event => finish(event.pointerId)}
 +        style={{ display: 'block', padding: 0, border: 0, background: 'transparent', pointerEvents: 'auto',
-+          cursor: held ? 'grabbing' : 'grab', touchAction: 'none' }} type="button">
-+        <PetSprite animate={!reduced} info={sheet} maxFps={15} stateOverride={actor.state} />
++          cursor: held ? 'grabbing' : 'grab', touchAction: 'none', transform: walk.mirror ? 'scaleX(-1)' : undefined }} type="button">
++        <PetSprite animate={!reduced} info={sheet} maxFps={15} rowOverride={walk.row}
++          stateOverride={walking && direction !== 0 ? 'run' : actor.state} />
 +      </button>
 +      {hint && !held && !open && actor.state === 'waiting' && <div role="tooltip"
 +        style={{ position: 'absolute', bottom: '100%', left: '50%', translate: '-50% 0',
@@ -22857,6 +22936,7 @@ index 0000000000000000000000000000000000000000..3457118a142163fae629a9f1872e7a07
 +/** The overlay displays snapshots. Only the main renderer resolves output addresses. */
 +export function PetCharacters({ desktop, info, preview, paused, output, showActions, onOutput, onPreview, onOpen, onOpenLink, onPreviewFile, onCopy, onViewFile, onBrokenImage, onStop }: PetCharactersProps) {
 +  const reduced = useReducedMotion()
++  const walkClock = useRef<WalkClock>({ actors: new Set(), timer: null })
 +  const [expiredAt, setExpiredAt] = useState(0)
 +  const [foreground, setForeground] = useState<string>()
 +  const [expandedRequest, setExpandedRequest] = useState<number>()
@@ -22969,7 +23049,7 @@ index 0000000000000000000000000000000000000000..3457118a142163fae629a9f1872e7a07
 +      </button>}
 +    </section>}
 +    <AnimatePresence>
-+      {actors.map((actor, index) => <Character actor={actor} desktop={desktop} foreground={actor.id === foreground} fromRight={actors.length - index - 1} info={info} key={actor.id} onGrab={setForeground} onOutput={onOutput}
++      {actors.map((actor, index) => <Character actor={actor} clock={walkClock} desktop={desktop} foreground={actor.id === foreground} fromRight={actors.length - index - 1} info={info} key={actor.id} onGrab={setForeground} onOutput={onOutput}
 +        open={actor.id === outputActor?.id} reduced={reduced} slot={(index + 1) * 100 / (actors.length + 1)} />)}
 +    </AnimatePresence>
 +  </div>
@@ -23254,22 +23334,28 @@ index 82319976a166e658f80e794b0033fed81a48d456..fbc679ba2f6109fe43bdc217e57c8d7e
    return (
 diff --git a/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..2d81568b34eca64056efd229746110afce05e97f
+index 0000000000000000000000000000000000000000..8b3ff5c285efafbdab1c0033cec86dacf8738a0a
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
-@@ -0,0 +1,665 @@
+@@ -0,0 +1,723 @@
 +import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 +import type * as Motion from 'motion/react'
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 +
++import type * as SpriteModule from '@/components/pet/pet-sprite'
 +import { setPetInfo } from '@/store/pet'
 +import type { PetOverlayStatePayload } from '@/store/pet-overlay'
 +
++import { hasSolidSpritePixel } from './pet-characters'
 +import { PetOverlayApp } from './pet-overlay-app'
 +
 +const io = vi.hoisted(() => ({ reduced: false }))
 +vi.mock('motion/react', async original => ({ ...(await original<typeof Motion>()), useReducedMotion: () => io.reduced }))
-+vi.mock('@/components/pet/pet-sprite', () => ({ PetSprite: (props: any) => <canvas data-animate={String(props.animate)} data-fps={props.maxFps} data-slug={props.info.displayName} data-state={props.stateOverride} data-testid="sprite" /> }))
++vi.mock('@/components/pet/pet-sprite', async original => ({
++  ...(await original<typeof SpriteModule>()),
++  PetSprite: (props: any) => <canvas data-animate={String(props.animate)} data-fps={props.maxFps}
++    data-row={props.rowOverride} data-slug={props.info.displayName} data-state={props.stateOverride} data-testid="sprite" />
++}))
 +let emit: (payload: PetOverlayStatePayload) => void
 +const ignore = vi.fn(), off = vi.fn()
 +const info = { enabled: true, displayName: 'Owned fixture', spritesheetBase64: 'synthetic', frameW: 16, frameH: 16, scale: 1 }
@@ -23639,6 +23725,58 @@ index 0000000000000000000000000000000000000000..2d81568b34eca64056efd229746110af
 +  fireEvent.keyDown(actor.querySelector('button')!, { key: 'ArrowRight' })
 +  expect(actor.style.cssText).not.toBe(moved)
 +  expect(neighbor.style.cssText).toBe(neighborStyle)
++})
++
++it('walks and turns between work poses, pauses on focus, and ends the shared clock with reduced motion', () => {
++  render(<PetOverlayApp />)
++  const area = { x: 0, y: 24, width: 1000, height: 700 }
++  const payload = { ...preview(), characterDesktop: { bounds: area, areas: [area] } }
++  act(() => emit(payload))
++  const [working, failed] = screen.getAllByTestId('sprite')
++  const walker = working.closest('figure')!.firstElementChild as HTMLElement
++  const offset = () => Number.parseFloat(walker.style.getPropertyValue('--pet-walk-offset'))
++
++  act(() => vi.advanceTimersByTime(1700))
++  expect(working.dataset.row).toBe('running-left')
++  expect(failed.dataset.row).toBeUndefined()
++  expect(failed.dataset.state).toBe('failed')
++  const before = offset()
++  expect(before).toBeLessThan(0)
++  fireEvent.focus(working.parentElement!)
++  act(() => vi.advanceTimersByTime(600))
++  expect(offset()).toBe(before)
++  expect(working.dataset.row).toBeUndefined()
++  fireEvent.blur(working.parentElement!)
++  act(() => vi.advanceTimersByTime(2500))
++  expect(working.dataset.row).toBeUndefined()
++  expect(working.dataset.state).toBe('run')
++  act(() => vi.advanceTimersByTime(1600))
++  expect(working.dataset.row).toBe('running-right')
++
++  io.reduced = true
++  act(() => emit({ ...payload }))
++  expect(working.dataset.row).toBeUndefined()
++  expect(working.dataset.animate).toBe('false')
++  expect(walker.style.getPropertyValue('--pet-walk-offset')).toBe('')
++})
++
++it('reads the displayed alpha pixel when a walking row is mirrored', () => {
++  render(<PetOverlayApp />)
++  const area = { x: 0, y: 0, width: 1000, height: 700 }
++
++  const payload = { ...preview(), info: { ...info, stateRows: ['idle', 'running-right'] },
++    characterDesktop: { bounds: area, areas: [area] } }
++
++  act(() => emit(payload))
++  act(() => vi.advanceTimersByTime(1700))
++  const [canvas] = screen.getAllByTestId('sprite') as HTMLCanvasElement[]
++  expect(canvas.dataset.row).toBe('running-right')
++  expect(canvas.parentElement!.hasAttribute('data-pet-mirrored')).toBe(true)
++  const getImageData = vi.fn((x: number) => ({ data: [0, 0, 0, x === canvas.width - 3 ? 255 : 0] }))
++  vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, canvas.width, canvas.height))
++  vi.spyOn(canvas, 'getContext').mockReturnValue({ getImageData } as never)
++  expect(hasSolidSpritePixel(canvas, 2, 4)).toBe(true)
++  expect(hasSolidSpritePixel(canvas, canvas.width - 3, 4)).toBe(false)
 +})
 +
 +it('drags a desktop pet through a display seam and clamps its sprite to the available screen edges', () => {
