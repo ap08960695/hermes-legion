@@ -10789,3 +10789,25 @@ network-denying macOS sandbox as the geometry test, with Chromium's
 nested sandbox disabled. Peak sampled use was three processes and
 401.4 MiB RSS including the observer, with zero survivors. This is a
 renderer experiment. Packaged application acceptance remains open.
+
+### Mac matching canvas and compositor-driven Characters sprites
+
+Four isolated launches compared canvas, transforms, transforms and
+canvas. They used the same prototype page, stock preload, full-size
+transparent Mac panel at 2×, five half-size atlases, ground anchors,
+sprite cells and 100 ms walk clock.
+
+Median Electron overhead above no window went from 108.4 to 98.1 MiB
+RSS and 3.28 to 2.56 CPU points. Median physical footprint increased
+from 35.3 to 69.2 MiB. Renderer RSS fell 18.5 MiB and main-process
+RSS rose 8.2 MiB, with GPU and networking in main. WindowServer CPU,
+including unrelated desktop activity, was recorded separately.
+
+In both transform runs Chromium reported five painted atlas layers.
+Identical cells were selected at the two fixed proof ticks, with
+at least 98.85% silhouette overlap across all characters. Capture and
+layer inspection took place after the resource sample. The Mac
+fixture denied network access and used the same Chromium sandbox
+setting as the earlier prototype. Peaks were three sampled processes
+and 365.5 MiB RSS including the observer, with zero survivors. Both
+variants exceeded the targets. Packaged acceptance remains open.
