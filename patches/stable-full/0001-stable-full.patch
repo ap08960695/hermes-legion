@@ -21599,16 +21599,25 @@ index 0000000000000000000000000000000000000000..21b3a7226020b181d8b40dd11d27ff2c
 +}
 diff --git a/apps/desktop/src/app/focus/goal-editor.test.tsx b/apps/desktop/src/app/focus/goal-editor.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..d8c6a2494a51b3aaa8fb86b6b3536f0058d8ba68
+index 0000000000000000000000000000000000000000..0037306f120e4c2296ff64e8a161d00cc705db2b
 --- /dev/null
 +++ b/apps/desktop/src/app/focus/goal-editor.test.tsx
-@@ -0,0 +1,160 @@
-+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+@@ -0,0 +1,243 @@
++import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 +import { afterEach, describe, expect, it, vi } from 'vitest'
 +
++import { I18nProvider, registerAppLocale, unregisterAppLocaleSource } from '@/i18n'
++
 +import { GoalEditor, type GoalFormArgs } from './goal-editor'
++
++const rpc = vi.hoisted(() => vi.fn())
++vi.mock('@/store/gateway', async original => ({ ...(await original<object>()), requestGatewayForProfile: rpc }))
++
 +afterEach(async () => {
 +  cleanup()
++  unregisterAppLocaleSource('backend')
++  vi.clearAllMocks()
++  vi.restoreAllMocks()
 +  await new Promise(resolve => setTimeout(resolve, 0))
 +})
 +const t = (key: string) => key
@@ -21733,6 +21742,80 @@ index 0000000000000000000000000000000000000000..d8c6a2494a51b3aaa8fb86b6b3536f00
 +    fireEvent.change(screen.getByLabelText('title'), { target: { value: 'Finish the work' } })
 +    expect((screen.getByRole('button', { name: 'save' }) as HTMLButtonElement).disabled).toBe(true)
 +  })
++
++  it.each([
++    {
++      locale: 'en',
++      prohibition: 'Do not reread the card',
++      check: 'Read the card back and record its status',
++      unrelated: 'Do not reread the report',
++      warning: 'These instructions may conflict.'
++    },
++    {
++      locale: 'th',
++      prohibition: 'ห้ามอ่านการ์ดซ้ำ',
++      check: 'ต้องอ่านการ์ดยืนยันผล',
++      unrelated: 'ห้ามอ่านรายงานซ้ำ',
++      warning: 'คำสั่งสองข้อนี้อาจขัดกัน'
++    }
++  ])(
++    'quotes both $locale clauses before save and keeps the advisory optional',
++    async ({ locale, prohibition, check, unrelated, warning }) => {
++      if (locale === 'th') {
++        registerAppLocale('th', { endonym: 'ไทย' }, 'backend')
++      }
++
++      const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Unexpected network request'))
++      const save = vi.fn(async (_id: string, _args: GoalFormArgs) => {})
++      const title = `Complete the card, ${prohibition}, call no other tools`
++      render(
++        <I18nProvider configClient={null} initialLocale={locale}>
++          <GoalEditor
++            busy={false}
++            goal={null}
++            onClose={vi.fn()}
++            onSave={save}
++            open
++            revision="rev-1"
++            sessionId="original"
++            skills={[]}
++            t={t}
++          />
++        </I18nProvider>
++      )
++
++      const set = (label: string, value: string) =>
++        fireEvent.change(screen.getByLabelText(label), { target: { value } })
++
++      set('title', title)
++      set('verification', check)
++
++      const advisory = within(screen.getByText(warning).closest('[role="status"]') as HTMLElement)
++      expect(advisory.getByText(prohibition)).toBeTruthy()
++      expect(advisory.getByText(check)).toBeTruthy()
++
++      set('verification', 'Use the completion receipt')
++      expect(screen.queryByText(warning)).toBeNull()
++      set('verification', check)
++      set('title', unrelated)
++      expect(screen.queryByText(warning)).toBeNull()
++      set('title', locale === 'th' ? 'ห้ามอ่านการ์ดใบอื่นซ้ำ' : 'Do not reread the archived card')
++      expect(screen.queryByText(warning)).toBeNull()
++      set('title', title)
++      expect(screen.getByText(warning)).toBeTruthy()
++      expect(rpc).not.toHaveBeenCalled()
++      expect(fetch).not.toHaveBeenCalled()
++      expect(save).not.toHaveBeenCalled()
++
++      fireEvent.click(screen.getByRole('button', { name: 'save' }))
++      await waitFor(() => expect(save).toHaveBeenCalledTimes(1))
++      expect(save).toHaveBeenCalledWith('original', {
++        title,
++        expected_revision: 'rev-1',
++        contract: expect.objectContaining({ verification: check })
++      })
++    }
++  )
 +})
 +
 +it('filters installed skills without losing chosen references or changing permissions', async () => {
@@ -21765,10 +21848,10 @@ index 0000000000000000000000000000000000000000..d8c6a2494a51b3aaa8fb86b6b3536f00
 +})
 diff --git a/apps/desktop/src/app/focus/goal-editor.tsx b/apps/desktop/src/app/focus/goal-editor.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..5ae5a7bd285859dde05e7c7bfadbb02af3a38486
+index 0000000000000000000000000000000000000000..f67eb41cb1c989629c28d1731d4572d7ee8cc7ba
 --- /dev/null
 +++ b/apps/desktop/src/app/focus/goal-editor.tsx
-@@ -0,0 +1,249 @@
+@@ -0,0 +1,295 @@
 +import { useId, useState } from 'react'
 +
 +import { Button } from '@/components/ui/button'
@@ -21776,6 +21859,7 @@ index 0000000000000000000000000000000000000000..5ae5a7bd285859dde05e7c7bfadbb02a
 +import { Input } from '@/components/ui/input'
 +import { SearchField } from '@/components/ui/search-field'
 +import { Textarea } from '@/components/ui/textarea'
++import { useI18n } from '@/i18n'
 +import type { SessionControlGoalContract } from '@/store/session-control'
 +
 +export interface GoalFormArgs {
@@ -21803,6 +21887,33 @@ index 0000000000000000000000000000000000000000..5ae5a7bd285859dde05e7c7bfadbb02a
 +  onClose: () => void
 +}
 +const SKILL_MARKER = '\n\nPreferred installed skills: '
++
++const CARD_READBACK_PROHIBITION = [
++  /^(?:do not|don't|never|must not)\s+(?:re-?read the (?:same )?card|read back the (?:same )?card|read the (?:same )?card (?:again|back))$/iu,
++  /^(?:ห้าม|อย่า|ต้องไม่)\s*อ่าน\s*การ์ด(?:ใบเดิม|เดิม)?\s*(?:ซ้ำ|กลับ)$/u
++]
++
++const CARD_READBACK_VERIFICATION = [
++  /^(?:must\s+)?(?:re-?read the (?:same )?card|read back the (?:same )?card|read the (?:same )?card (?:again|back))(?=$|\s+(?:to|and)\s+(?:verify|confirm|check|show|record|report)\b)/iu,
++  /^(?:ต้อง\s*)?อ่าน\s*การ์ด(?:ใบเดิม|เดิม)?\s*(?:(?:ซ้ำ|กลับ)(?=$|\s*(?:เพื่อ|ตรวจสอบ|ยืนยัน|แสดง))|(?:เพื่อ)?(?:ตรวจสอบ|ยืนยัน))/u
++]
++
++function cardReadbackConflict({ title, contract }: GoalFormState) {
++  // Only direct instructions about the same unnamed card qualify. Match each clause separately
++  // so the editor can quote the draft verbatim and keep unrelated restrictions out of the advisory.
++  const clauses = (text: string) => text.split(/[,.!?;\n\r]+/u).map(clause => clause.trim())
++
++  const prohibition = [title, contract.constraints, contract.boundaries]
++    .flatMap(clauses)
++    .find(clause => CARD_READBACK_PROHIBITION.some(pattern => pattern.test(clause)))
++
++  const verification = clauses(contract.verification).find(clause =>
++    CARD_READBACK_VERIFICATION.some(pattern => pattern.test(clause))
++  )
++
++  return prohibition && verification ? { prohibition, verification } : null
++}
++
 +function draftFor(goal: GoalEditorProps['goal'], t: GoalEditorProps['t']): GoalFormState {
 +  const contract = goal
 +    ? { ...goal.contract }
@@ -21838,13 +21949,16 @@ index 0000000000000000000000000000000000000000..5ae5a7bd285859dde05e7c7bfadbb02a
 +  onSave,
 +  onClose
 +}: GoalEditorProps) {
++  const { locale } = useI18n()
 +  const [draft, setDraft] = useState(() => draftFor(goal, t))
 +  const [baseRevision, setBaseRevision] = useState(revision)
 +  const [pending, setPending] = useState(false)
 +  const [error, setError] = useState('')
 +  const [skillSearch, setSkillSearch] = useState('')
 +  const hint = useId(),
-+    formId = useId()
++    formId = useId(),
++    conflictId = useId()
++  const conflict = cardReadbackConflict(draft)
 +  const blocked =
 +    pending || busy || goal?.status === 'done' || !draft.title.trim() || !draft.contract.verification.trim()
 +  const setField = (field: keyof SessionControlGoalContract, value: string) =>
@@ -21905,6 +22019,7 @@ index 0000000000000000000000000000000000000000..5ae5a7bd285859dde05e7c7bfadbb02a
 +            <label>
 +              <span>{t('title')} *</span>
 +              <Input
++                aria-describedby={conflict ? conflictId : undefined}
 +                required
 +                aria-label={t('title')}
 +                maxLength={4000}
@@ -21919,6 +22034,7 @@ index 0000000000000000000000000000000000000000..5ae5a7bd285859dde05e7c7bfadbb02a
 +                  {field === 'verification' ? ' *' : ''}
 +                </span>
 +                <Textarea
++                  aria-describedby={field === 'verification' && conflict ? conflictId : undefined}
 +                  aria-required={field === 'verification'}
 +                  aria-label={t(field)}
 +                  maxLength={16000}
@@ -21928,6 +22044,19 @@ index 0000000000000000000000000000000000000000..5ae5a7bd285859dde05e7c7bfadbb02a
 +                />
 +              </label>
 +            ))}
++            {conflict && (
++              <div className="text-xs break-words text-amber-700 dark:text-amber-300" id={conflictId} role="status">
++                <p>{locale === 'th' ? 'คำสั่งสองข้อนี้อาจขัดกัน' : 'These instructions may conflict.'}</p>
++                <ul className="list-disc ps-4">
++                  <li>
++                    <q>{conflict.prohibition}</q>
++                  </li>
++                  <li>
++                    <q>{conflict.verification}</q>
++                  </li>
++                </ul>
++              </div>
++            )}
 +            <fieldset>
 +              <legend>{t('skills')}</legend>
 +              <p>{t('skillsHint')}</p>
@@ -53974,29 +54103,24 @@ index 0000000000000000000000000000000000000000..04868875b5317ae995baac923e434c7d
 +    return {'profiles.workflow.get': partial(_get, connection),
 +            'profiles.workflow.configure': partial(_configure, connection)}
 diff --git a/gateway/session_control_actions.py b/gateway/session_control_actions.py
-index 5fdf5536af0b43bd77287c301aede80e7f2811c5..ed2fe18ec44ddd22c885f2c2114a7109c59d1d1d 100644
+index 5fdf5536af0b43bd77287c301aede80e7f2811c5..81f8c890d71f52f76b66cb2e0d4bc2040dd105b4 100644
 --- a/gateway/session_control_actions.py
 +++ b/gateway/session_control_actions.py
-@@ -99,2 +99,23 @@ def publish(authority, session_id, *, only_if_present=False, only_if_changed=Fal
+@@ -99,2 +99,18 @@ def publish(authority, session_id, *, only_if_present=False, only_if_changed=Fal
 
 +def pause_goal_on_interrupt(authority, ref):
 +    """Stop must not let an interrupted worker's follow-up restart its owner's goal."""
-+    from pathlib import Path
-+    from gateway.run import _profile_runtime_scope
++    from sqlite3 import Error as SQLiteError
 +    from gateway.session_ancillary import physical_target
-+    from hermes_cli.goals import GoalManager, GoalState
++    from hermes_cli.goals_metadata import pause_active_goal_on_stop
 +    target = physical_target(authority, ref)
-+    target = authority.db.get_compression_tip(target) or target
-+    raw = authority.db.get_meta('goal:' + target)
-+    if not raw or GoalState.from_json(raw).status != 'active':
-+        return
 +    try:
-+        with _profile_runtime_scope(Path(authority.profile_id)):
-+            paused = GoalManager(session_id=target).pause(reason='user-interrupted (Stop)')
-+        # GoalManager persistence is best-effort; returning from pause is not a write receipt.
-+        if paused is None or authority.db.get_meta('goal:' + target) != paused.to_json():
-+            raise RuntimeStoreError('storage_unavailable')
-+    finally:
++        target = authority.db.get_compression_tip(target) or target
++        paused = pause_active_goal_on_stop(authority.db, target)
++    except SQLiteError as exc:
++        publish(authority, ref.session_id, only_if_present=True)
++        raise RuntimeStoreError('storage_unavailable') from exc
++    if paused:
 +        publish(authority, ref.session_id, only_if_present=True)
 +
 +
@@ -56786,25 +56910,30 @@ index 0000000000000000000000000000000000000000..e7be6d1c50f59f85be6c89a3bfc765e0
 +    args = parser.parse_args(['goal', *sys.argv[1:]])
 +    raise SystemExit(args.func(args))
 diff --git a/hermes_cli/goals.py b/hermes_cli/goals.py
-index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e095040b4e740c7509cf01ec50f5098b4d2793d0 100644
+index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e64556a710336aac1f2c075530eb5acb367555d6 100644
 --- a/hermes_cli/goals.py
 +++ b/hermes_cli/goals.py
 @@ -15,2 +15,3 @@ import os
  import re
 +import sqlite3
  import subprocess
-@@ -23,2 +24,3 @@ from typing import Any, Dict, List, Optional, Tuple
+@@ -18,2 +19,3 @@ import threading
+ import time
++from copy import copy, deepcopy
+ from dataclasses import dataclass, field, asdict
+@@ -23,2 +25,4 @@ from typing import Any, Dict, List, Optional, Tuple
  
 +from hermes_cli import goals_judge_memo as judge_memo
++from hermes_cli.goals_metadata import clear_goal, load_goal, read_goal, save_goal
  from hermes_cli._subprocess_compat import noninteractive_git_env
-@@ -52,4 +54,4 @@ DEFAULT_GATE_TIMEOUT_SECONDS = 300
+@@ -52,4 +56,4 @@ DEFAULT_GATE_TIMEOUT_SECONDS = 300
  DEFAULT_GATE_MAX_RETRIES = 3
 -# Longest a pid/session wait barrier may hold the loop before judging resumes. Timed barriers
 -# (``waiting_until``) carry their own deadline and are exempt.
 +# Maximum age of an unverified pid/session barrier before the goal is paused for inspection.
 +# A verified live operation is not considered complete merely because this time has passed.
  _MAX_BARRIER_WAIT_S = 30 * 60
-@@ -155,2 +157,8 @@ JUDGE_SYSTEM_PROMPT = (
+@@ -155,2 +159,8 @@ JUDGE_SYSTEM_PROMPT = (
      "produces a status recap.\n"
 +    # local patch 25
 +    "- The agent coordinates Kanban cards that are still running or queued "
@@ -56813,7 +56942,7 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e095040b4e740c7509cf01ec50f5098b
 +    "``wait_for_seconds`` between 900 and 1800. A finished, blocked or failed "
 +    "card wakes the agent by itself.\n"
      "Picking WAIT parks the loop without burning a turn; it resumes "
-@@ -173,2 +181,51 @@ JUDGE_SYSTEM_PROMPT = (
+@@ -173,2 +183,51 @@ JUDGE_SYSTEM_PROMPT = (
  
 +# goals.delegated_decisions: the owner delegates in-scope choices to the agent, so "needs a user
 +# decision" stops being a block; only external gates still are.
@@ -56865,7 +56994,7 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e095040b4e740c7509cf01ec50f5098b
 +
 +
  # Judge prompt line for live delegated subagents (WAIT-for-seconds vs CONTINUE).
-@@ -179,2 +236,37 @@ JUDGE_DELEGATIONS_BLOCK_TEMPLATE = (
+@@ -179,2 +238,37 @@ JUDGE_DELEGATIONS_BLOCK_TEMPLATE = (
  
 +# local patch 25: the judge knew delegations and processes but not board cards, so a Captain waiting on
 +# running cards was re-poked every turn (16 of 19 goal wakes were status recaps on 2026-10-09).
@@ -56903,40 +57032,102 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e095040b4e740c7509cf01ec50f5098b
 +
 +
  # Judge prompt block listing running background processes (WAIT vs CONTINUE, which pid).
-@@ -434,2 +526,4 @@ class GoalState:
+@@ -434,2 +528,4 @@ class GoalState:
      consecutive_transport_failures: int = 0   # judge API/transport errors in a row
 +    # goals.delegated_decisions: "waiting for a user decision" BLOCKED verdicts auto-continued so far.
 +    delegated_auto_continues: int = 0
      # User-added criteria (/subgoal). Both the judge and continuation prompts include them.
-@@ -443,2 +537,3 @@ class GoalState:
+@@ -443,2 +539,3 @@ class GoalState:
      waiting_on_pid: Optional[int] = None
 +    waiting_on_pid_fingerprint: Optional[str] = None
      waiting_on_session: Optional[str] = None
-@@ -448,2 +543,4 @@ class GoalState:
+@@ -448,2 +545,4 @@ class GoalState:
      waiting_on_delegations: int = 0
 +    # A judge-created card wait is advisory: new completed work may be rejudged before its timer.
 +    waiting_on_kanban_cards: int = 0
      waiting_reason: Optional[str] = None
-@@ -461,3 +558,3 @@ class GoalState:
+@@ -453,2 +552,4 @@ class GoalState:
+     gates: list[GoalGate] = field(default_factory=list)
++    # A new revision on write distinguishes even a pause/resume that restores every other field.
++    revision: str = ""
+
+@@ -461,3 +562,3 @@ class GoalState:
          raw_subgoals = data.get("subgoals") or []
 -        ints = {k: int(data.get(k) or 0) for k in ("turns_used", "consecutive_parse_failures", "consecutive_transport_failures", "waiting_on_delegations")}
 +        ints = {k: int(data.get(k) or 0) for k in ("turns_used", "consecutive_parse_failures", "consecutive_transport_failures", "delegated_auto_continues", "waiting_on_delegations", "waiting_on_kanban_cards")}
          floats = {k: float(data.get(k) or 0.0) for k in ("created_at", "last_turn_at", "waiting_until", "waiting_since")}
-@@ -472,2 +569,5 @@ class GoalState:
+@@ -470,4 +571,8 @@ class GoalState:
+             paused_reason=data.get("paused_reason"),
++            revision=data.get("revision", ""),
+             subgoals=[str(s).strip() for s in raw_subgoals if str(s).strip()] if isinstance(raw_subgoals, list) else [],
              waiting_on_pid=(int(data["waiting_on_pid"]) if data.get("waiting_on_pid") else None),
 +            waiting_on_pid_fingerprint=(data.get("waiting_on_pid_fingerprint")
 +                if isinstance(data.get("waiting_on_pid_fingerprint"), str)
 +                and 0 < len(data["waiting_on_pid_fingerprint"]) <= 256 else None),
              waiting_on_session=(str(data["waiting_on_session"]) if data.get("waiting_on_session") else None),
-@@ -491,2 +591,3 @@ class GoalState:
+@@ -491,2 +596,3 @@ class GoalState:
          self.waiting_on_pid = None
 +        self.waiting_on_pid_fingerprint = None
          self.waiting_on_session = None
-@@ -494,2 +595,3 @@ class GoalState:
+@@ -494,2 +600,3 @@ class GoalState:
          self.waiting_on_delegations = 0
 +        self.waiting_on_kanban_cards = 0
          self.waiting_reason = None
-@@ -689,19 +791,5 @@ def migrate_goal_to_session(old_session_id: str, new_session_id: str, *, reason:
+@@ -500,6 +607,2 @@ class GoalState:
+
+-def _meta_key(session_id: str) -> str:
+-    return f"goal:{session_id}"
+-
+-
+ _DB_CACHE: dict[str, Any] = {}
+@@ -635,46 +738,2 @@ def _warn_dropped_write(manager: str, kind: str, session_id: str) -> None:
+
+-def load_goal(session_id: str) -> Optional[GoalState]:
+-    """Load the goal for a session, or None if none exists."""
+-    if not session_id:
+-        return None
+-    db = _get_session_db()
+-    if db is None:
+-        return None
+-    try:
+-        raw = db.get_meta(_meta_key(session_id))
+-    except Exception as exc:
+-        logger.debug("GoalManager: get_meta failed: %s", exc)
+-        return None
+-    if not raw:
+-        return None
+-    try:
+-        return GoalState.from_json(raw)
+-    except Exception as exc:
+-        logger.warning("GoalManager: could not parse stored goal for %s: %s", session_id, exc)
+-        return None
+-
+-
+-def save_goal(session_id: str, state: GoalState) -> None:
+-    """Persist a goal to SessionDB. No-op if DB unavailable."""
+-    if not session_id:
+-        return
+-    db = _get_session_db()
+-    if db is None:
+-        _warn_dropped_write("GoalManager", "goal", session_id)
+-        return
+-    try:
+-        db.set_meta(_meta_key(session_id), state.to_json())
+-    except Exception as exc:
+-        logger.debug("GoalManager: set_meta failed: %s", exc)
+-
+-
+-def clear_goal(session_id: str) -> None:
+-    """Mark a goal cleared in the DB (preserved for audit, status=cleared)."""
+-    state = load_goal(session_id)
+-    if state is None:
+-        return
+-    state.status = "cleared"
+-    save_goal(session_id, state)
+-
+-
+ def migrate_goal_to_session(old_session_id: str, new_session_id: str, *, reason: str = "") -> bool:
+@@ -689,19 +748,5 @@ def migrate_goal_to_session(old_session_id: str, new_session_id: str, *, reason:
      """
 -    if not old_session_id or not new_session_id or old_session_id == new_session_id:
 -        return False
@@ -56959,7 +57150,7 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e095040b4e740c7509cf01ec50f5098b
 +
 +    return migrate_control_state('goal:', old_session_id, new_session_id, GoalState.from_json, _get_session_db)
  
-@@ -736,5 +824,32 @@ def _pid_alive(pid: int) -> bool:
+@@ -736,5 +781,32 @@ def _pid_alive(pid: int) -> bool:
  
 -def _session_waiting(session_id: str) -> bool:
 -    """True while the process_registry session is running and its trigger hasn't fired. Fail-safe:
@@ -56995,7 +57186,7 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e095040b4e740c7509cf01ec50f5098b
 +def _session_waiting(session_id: str) -> Optional[bool]:
 +    """True while the registry trigger is pending; None when the registry cannot be inspected."""
      if not session_id:
-@@ -744,5 +859,5 @@ def _session_waiting(session_id: str) -> bool:
+@@ -744,5 +816,5 @@ def _session_waiting(session_id: str) -> bool:
  
 -        return bool(process_registry.is_session_waiting(session_id))
 +        return process_registry.is_session_waiting(session_id, strict=True)
@@ -57003,7 +57194,7 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e095040b4e740c7509cf01ec50f5098b
 -        return False
 +        return None
  
-@@ -826,5 +941,7 @@ def _parse_judge_response(raw: str) -> tuple[str, str, bool, Optional[dict[str,
+@@ -826,5 +898,7 @@ def _parse_judge_response(raw: str) -> tuple[str, str, bool, Optional[dict[str,
          for k in keys:
 +            if isinstance(data.get(k), bool):
 +                continue
@@ -57012,18 +57203,18 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e095040b4e740c7509cf01ec50f5098b
 -            except (TypeError, ValueError):
 +            except (TypeError, ValueError, OverflowError):
                  continue
-@@ -902,2 +1019,4 @@ def judge_goal(
+@@ -902,2 +976,4 @@ def judge_goal(
      active_delegations: int = 0,
 +    active_kanban_cards: int = 0,
 +    delegated_decisions: bool = False,
  ) -> tuple[str, str, bool, Optional[dict[str, Any]], bool]:
-@@ -930,3 +1049,4 @@ def judge_goal(
+@@ -930,3 +1006,4 @@ def judge_goal(
          background_block=_render_background_block(background_processes)
 -        + (JUDGE_DELEGATIONS_BLOCK_TEMPLATE.format(count=active_delegations) if active_delegations > 0 else ""),
 +        + (JUDGE_DELEGATIONS_BLOCK_TEMPLATE.format(count=active_delegations) if active_delegations > 0 else "")
 +        + (JUDGE_KANBAN_BLOCK_TEMPLATE.format(count=active_kanban_cards) if active_kanban_cards > 0 else ""),
          current_time=safe_strftime(datetime.now(tz=UTC).astimezone(), "%Y-%m-%d %H:%M:%S %Z"),
-@@ -937,11 +1057,21 @@ def judge_goal(
+@@ -937,11 +1014,21 @@ def judge_goal(
              contract_block = f"{contract_block}\n{_render_extra_criteria(clean_subgoals)}"
 -        prompt = JUDGE_USER_PROMPT_WITH_CONTRACT_TEMPLATE.format(contract_block=_truncate(contract_block, 2500), **common)
 +        common["contract_block"] = _truncate(contract_block, 2500)
@@ -57050,11 +57241,23 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e095040b4e740c7509cf01ec50f5098b
 -        raw = _call_goal_judge_llm(call_llm, JUDGE_SYSTEM_PROMPT, prompt, timeout)
 +        raw = _call_goal_judge_llm(call_llm, system_prompt, prompt, timeout)
      except AuxiliaryClientUnavailable as exc:
-@@ -956,2 +1086,3 @@ def judge_goal(
+@@ -956,2 +1043,3 @@ def judge_goal(
      verdict, reason, parse_failed, wait_directive = _parse_judge_response(raw)
 +    judge_memo.store(memo_key, verdict, reason, parse_failed)
      logger.info("goal judge: verdict=%s reason=%s%s", verdict, _truncate(reason, 120),
-@@ -1111,2 +1242,16 @@ class GoalManager:
+@@ -1099,7 +1187,6 @@ class GoalManager:
+         self.default_max_turns = int(default_max_turns or DEFAULT_MAX_TURNS)
+-        self._state: Optional[GoalState] = load_goal(session_id)
+-
+-    def refresh(self) -> None:
+-        """Re-read state from the DB (another writer, e.g. a tool, moved it)."""
+-        self._state = load_goal(self.session_id)
++        self._state: Optional[GoalState] = None
++        self._persisted: Optional[str] = None
++        if session_id:
++            self.refresh()
+
+@@ -1111,2 +1198,16 @@ class GoalManager:
  
 +    def refresh(self) -> bool:
 +        """Observe external goal controls at a turn boundary; unknown is not absent."""
@@ -57062,16 +57265,16 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e095040b4e740c7509cf01ec50f5098b
 +            db = _get_session_db()
 +            if db is None:
 +                return False
-+            raw = db.get_meta(_meta_key(self.session_id))
-+            state = GoalState.from_json(raw) if raw is not None else None
++            state, raw = read_goal(db, self.session_id)
 +        except Exception:
 +            logger.debug('GoalManager: state refresh unavailable', exc_info=True)
 +            return False
 +        self._state = state
++        self._persisted = raw
 +        return True
 +
      def is_active(self) -> bool:
-@@ -1130,5 +1275,5 @@ class GoalManager:
+@@ -1130,5 +1231,5 @@ class GoalManager:
          if s.status == "active":
 -            if s.waiting_on_session and _session_waiting(s.waiting_on_session):
 +            if s.waiting_on_session and _session_waiting(s.waiting_on_session) is not False:
@@ -57079,7 +57282,27 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e095040b4e740c7509cf01ec50f5098b
 -            if s.waiting_on_pid and _pid_alive(s.waiting_on_pid):
 +            if s.waiting_on_pid and _pid_observation(s.waiting_on_pid) is not False:
                  return f"⏳ Goal (parked on {s.waiting_reason or f'pid {s.waiting_on_pid}'}, {meta}): {s.goal}"
-@@ -1182,2 +1327,19 @@ class GoalManager:
+@@ -1149,5 +1250,14 @@ class GoalManager:
+     def _save(self) -> Optional[GoalState]:
+-        save_goal(self.session_id, self._state)
++        self._persisted = save_goal(self.session_id, self._state)
+         return self._state
+
++    def _commit_snapshot(self, state: GoalState, expected_raw: Optional[str]) -> bool:
++        if expected_raw is None:
++            return False
++        saved = save_goal(self.session_id, state, expected_raw=expected_raw)
++        if saved is None:
++            return False
++        self._state, self._persisted = state, saved
++        return True
++
+     def _require_goal(self) -> GoalState:
+@@ -1165,3 +1275,2 @@ class GoalManager:
+         self._state.paused_reason = reason
+-        self._save()
+
+@@ -1182,2 +1291,19 @@ class GoalManager:
  
 +    def configure(self, goal: str, contract: GoalContract) -> GoalState:
 +        """Save an owner's form without resetting turn budgets, gates or wait barriers.
@@ -57099,7 +57322,28 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e095040b4e740c7509cf01ec50f5098b
 +        return self._save()
 +
      def set_contract(self, contract: GoalContract) -> Optional[GoalState]:
-@@ -1378,5 +1540,7 @@ class GoalManager:
+@@ -1345,3 +1471,2 @@ class GoalManager:
+
+-            self._save()
+             prompt = CONTINUATION_PROMPT_GATE_FAILED_TEMPLATE.format(
+@@ -1357,3 +1482,2 @@ class GoalManager:
+
+-        self._save()
+         return None
+@@ -1362,3 +1486,3 @@ class GoalManager:
+
+-    def _park(self, reason: str, **barrier) -> GoalState:
++    def _park(self, reason: str, *, persist: bool, **barrier) -> GoalState:
+         state = self._require_active()
+@@ -1369,5 +1493,5 @@ class GoalManager:
+         state.waiting_since = time.time()
+-        return self._save()
++        return self._save() if persist else state
+
+-    def wait_on(self, pid: int, reason: str = "") -> GoalState:
++    def wait_on(self, pid: int, reason: str = "", *, _persist: bool = True) -> GoalState:
+         """Park the goal loop until a background PID exits (no turn burned, no judge call). For a
+@@ -1378,7 +1502,9 @@ class GoalManager:
              raise ValueError("pid must be a positive integer")
 -        if not _pid_alive(pid):
 +        observation = _pid_observation(pid)
@@ -57107,22 +57351,28 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e095040b4e740c7509cf01ec50f5098b
              raise ValueError("pid is not alive on this host")
 -        return self._park(reason, waiting_on_pid=pid)
 +        fingerprint = _pid_fingerprint(pid) if observation is True else None
-+        return self._park(reason, waiting_on_pid=pid, waiting_on_pid_fingerprint=fingerprint)
++        return self._park(reason, persist=_persist, waiting_on_pid=pid, waiting_on_pid_fingerprint=fingerprint)
  
-@@ -1391,3 +1555,4 @@ class GoalManager:
+-    def wait_on_session(self, session_id: str, reason: str = "") -> GoalState:
++    def wait_on_session(self, session_id: str, reason: str = "", *, _persist: bool = True) -> GoalState:
+         """Park on a process_registry session's OWN trigger: exit OR ``watch_patterns`` match. The
+@@ -1389,5 +1515,6 @@ class GoalManager:
+             raise ValueError("session_id must be a non-empty string")
+-        return self._park(reason, waiting_on_session=session_id)
++        return self._park(reason, persist=_persist, waiting_on_session=session_id)
  
 -    def wait_for_seconds(self, seconds: int, reason: str = "", *, on_delegations: int = 0) -> GoalState:
 +    def wait_for_seconds(self, seconds: int, reason: str = "", *, on_delegations: int = 0,
-+                         on_kanban_cards: int = 0) -> GoalState:
++                         on_kanban_cards: int = 0, _persist: bool = True) -> GoalState:
          """Park until ``seconds`` from now (backoff/cooldown waits with no process to track). With
-@@ -1401,3 +1566,5 @@ class GoalManager:
+@@ -1401,3 +1528,5 @@ class GoalManager:
              raise ValueError("seconds must be a positive integer")
 -        return self._park(reason, waiting_until=time.time() + seconds, waiting_on_delegations=max(0, int(on_delegations)))
-+        return self._park(reason, waiting_until=time.time() + seconds,
++        return self._park(reason, persist=_persist, waiting_until=time.time() + seconds,
 +                          waiting_on_delegations=max(0, int(on_delegations)),
 +                          waiting_on_kanban_cards=max(0, int(on_kanban_cards)))
  
-@@ -1414,6 +1581,4 @@ class GoalManager:
+@@ -1414,13 +1543,29 @@ class GoalManager:
          """True iff a barrier is set AND not yet satisfied. A satisfied barrier is cleared here
 -        (lazy auto-clear) so the next evaluation resumes normal judging. A pid/session barrier
 -        also expires after ``_MAX_BARRIER_WAIT_S``: a watcher or poller that never exits would
@@ -57130,9 +57380,18 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e095040b4e740c7509cf01ec50f5098b
 -        the work it was polling)."""
 +        (lazy auto-clear) so the next evaluation resumes normal judging. A long-running verified
 +        operation remains parked; an unverified one is paused for inspection after the limit."""
++        expected_raw = self._persisted
++        waiting, changed = self._observe_wait()
++        if changed and not self._commit_snapshot(self._state, expected_raw):
++            self.refresh()
++        return waiting
++
++    def _observe_wait(self) -> tuple[bool, bool]:
++        """Return whether the barrier holds and whether its state changed."""
          s = self._state
-@@ -1421,6 +1586,16 @@ class GoalManager:
-             return False
+         if s is None:
+-            return False
++            return False, False
 +        unverified = False
          if s.waiting_on_session is not None:
              still = _session_waiting(s.waiting_on_session)
@@ -57149,54 +57408,91 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e095040b4e740c7509cf01ec50f5098b
 +            elif still is None:
 +                unverified = True
          elif s.waiting_until:
-@@ -1434,9 +1609,9 @@ class GoalManager:
-             return False
+@@ -1433,10 +1578,12 @@ class GoalManager:
+         else:
+-            return False
 -        if still and s.waiting_since and s.waiting_until == 0.0 and time.time() - s.waiting_since > _MAX_BARRIER_WAIT_S:
 -            logger.info("goal %s: wait barrier on %s exceeded %ds; resuming judging",
 -                        self.session_id, s.waiting_on_session or s.waiting_on_pid, _MAX_BARRIER_WAIT_S)
 -            still = False
 -        if not still:
+-            self.stop_waiting()
+-        return still
++            return False, False
 +        if unverified:
 +            if s.status == "active" and s.waiting_since and time.time() - s.waiting_since > _MAX_BARRIER_WAIT_S:
 +                self._pause_state("wait target could not be verified; inspect the original operation before resuming")
-+            return True
++                return True, True
++            return True, False
 +        if still is False:
-             self.stop_waiting()
--        return still
-+        return bool(still)
++            s.clear_wait()
++            return False, True
++        return bool(still), False
  
-@@ -1454,3 +1629,4 @@ class GoalManager:
+@@ -1454,3 +1601,4 @@ class GoalManager:
  
 -    def _apply_wait_directive(self, wait_directive: dict[str, Any], reason: str, *, active_delegations: int = 0) -> Optional[dict[str, Any]]:
 +    def _apply_wait_directive(self, wait_directive: dict[str, Any], reason: str, *, active_delegations: int = 0,
 +                              active_kanban_cards: int = 0) -> Optional[dict[str, Any]]:
          """Judge said WAIT: set the barrier and park. The counted turn stands (the judge ran) but no
-@@ -1472,3 +1648,4 @@ class GoalManager:
+@@ -1459,3 +1607,4 @@ class GoalManager:
+         if wait_directive.get("session_id"):
+-            tgt = f"session {self.wait_on_session(str(wait_directive['session_id']), reason=reason).waiting_on_session}"
++            parked = self.wait_on_session(str(wait_directive['session_id']), reason=reason, _persist=False)
++            tgt = f"session {parked.waiting_on_session}"
+         elif wait_directive.get("pid"):
+@@ -1463,3 +1612,3 @@ class GoalManager:
+             try:
+-                tgt = f"pid {self.wait_on(pid, reason=reason).waiting_on_pid}"
++                tgt = f"pid {self.wait_on(pid, reason=reason, _persist=False).waiting_on_pid}"
+             except ValueError:
+@@ -1472,3 +1621,5 @@ class GoalManager:
          else:
 -            self.wait_for_seconds(int(wait_directive["seconds"]), reason=reason, on_delegations=active_delegations)
 +            self.wait_for_seconds(int(wait_directive["seconds"]), reason=reason,
-+                                  on_delegations=active_delegations, on_kanban_cards=active_kanban_cards)
++                                  on_delegations=active_delegations, on_kanban_cards=active_kanban_cards,
++                                  _persist=False)
              tgt = f"{wait_directive['seconds']}s"
-@@ -1487,2 +1664,4 @@ class GoalManager:
+@@ -1487,2 +1638,4 @@ class GoalManager:
          active_delegations: int = 0,
 +        kanban_notification_target: Optional[dict[str, str]] = None,
 +        after_model_turn: bool = False,
      ) -> dict[str, Any]:
-@@ -1495,4 +1674,13 @@ class GoalManager:
- 
+@@ -1495,4 +1648,32 @@ class GoalManager:
+
++        # Stage the entire verdict away from the live manager while gates/the judge can block.
++        expected_raw = self._persisted
++        draft = copy(self)
++        draft._state = deepcopy(state)
++        decision = draft._evaluate_turn(last_response, background_processes, active_delegations,
++                                        kanban_notification_target, after_model_turn)
++        if decision["verdict"] == "waiting":
++            return decision
++
++        if self._commit_snapshot(draft._state, expected_raw):
++            return decision
++        current = self.state if self.refresh() else None
++        return _decision(current.status if current else None, False, None, "discarded",
++                         "goal revision no longer current or write unavailable", "")
++
++    def _evaluate_turn(self, last_response, background_processes, active_delegations,
++                       kanban_notification_target, after_model_turn) -> dict[str, Any]:
++        state = self._state
 +        # Only a native successful post-turn hook can release an advisory card timer. A changed
 +        # card count is not completion evidence; passive reads and explicit owner barriers stay quiet.
 +        if (after_model_turn is True and state.waiting_on_kanban_cards > 0 and state.waiting_until
 +                and state.waiting_on_pid is None and state.waiting_on_session is None):
-+            self.stop_waiting()
++            state.clear_wait()
 +
          # Parked on a live process or an unexpired deadline: quiesce without burning a turn.
-         if self.is_waiting():
+-        if self.is_waiting():
++        waiting, _ = self._observe_wait()
++        if waiting:
 +            if state.status == "paused":
 +                reason = state.paused_reason or "wait target could not be verified"
 +                return _decision("paused", False, None, "wait_unverified", reason, f"⏸ Goal paused — {reason}")
              return self._waiting_decision(state)
-@@ -1510,6 +1698,15 @@ class GoalManager:
+@@ -1510,6 +1691,15 @@ class GoalManager:
  
 -        verdict, reason, parse_failed, wait_directive, transport_failed = judge_goal(
 -            state.goal, last_response, subgoals=state.subgoals or None, background_processes=background_processes,
@@ -57216,13 +57512,13 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e095040b4e740c7509cf01ec50f5098b
 +        finally:
 +            reset_accounting_context(token)
          state.last_verdict = verdict
-@@ -1523,3 +1720,4 @@ class GoalManager:
+@@ -1523,3 +1713,4 @@ class GoalManager:
          if verdict == "wait" and wait_directive:
 -            parked = self._apply_wait_directive(wait_directive, reason, active_delegations=active_delegations)
 +            parked = self._apply_wait_directive(wait_directive, reason, active_delegations=active_delegations,
 +                                                active_kanban_cards=active_cards)
              if parked is not None:
-@@ -1532,2 +1730,16 @@ class GoalManager:
+@@ -1532,2 +1723,15 @@ class GoalManager:
          if verdict == "blocked":
 +            # Delegated decisions: a block that only waits on a user choice gets a bounded nudge
 +            # to decide within authority before the goal pauses.
@@ -57230,7 +57526,6 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e095040b4e740c7509cf01ec50f5098b
 +                    and state.delegated_auto_continues < DEFAULT_MAX_DELEGATED_AUTO_CONTINUES
 +                    and state.turns_used < state.max_turns):
 +                state.delegated_auto_continues += 1
-+                self._save()
 +                n = state.delegated_auto_continues
 +                return _decision(
 +                    "active", True,
@@ -57239,8 +57534,13 @@ index 96ee695e28dad2dcf23bb652aa379c1b0cca5bbc..e095040b4e740c7509cf01ec50f5098b
 +                    f"↻ Deciding within delegated authority ({n}/{DEFAULT_MAX_DELEGATED_AUTO_CONTINUES}): {reason}",
 +                )
              return self._pause_decision(
-@@ -1564,4 +1776,7 @@ class GoalManager:
-         self._save()
+@@ -1539,3 +1743,2 @@ class GoalManager:
+             state.status = "done"
+-            self._save()
+             return _decision("done", False, None, "done", reason, f"✓ Goal achieved: {reason}")
+@@ -1563,5 +1766,7 @@ class GoalManager:
+
+-        self._save()
 +        prompt = self.next_continuation_prompt()
 +        if delegated and reason:
 +            prompt += DELEGATED_DECISION_CONTINUE_TEMPLATE.format(reason=reason)
@@ -57294,6 +57594,112 @@ index 0000000000000000000000000000000000000000..cefcc7acbc27953a2ed66d6640db3d0b
 +def clear() -> None:
 +    with _LOCK:
 +        _MEMO.clear()
+diff --git a/hermes_cli/goals_metadata.py b/hermes_cli/goals_metadata.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..cc1ae18344be4d4dd215cb28c8a7c6c857950d41
+--- /dev/null
++++ b/hermes_cli/goals_metadata.py
+@@ -0,0 +1,100 @@
++"""Goal snapshots and atomic writes in the existing SessionDB metadata table."""
++
++from __future__ import annotations
++
++import logging
++from typing import TYPE_CHECKING
++from uuid import uuid4
++
++if TYPE_CHECKING:
++    from hermes_cli.goals import GoalState
++    from hermes_state import SessionDB
++
++logger = logging.getLogger(__name__)
++
++
++def _key(session_id: str) -> str:
++    return f"goal:{session_id}"
++
++
++def read_goal(db: SessionDB, session_id: str) -> tuple[GoalState | None, str | None]:
++    from hermes_cli.goals import GoalState
++
++    raw = db.get_meta(_key(session_id))
++    return (GoalState.from_json(raw), raw) if raw else (None, None)
++
++
++def load_goal(session_id: str) -> GoalState | None:
++    """Load the goal for a session, or None when it cannot be read."""
++    from hermes_cli.goals import _get_session_db
++
++    db = _get_session_db() if session_id else None
++    if db is not None:
++        try:
++            state, _ = read_goal(db, session_id)
++            return state
++        except Exception:
++            logger.debug("GoalManager: could not load stored goal for %s", session_id, exc_info=True)
++    return None
++
++
++def _encode_revision(state: GoalState) -> str:
++    state.revision = uuid4().hex
++    return state.to_json()
++
++
++def save_goal(session_id: str, state: GoalState, *, expected_raw: str | None = None) -> str | None:
++    """Persist a new revision, optionally replacing only the exact stored snapshot."""
++    from hermes_cli.goals import _get_session_db, _warn_dropped_write
++
++    if not session_id:
++        return None
++    db = _get_session_db()
++    if db is None:
++        _warn_dropped_write("GoalManager", "goal", session_id)
++        return None
++    try:
++        raw = _encode_revision(state)
++        key = _key(session_id)
++        if expected_raw is None:
++            db.set_meta(key, raw)
++        elif not db._write_rowcount(
++            "UPDATE state_meta SET value = ? WHERE key = ? AND value = ?",
++            (raw, key, expected_raw),
++        ):
++            return None
++        return raw
++    except Exception:
++        logger.debug("GoalManager: set_meta failed", exc_info=True)
++        return None
++
++
++def pause_active_goal_on_stop(db: SessionDB, session_id: str) -> bool:
++    """Pause the current active revision in the session authority's database."""
++    from hermes_cli.goals import GoalState
++
++    key = _key(session_id)
++
++    def pause(conn):
++        cursor = conn.cursor()
++        row = cursor.execute("SELECT value FROM state_meta WHERE key = ?", (key,)).fetchone()
++        if row is None:
++            return False
++        state = GoalState.from_json(row[0])
++        if state.status != "active":
++            return False
++        state.status = "paused"
++        state.paused_reason = "user-interrupted (Stop)"
++        state.clear_wait()
++        db.set_meta(key, _encode_revision(state), cursor=cursor)
++        return True
++
++    return db._execute_write(pause)
++
++
++def clear_goal(session_id: str) -> None:
++    """Mark a goal cleared in the DB (preserved for audit, status=cleared)."""
++    state = load_goal(session_id)
++    if state is not None:
++        state.status = "cleared"
++        save_goal(session_id, state)
 diff --git a/hermes_cli/heartbeat.py b/hermes_cli/heartbeat.py
 index b10a5846fbf6f7c090dd0956ab8fd1e8d76ecfb6..c1cba192a93c8a47453d39e5fe0b44156e0492e8 100644
 --- a/hermes_cli/heartbeat.py
@@ -84458,20 +84864,135 @@ index 91f30aa217762d0aa80a9dccfcf5134050a9d3eb..c77867fc9142a937f353b5804c3d37f8
 +        asyncio.run(probe())
 diff --git a/tests/gateway/test_session_interrupt_goal.py b/tests/gateway/test_session_interrupt_goal.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..fa1a4166bc8987fe3668a5151b2c9f0bb1ce1fef
+index 0000000000000000000000000000000000000000..70701fbfd6062b492a85411d1f0e12b4e99a375f
 --- /dev/null
 +++ b/tests/gateway/test_session_interrupt_goal.py
-@@ -0,0 +1,72 @@
+@@ -0,0 +1,189 @@
 +"""Stop pauses only its current goal; a dropped pause write cannot suppress cancellation."""
 +import asyncio
 +import json
++import sqlite3
++import threading
++import time
++from types import SimpleNamespace
 +
 +import pytest
 +
 +from gateway.session_contract import Principal, SessionRef
 +from hermes_cli import goals
++from hermes_state import SessionDB
 +from hermes_state_runtime import RuntimeStoreError
 +from tests.gateway.test_session_authority_cancel_settlement import _authority
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize(('control', 'verdict'), [
++    ('stop', 'continue'),
++    ('stop', 'done'),
++    ('stop-resume', 'continue'),
++    ('uninterrupted', 'continue'),
++    ('uninterrupted', 'done'),
++    ('legacy-uninterrupted', 'continue'),
++])
++async def test_post_turn_judge_cannot_continue_a_stopped_goal(tmp_path, monkeypatch, control, verdict):
++    from gateway import session_automation
++    from gateway.config import Platform
++    from gateway.run_goals import GatewayGoalsMixin
++
++    class Runner(GatewayGoalsMixin):
++        async def _post_turn_manager(self, entry, *_args):
++            return goals.GoalManager(entry.session_id)
++
++        async def _run_in_executor_with_context(self, fn):
++            return await asyncio.to_thread(fn)
++
++        async def _defer_goal_status_notice_after_delivery(self, _source, message):
++            notices.append(message)
++
++        def _goal_kanban_notification_target(self, _source):
++            return None
++
++        def _delivery_adapter_for(self, _source):
++            return None
++
++    db, authority = _authority(tmp_path, monkeypatch)
++    authority.profile_id = str(tmp_path)
++    actor = Principal('human', str(tmp_path), frozenset({'session:control'}), 'cli')
++    ref = SessionRef(str(tmp_path), 's')
++    started = asyncio.Event()
++    release = threading.Event()
++    loop = asyncio.get_running_loop()
++    follow_ups = []
++    notices = []
++
++    def judge(*_args, **_kwargs):
++        loop.call_soon_threadsafe(started.set)
++        assert release.wait(5)
++        return verdict, 'Fixture judge result', False, None, False
++
++    async def admit(_runner, _adapter, _source, prompt, wake_kind):
++        follow_ups.append((prompt, wake_kind))
++
++    def read_goal():
++        with SessionDB(db_path=tmp_path / 'state.db') as reader:
++            return json.loads(reader.get_meta('goal:s'))
++
++    monkeypatch.setattr(goals, 'judge_goal', judge)
++    monkeypatch.setattr(session_automation, 'admit_route_wake', admit)
++    with db:
++        if control == 'legacy-uninterrupted':
++            db.set_meta('goal:s', '{"goal":"Collect evidence","status":"active"}')
++        else:
++            goals.GoalManager('s').set('Collect evidence')
++        task = asyncio.create_task(Runner()._post_turn_goal_continuation(
++            session_entry=SimpleNamespace(session_id='s'),
++            source=SimpleNamespace(platform=Platform.LOCAL), final_response='Partial progress',
++        ))
++        try:
++            await asyncio.wait_for(started.wait(), timeout=5)
++            if control.startswith('stop'):
++                await authority.interrupt(actor, ref, authority._handle(ref).execution_generation)
++                assert read_goal()['status'] == 'paused'
++                if control == 'stop-resume':
++                    goals.GoalManager('s').resume()
++                    assert read_goal()['status'] == 'active'
++                acknowledged = read_goal()
++        finally:
++            release.set()
++            await task
++
++        if control.startswith('stop'):
++            assert (read_goal(), notices, follow_ups) == (acknowledged, [], [])
++        else:
++            result = read_goal()
++            assert (result['last_verdict'], result['turns_used']) == (verdict, 1)
++            assert len(notices) == 1
++            if verdict == 'done':
++                assert result['status'] == 'done'
++                assert 'Goal achieved' in notices[0]
++                assert not follow_ups
++            else:
++                assert result['status'] == 'active'
++                assert len(follow_ups) == 1 and follow_ups[0][1] == 'goal-continuation'
++
++
++@pytest.mark.asyncio
++async def test_expired_wait_cannot_reactivate_a_stopped_goal(tmp_path, monkeypatch):
++    db, authority = _authority(tmp_path, monkeypatch)
++    authority.profile_id = str(tmp_path)
++    actor = Principal('human', str(tmp_path), frozenset({'session:control'}), 'cli')
++    ref = SessionRef(str(tmp_path), 's')
++    manager = goals.GoalManager('s')
++    manager.set('Wait for evidence')
++    expired_at = manager.wait_for_seconds(600).waiting_until + 1
++    with db:
++        await authority.interrupt(actor, ref, authority._handle(ref).execution_generation)
++        stopped = db.get_meta('goal:s')
++        assert json.loads(stopped)['status'] == 'paused'
++        monkeypatch.setattr(time, 'time', lambda: expired_at)
++        assert not manager.is_waiting()
++        assert db.get_meta('goal:s') == stopped
++        assert manager.state.status == 'paused'
 +
 +
 +@pytest.mark.parametrize('status', ['active', 'paused', 'done', 'cleared', None])
@@ -84527,7 +85048,9 @@ index 0000000000000000000000000000000000000000..fa1a4166bc8987fe3668a5151b2c9f0b
 +    goals.GoalManager('s').set('Do not lose Stop if pause cannot be saved')
 +    before = db.get_meta('goal:s')
 +    cancelled = []
-+    monkeypatch.setattr(goals, 'save_goal', lambda *args: None)
++    def failed_write(*_args, **_kwargs):
++        raise sqlite3.OperationalError('fixture write failure')
++    monkeypatch.setattr(db, 'set_meta', failed_write)
 +    monkeypatch.setattr(async_delegation, 'interrupt_for_session', lambda **args: cancelled.append(args))
 +    with db:
 +        with pytest.raises(RuntimeStoreError, match='storage_unavailable'):
@@ -86401,10 +86924,10 @@ index 8eefb2f03f6b1714ecb3f9b19e130c686de03b47..a24a9f19bbdda2eb20de4ed90aeb8499
      monkeypatch.setattr(service, "discover_existing_gateway_service", lambda *a, **k: None)
 diff --git a/tests/hermes_cli/test_goal_aux_accounting.py b/tests/hermes_cli/test_goal_aux_accounting.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..898a49c507b7b02aba99381a7f08f5b229c583ea
+index 0000000000000000000000000000000000000000..5e09d04d20999694355f2c873fe55547816d3321
 --- /dev/null
 +++ b/tests/hermes_cli/test_goal_aux_accounting.py
-@@ -0,0 +1,153 @@
+@@ -0,0 +1,159 @@
 +"""Post-turn judges belong to the goal's session, not a finished or unrelated turn."""
 +from concurrent.futures import ThreadPoolExecutor
 +from pathlib import Path
@@ -86481,6 +87004,12 @@ index 0000000000000000000000000000000000000000..898a49c507b7b02aba99381a7f08f5b2
 +        expected.insert(0, ("goal-owner", "goal_judge", 40, 20, 60, 7, 1))
 +    assert _rows(db) == expected
 +    assert attempts == ["goal_judge"]
++    if missing_store:
++        assert decision["status"] is None and decision["verdict"] == "discarded"
++        assert decision["should_continue"] is False
++        assert mgr.state.turns_used == 0
++        assert goals.GoalState.from_json(db.get_meta("goal:goal-owner")).turns_used == 0
++        return
 +    assert decision["status"] == ("active" if failure else "done")
 +    assert mgr.state.turns_used == 1
 +
