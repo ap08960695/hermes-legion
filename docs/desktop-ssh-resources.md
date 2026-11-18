@@ -61,6 +61,15 @@ Unconfirmed close preserves the socket and reservation. A crash can
 leave the reservation in place until ownership is reconciled. Host
 aliases and separate control directories have independent reservations.
 
+The `host-busy` message reports the exact reservation basename for local
+diagnosis. Look for that basename in Desktop's private control directory
+under the default Hermes home or in the per-user short control directory.
+The message covers an active connection and a reservation retained after
+interruption. A missing socket, reservation age, or a dead Desktop PID
+alone cannot establish that the previous launcher and master are gone.
+Recovery still needs proof that neither can create or retain a connection
+and that removal targets the same reservation generation.
+
 During orderly quit, bootstrap rollback and forced cleanup join the same
 socket teardown. The last holder aborts a pending master start and waits
 for the startup client to close before sending one `ssh -O exit`. The

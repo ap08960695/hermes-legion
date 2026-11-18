@@ -10672,3 +10672,13 @@ made zero fake SSH calls while the owner held the reservation. A clean
 close allowed an immediate retry. Killing the owner left the reservation
 closed to the contender. The 62 focused tests and development bundles
 passed. Live SSH and crash recovery on actual OpenSSH remain open.
+
+### Ambiguous SSH master reservations
+
+Two-process Mac fixtures blocked contenders while a live launcher was
+paused before socket creation, after that launcher died without a socket,
+and after a separate owner died with a fake socket still present. The
+competing processes issued zero SSH calls. A clean close admitted an
+immediate retry. The busy error reports the exact lease basename and
+explains that an interruption can leave it behind. Reclamation still
+requires ownership proof.
