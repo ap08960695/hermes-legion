@@ -1,3 +1,18 @@
+# Preview the first page of a Mac Local PDF
+
+A PDF delivered in the current Bot Chat workspace can show **Preview
+file** in the character popover on Mac Local. On click the existing
+Monitor route redeems the ticket, and Electron sends a bounded snapshot
+to the sandboxed raster helper. The overlay receives a PNG of page one.
+The popover keeps **Copy path** and offers **Expand preview**. Outside
+deliveries and unsupported connections show the path. An older Local
+gateway that rejects the opt-in can still offer text and PNG previews.
+
+Electron claims each click once and discards the raster if the current
+popover is replaced, hidden, closed, or navigating. Invalid or failed
+renders show **File preview unavailable**. The built-in document viewer
+and system-open actions remain separate work.
+
 # Authorize a Mac Local PDF snapshot
 
 Native Mac Local callers with session control can set `pdf_preview` to

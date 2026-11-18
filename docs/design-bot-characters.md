@@ -536,8 +536,9 @@ its sandbox policy together. The [private Mac supervisor](verification.md#superv
 admits one render at a time and releases the slot when the helper closes.
 The [Mac Local gateway](verification.md#authorize-a-mac-local-pdf-snapshot)
 can authorize a single-use snapshot tied to the saved reply and file
-revision. The Desktop client still needs to opt in and pass the snapshot
-to the supervisor. The overlay will receive the rendered first page.
+revision. The [Mac Local popover](verification.md#preview-the-first-page-of-a-mac-local-pdf)
+opts in through the current Monitor route and receives the rendered
+first page after an explicit click.
 
 [Preview file](verification.md#preview-a-delivered-text-file-in-a-bots-character-unreleased)
 can read one small UTF-8 `.txt`, `.md` or `.csv` file directly inside the
