@@ -24,7 +24,10 @@ A character’s latest-output popover labels the full path when a complete
 saved reply contains one standalone `MEDIA:` delivery of an absolute
 `.txt`, `.md` or `.csv` path. Quoted filename spaces are preserved. The label is plain
 text and **Open in Hermes** still opens the owning Bot Chat. Ambiguous
-or incomplete replies keep the ordinary text preview.
+or incomplete replies keep the ordinary text preview. Select **Copy path**
+to copy the exact displayed path without reading the file. The popover shows
+**Path copied** once Electron confirms the write. Copying is available before
+or after a preview and for deliveries whose path is shown without a preview.
 
 An isolated Mac Local run displayed the exact path, including two spaces
 in the filename, from the canonical Bot Chat despite a newer side chat.

@@ -8284,26 +8284,26 @@ index 2c784ec2a2e709f7fc953d88399b3078aaa5e12b..5492eec425bbd695225966f3bc91032d
  }
 diff --git a/apps/desktop/electron/pet-overlay-ipc.test.ts b/apps/desktop/electron/pet-overlay-ipc.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..36585313c7286ecfbeaa4090407b24e995dc4526
+index 0000000000000000000000000000000000000000..977f01f9bc82ebcf498a93ceff6dc8d337ddd1cb
 --- /dev/null
 +++ b/apps/desktop/electron/pet-overlay-ipc.test.ts
-@@ -0,0 +1,269 @@
+@@ -0,0 +1,312 @@
 +import { EventEmitter } from 'node:events'
 +
 +import { afterEach, expect, it, vi } from 'vitest'
 +
-+const io = vi.hoisted(() => ({ on: new Map<string, (...args: any[]) => void>() }))
++const io = vi.hoisted(() => ({ writeText: vi.fn(), on: new Map<string, (...args: any[]) => void>() }))
 +vi.mock('electron', async () => {
 +  const { EventEmitter } = await import('node:events')
 +
-+  return { ipcMain: { on: (name: string, fn: (...args: any[]) => void) => io.on.set(name, fn), handle: vi.fn() },
++  return { clipboard: { writeText: io.writeText }, ipcMain: { on: (name: string, fn: (...args: any[]) => void) => io.on.set(name, fn), handle: vi.fn() },
 +    screen: { getAllDisplays: () => [] }, powerMonitor: Object.assign(new EventEmitter(), { getSystemIdleState: () => 'active' }) }
 +})
 +import { powerMonitor } from 'electron'
 +
 +import { registerPetOverlayIpc } from './pet-overlay-ipc'
 +
-+afterEach(() => { powerMonitor.removeAllListeners(); io.on.clear() })
++afterEach(() => { powerMonitor.removeAllListeners(); io.on.clear(); io.writeText.mockReset() })
 +
 +it('pauses character snapshots on main hide/minimize and screen lock/suspend; retires observers in mascot mode', () => {
 +  const main = Object.assign(new EventEmitter(), { isDestroyed: () => false, isVisible: (): boolean => true, isMinimized: (): boolean => false, webContents: { send: vi.fn() } })
@@ -8557,14 +8557,57 @@ index 0000000000000000000000000000000000000000..36585313c7286ecfbeaa4090407b24e9
 +  ])
 +  expect(overlay.webContents.send.mock.lastCall?.[1].characterOutput).toEqual({ id, request: 2, text: null, stopStatus: 'requested' })
 +})
++
++
++it('copies only the exact displayed path for the current overlay request', () => {
++  const main = Object.assign(new EventEmitter(), { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, webContents: { send: vi.fn() } })
++  const overlay = Object.assign(new EventEmitter(), { isDestroyed: () => false, webContents: { send: vi.fn() } })
++  registerPetOverlayIpc({ getMainWindow: () => main as never, getPetOverlayWindow: () => overlay as never, openPetOverlay: vi.fn(), closePetOverlay: vi.fn() })
++  const state = io.on.get('hermes:pet-overlay:state')!, control = io.on.get('hermes:pet-overlay:control')!
++  const snapshot = { characterPreview: { characters: [{ outputId: 'owned' }], expiresAt: Date.now() + 15_000 } }
++  const id = 'owned'
++
++  const show = (request: number, deliveredFile: string) => {
++    control({ sender: overlay.webContents }, { type: 'character-output', id, request })
++    state({ sender: main.webContents }, { ...snapshot, characterOutput: { id, request, text: null, deliveredFile } })
++  }
++
++  state({ sender: main.webContents }, snapshot)
++  show(1, '/workspace/old.txt')
++  const deliveredFile = '/outside/สอง  words.csv'
++  show(2, deliveredFile)
++  const copy = { type: 'character-output-copy-path', id, request: 2 }
++
++  control({ sender: main.webContents }, copy)
++  control({ sender: overlay.webContents }, { ...copy, path: '/forged.txt' })
++  control({ sender: overlay.webContents }, { ...copy, request: 1 })
++  expect(io.writeText).not.toHaveBeenCalled()
++
++  control({ sender: overlay.webContents }, copy)
++  expect(io.writeText.mock.calls).toEqual([[deliveredFile]])
++  expect(overlay.webContents.send.mock.lastCall?.[1].characterPathCopy).toEqual({ id, request: 2, ok: true })
++  expect(main.webContents.send.mock.calls.every(([, payload]) => payload.type !== copy.type)).toBe(true)
++
++  io.writeText.mockImplementationOnce(() => { throw new Error('clipboard unavailable') })
++  control({ sender: overlay.webContents }, copy)
++  expect(overlay.webContents.send.mock.lastCall?.[1].characterPathCopy).toEqual({ id, request: 2, ok: false })
++  control({ sender: overlay.webContents }, { type: 'character-output-close' })
++  control({ sender: overlay.webContents }, copy)
++  show(3, '/outside/malformed\npath.txt')
++  control({ sender: overlay.webContents }, { ...copy, request: 3 })
++  show(4, deliveredFile)
++  powerMonitor.emit('lock-screen')
++  control({ sender: overlay.webContents }, { ...copy, request: 4 })
++  expect(io.writeText).toHaveBeenCalledTimes(2)
++})
 diff --git a/apps/desktop/electron/pet-overlay-ipc.ts b/apps/desktop/electron/pet-overlay-ipc.ts
-index 59d8dd527dae029c695a8520996f6051d75df371..6e7b706e2725f7bc2d137433668cdcc077d9e261 100644
+index 59d8dd527dae029c695a8520996f6051d75df371..ee38ea137566b16ee5585a2c312e78aba6d2a197 100644
 --- a/apps/desktop/electron/pet-overlay-ipc.ts
 +++ b/apps/desktop/electron/pet-overlay-ipc.ts
 @@ -2,3 +2,5 @@
  // main.ts; window handles stay injected because main.ts owns their lifecycle.
 -import { type BrowserWindow, ipcMain, screen } from 'electron'
-+import { type BrowserWindow, ipcMain, powerMonitor, screen } from 'electron'
++import { type BrowserWindow, clipboard, ipcMain, powerMonitor, screen } from 'electron'
 +
 +import type { PetCharacterOutput, PetCharacterPreview } from '../src/store/pet-characters'
 
@@ -8603,7 +8646,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..6e7b706e2725f7bc2d137433668cdcc0
 +  openExternalUrl
  }: PetOverlayIpcDeps) {
 +  let lastCharacterPayload: Record<string, unknown> | null = null
-+  let outputAction: (Pick<PetCharacterOutput, 'id' | 'request' | 'canOpen'> & { window: BrowserWindow; links?: string[]; file?: 'offered' | 'pending'; stop?: 'offered' | 'pending' }) | null = null
++  let outputAction: (Pick<PetCharacterOutput, 'id' | 'request' | 'canOpen'> & { window: BrowserWindow; links?: string[]; deliveredFile?: string; file?: 'offered' | 'pending'; stop?: 'offered' | 'pending' }) | null = null
 +  let stopObserving: (() => void) | null = null
 +  let locked = false, suspended = false
 +
@@ -8701,13 +8744,13 @@ index 59d8dd527dae029c695a8520996f6051d75df371..6e7b706e2725f7bc2d137433668cdcc0
 +  }
 +
    // `request` is `{ bounds, screen }`. A fresh pop-out passes viewport-space
-@@ -144,3 +267,77 @@ export function registerPetOverlayIpc({
+@@ -144,3 +267,78 @@ export function registerPetOverlayIpc({
    // Main renderer → overlay: forward the latest pet state for the overlay to render.
 -  ipcMain.on('hermes:pet-overlay:state', (_event, payload) => {
 +  ipcMain.on('hermes:pet-overlay:state', (event, payload) => {
 +    const main = getMainWindow()
 +
-+    if (!main || event.sender !== main.webContents) {return}
++    if (!main || event.sender !== main.webContents || payload?.characterPathCopy) {return}
 +
 +    if (payload?.characterPreview) {
 +      const { characterOutput, characterFile, ...snapshot } = payload
@@ -8750,13 +8793,14 @@ index 59d8dd527dae029c695a8520996f6051d75df371..6e7b706e2725f7bc2d137433668cdcc0
 +        const stoppable = canStop === true && visibleOutput(id, true)
 +
 +        const file = unavailable !== true &&
-+          typeof deliveredFile === 'string' && deliveredFile.length <= 600 && deliveredFile.startsWith('/') ? deliveredFile : undefined
++          typeof deliveredFile === 'string' && deliveredFile.length <= 600 && deliveredFile.startsWith('/') &&
++          !deliveredFile.startsWith('//') && !/[\p{C}\p{Zl}\p{Zp}]/u.test(deliveredFile) ? deliveredFile : undefined
 +
 +        const openable = canOpen === true && unavailable !== true
 +        const links = openExternalUrl && canLink === true && unavailable !== true && typeof text === 'string' ? outputWebLinks(text) : []
 +        const previewable = file && canPreviewFile === true
 +
-+        outputAction = openable || links.length || previewable || stoppable ? { id, request, window: overlay, links,
++        outputAction = openable || links.length || file || stoppable ? { id, request, window: overlay, links, deliveredFile: file,
 +          ...(stoppable ? { stop: 'offered' } : {}),
 +          ...(openable ? { canOpen: true } : {}), ...(previewable ? { file: 'offered' } : {}) } : null
 +        overlay.webContents.send('hermes:pet-overlay:state', { ...lastCharacterPayload, charactersPaused: false,
@@ -8780,15 +8824,16 @@ index 59d8dd527dae029c695a8520996f6051d75df371..6e7b706e2725f7bc2d137433668cdcc0
 +    stopObserving?.()
 +    stopObserving = null
      const petOverlayWindow = getPetOverlayWindow()
-@@ -152,3 +349,3 @@ export function registerPetOverlayIpc({
+@@ -152,3 +350,3 @@ export function registerPetOverlayIpc({
    // Overlay → main renderer: control messages (pop back in, composer submit).
 -  ipcMain.on('hermes:pet-overlay:control', (_event, payload) => {
 +  ipcMain.on('hermes:pet-overlay:control', (event, payload) => {
      const mainWindow = getMainWindow()
-@@ -159,2 +356,58 @@ export function registerPetOverlayIpc({
+@@ -159,2 +357,77 @@ export function registerPetOverlayIpc({
 
 +    if (payload?.type === 'character-output' || payload?.type === 'character-output-close' ||
-+        payload?.type === 'character-output-open' || payload?.type === 'character-stop' || payload?.type === 'character-output-link' || payload?.type === 'character-output-file') {
++        payload?.type === 'character-output-open' || payload?.type === 'character-stop' || payload?.type === 'character-output-link' ||
++        payload?.type === 'character-output-file' || payload?.type === 'character-output-copy-path') {
 +      const overlay = getPetOverlayWindow()
 +
 +      if (!overlay || overlay.isDestroyed() || event.sender !== overlay.webContents) {return}
@@ -8803,6 +8848,24 @@ index 59d8dd527dae029c695a8520996f6051d75df371..6e7b706e2725f7bc2d137433668cdcc0
 +      const { id, request } = payload
 +
 +      if (typeof id !== 'string' || !Number.isSafeInteger(request) || request <= 0 || !visibleOutput(id)) {return}
++
++      if (payload.type === 'character-output-copy-path') {
++        if (Object.keys(payload).length !== 3 || !outputAction?.deliveredFile ||
++            outputAction.window !== overlay || outputAction.id !== id || outputAction.request !== request) {return}
++
++        let ok = true
++
++        try {
++          clipboard.writeText(outputAction.deliveredFile)
++        } catch {
++          ok = false
++        }
++
++        overlay.webContents.send('hermes:pet-overlay:state', { ...lastCharacterPayload, charactersPaused: false,
++          characterPathCopy: { id, request, ok } })
++
++        return
++      }
 +
 +      if (payload.type === 'character-output-link') {
 +        const { index } = payload
@@ -21608,10 +21671,10 @@ index de446bdb6a589e02ff3634ae483fe46d4a108ff2..447b3cacb7b6af2b6d1aca49f9487795
   *
 diff --git a/apps/desktop/src/app/pet-overlay/pet-characters.tsx b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..edca17e2058cbd93237baa255dfc4f0b25e87239
+index 0000000000000000000000000000000000000000..d8de9319068947a4af310246c1ee48a0ee71775b
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
-@@ -0,0 +1,210 @@
+@@ -0,0 +1,215 @@
 +import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 +import { type ReactNode, type RefObject, useEffect, useId, useRef, useState } from 'react'
 +
@@ -21625,13 +21688,14 @@ index 0000000000000000000000000000000000000000..edca17e2058cbd93237baa255dfc4f0b
 +  preview: PetCharacterPreview
 +  moveHandle: ReactNode
 +  paused: boolean
-+  output: (PetCharacterOutput & { loading?: true; fileLoading?: true; fileText?: string | null; stopPending?: true }) | null
++  output: (PetCharacterOutput & { loading?: true; fileLoading?: true; fileText?: string | null; pathCopied?: boolean; stopPending?: true }) | null
 +  showActions: boolean
 +  onOutput: (id: string | null, showActions?: boolean) => void
 +  onPreview: () => void
 +  onOpen: () => void
 +  onOpenLink: (index: number) => void
 +  onPreviewFile: () => void
++  onCopyPath: () => void
 +  onStop: () => void
 +}
 +
@@ -21702,7 +21766,7 @@ index 0000000000000000000000000000000000000000..edca17e2058cbd93237baa255dfc4f0b
 +}
 +
 +/** The overlay displays snapshots. Only the main renderer resolves output addresses. */
-+export function PetCharacters({ info, preview, moveHandle, paused, output, showActions, onOutput, onPreview, onOpen, onOpenLink, onPreviewFile, onStop }: PetCharactersProps) {
++export function PetCharacters({ info, preview, moveHandle, paused, output, showActions, onOutput, onPreview, onOpen, onOpenLink, onPreviewFile, onCopyPath, onStop }: PetCharactersProps) {
 +  const reduced = useReducedMotion()
 +  const root = useRef<HTMLDivElement>(null)
 +  const captionId = useId()
@@ -21752,10 +21816,14 @@ index 0000000000000000000000000000000000000000..edca17e2058cbd93237baa255dfc4f0b
 +      </button> : <>
 +        <div key={fileReady ? 'file' : 'output'} style={{ marginTop: 4, overflowY: 'auto', maxHeight: output.deliveredFile ? 116 : 96, overflowWrap: 'anywhere' }}>
 +          {output.deliveredFile && <div style={{ marginBottom: 4 }}>
-+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6 }}>
++            <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 6 }}>
 +              <strong>Delivered file</strong>
-+              {output.canPreviewFile && <button onClick={onPreviewFile} style={{ textDecoration: 'underline' }} type="button">Preview file</button>}
++              <div style={{ display: 'flex', gap: 8 }}>
++                {output.canPreviewFile && <button onClick={onPreviewFile} style={{ textDecoration: 'underline' }} type="button">Preview file</button>}
++                <button onClick={onCopyPath} style={{ textDecoration: 'underline' }} type="button">Copy path</button>
++              </div>
 +            </div>
++            <div role="status">{output.pathCopied === true ? 'Path copied' : output.pathCopied === false ? 'Could not copy path' : ''}</div>
 +            {fileReady ? <details>
 +              <summary style={{ cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
 +                File path — {output.deliveredFile.split('/').at(-1)}
@@ -21823,7 +21891,7 @@ index 0000000000000000000000000000000000000000..edca17e2058cbd93237baa255dfc4f0b
 +  </div>
 +}
 diff --git a/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx b/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
-index 82319976a166e658f80e794b0033fed81a48d456..94748b207bafb7f17a4a2972f2bc8472d0f9478d 100644
+index 82319976a166e658f80e794b0033fed81a48d456..d882029e3d22bb4b8dea9da064fdf9f89c7e9586 100644
 --- a/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
 +++ b/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
 @@ -10,2 +10,3 @@ import { isSubmitEnter } from '@/lib/ime'
@@ -21852,13 +21920,13 @@ index 82319976a166e658f80e794b0033fed81a48d456..94748b207bafb7f17a4a2972f2bc8472
 @@ -67,2 +75,8 @@ export function PetOverlayApp() {
    const [composerOpen, setComposerOpen] = useState(false)
 +  const [characters, setCharacters] = useState<{ preview: PetCharacterPreview; paused: boolean } | null>(null)
-+  const [output, setOutput] = useState<(PetCharacterOutput & { loading?: true; fileLoading?: true; fileText?: string | null; stopPending?: true }) | null>(null)
++  const [output, setOutput] = useState<(PetCharacterOutput & { loading?: true; fileLoading?: true; fileText?: string | null; pathCopied?: boolean; stopPending?: true }) | null>(null)
 +  const [actionsRequest, setActionsRequest] = useState<number | null>(null)
 +  const characterMode = Boolean(characters)
 +  const outputTargets = characters?.paused ? '' : characters?.preview.characters.map(character => character.outputId).join(',')
 +  const characterCount = Math.min(5, characters?.preview.characters.length ?? 0)
    const [draft, setDraft] = useState('')
-@@ -94,2 +108,21 @@ export function PetOverlayApp() {
+@@ -94,2 +108,27 @@ export function PetOverlayApp() {
      const off = window.hermesDesktop?.petOverlay?.onState(payload => {
 +      const preview = payload.characterPreview ?? null
 +      setCharacters(preview ? { preview, paused: payload.charactersPaused !== false } : null)
@@ -21873,6 +21941,12 @@ index 82319976a166e658f80e794b0033fed81a48d456..94748b207bafb7f17a4a2972f2bc8472
 +          return { ...current, fileLoading: undefined, fileText: file.text }
 +        }
 +
++        const copy = payload.characterPathCopy
++
++        if (current.deliveredFile && copy?.id === current.id && copy.request === current.request) {
++          return { ...current, pathCopied: copy.ok }
++        }
++
 +        const reply = payload.characterOutput
 +
 +        return reply?.id === current.id && reply.request === current.request ? reply : current
@@ -21880,42 +21954,42 @@ index 82319976a166e658f80e794b0033fed81a48d456..94748b207bafb7f17a4a2972f2bc8472
 +
 +      if (preview) {setComposerOpen(false)}
        setPetInfo(payload.info)
-@@ -104,3 +137,3 @@ export function PetOverlayApp() {
+@@ -104,3 +143,3 @@ export function PetOverlayApp() {
 
 -      if (lastReactionRef.current === null) {
 +      if (preview || lastReactionRef.current === null) {
          lastReactionRef.current = reaction?.id ?? 0
-@@ -122,2 +155,6 @@ export function PetOverlayApp() {
+@@ -122,2 +161,6 @@ export function PetOverlayApp() {
 
 +  useEffect(() => {
 +    if (characterMode && !dragRef.current?.target.isConnected) {setIgnore(true)}
 +  }, [characterMode, outputTargets])
 +
    // Click-through: make only the *solid* sprite pixels (plus the bubble / mail
-@@ -127,2 +164,3 @@ export function PetOverlayApp() {
+@@ -127,2 +170,3 @@ export function PetOverlayApp() {
    // returns to a solid pixel.
 +  // eslint-disable-next-line no-restricted-syntax -- clear a detached gesture from the native move listener.
    useEffect(() => {
-@@ -138,2 +176,4 @@ export function PetOverlayApp() {
+@@ -138,2 +182,4 @@ export function PetOverlayApp() {
 
 +      if (target?.closest('[data-pet-output-target], [data-pet-drag-handle]')) {return true}
 +
        if (!pet || !target || !pet.contains(target)) {
-@@ -170,2 +210,6 @@ export function PetOverlayApp() {
+@@ -170,2 +216,6 @@ export function PetOverlayApp() {
      const onMove = (ev: MouseEvent) => {
 +      if (dragRef.current && !dragRef.current.target.isConnected) {
 +        dragRef.current = null
 +      }
 +
        if (dragRef.current || composerOpenRef.current) {
-@@ -205,4 +249,4 @@ export function PetOverlayApp() {
+@@ -205,4 +255,4 @@ export function PetOverlayApp() {
 
 -  const onPetPointerDown = (e: React.PointerEvent) => {
 -    if (e.button !== 0) {
 +  const onPetPointerDown = (e: React.PointerEvent, moveOnly = false) => {
 +    if (e.button !== 0 || dragRef.current) {
        return
-@@ -210,4 +254,9 @@ export function PetOverlayApp() {
+@@ -210,4 +260,9 @@ export function PetOverlayApp() {
 
 -    ;(e.target as Element).setPointerCapture?.(e.pointerId)
 +    const target = e.currentTarget
@@ -21926,17 +22000,17 @@ index 82319976a166e658f80e794b0033fed81a48d456..94748b207bafb7f17a4a2972f2bc8472
 +      moveOnly,
 +      pointerId: e.pointerId,
        height: window.outerHeight,
-@@ -225,3 +274,3 @@ export function PetOverlayApp() {
+@@ -225,3 +280,3 @@ export function PetOverlayApp() {
 
 -    if (!drag) {
 +    if (!drag || drag.pointerId !== e.pointerId) {
        return
-@@ -233,2 +282,4 @@ export function PetOverlayApp() {
+@@ -233,2 +288,4 @@ export function PetOverlayApp() {
 
 +    if (drag.moveOnly && !drag.moved) {return}
 +
      window.hermesDesktop?.petOverlay?.setBounds({
-@@ -243,6 +294,4 @@ export function PetOverlayApp() {
+@@ -243,6 +300,4 @@ export function PetOverlayApp() {
      const drag = dragRef.current
 -    dragRef.current = null
 -    ;(e.target as Element).releasePointerCapture?.(e.pointerId)
@@ -21944,18 +22018,18 @@ index 82319976a166e658f80e794b0033fed81a48d456..94748b207bafb7f17a4a2972f2bc8472
 -    if (!drag) {
 +    if (!drag || drag.pointerId !== e.pointerId) {
        return
-@@ -250,2 +299,5 @@ export function PetOverlayApp() {
+@@ -250,2 +305,5 @@ export function PetOverlayApp() {
 
 +    dragRef.current = null
 +    drag.target.releasePointerCapture?.(e.pointerId)
 +
      if (drag.moved) {
-@@ -266,2 +318,4 @@ export function PetOverlayApp() {
+@@ -266,2 +324,4 @@ export function PetOverlayApp() {
 
 +    if (drag.moveOnly) {return}
 +
      // Shift-click always pops the pet back in (no double-click ambiguity).
-@@ -289,2 +343,33 @@ export function PetOverlayApp() {
+@@ -289,2 +349,33 @@ export function PetOverlayApp() {
 
 +  const cancelCharacterDrag = ({ pointerId }: React.PointerEvent) => {
 +    const drag = dragRef.current
@@ -21989,12 +22063,12 @@ index 82319976a166e658f80e794b0033fed81a48d456..94748b207bafb7f17a4a2972f2bc8472
 +  }
 +
    const send = () => {
-@@ -316,3 +401,3 @@ export function PetOverlayApp() {
+@@ -316,3 +407,3 @@ export function PetOverlayApp() {
 
 -  usePetZoomGesture(petRef, onScale, Boolean(info.enabled && info.spritesheetBase64))
 +  usePetZoomGesture(petRef, onScale, Boolean(info.enabled && info.spritesheetBase64 && !characterMode))
 
-@@ -331,5 +416,6 @@ export function PetOverlayApp() {
+@@ -331,5 +422,6 @@ export function PetOverlayApp() {
      const { width, height } = overlayWindowSize(
 -      info.frameW ?? DEFAULT_FRAME_W,
 -      info.frameH ?? DEFAULT_FRAME_H,
@@ -22004,7 +22078,7 @@ index 82319976a166e658f80e794b0033fed81a48d456..94748b207bafb7f17a4a2972f2bc8472
 +      characterMode ? DEFAULT_SCALE : info.scale ?? DEFAULT_SCALE,
 +      characterCount
      )
-@@ -364,3 +450,48 @@ export function PetOverlayApp() {
+@@ -364,3 +456,55 @@ export function PetOverlayApp() {
      window.hermesDesktop?.petOverlay?.control({ bounds, type: 'bounds' })
 -  }, [info.enabled, info.spritesheetBase64, info.scale, info.frameW, info.frameH])
 +  }, [info.enabled, info.spritesheetBase64, info.scale, info.frameW, info.frameH, characterCount, characterMode])
@@ -22047,6 +22121,13 @@ index 82319976a166e658f80e794b0033fed81a48d456..94748b207bafb7f17a4a2972f2bc8472
 +    window.hermesDesktop?.petOverlay?.control({ type: 'character-output-link', id, request, index })
 +  }
 +
++  const copyOutputPath = () => {
++    if (!output?.deliveredFile) {return}
++    const { id, request } = output
++    setOutput({ ...output, pathCopied: undefined })
++    window.hermesDesktop?.petOverlay?.control({ type: 'character-output-copy-path', id, request })
++  }
++
 +  const previewOutputFile = () => {
 +    if (!output?.canPreviewFile) {return}
 +    const { id, request } = output
@@ -22054,7 +22135,7 @@ index 82319976a166e658f80e794b0033fed81a48d456..94748b207bafb7f17a4a2972f2bc8472
 +    window.hermesDesktop?.petOverlay?.control({ type: 'character-output-file', id, request })
 +  }
 
-@@ -370,2 +501,16 @@ export function PetOverlayApp() {
+@@ -370,2 +514,16 @@ export function PetOverlayApp() {
 
 +  if (characters) {
 +    const moveHandle = <button aria-label="Move characters" className="focus-visible:outline focus-visible:outline-2" data-pet-drag-handle=""
@@ -22066,17 +22147,17 @@ index 82319976a166e658f80e794b0033fed81a48d456..94748b207bafb7f17a4a2972f2bc8472
 +      title="Drag or use the arrow keys to move characters" type="button">Move</button>
 +
 +    return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-end', height: '100vh', paddingBottom: PET_PADDING_BOTTOM, pointerEvents: 'none' }}>
-+      <PetCharacters info={info} moveHandle={moveHandle} onOpen={openOutput} onOpenLink={openOutputLink} onOutput={showOutput} onPreview={() => setActionsRequest(null)} onPreviewFile={previewOutputFile} onStop={stopWorker} output={output} paused={characters.paused} preview={characters.preview} showActions={output?.request === actionsRequest} />
++      <PetCharacters info={info} moveHandle={moveHandle} onCopyPath={copyOutputPath} onOpen={openOutput} onOpenLink={openOutputLink} onOutput={showOutput} onPreview={() => setActionsRequest(null)} onPreviewFile={previewOutputFile} onStop={stopWorker} output={output} paused={characters.paused} preview={characters.preview} showActions={output?.request === actionsRequest} />
 +    </div>
 +  }
 +
    return (
 diff --git a/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..9047d92bcd41a749d3e193a6c1569246fc5a887d
+index 0000000000000000000000000000000000000000..cee4560c1fa1a8fb2a161b2f5f17801cdb187a4a
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
-@@ -0,0 +1,497 @@
+@@ -0,0 +1,512 @@
 +import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 +import type * as Motion from 'motion/react'
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -22280,8 +22361,23 @@ index 0000000000000000000000000000000000000000..9047d92bcd41a749d3e193a6c1569246
 +  fireEvent.click(path)
 +  expect(control).toHaveBeenLastCalledWith(request)
 +  expect(screen.getByRole('button', { name: 'Open in Hermes' })).toBeTruthy()
++  const copy = screen.getByRole('button', { name: 'Copy path' })
++
++  fireEvent.click(copy)
++  expect(control).toHaveBeenLastCalledWith({ type: 'character-output-copy-path', id: request.id, request: request.request })
++  expect(screen.queryByText('Path copied')).toBeNull()
++  const receipt = { id: request.id, request: request.request, ok: true }
++  act(() => emit({ ...payload, characterPathCopy: { ...receipt, request: request.request + 1 } }))
++  expect(screen.queryByText('Path copied')).toBeNull()
++  act(() => emit({ ...payload, characterPathCopy: receipt }))
++  expect(screen.getByText('Path copied').getAttribute('role')).toBe('status')
++
++  fireEvent.click(copy)
++  act(() => emit({ ...payload, characterPathCopy: { ...receipt, ok: false } }))
++  expect(screen.getByText('Could not copy path').getAttribute('role')).toBe('status')
 +  fireEvent.click(screen.getByRole('button', { name: 'Close latest output' }))
 +  expect(screen.queryByText('Delivered file')).toBeNull()
++  expect(screen.queryByText('Could not copy path')).toBeNull()
 +})
 +
 +it.each([
@@ -44555,36 +44651,38 @@ index 0000000000000000000000000000000000000000..9bab3030d9fbc8a588d05a8c54f186c8
 +  }
 +}
 diff --git a/apps/desktop/src/store/pet-overlay.ts b/apps/desktop/src/store/pet-overlay.ts
-index d47f67023fb8b820d6f6cbd455562a591600413b..05d25b99196de96b29b0af97d0de13371130d664 100644
+index d47f67023fb8b820d6f6cbd455562a591600413b..d91bb8c97a59687ad2f9b5a9e37ad617ba566ead 100644
 --- a/apps/desktop/src/store/pet-overlay.ts
 +++ b/apps/desktop/src/store/pet-overlay.ts
 @@ -5,2 +5,3 @@ import { persistBoolean, persistString, storedBoolean, storedString } from '@/li
  import { $petActivity, $petInfo, $petUnread, clearPetUnread, type PetActivity, type PetInfo } from '@/store/pet'
 +import { $petCharacterPreview, openPetCharacterOutput, type PetCharacterFile, type PetCharacterOutput, type PetCharacterPreview, readPetCharacterFile, readPetCharacterOutput, type WorkerStopStatus } from '@/store/pet-characters'
  import { $petPluginMessages, type PetPluginMessage } from '@/store/pet-plugin-messages'
-@@ -53,2 +54,6 @@ export interface PetOverlayStatePayload {
+@@ -53,2 +54,7 @@ export interface PetOverlayStatePayload {
    pluginMessages?: PetPluginMessage[]
 +  characterPreview?: PetCharacterPreview | null
 +  charactersPaused?: boolean
 +  characterOutput?: PetCharacterOutput
 +  characterFile?: PetCharacterFile
++  characterPathCopy?: { id: string; request: number; ok: boolean }
  }
-@@ -58,2 +63,8 @@ export type PetOverlayControl =
+@@ -58,2 +64,9 @@ export type PetOverlayControl =
    | { type: 'ready' }
 +  | { type: 'character-output'; id: string; request: number }
 +  | { type: 'character-output-close' }
 +  | { type: 'character-stop'; id: string; request: number }
 +  | { type: 'character-output-open'; id: string; request: number }
 +  | { type: 'character-output-file'; id: string; request: number }
++  | { type: 'character-output-copy-path'; id: string; request: number }
 +  | { type: 'character-output-link'; id: string; request: number; index: number }
    | { type: 'submit'; text: string }
-@@ -71,5 +82,2 @@ export const $petOverlayActive = atom(storedBoolean(OVERLAY_ACTIVE_KEY, false))
+@@ -71,5 +84,2 @@ export const $petOverlayActive = atom(storedBoolean(OVERLAY_ACTIVE_KEY, false))
 
 -// Persist the in/out choice so a popped-out pet comes back popped out.
 -$petOverlayActive.subscribe(active => persistBoolean(OVERLAY_ACTIVE_KEY, active))
 -
  /**
-@@ -132,5 +140,5 @@ const OVERLAY_MIN_H = 300
+@@ -132,5 +142,5 @@ const OVERLAY_MIN_H = 300
   */
 -export function overlayWindowSize(frameW: number, frameH: number, scale: number): { width: number; height: number } {
 +export function overlayWindowSize(frameW: number, frameH: number, scale: number, characterCount = 0): { width: number; height: number } {
@@ -44592,51 +44690,51 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..05d25b99196de96b29b0af97d0de1337
 -    width: Math.max(OVERLAY_MIN_W, Math.round(frameW * scale + OVERLAY_PAD_X)),
 +    width: Math.max(OVERLAY_MIN_W, Math.round(frameW * scale + OVERLAY_PAD_X), Math.min(5, characterCount) * 120 + 32),
      height: Math.max(OVERLAY_MIN_H, Math.round(frameH * scale + OVERLAY_PAD_Y))
-@@ -153,3 +161,4 @@ function currentPayload(): PetOverlayStatePayload {
+@@ -153,3 +163,4 @@ function currentPayload(): PetOverlayStatePayload {
      reaction: $petReaction.get(),
 -    pluginMessages: $petPluginMessages.get()
 +    pluginMessages: $petPluginMessages.get(),
 +    characterPreview: $petCharacterPreview.get()
    }
-@@ -166,3 +175,3 @@ function pushNow(): void {
+@@ -166,3 +177,3 @@ function pushNow(): void {
   */
 -function openOverlay(request: PetOverlayOpenRequest): void {
 +function openOverlay(request: PetOverlayOpenRequest, restoreOnLaunch = true): void {
    const api = window.hermesDesktop?.petOverlay
-@@ -173,2 +182,3 @@ function openOverlay(request: PetOverlayOpenRequest): void {
+@@ -173,2 +184,3 @@ function openOverlay(request: PetOverlayOpenRequest): void {
 
 +  persistBoolean(OVERLAY_ACTIVE_KEY, restoreOnLaunch)
    $petOverlayActive.set(true)
-@@ -191,3 +201,4 @@ function openOverlay(request: PetOverlayOpenRequest): void {
+@@ -191,3 +203,4 @@ function openOverlay(request: PetOverlayOpenRequest): void {
      $petReaction.subscribe(pushNow),
 -    $petPluginMessages.subscribe(pushNow)
 +    $petPluginMessages.subscribe(pushNow),
 +    $petCharacterPreview.subscribe(pushNow)
    ]
-@@ -201,3 +212,3 @@ function openOverlay(request: PetOverlayOpenRequest): void {
+@@ -201,3 +214,3 @@ function openOverlay(request: PetOverlayOpenRequest): void {
   */
 -export function popOutPet(petRect: PetOverlayBounds): void {
 +export function popOutPet(petRect: PetOverlayBounds, { restoreOnLaunch = true } = {}): void {
    if ($petOverlayActive.get() || stateUnsubs.length) {
-@@ -209,3 +220,3 @@ export function popOutPet(petRect: PetOverlayBounds): void {
+@@ -209,3 +222,3 @@ export function popOutPet(petRect: PetOverlayBounds): void {
    if (saved) {
 -    openOverlay({ bounds: saved, screen: true })
 +    openOverlay({ bounds: saved, screen: true }, restoreOnLaunch)
 
-@@ -221,3 +232,3 @@ export function popOutPet(petRect: PetOverlayBounds): void {
+@@ -221,3 +234,3 @@ export function popOutPet(petRect: PetOverlayBounds): void {
 
 -  openOverlay({ bounds: { height, width, x, y }, screen: false })
 +  openOverlay({ bounds: { height, width, x, y }, screen: false }, restoreOnLaunch)
  }
-@@ -237,2 +248,3 @@ export function restorePetOverlay(): void {
+@@ -237,2 +250,3 @@ export function restorePetOverlay(): void {
    if (!saved) {
 +    persistBoolean(OVERLAY_ACTIVE_KEY, false)
      $petOverlayActive.set(false)
-@@ -252,2 +264,3 @@ export function popInPet(): void {
+@@ -252,2 +266,3 @@ export function popInPet(): void {
    stateUnsubs = []
 +  persistBoolean(OVERLAY_ACTIVE_KEY, false)
    $petOverlayActive.set(false)
-@@ -282,4 +295,49 @@ export function initPetOverlayBridge(): () => void {
+@@ -282,4 +297,49 @@ export function initPetOverlayBridge(): () => void {
 
 +  let activeOutput: { id: string; request: number; canOpen?: true; opened?: true; fileToken?: string; stop?: () => Promise<WorkerStopStatus> } | null = null
    controlUnsub = api.onControl(payload => {
@@ -44687,7 +44785,7 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..05d25b99196de96b29b0af97d0de1337
 +    } else if (payload?.type === 'pop-in') {
 +      activeOutput = null
        popInPet()
-@@ -307,2 +365,3 @@ export function initPetOverlayBridge(): () => void {
+@@ -307,2 +367,3 @@ export function initPetOverlayBridge(): () => void {
    return () => {
 +    activeOutput = null
      controlUnsub?.()

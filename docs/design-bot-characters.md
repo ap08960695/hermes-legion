@@ -445,8 +445,10 @@ click.
 
 The [Delivered file row](verification.md#see-a-delivered-text-file-in-a-bots-preview-unreleased)
 shows the exact path of a single standalone text-file delivery from a complete
-reply. The path appears once as plain text and the transcript remains available
-through **Open in Hermes**.
+reply. The path appears as plain text and the transcript remains available
+through **Open in Hermes**. **Copy path** copies the exact displayed path,
+including for a path-only delivery outside the workspace. Electron accepts the
+click only for the current popover and reports the clipboard result.
 
 [Preview file](verification.md#preview-a-delivered-text-file-in-a-bots-character-unreleased)
 can read one small UTF-8 `.txt`, `.md` or `.csv` file directly inside the
