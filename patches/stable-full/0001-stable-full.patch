@@ -27496,10 +27496,10 @@ index 7d1c2ea4b9ff9f1908bdb750a838cf1f6f1d2e47..2df76c02c22201edfd89371857f2fb7d
    )
 diff --git a/apps/desktop/src/contrib/plugin-characters.test.ts b/apps/desktop/src/contrib/plugin-characters.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..147b49b4ecbabb5842d92c7d8b70d1135f4fc465
+index 0000000000000000000000000000000000000000..0e89b80a861ff1480112e800db139b63a52fb80c
 --- /dev/null
 +++ b/apps/desktop/src/contrib/plugin-characters.test.ts
-@@ -0,0 +1,199 @@
+@@ -0,0 +1,257 @@
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 +
 +import { setPetInfo } from '@/store/pet'
@@ -27699,8 +27699,66 @@ index 0000000000000000000000000000000000000000..147b49b4ecbabb5842d92c7d8b70d113
 +    expect(await read('No file in this reply', true)).not.toHaveProperty('deliveredFile')
 +  } finally {publisher.dispose()}
 +})
++
++it('remembers preview bounds across renderer reload without restoring a preview-only window', async () => {
++  const anchor = { x: 10, y: 20, width: 40, height: 40 }
++  const moved = { x: 130, y: 145, width: 272, height: 300 }
++  const activeKey = 'hermes.desktop.pet-overlay-active.v1'
++  const boundsKey = 'hermes.desktop.pet-overlay-bounds.v1'
++  const storage = window.localStorage
++  const savedBounds = storage.getItem(boundsKey)
++  const open = vi.fn(async () => ({}))
++  let send: ((payload: { type: 'bounds'; bounds: typeof moved }) => void) | undefined
++  Object.defineProperty(window, 'hermesDesktop', { configurable: true, value: { petOverlay: {
++    open, close: vi.fn(async () => ({})), pushState: vi.fn(), onControl: (listener: typeof send) => {
++      send = listener
++
++      return () => {}
++    }
++  } } })
++  dispose = initPetOverlayBridge()
++  setPetInfo({ enabled: true, spritesheetBase64: 'owned-fixture' })
++  const ctx = createPluginContext('temporary-preview')
++  const preview = ctx.pet.previewCharacters!(anchor)!
++
++  try {
++    expect($petOverlayActive.get()).toBe(true)
++    send?.({ type: 'bounds', bounds: moved })
++    expect(storage.getItem(activeKey)).toBe('false')
++    expect(JSON.parse(storage.getItem(boundsKey)!)).toEqual(moved)
++
++    vi.resetModules()
++    const reloaded = await import('@/store/pet-overlay')
++
++    try {
++      open.mockClear()
++      reloaded.restorePetOverlay()
++      expect(open).not.toHaveBeenCalled()
++      reloaded.popOutPet(anchor)
++      expect(open).toHaveBeenCalledExactlyOnceWith({ bounds: moved, screen: true })
++      expect(storage.getItem(activeKey)).toBe('true')
++      const regularPreview = (await import('./plugin')).createPluginContext('popped-out-pet').pet
++
++      const { setPetInfo: setReloadedPetInfo } = await import('@/store/pet')
++
++      setReloadedPetInfo({ enabled: true, spritesheetBase64: 'owned-fixture' })
++      const shared = regularPreview.previewCharacters!(anchor)!
++
++      shared.dispose()
++      expect(storage.getItem(activeKey)).toBe('true')
++      expect(reloaded.$petOverlayActive.get()).toBe(true)
++    } finally {
++      reloaded.popInPet()
++    }
++  } finally {
++    preview.dispose()
++
++    if (savedBounds === null) {storage.removeItem(boundsKey)}
++    else {storage.setItem(boundsKey, savedBounds)}
++  }
++})
 diff --git a/apps/desktop/src/contrib/plugin.ts b/apps/desktop/src/contrib/plugin.ts
-index d487729ac19e2c5d823d0437d4882b3400114822..d55ea9c3eb031306f2dbbbb806498cd02b328fb5 100644
+index d487729ac19e2c5d823d0437d4882b3400114822..e6c7969f1fa5540a4a4b4b651d5b225049a2cffc 100644
 --- a/apps/desktop/src/contrib/plugin.ts
 +++ b/apps/desktop/src/contrib/plugin.ts
 @@ -28,2 +28,4 @@ import { dispatchPluginNativeNotification, type PluginNativeNotificationInput }
@@ -27750,7 +27808,7 @@ index d487729ac19e2c5d823d0437d4882b3400114822..d55ea9c3eb031306f2dbbbb806498cd0
 +          if (current && !alreadyOpen) {popInPet()}
 +        }
 +      }
-+      popOutPet(anchor)
++      popOutPet(anchor, { restoreOnLaunch: false })
 +
 +      return preview
 +    },
@@ -44459,7 +44517,7 @@ index 0000000000000000000000000000000000000000..792bc0807cad0336f893711441d3b392
 +  }
 +}
 diff --git a/apps/desktop/src/store/pet-overlay.ts b/apps/desktop/src/store/pet-overlay.ts
-index d47f67023fb8b820d6f6cbd455562a591600413b..8358fad1146522aadb00b7b2d69ce63b1e3f1503 100644
+index d47f67023fb8b820d6f6cbd455562a591600413b..05d25b99196de96b29b0af97d0de13371130d664 100644
 --- a/apps/desktop/src/store/pet-overlay.ts
 +++ b/apps/desktop/src/store/pet-overlay.ts
 @@ -5,2 +5,3 @@ import { persistBoolean, persistString, storedBoolean, storedString } from '@/li
@@ -44482,7 +44540,13 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..8358fad1146522aadb00b7b2d69ce63b
 +  | { type: 'character-output-file'; id: string; request: number }
 +  | { type: 'character-output-link'; id: string; request: number; index: number }
    | { type: 'submit'; text: string }
-@@ -132,5 +143,5 @@ const OVERLAY_MIN_H = 300
+@@ -71,5 +82,2 @@ export const $petOverlayActive = atom(storedBoolean(OVERLAY_ACTIVE_KEY, false))
+
+-// Persist the in/out choice so a popped-out pet comes back popped out.
+-$petOverlayActive.subscribe(active => persistBoolean(OVERLAY_ACTIVE_KEY, active))
+-
+ /**
+@@ -132,5 +140,5 @@ const OVERLAY_MIN_H = 300
   */
 -export function overlayWindowSize(frameW: number, frameH: number, scale: number): { width: number; height: number } {
 +export function overlayWindowSize(frameW: number, frameH: number, scale: number, characterCount = 0): { width: number; height: number } {
@@ -44490,18 +44554,50 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..8358fad1146522aadb00b7b2d69ce63b
 -    width: Math.max(OVERLAY_MIN_W, Math.round(frameW * scale + OVERLAY_PAD_X)),
 +    width: Math.max(OVERLAY_MIN_W, Math.round(frameW * scale + OVERLAY_PAD_X), Math.min(5, characterCount) * 120 + 32),
      height: Math.max(OVERLAY_MIN_H, Math.round(frameH * scale + OVERLAY_PAD_Y))
-@@ -153,3 +164,4 @@ function currentPayload(): PetOverlayStatePayload {
+@@ -153,3 +161,4 @@ function currentPayload(): PetOverlayStatePayload {
      reaction: $petReaction.get(),
 -    pluginMessages: $petPluginMessages.get()
 +    pluginMessages: $petPluginMessages.get(),
 +    characterPreview: $petCharacterPreview.get()
    }
-@@ -191,3 +203,4 @@ function openOverlay(request: PetOverlayOpenRequest): void {
+@@ -166,3 +175,3 @@ function pushNow(): void {
+  */
+-function openOverlay(request: PetOverlayOpenRequest): void {
++function openOverlay(request: PetOverlayOpenRequest, restoreOnLaunch = true): void {
+   const api = window.hermesDesktop?.petOverlay
+@@ -173,2 +182,3 @@ function openOverlay(request: PetOverlayOpenRequest): void {
+
++  persistBoolean(OVERLAY_ACTIVE_KEY, restoreOnLaunch)
+   $petOverlayActive.set(true)
+@@ -191,3 +201,4 @@ function openOverlay(request: PetOverlayOpenRequest): void {
      $petReaction.subscribe(pushNow),
 -    $petPluginMessages.subscribe(pushNow)
 +    $petPluginMessages.subscribe(pushNow),
 +    $petCharacterPreview.subscribe(pushNow)
    ]
+@@ -201,3 +212,3 @@ function openOverlay(request: PetOverlayOpenRequest): void {
+  */
+-export function popOutPet(petRect: PetOverlayBounds): void {
++export function popOutPet(petRect: PetOverlayBounds, { restoreOnLaunch = true } = {}): void {
+   if ($petOverlayActive.get() || stateUnsubs.length) {
+@@ -209,3 +220,3 @@ export function popOutPet(petRect: PetOverlayBounds): void {
+   if (saved) {
+-    openOverlay({ bounds: saved, screen: true })
++    openOverlay({ bounds: saved, screen: true }, restoreOnLaunch)
+
+@@ -221,3 +232,3 @@ export function popOutPet(petRect: PetOverlayBounds): void {
+
+-  openOverlay({ bounds: { height, width, x, y }, screen: false })
++  openOverlay({ bounds: { height, width, x, y }, screen: false }, restoreOnLaunch)
+ }
+@@ -237,2 +248,3 @@ export function restorePetOverlay(): void {
+   if (!saved) {
++    persistBoolean(OVERLAY_ACTIVE_KEY, false)
+     $petOverlayActive.set(false)
+@@ -252,2 +264,3 @@ export function popInPet(): void {
+   stateUnsubs = []
++  persistBoolean(OVERLAY_ACTIVE_KEY, false)
+   $petOverlayActive.set(false)
 @@ -282,4 +295,49 @@ export function initPetOverlayBridge(): () => void {
 
 +  let activeOutput: { id: string; request: number; canOpen?: true; opened?: true; fileToken?: string; stop?: () => Promise<WorkerStopStatus> } | null = null

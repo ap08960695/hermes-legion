@@ -367,6 +367,10 @@ saves the final position through the existing overlay bounds route. Tapping
 the grip leaves the composer closed. Arrow keys nudge the overlay when
 the grip has focus. The guarded Local Mac drag confirmed native movement,
 one final bounds message, passive click-through and output after the drop.
+If Show bot characters opened the window, the preview stays opt-in at
+the next launch. The saved desktop position is used the next time the
+preview opens. A mascot that was already popped out still restores on
+launch.
 
 Right-click or Control-click an actionable caption to see Output actions.
 Preview latest output displays the reply already read for that selection.
