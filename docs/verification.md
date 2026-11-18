@@ -192,6 +192,36 @@ sessions still need measurements.
 The 60-second Local gate recorded zero Desktop SSH links. At most
 four Hermes processes ran and all stopped. No Hermes model ran.
 
+# Reuse assigned pet atlases from the main renderer
+
+The main renderer sends an assigned atlas when it first publishes the
+actor, when the atlas changes, and when the overlay reloads. Routine
+updates reference the last accepted atlas for that actor. Electron
+resolves references only within the sending frame and clears that state
+when the preview closes.
+
+Source tests cover changed art, mismatched actor and version, a foreign
+frame, preview retirement, and full delivery after ready. The existing
+full-snapshot and output paths also pass.
+
+In the packaged Mac Local run, all five distinct pets moved. Each of
+three routine five-pet updates sent zero assigned atlas bytes from the
+main renderer. Reloading sent 2,392,032 base64 bytes and all five pets
+painted again. The count covers assigned atlas data and excludes the
+rest of the IPC message.
+
+| Added over the first minimized preview-off sample | Previous run | With atlas references |
+| --- | ---: | ---: |
+| CPU, percentage points of one core | 2.42 | 3.29 |
+| Physical footprint | 144.3 MiB | 142.9 MiB |
+| RSS | 284.1 MiB | 271.4 MiB |
+
+After closing, the final off sample averaged 7.8 MiB more footprint
+than first off. One sequence per build captures the range of observed
+changes. The active preview still exceeded all three budgets. The
+60-second Local gate recorded zero Desktop SSH links and all trial
+processes stopped.
+
 # Pass task and report cues after Mac desktop pets land
 
 A new worker can enter from outside the screen. The folder cue now
