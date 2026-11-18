@@ -1,3 +1,23 @@
+# Reuse installed atlases in the desktop overlay
+
+Electron sends an assigned atlas to the overlay on first use or change.
+Later updates and output replies reference the delivered version.
+The overlay matches the actor and version before reusing bytes. A
+fresh overlay document gets full bytes through the ready handshake.
+
+Three packaged Mac Local runs used the same six generated pack hashes.
+The two baseline samples each sent 28.8 MiB of atlas text across four
+steady five-pet refreshes. The candidate sent zero atlas bytes during
+those refreshes. Mean physical footprint of the overlay renderer was
+164.6 and 163.9 MiB before and 145.4 MiB after. All six pets reappeared
+when the overlay reloaded, and four-corner dragging passed on one
+display. No Desktop SSH links opened or test processes survived.
+
+Overall five-pet overhead in the candidate was 144.5 MiB and 2.92
+CPU points of one core. Both were within the spread of the baseline
+runs and remain above the release targets. The sample windows were
+25 seconds with isolated activity and in-process GPU and networking.
+
 # Create six packs from generated art
 
 Six original generated characters passed the public creator workflow.
