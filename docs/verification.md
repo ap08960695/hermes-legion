@@ -1,3 +1,26 @@
+# Compare resident character sprite sheets
+
+Seven fresh isolated Electron runs used the same production renderer.
+Two opposite-order passes compared five full sheets, five equally sized
+sheets with transparent unused rows, and five one-row running strips.
+The running pixels, canvas dimensions, 2× viewport, and frame cadence
+matched. Each run sampled 20 seconds after an 18-second warmup. The
+figures below compare each variant's two-run midpoint with the
+no-overlay baseline.
+
+| Source | Added physical footprint | Added CPU points of one core |
+|---|---:|---:|
+| Full sheets | 108.0 MiB | 2.41 |
+| Transparent unused rows | 108.2 MiB | 2.93 |
+| Running strips | 71.3 MiB | 2.43 |
+
+The renderer produced matching SHA-256 hashes for all six frames of
+each of the five canvases. The lower footprint with strips measures
+the end-to-end effect of smaller source images. The trial leaves
+allocation-level attribution and state-transition behavior open.
+Every run recorded zero Desktop SSH at 60 seconds and no surviving
+processes.
+
 # Keep the Markdown vendor chunk off the overlay boot path
 
 The built overlay entry reached the entire Markdown vendor chunk through

@@ -324,6 +324,14 @@ The candidate added 79.5 MiB and 2.96 CPU points over no overlay. Keep the
 full-sheet path for now. The release budget still needs a change that reduces
 rendering cost without losing movement or click-through.
 
+A later Mac comparison fed pre-encoded running strips to the current
+renderer. The strips saved 38.6 and 34.8 MiB in the two paired runs.
+Full-size sheets with transparent unused rows had little effect by
+comparison. The strips added 71.3 MiB and 2.43 CPU points
+over no overlay. Treat these strips as a running-state fixture. A
+product approach still needs state transitions and the CPU gate.
+[Measurement method](verification.md#compare-resident-character-sprite-sheets).
+
 A follow-up Mac run measured 111.6 MiB and 2.81 CPU points of five-pack
 overhead before tracing. About 1.51 CPU points came from the overlay
 renderer and 1.29 from the main process, which hosted Chromium's GPU
