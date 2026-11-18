@@ -349,6 +349,12 @@ added 109.9–112.6 MiB and 2.67–3.00 CPU points over no overlay.
 The shared full-sheet renderer missed the resource gate. It also missed the CPU headroom needed for the earlier active-row decode cost. The product still uses separate canvases.
 Keep the tested canvas path and target atlas residency and drawing cadence separately.
 
+A Mac comparison kept the canvas sizes and full atlas residency fixed while
+drawing only the visible region of each frame. The fixture drew 8,320 of
+39,936 source pixels per frame and matched full-frame RGBA through 55
+transitions in each tight run. This added 113.6–114.5 MiB and
+2.57–2.61 CPU points over no overlay. The tighter-paint prototype exceeded the resource budget. Keep full-frame painting.
+
 The [cross-panel regression](verification.md#edit-profile-to-monitor-character-handoff-unreleased)
 verifies that the saved character reaches Monitor after a roster reload, even
 with the optimistic metadata cache cleared. The isolated Mac walkthrough
