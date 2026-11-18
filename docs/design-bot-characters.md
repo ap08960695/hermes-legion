@@ -362,6 +362,12 @@ remain click-through, and a guarded Local Mac check confirmed moving from
 an output button to a passive caption restores click-through. The matching
 saved output still opens with one click on its caption.
 
+The character overlay has one Move grip. Dragging it moves the group and
+saves the final position through the existing overlay bounds route. Tapping
+the grip leaves the composer closed. Arrow keys nudge the overlay when
+the grip has focus. The guarded Local Mac drag confirmed native movement,
+one final bounds message, passive click-through and output after the drop.
+
 The [cross-panel regression](verification.md#edit-profile-to-monitor-character-handoff-unreleased)
 verifies that the saved character reaches Monitor after a roster reload, even
 with the optimistic metadata cache cleared. The isolated Mac walkthrough
