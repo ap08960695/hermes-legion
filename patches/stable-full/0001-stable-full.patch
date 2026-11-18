@@ -54946,15 +54946,31 @@ index 0000000000000000000000000000000000000000..cb9ea9091065e5dab2aa9530863b9a56
 +        raise SystemExit(1)
 +    print(json.dumps(result, indent=2))
 diff --git a/hermes_cli/gateway_runtime.py b/hermes_cli/gateway_runtime.py
-index 818ace3cc7ab9828ef87b4227ec6866648c182f5..da37bb5008d02d77a1156781628e6961da14a9bf 100644
+index 818ace3cc7ab9828ef87b4227ec6866648c182f5..2d7695e43b17f6b9a9be966f92b3a1f36003fbb6 100644
 --- a/hermes_cli/gateway_runtime.py
 +++ b/hermes_cli/gateway_runtime.py
-@@ -212,3 +212,3 @@ def _served_by_multiplexer(home: Path, *, timeout: float) -> GatewayDiscovery |
+@@ -208,2 +208,15 @@ def _refused_owner_verdict(exc: PermissionError) -> GatewayDiscovery | None:
+
++def _missing_owner_verdict(home: Path) -> GatewayDiscovery:
++    from hermes_cli.gateway_runtime_discovery import missing_owner_state
++
++    state = missing_owner_state(home)
++    if state != "inaccessible":
++        return GatewayDiscovery(state)
++    if os.name != "nt":
++        from gateway.runtime_ownership import unreadable_lock_recovery
++        if detail := unreadable_lock_recovery(home / "gateway.lock"):
++            return GatewayDiscovery(state, reason_code="foreign_stale_lock", detail=detail)
++    return GatewayDiscovery(state, reason_code="runtime_lock_inaccessible")
++
++
+ def _served_by_multiplexer(home: Path, *, timeout: float) -> GatewayDiscovery | None:
+@@ -212,3 +225,3 @@ def _served_by_multiplexer(home: Path, *, timeout: float) -> GatewayDiscovery |
      multiplexer's live descriptor proves service; a held ``gateway.lock`` alone does not."""
 -    from hermes_cli.gateway_runtime_discovery import DiscoveryError, query_identify
 +    from hermes_cli.gateway_runtime_discovery import query_identify
      from hermes_cli.gateway_runtime_multiplex import multiplexer_root_for
-@@ -219,16 +219,12 @@ def _served_by_multiplexer(home: Path, *, timeout: float) -> GatewayDiscovery |
+@@ -219,16 +232,16 @@ def _served_by_multiplexer(home: Path, *, timeout: float) -> GatewayDiscovery |
          payload = query_identify(root, timeout=timeout)
 -    except PermissionError as exc:
 -        # The multiplexer's pipe proved the boundary: name it for the secondary too (#140706), unless
@@ -54962,25 +54978,33 @@ index 818ace3cc7ab9828ef87b4227ec6866648c182f5..da37bb5008d02d77a1156781628e6961
 -        # other refusal is "not served" before a config is read, as on POSIX, where none is proven.
 -        named = _refused_owner_verdict(exc)
 -        if named is None:
--            return None
++    except (FileNotFoundError, ConnectionRefusedError):
++        owner = _missing_owner_verdict(root)
++        if owner.state != "inaccessible":
+             return None
 -        from hermes_cli.gateway_multiplex_mode import host_serves_named_profile
 -        if host_serves_named_profile(root, home) is False:
--            return None
--        return named
--    except (FileNotFoundError, ConnectionRefusedError, TimeoutError, DiscoveryError,
--            OSError, ValueError, TypeError):
-+    except (FileNotFoundError, ConnectionRefusedError):
-         return None
++        from hermes_cli.profiles import profile_is_standalone
++        return None if profile_is_standalone(home) else owner
 +    except (OSError, ValueError, TypeError) as exc:
 +        # An uncertain host probe is only irrelevant to a deliberately standalone profile.
 +        from hermes_cli.profiles import profile_is_standalone
 +        if profile_is_standalone(home):
-+            return None
+             return None
+-        return named
+-    except (FileNotFoundError, ConnectionRefusedError, TimeoutError, DiscoveryError,
+-            OSError, ValueError, TypeError):
+-        return None
 +        if isinstance(exc, PermissionError):
 +            return _refused_owner_verdict(exc) or _refused(root)
 +        raise
      result = _endpoint(payload, home, control_home=root)
-@@ -300,13 +296,8 @@ def discover_gateway_endpoint(profile_home: str | Path, *, timeout: float = 2.0)
+@@ -294,3 +307,3 @@ def discover_gateway_endpoint(profile_home: str | Path, *, timeout: float = 2.0)
+     """
+-    from hermes_cli.gateway_runtime_discovery import DiscoveryError, missing_owner_state, query_identify
++    from hermes_cli.gateway_runtime_discovery import DiscoveryError, query_identify
+
+@@ -300,13 +313,8 @@ def discover_gateway_endpoint(profile_home: str | Path, *, timeout: float = 2.0)
      try:
 -        return _endpoint(query_identify(home, timeout=timeout), home)
 -    except (FileNotFoundError, ConnectionRefusedError):
@@ -55000,14 +55024,9 @@ index 818ace3cc7ab9828ef87b4227ec6866648c182f5..da37bb5008d02d77a1156781628e6961
 +            if served is not None:
 +                return served
      except TimeoutError:
-@@ -322,2 +313,8 @@ def discover_gateway_endpoint(profile_home: str | Path, *, timeout: float = 2.0)
+@@ -322,2 +330,3 @@ def discover_gateway_endpoint(profile_home: str | Path, *, timeout: float = 2.0)
          return GatewayDiscovery("inaccessible", reason_code="invalid_control_peer")
-+    state = missing_owner_state(home)
-+    if state == "inaccessible" and os.name != "nt":
-+        from gateway.runtime_ownership import unreadable_lock_recovery
-+        if detail := unreadable_lock_recovery(home / "gateway.lock"):
-+            return GatewayDiscovery(state, reason_code="foreign_stale_lock", detail=detail)
-+    return GatewayDiscovery(state)
++    return _missing_owner_verdict(home)
 
 diff --git a/hermes_cli/goal_command.py b/hermes_cli/goal_command.py
 index 0c19ebf3641b5e809a20f999988c19a38428881d..cc59114db3a89152e24266ed1cfc7596de919e8f 100644
@@ -84491,10 +84510,10 @@ index c4e4080046e70116f98165e92debbe3e98ecfeec..999318a1677ce3f47db910ca86c84915
 +    monkeypatch.setattr(profiles, "_get_wrapper_dir", lambda: tmp_path / "wrappers")
      (tmp_path / "profiles" / "beta").mkdir(parents=True)
 diff --git a/tests/hermes_cli/test_gateway_runtime_ensure.py b/tests/hermes_cli/test_gateway_runtime_ensure.py
-index 8eefb2f03f6b1714ecb3f9b19e130c686de03b47..9a1254e1a5fcc9a1c0b76eecebe7e7348147ddc4 100644
+index 8eefb2f03f6b1714ecb3f9b19e130c686de03b47..80a7fc4ee8daf15a93590fe430fa2385c55ebf7a 100644
 --- a/tests/hermes_cli/test_gateway_runtime_ensure.py
 +++ b/tests/hermes_cli/test_gateway_runtime_ensure.py
-@@ -372,2 +372,56 @@ def test_unmanaged_root_home_child_ignores_sticky_active_profile(tmp_path, monke
+@@ -372,2 +372,97 @@ def test_unmanaged_root_home_child_ignores_sticky_active_profile(tmp_path, monke
 
 +@pytest.mark.parametrize("named", [False, True])
 +@pytest.mark.parametrize("probe_error,reason", [
@@ -84550,14 +84569,55 @@ index 8eefb2f03f6b1714ecb3f9b19e130c686de03b47..9a1254e1a5fcc9a1c0b76eecebe7e734
 +    assert str(control.resolve()) in (result.detail or "")
 +
 +
++@pytest.mark.platforms("linux", "macos")
++@pytest.mark.parametrize("case", ["default", "named", "appears_before_start", "standalone", "absent"])
++def test_ensure_checks_host_lock_when_the_host_has_no_socket(tmp_path, monkeypatch, case):
++    from hermes_cli import gateway_runtime as runtime, gateway_runtime_service as service, gateway_runtime_start as start
++
++    root = tmp_path / ".hermes"
++    home = root if case == "default" else root / "profiles" / "alpha"
++    home.mkdir(parents=True, mode=0o700)
++    lock = root / "gateway.lock"
++    if case in {"default", "named", "standalone"}:
++        lock.mkdir()
++    if case == "standalone":
++        (home / "config.yaml").write_text("gateway: {standalone: true}\n", encoding="utf-8")
++    spawned = []
++    looked_up = []
++
++    def lookup(target, **kwargs):
++        looked_up.append(target)
++        if case == "appears_before_start":
++            lock.mkdir(exist_ok=True)
++        return None
++
++    def spawn(target, **kwargs):
++        spawned.append(target)
++        raise TimeoutError
++
++    monkeypatch.setattr(service, "discover_existing_gateway_service", lookup)
++    monkeypatch.setattr(start, "spawn_unmanaged_gateway", spawn)
++    result = runtime.ensure_gateway_runtime(home, timeout=0.5)
++
++    if case in {"standalone", "absent"}:
++        target = home if case == "standalone" else root
++        assert (result.state, result.reason_code) == ("starting", "deadline")
++        assert spawned == [target]
++    else:
++        assert spawned == []
++        assert (result.state, result.reason_code) == ("inaccessible", "runtime_lock_inaccessible")
++        assert looked_up == ([home, root] if case == "appears_before_start" else [])
++        assert lock.is_dir()
++
++
  @pytest.mark.parametrize("standalone", [False, True])
-@@ -375,3 +429,4 @@ def test_named_profile_without_multiplex_evidence_starts_the_host_gateway(tmp_pa
+@@ -375,3 +470,4 @@ def test_named_profile_without_multiplex_evidence_starts_the_host_gateway(tmp_pa
      """`gateway run` refuses a profiles/<name> home a gateway of its own, so ensure must start the host."""
 -    from hermes_cli import gateway_runtime as runtime, gateway_runtime_service as service, gateway_runtime_start as start
 +    from hermes_cli import gateway_runtime as runtime, gateway_runtime_discovery as discovery
 +    from hermes_cli import gateway_runtime_service as service, gateway_runtime_start as start
 
-@@ -382,4 +437,9 @@ def test_named_profile_without_multiplex_evidence_starts_the_host_gateway(tmp_pa
+@@ -382,4 +478,9 @@ def test_named_profile_without_multiplex_evidence_starts_the_host_gateway(tmp_pa
          (home / "config.yaml").write_text("gateway:\n  standalone: true\n", encoding="utf-8")
 +    def identify(path, *, timeout):
 +        if standalone and path == root:

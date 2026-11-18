@@ -16,6 +16,21 @@ The three changed patch sections applied and reversed with matching
 hashes against the pinned source. The intermittent Desktop duplicate
 and simultaneous cold starts after confirmed absence still need proof.
 
+A missing root socket also requires a usable ownership lock. Named
+Local startup now reports an inaccessible root lock before looking
+up a service or spawning a gateway. The same check runs again just
+before startup. An explicitly standalone profile still starts
+independently, and the existing foreign-lock recovery hint survives.
+
+Two named-profile fixtures previously requested a launch with an
+unsafe root lock. One introduced the lock after service lookup
+began. The fixed fixtures requested zero launches. The isolated Mac
+CLI returned `runtime_lock_inaccessible` and exit 7 for both the
+default and named profiles. The focused suite passed 70 tests with
+11 skips. Both changed patch sections applied and reversed with
+matching pinned-base hashes. This covers lock uncertainty before
+launch. Simultaneous starts after confirmed absence remain open.
+
 # Celebrate a saved worker completion on Mac desktop
 
 A fresh saved worker completion uses the current pack's jumping row
