@@ -1,3 +1,28 @@
+# Batch Mac desktop pet paints on the walk clock
+
+Mac desktop pets update sprite frames and walk positions on the same
+100 ms clock. Each canvas paints only when its visible frame changes.
+Elapsed time keeps the atlas loop on pace. Fast sheets can display up
+to 10 frames per second in this overlay. The canvas keeps its Retina
+backing size and alpha hit testing. Reduced motion still draws a static pose.
+
+Two packaged Local runs used the same Electron main binary, five
+moving pets, sprite sheet, Local roster fixture, and display geometry.
+Hermes was minimized for the 30-second preview-off and 40-second
+preview-on samples. GPU and networking ran in-process.
+
+| Five-pet overhead | Before | After |
+| --- | ---: | ---: |
+| CPU, percentage points of one core | 2.45 | 1.92 |
+| Mean physical footprint | 64.9 MiB | 64.1 MiB |
+
+The regression exercises five canvases with one clock, no per-sprite
+wakeups, a delayed tick, and hidden-document pause. Both packaged
+runs passed four-corner drag, latest output, and a single saved-report
+cue. Local60 found zero Desktop SSH links. All test processes stopped.
+These figures reflect one paired run on a single display. The default
+GPU-process configuration and longer sessions remain open.
+
 # Show a desktop pet deliver a saved report
 
 On Mac, a pet carrying a newly completed report passes a short,

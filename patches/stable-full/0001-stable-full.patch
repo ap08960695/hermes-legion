@@ -22644,12 +22644,12 @@ index de446bdb6a589e02ff3634ae483fe46d4a108ff2..447b3cacb7b6af2b6d1aca49f9487795
   *
 diff --git a/apps/desktop/src/app/pet-overlay/pet-characters.tsx b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..35dbee38a777ee8f1791183fffbb83f465c50887
+index 0000000000000000000000000000000000000000..6e406efb6855b1ddfe846d3c184845dcf0fee551
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
-@@ -0,0 +1,523 @@
+@@ -0,0 +1,532 @@
 +import { AnimatePresence, motion, useIsPresent, useReducedMotion } from 'motion/react'
-+import { type CSSProperties, type RefObject, useEffect, useRef, useState } from 'react'
++import { type CSSProperties, useCallback, useEffect, useRef, useState } from 'react'
 +
 +import { DEFAULT_STATE_ROWS, PetSprite, roamWalkRow } from '@/components/pet/pet-sprite'
 +import { FileText, FolderOpen } from '@/lib/icons'
@@ -22700,7 +22700,7 @@ index 0000000000000000000000000000000000000000..35dbee38a777ee8f1791183fffbb83f4
 +type HandoffCue = { key: string; from: string; to: string; report: boolean; start: Point; end: Point }
 +const HANDOFF_WINDOW_MS = 15_000
 +type WalkDirection = -1 | 0 | 1
-+type WalkClock = { actors: Set<() => void>; timer: number | null }
++type SubscribeFrame = (draw: FrameRequestCallback) => () => void
 +
 +function fitDesktopPoint(desktop: PetCharacterDesktop, point: Point, width: number, height: number, cursor = point) {
 +  const distance = ({ x, y, width, height }: PetCharacterDesktop['areas'][number]) => {
@@ -22716,9 +22716,9 @@ index 0000000000000000000000000000000000000000..35dbee38a777ee8f1791183fffbb83f4
 +    y: Math.max(area.y, Math.min(area.y + area.height - height, point.y)), area }
 +}
 +
-+function Character({ actor, clock, desktop, foreground, info, slot, fromRight, reduced, open, onGrab, onHitTargetsChanged, onOutput }: {
++function Character({ actor, subscribeFrame, desktop, foreground, info, slot, fromRight, reduced, open, onGrab, onHitTargetsChanged, onOutput }: {
 +  actor: PetCharacter
-+  clock: RefObject<WalkClock>
++  subscribeFrame: SubscribeFrame
 +  desktop?: PetCharacterDesktop
 +  info: PetInfo
 +  slot: number
@@ -22777,7 +22777,6 @@ index 0000000000000000000000000000000000000000..35dbee38a777ee8f1791183fffbb83f4
 +    }
 +
 +    if (!walking) {return}
-+    const shared = clock.current
 +    const cycle = walkCycle.current
 +    let lastDirection: WalkDirection | undefined
 +    const outbound: WalkDirection = distance < 0 ? -1 : 1
@@ -22799,20 +22798,8 @@ index 0000000000000000000000000000000000000000..35dbee38a777ee8f1791183fffbb83f4
 +      }
 +    }
 +
-+    shared.actors.add(move)
-+    shared.timer ??= window.setInterval(() => {
-+      if (window.document.visibilityState === 'visible') {shared.actors.forEach(update => update())}
-+    }, 100)
-+
-+    return () => {
-+      shared.actors.delete(move)
-+
-+      if (!shared.actors.size && shared.timer !== null) {
-+        window.clearInterval(shared.timer)
-+        shared.timer = null
-+      }
-+    }
-+  }, [canWalk, clock, distance, walking])
++    return subscribeFrame(move)
++  }, [canWalk, distance, subscribeFrame, walking])
 +
 +  // eslint-disable-next-line no-restricted-syntax -- retire an imperative pointer capture when the actor leaves.
 +  useEffect(() => {
@@ -22951,8 +22938,8 @@ index 0000000000000000000000000000000000000000..35dbee38a777ee8f1791183fffbb83f4
 +        style={{ display: 'block', padding: 0, border: 0, background: 'transparent', pointerEvents: present ? 'auto' : 'none',
 +          cursor: held ? 'grabbing' : 'grab', touchAction: 'none', scaleX: walk.mirror ? -1 : 1, originY: 1 }}
 +        transition={{ duration: reduced ? 0 : 0.18, ease: 'easeOut' }} type="button">
-+        <PetSprite animate={present && !reduced} info={sheet} maxFps={15} rowOverride={walk.row}
-+          stateOverride={walking && direction !== 0 ? 'run' : actor.state} />
++        <PetSprite animate={present && !reduced} info={sheet} maxFps={15} rowOverride={walk.row} stateOverride={walking && direction !== 0 ? 'run' : actor.state}
++          subscribeFrame={desktop ? subscribeFrame : undefined} />
 +      </motion.button>
 +      {present && hint && !held && !open && actor.state === 'waiting' && <div role="tooltip"
 +        style={{ position: 'absolute', bottom: '100%', left: '50%', translate: '-50% 0',
@@ -22965,7 +22952,29 @@ index 0000000000000000000000000000000000000000..35dbee38a777ee8f1791183fffbb83f4
 +/** The overlay displays snapshots. Only the main renderer resolves output addresses. */
 +export function PetCharacters({ desktop, info, preview, paused, output, showActions, onHitTargetsChanged, onOutput, onPreview, onOpen, onOpenLink, onPreviewFile, onCopy, onViewFile, onBrokenImage, onStop }: PetCharactersProps) {
 +  const reduced = useReducedMotion()
-+  const walkClock = useRef<WalkClock>({ actors: new Set(), timer: null })
++  const frameClock = useRef<{ callbacks: Set<FrameRequestCallback>; timer: number | null }>({ callbacks: new Set(), timer: null })
++
++  const subscribeFrame = useCallback<SubscribeFrame>(draw => {
++    const clock = frameClock.current
++
++    clock.callbacks.add(draw)
++    clock.timer ??= window.setInterval(() => {
++      if (document.visibilityState !== 'visible') {return}
++      const now = performance.now()
++
++      clock.callbacks.forEach(update => update(now))
++    }, 100)
++
++    return () => {
++      clock.callbacks.delete(draw)
++
++      if (!clock.callbacks.size && clock.timer !== null) {
++        window.clearInterval(clock.timer)
++        clock.timer = null
++      }
++    }
++  }, [])
++
 +  const panelRef = useRef<HTMLDivElement>(null)
 +  const handoffClock = useRef({ since: 0, revision: 0, seen: new Map<string, number>() })
 +  const [cue, setCue] = useState<HandoffCue | null>(null)
@@ -23158,8 +23167,8 @@ index 0000000000000000000000000000000000000000..35dbee38a777ee8f1791183fffbb83f4
 +      </button>}
 +    </section>}
 +    <AnimatePresence>
-+      {actors.map((actor, index) => <Character actor={actor} clock={walkClock} desktop={desktop} foreground={actor.id === foreground} fromRight={actors.length - index - 1} info={info} key={actor.id} onGrab={setForeground} onHitTargetsChanged={onHitTargetsChanged} onOutput={onOutput}
-+        open={actor.id === outputActor?.id} reduced={reduced} slot={(index + 1) * 100 / (actors.length + 1)} />)}
++      {actors.map((actor, index) => <Character actor={actor} desktop={desktop} foreground={actor.id === foreground} fromRight={actors.length - index - 1} info={info} key={actor.id} onGrab={setForeground} onHitTargetsChanged={onHitTargetsChanged} onOutput={onOutput}
++        open={actor.id === outputActor?.id} reduced={reduced} slot={(index + 1) * 100 / (actors.length + 1)} subscribeFrame={subscribeFrame} />)}
 +    </AnimatePresence>
 +    {cue && !reduced && !output && <motion.span animate={{ x: cue.end.x - cue.start.x, y: cue.end.y - cue.start.y, opacity: [0, 1, 1, 0] }}
 +      aria-hidden="true" data-pet-handoff={cue.report ? 'report' : 'task'} initial={{ x: 0, y: 0, opacity: 0 }} key={cue.key}
@@ -28618,7 +28627,7 @@ index 64d8d4fcfba6a2fc30a68e0416bd0af72543cb76..d47d28d57ee7906997042d276c48a8ec
 +        zIndex: 45
        }}
 diff --git a/apps/desktop/src/components/pet/pet-sprite.test.tsx b/apps/desktop/src/components/pet/pet-sprite.test.tsx
-index f7e418de0684778cec8c96a9cb599ebb3b6ae5c6..d2b8665ac897d27d34539c9999b10b2e809d5ca8 100644
+index f7e418de0684778cec8c96a9cb599ebb3b6ae5c6..c0fa0f4d0ecd47ed7133a46c29e1c133b516da7d 100644
 --- a/apps/desktop/src/components/pet/pet-sprite.test.tsx
 +++ b/apps/desktop/src/components/pet/pet-sprite.test.tsx
 @@ -83,3 +83,3 @@ describe('PetSprite RAF scheduling', () => {
@@ -28626,7 +28635,7 @@ index f7e418de0684778cec8c96a9cb599ebb3b6ae5c6..d2b8665ac897d27d34539c9999b10b2e
 -    vi.spyOn(document, 'hasFocus').mockReturnValue(true)
 +    vi.spyOn(window.document, 'hasFocus').mockReturnValue(true)
      windowState = installWindowStateBridge()
-@@ -110,2 +110,90 @@ describe('PetSprite RAF scheduling', () => {
+@@ -110,2 +110,129 @@ describe('PetSprite RAF scheduling', () => {
 
 +  it('renders a static pose without animation timers and repaints a changed explicit state', () => {
 +    const raf = installRaf()
@@ -28716,40 +28725,106 @@ index f7e418de0684778cec8c96a9cb599ebb3b6ae5c6..d2b8665ac897d27d34539c9999b10b2e
 +    expect(raf.request).toHaveBeenCalledTimes(2)
 +  })
 +
++  it('batches five sprites on the supplied clock without per-sprite wakeups', () => {
++    const raf = installRaf()
++    const sprites = new Set<FrameRequestCallback>()
++
++    const subscribeFrame = (draw: FrameRequestCallback) => {
++      sprites.add(draw)
++
++      return () => {sprites.delete(draw)}
++    }
++
++    const info = { ...INFO, framesPerState: 4, loopMs: 400 }
++
++    mount.render(<>{Array.from({ length: 5 }, (_, index) =>
++      <PetSprite info={info} key={index} subscribeFrame={subscribeFrame} />)}</>)
++    expect(sprites.size).toBe(5)
++    expect(raf.request).not.toHaveBeenCalled()
++    expect(vi.getTimerCount()).toBe(0)
++
++    const tick = (now: number) => act(() => sprites.forEach(draw => draw(now)))
++
++    tick(100)
++    tick(150)
++    expect(drawImage).toHaveBeenCalledTimes(5)
++    tick(410)
++    expect(drawImage.mock.calls.slice(5).map(([, x]) => x)).toEqual(Array(5).fill(48))
++
++    act(() => {
++      setDocumentHidden(true)
++      document.dispatchEvent(new Event('visibilitychange'))
++    })
++    tick(510)
++    expect(drawImage).toHaveBeenCalledTimes(10)
++
++    mount.unmount()
++    expect(sprites.size).toBe(0)
++    expect(raf.request).not.toHaveBeenCalled()
++    expect(vi.getTimerCount()).toBe(0)
++  })
++
    it('sleeps between visible sprite frames instead of chaining RAFs', () => {
 diff --git a/apps/desktop/src/components/pet/pet-sprite.tsx b/apps/desktop/src/components/pet/pet-sprite.tsx
-index cd3436e3cc2daac40af3d0121de65d63cfa8f418..86f88b9e9ce790986b1c14c10671bbd19d6c70c9 100644
+index cd3436e3cc2daac40af3d0121de65d63cfa8f418..3f9345a201cd6562ab680841abeee105d510de88 100644
 --- a/apps/desktop/src/components/pet/pet-sprite.tsx
 +++ b/apps/desktop/src/components/pet/pet-sprite.tsx
-@@ -135,2 +135,6 @@ interface PetSpriteProps {
+@@ -135,2 +135,8 @@ interface PetSpriteProps {
    info: PetInfo
 +  /** Static pose for reduced motion; semantic state changes still repaint. */
 +  animate?: boolean
 +  /** Per-sprite ceiling for bounded multi-character previews. */
 +  maxFps?: number
++  /** Batch visible canvas updates with the overlay's walk clock. */
++  subscribeFrame?: (draw: FrameRequestCallback) => () => void
    /** Opt in to pausing on blur; visible pets animate by default. */
-@@ -160,3 +164,3 @@ interface PetSpriteProps {
+@@ -160,3 +166,3 @@ interface PetSpriteProps {
   */
 -function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUnfocused = false }: PetSpriteProps) {
-+function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUnfocused = false, animate = true, maxFps = Infinity }: PetSpriteProps) {
++function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUnfocused = false, animate = true, maxFps = Infinity, subscribeFrame }: PetSpriteProps) {
    const canvasRef = useRef<HTMLCanvasElement | null>(null)
-@@ -352,5 +356,5 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
+@@ -257,4 +263,6 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
+
++    const sharedClock = animate && subscribeFrame
++
+     const scheduleFrame = (delayMs = 0) => {
+-      if (stopped || rendererPaused() || raf !== 0 || wakeTimer !== 0) {
++      if (sharedClock || stopped || rendererPaused() || raf !== 0 || wakeTimer !== 0) {
+         return
+@@ -352,7 +360,11 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
        // differ; counts vary per row so derive the cadence here, not once.
 -      const stepMs = loopMs / count
 +      const stepMs = Math.max(loopMs / count, 1000 / maxFps)
 
 -      if (now - lastStep >= stepMs) {
-+      if (animate && now - lastStep >= stepMs) {
-         frame += 1
-@@ -380,3 +384,3 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
+-        frame += 1
+-        lastStep = now
++      const elapsed = now - lastStep
++
++      if (animate && elapsed >= stepMs) {
++        const advance = sharedClock ? Math.floor(elapsed / stepMs) : 1
++
++        frame += advance
++        lastStep = sharedClock ? lastStep + advance * stepMs : now
+       }
+@@ -380,3 +392,3 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
 
 -      scheduleFrame(Math.max(0, stepMs - (now - lastStep)))
 +      if (animate) {scheduleFrame(Math.max(0, stepMs - (now - lastStep)))}
      }
-@@ -402,3 +406,3 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
+@@ -392,2 +404,4 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
+     pauseController = createRendererLoopPauseController(handleVisibilityChange, { pauseWhenUnfocused })
++    const unsubscribeFrame = sharedClock ? sharedClock(render) : undefined
++
+     scheduleFrame()
+@@ -396,2 +410,3 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
+       stopped = true
++      unsubscribeFrame?.()
+       kickAnimationRef.current = () => undefined
+@@ -402,3 +417,3 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
      }
 -  }, [image, frameW, frameH, frames, framesByState, framesByRow, loopMs, backingW, backingH, rows, pauseWhenUnfocused])
-+  }, [image, frameW, frameH, frames, framesByState, framesByRow, loopMs, backingW, backingH, rows, pauseWhenUnfocused, animate, maxFps])
++  }, [image, frameW, frameH, frames, framesByState, framesByRow, loopMs, backingW, backingH, rows, pauseWhenUnfocused, animate, maxFps, subscribeFrame])
 
 diff --git a/apps/desktop/src/components/pet/roam-geometry.test.ts b/apps/desktop/src/components/pet/roam-geometry.test.ts
 index 0a882daa657707c4aad7cdd02f4edd17408a794a..5f6b52fecd8ed7a0a3a0264d949a9c2c737a1c73 100644
