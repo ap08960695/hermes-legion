@@ -10695,3 +10695,16 @@ The independent-process reservation proof was rerun with fake SSH.
 An unprivileged sshd configuration passed validation. The authenticated
 fixture stayed off because its server and master fork overlap could not
 be bounded to four processes. No trial processes survived.
+
+### Mac SSH-helper cleanup on transport EOF
+
+A disposable pipe drove the published SSH lease wrapper. With the
+guard, TERM-resistant helper and same-group child alive, the observer
+closed only the lease writer. Both workers recorded TERM. The real
+guard returned 124, and both worker PIDs and their group were absent
+1.036 seconds after EOF, before the 11-second deadline and before
+harness cleanup. A fresh request completed on the same lock inode.
+
+Peak sampled use was four processes including the observer and 70 MiB
+summed RSS. Outbound networking and SSH execution were denied. This
+proves the local pipe-loss path for owned same-group processes.
