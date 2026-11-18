@@ -25158,13 +25158,15 @@ index b4da7a42c45061d676c88b5b49f77b66aabcf4a7..dd0f767c20a1375503ad34189617448d
  
 diff --git a/apps/desktop/src/app/pet-overlay/linux-input-region.test.ts b/apps/desktop/src/app/pet-overlay/linux-input-region.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..9dc2ef20761d689ae516f25e66f639db0493b879
+index 0000000000000000000000000000000000000000..8172715f1b377ec71e3f22147b49521d00a87d59
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/linux-input-region.test.ts
-@@ -0,0 +1,20 @@
-+import { expect, it } from 'vitest'
+@@ -0,0 +1,90 @@
++import { expect, it, vi } from 'vitest'
 +
-+import { appendSpriteRegion } from './linux-input-region'
++import { markPetSpritePaint } from '@/lib/pet-sprite-paint'
++
++import { appendSpriteRegion, observeLinuxPetInput } from './linux-input-region'
 +
 +it('keeps transparent holes empty, merges repeated runs and honors mirror and clipping', () => {
 +  const viewport = { x: 0, y: 0, width: 10, height: 10 }
@@ -25182,12 +25184,82 @@ index 0000000000000000000000000000000000000000..9dc2ef20761d689ae516f25e66f639db
 +  appendSpriteRegion(clipped, { ...box, x: -2 }, pixels, viewport, true)
 +  expect(clipped).toEqual([1, 3, 1, 2])
 +})
++
++it('reuses painted pixels while moving but clears stale hits on repaint and backing reset', async () => {
++  const button = document.createElement('button')
++  const canvas = document.createElement('canvas')
++  button.dataset.petCaption = 'fixture'
++  button.style.opacity = '1'
++  button.append(canvas)
++  document.body.append(button)
++  canvas.width = 2
++  canvas.height = 1
++
++  let box = new DOMRect(2, 3, 2, 1)
++  vi.spyOn(canvas, 'getBoundingClientRect').mockImplementation(() => box)
++
++  const pixels = (left: number, right: number) => ({
++    data: Uint8ClampedArray.of(0, 0, 0, left, 0, 0, 0, right), width: 2, height: 1
++  })
++
++  const read = vi.fn().mockReturnValue(pixels(255, 0))
++  vi.spyOn(canvas, 'getContext').mockReturnValue({ getImageData: read } as unknown as CanvasRenderingContext2D)
++
++  let frame: FrameRequestCallback | undefined
++  vi.stubGlobal('requestAnimationFrame', (next: FrameRequestCallback) => {
++    frame = next
++
++    return 1
++  })
++  const cancel = vi.fn()
++  vi.stubGlobal('cancelAnimationFrame', cancel)
++  vi.stubGlobal('devicePixelRatio', 1)
++  const send = vi.fn()
++  const stop = observeLinuxPetInput(send)
++
++  try {
++    markPetSpritePaint(canvas)
++    frame!(0)
++    expect(send).toHaveBeenLastCalledWith([2, 3, 1, 1])
++    box = new DOMRect(8, 3, 2, 1)
++    button.setAttribute('data-pet-mirrored', '')
++    frame!(33)
++    expect(send).toHaveBeenLastCalledWith([9, 3, 1, 1])
++    expect(read).toHaveBeenCalledTimes(1)
++
++    read.mockReturnValue(pixels(0, 255))
++    markPetSpritePaint(canvas)
++    frame!(66)
++    expect(send).toHaveBeenLastCalledWith([8, 3, 1, 1])
++    expect(read).toHaveBeenCalledTimes(2)
++
++    canvas.width = 2
++    read.mockImplementationOnce(() => {throw new Error('Unreadable frame')}).mockReturnValue(pixels(255, 0))
++    await Promise.resolve()
++    frame!(99)
++    expect(send).toHaveBeenLastCalledWith([])
++    expect(read).toHaveBeenCalledTimes(3)
++    frame!(132)
++    expect(send).toHaveBeenLastCalledWith([9, 3, 1, 1])
++    expect(read).toHaveBeenCalledTimes(4)
++  } finally {
++    stop()
++    button.remove()
++    vi.unstubAllGlobals()
++    vi.restoreAllMocks()
++  }
++
++  expect(cancel).toHaveBeenCalledWith(1)
++  expect(send).toHaveBeenLastCalledWith([])
++})
 diff --git a/apps/desktop/src/app/pet-overlay/linux-input-region.ts b/apps/desktop/src/app/pet-overlay/linux-input-region.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..d4f3cccbcb430beea9da42cd7ed3d507d967d8a0
+index 0000000000000000000000000000000000000000..a31b903b163312c350138e4660d6719c73fdbe85
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/linux-input-region.ts
-@@ -0,0 +1,114 @@
+@@ -0,0 +1,142 @@
++import { petSpritePaintVersion } from '@/lib/pet-sprite-paint'
++
 +// X11 needs a window-local input region: forwarding mouse moves through an
 +// ignoring overlay is unavailable. Keep this sampling off the Mac renderer.
 +const MAX_RECTS = 4096
@@ -25237,7 +25309,7 @@ index 0000000000000000000000000000000000000000..d4f3cccbcb430beea9da42cd7ed3d507
 +  }
 +}
 +
-+function inputRegion(): number[] {
++function inputRegion(readPixels: (canvas: HTMLCanvasElement) => ImageData | undefined): number[] {
 +  const dpr = window.devicePixelRatio
 +  const viewport = { x: 0, y: 0, width: Math.min(32767, Math.round(window.innerWidth * dpr)),
 +    height: Math.min(32767, Math.round(window.innerHeight * dpr)) }
@@ -25265,13 +25337,11 @@ index 0000000000000000000000000000000000000000..d4f3cccbcb430beea9da42cd7ed3d507
 +    const box = deviceBox(canvas)
 +
 +    if (!button || !box.width || !box.height || Number(getComputedStyle(button).opacity) < 0.06) {continue}
-+    const context = canvas.getContext('2d')
 +
 +    try {
-+      if (context) {
-+        appendSpriteRegion(regions, box, context.getImageData(0, 0, canvas.width, canvas.height),
-+          viewport, button.hasAttribute('data-pet-mirrored'))
-+      }
++      const pixels = readPixels(canvas)
++
++      if (pixels) {appendSpriteRegion(regions, box, pixels, viewport, button.hasAttribute('data-pet-mirrored'))}
 +    } catch {
 +      // A canvas without readable pixels contributes no input.
 +    }
@@ -25284,12 +25354,39 @@ index 0000000000000000000000000000000000000000..d4f3cccbcb430beea9da42cd7ed3d507
 +  let previous: number[] = []
 +  let frame = 0
 +  let lastTime = -Infinity
++  const readbacks = new WeakMap<HTMLCanvasElement, { version: number; pixels: ImageData }>()
++
++  const backingChanges = new MutationObserver(records => {
++    for (const { target } of records) {
++      if (target instanceof HTMLCanvasElement) {readbacks.delete(target)}
++    }
++  })
++
++  // Assigning the same width or height also clears the backing store.
++  backingChanges.observe(document.documentElement, { subtree: true, attributeFilter: ['width', 'height'] })
++
++  const readPixels = (canvas: HTMLCanvasElement) => {
++    const { width, height } = canvas
++    const version = petSpritePaintVersion(canvas)
++    const cached = readbacks.get(canvas)
++
++    if (cached && cached.version === version && cached.pixels.width === width && cached.pixels.height === height) {
++      return cached.pixels
++    }
++
++    const pixels = canvas.getContext('2d')?.getImageData(0, 0, width, height)
++
++    if (pixels && version !== undefined) {readbacks.set(canvas, { version, pixels })}
++
++    return pixels
++  }
 +
 +  const update = (time: number) => {
 +    frame = requestAnimationFrame(update)
 +    if (time - lastTime < 32) {return}
 +    lastTime = time
-+    const regions = inputRegion()
++
++    const regions = inputRegion(readPixels)
 +
 +    if (regions.length === previous.length && regions.every((part, i) => part === previous[i])) {return}
 +    previous = regions
@@ -25299,6 +25396,7 @@ index 0000000000000000000000000000000000000000..d4f3cccbcb430beea9da42cd7ed3d507
 +
 +  return () => {
 +    cancelAnimationFrame(frame)
++    backingChanges.disconnect()
 +    send([])
 +  }
 +}
@@ -32949,10 +33047,14 @@ index f7e418de0684778cec8c96a9cb599ebb3b6ae5c6..3739f34bf1ab552eb13d32217c95f7b5
 +
    it('sleeps between visible sprite frames instead of chaining RAFs', () => {
 diff --git a/apps/desktop/src/components/pet/pet-sprite.tsx b/apps/desktop/src/components/pet/pet-sprite.tsx
-index cd3436e3cc2daac40af3d0121de65d63cfa8f418..b1a65f5b1eb921065741dece8e2736ec0079c979 100644
+index cd3436e3cc2daac40af3d0121de65d63cfa8f418..b03a08d7568941ed522703fbe76cc5c23afa718e 100644
 --- a/apps/desktop/src/components/pet/pet-sprite.tsx
 +++ b/apps/desktop/src/components/pet/pet-sprite.tsx
-@@ -135,2 +135,10 @@ interface PetSpriteProps {
+@@ -2,2 +2,3 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react'
+
++import { markPetSpritePaint } from '@/lib/pet-sprite-paint'
+ import { createRendererLoopPauseController } from '@/lib/renderer-loop-pause'
+@@ -135,2 +136,10 @@ interface PetSpriteProps {
    info: PetInfo
 +  /** Static pose for reduced motion; semantic state changes still repaint. */
 +  animate?: boolean
@@ -32963,12 +33065,12 @@ index cd3436e3cc2daac40af3d0121de65d63cfa8f418..b1a65f5b1eb921065741dece8e2736ec
 +  /** Batch visible canvas updates with the overlay's walk clock. */
 +  subscribeFrame?: (draw: FrameRequestCallback) => () => void
    /** Opt in to pausing on blur; visible pets animate by default. */
-@@ -160,3 +168,3 @@ interface PetSpriteProps {
+@@ -160,3 +169,3 @@ interface PetSpriteProps {
   */
 -function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUnfocused = false }: PetSpriteProps) {
 +function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUnfocused = false, animate = true, playOnce = false, maxFps = Infinity, subscribeFrame }: PetSpriteProps) {
    const canvasRef = useRef<HTMLCanvasElement | null>(null)
-@@ -257,4 +265,12 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
+@@ -257,4 +266,12 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
 
 +    const sharedClock = animate && subscribeFrame
 +    let unsubscribeFrame: (() => void) | undefined
@@ -32982,17 +33084,17 @@ index cd3436e3cc2daac40af3d0121de65d63cfa8f418..b1a65f5b1eb921065741dece8e2736ec
 -      if (stopped || rendererPaused() || raf !== 0 || wakeTimer !== 0) {
 +      if (unsubscribeFrame || stopped || rendererPaused() || raf !== 0 || wakeTimer !== 0) {
          return
-@@ -287,2 +303,4 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
+@@ -287,2 +304,4 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
        if (rendererPaused()) {
 +        stopSharedFrame()
 +
          return
-@@ -345,3 +363,3 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
+@@ -345,3 +364,3 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
          activeCount = count
 -        frame = 0
 +        frame = playOnce && !animate ? count - 1 : 0
          lastStep = now
-@@ -352,10 +370,12 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
+@@ -352,10 +371,12 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
        // differ; counts vary per row so derive the cadence here, not once.
 -      const stepMs = loopMs / count
 +      const stepMs = Math.max(loopMs / count, 1000 / maxFps)
@@ -33011,7 +33113,11 @@ index cd3436e3cc2daac40af3d0121de65d63cfa8f418..b1a65f5b1eb921065741dece8e2736ec
 +        lastStep = sharedClock ? lastStep + advance * stepMs : now
 +      }
 
-@@ -380,3 +400,10 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
+@@ -370,2 +391,3 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
+         const sy = row * frameH
++        markPetSpritePaint(canvas)
+         ctx.clearRect(0, 0, canvas.width, canvas.height)
+@@ -380,3 +402,10 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
 
 -      scheduleFrame(Math.max(0, stepMs - (now - lastStep)))
 +      const hasMoreFrames = !playOnce || frame < count - 1
@@ -33023,18 +33129,18 @@ index cd3436e3cc2daac40af3d0121de65d63cfa8f418..b1a65f5b1eb921065741dece8e2736ec
 +        scheduleFrame(Math.max(0, stepMs - (now - lastStep)))
 +      }
      }
-@@ -392,3 +419,5 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
+@@ -392,3 +421,5 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
      pauseController = createRendererLoopPauseController(handleVisibilityChange, { pauseWhenUnfocused })
 -    scheduleFrame()
 +
 +    if (sharedClock) {render(performance.now())}
 +    else {scheduleFrame()}
 
-@@ -396,2 +425,3 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
+@@ -396,2 +427,3 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
        stopped = true
 +      stopSharedFrame()
        kickAnimationRef.current = () => undefined
-@@ -402,3 +432,3 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
+@@ -402,3 +434,3 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
      }
 -  }, [image, frameW, frameH, frames, framesByState, framesByRow, loopMs, backingW, backingH, rows, pauseWhenUnfocused])
 +  }, [image, frameW, frameH, frames, framesByState, framesByRow, loopMs, backingW, backingH, rows, pauseWhenUnfocused, animate, playOnce, maxFps, subscribeFrame])
@@ -36284,6 +36390,19 @@ index 0000000000000000000000000000000000000000..4c2884495a0c7abd46c0fd004c5dc80e
 +  if (!integer(columns, 6, 9) || !integer(rows, 8, 9) || !validAnimation(info, columns, rows)) {return null}
 +
 +  return immutableSprite(info, frameW, frameH)
++}
+diff --git a/apps/desktop/src/lib/pet-sprite-paint.ts b/apps/desktop/src/lib/pet-sprite-paint.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..b9ac911443f9b398b1bbff78b5b9db64ba35f2dd
+--- /dev/null
++++ b/apps/desktop/src/lib/pet-sprite-paint.ts
+@@ -0,0 +1,7 @@
++const versions = new WeakMap<HTMLCanvasElement, number>()
++
++export const petSpritePaintVersion = (canvas: HTMLCanvasElement) => versions.get(canvas)
++
++export const markPetSpritePaint = (canvas: HTMLCanvasElement) => {
++  versions.set(canvas, (versions.get(canvas) ?? 0) + 1)
 +}
 diff --git a/apps/desktop/src/lib/session-ref-live-owner.test.ts b/apps/desktop/src/lib/session-ref-live-owner.test.ts
 new file mode 100644
