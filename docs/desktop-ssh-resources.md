@@ -59,6 +59,12 @@ socket teardown. The last holder aborts a pending master start and waits
 for the startup client to close before sending one `ssh -O exit`. The
 quit deadline remains six seconds plus one second for forced cleanup.
 
+Desktop's in-app relaunch paths now share the SSH teardown used by ordinary
+quit. If a managed SSH update or recovery is active, the old app stays open
+until it finishes. Then Desktop seals new SSH bootstraps and runs the bounded
+SSH and local backend shutdowns in parallel before exiting. Bundle-swap
+startup stays parked while this handoff is pending.
+
 POSIX execution also acquires a remote kernel lock **before starting Python**.
 The inherited descriptor reserves the remote home's single helper slot through
 actual cleanup, even after the local client has disappeared. Other application

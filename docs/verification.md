@@ -10629,3 +10629,11 @@ previously sent two exits to the same socket. The fix sends one exit,
 waits for its completion before final quit, and reports the bootstrap
 as superseded. The focused in-process run passed 33 cases, with one real
 OpenSSH case excluded. The three development Electron bundles built.
+
+The relaunch regression runs the production main-process shutdown helpers
+with a fake Electron exit and a stuck SSH teardown. The old helper exited
+during a pending managed recovery. The patched path allowed a restore
+bootstrap, kept bundle-swap startup parked beyond its 15-second fallback,
+then sealed SSH and exited after the existing six-plus-one-second budget.
+The focused run passed 41 tests with the real OpenSSH case excluded.
+Three Electron development bundles built. Live app relaunch remains unverified.
