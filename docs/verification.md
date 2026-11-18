@@ -1,3 +1,18 @@
+# Stage the macOS PDF raster helper
+
+Mac native preparation builds the PDF raster executable with arm64
+and x86_64 slices. Prepared inputs bind the build script, C source
+and sandbox policy to the native receipt. A Mac tree missing either
+output requires restaging. The existing native copy step places both
+files in `dist/native`. Packaged assets use the existing unpacked ASAR
+layout.
+
+An ad hoc signed Local Electron fixture invoked the unpacked helper
+through its bundled policy. The helper accepted bounded bytes on
+stdin, rendered page one, and rejected invalid headers, malformed PDF,
+oversized input, and path arguments. Character PDF deliveries still
+offer **Copy path**. Live viewer wiring and release signing remain open.
+
 # Measure a static first-page PDF preview
 
 An on-demand CoreGraphics and ImageIO helper accepted PDF bytes on stdin

@@ -8254,6 +8254,95 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..6a2b0daac0301a60f68b02c20cc1c098
 -  if (heldQuitForActiveWork(event)) {
 +  if (deferConfigQuit(event)) {
      appQuitting = false
+diff --git a/apps/desktop/electron/native/pdf-raster.c b/apps/desktop/electron/native/pdf-raster.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..bf33a49c7f672acf6844c09cb6a906c6717af980
+--- /dev/null
++++ b/apps/desktop/electron/native/pdf-raster.c
+@@ -0,0 +1,71 @@
++#include <CoreFoundation/CoreFoundation.h>
++#include <CoreGraphics/CoreGraphics.h>
++#include <ImageIO/ImageIO.h>
++#include <math.h>
++#include <stdio.h>
++#include <string.h>
++
++enum { inputLimit = 512 * 1024, pngLimit = 128 * 1024, maxEdge = 640, maxPoints = 8192 };
++
++static int render(void) {
++    static UInt8 input[inputLimit + 1];
++    size_t count = fread(input, 1, sizeof(input), stdin);
++    if (ferror(stdin) || count < 5 || count > inputLimit || memcmp(input, "%PDF-", 5) != 0) return 2;
++
++    CFDataRef bytes = CFDataCreateWithBytesNoCopy(NULL, input, (CFIndex)count, kCFAllocatorNull);
++    CGDataProviderRef provider = bytes ? CGDataProviderCreateWithCFData(bytes) : NULL;
++    CGPDFDocumentRef doc = provider ? CGPDFDocumentCreateWithProvider(provider) : NULL;
++    CGPDFPageRef page = doc && !CGPDFDocumentIsEncrypted(doc) ? CGPDFDocumentGetPage(doc, 1) : NULL;
++    if (!page) return 3;
++
++    CGRect crop = CGPDFPageGetBoxRect(page, kCGPDFCropBox);
++    double width = crop.size.width, height = crop.size.height;
++    if (!isfinite(width) || !isfinite(height) || width <= 0 || height <= 0 ||
++        width > maxPoints || height > maxPoints ||
++        !isfinite(crop.origin.x) || !isfinite(crop.origin.y) ||
++        fabs(crop.origin.x) > maxPoints || fabs(crop.origin.y) > maxPoints) return 4;
++
++    int rotation = CGPDFPageGetRotationAngle(page);
++    if (rotation % 90 != 0) return 4;
++    if (rotation % 180 != 0) {
++        double swap = width;
++        width = height;
++        height = swap;
++    }
++    double scale = fmin(1., maxEdge / fmax(width,height));
++    size_t rasterWidth = (size_t)fmax(1, round(width * scale));
++    size_t rasterHeight = (size_t)fmax(1, round(height * scale));
++    CGRect output = CGRectMake(0, 0, rasterWidth, rasterHeight);
++
++    CGColorSpaceRef color = CGColorSpaceCreateDeviceRGB();
++    CGContextRef ctx = color ? CGBitmapContextCreate(NULL,rasterWidth,rasterHeight,8,0,color,kCGImageAlphaNoneSkipLast) : NULL;
++    if (!ctx) return 5;
++    CGContextSetRGBFillColor(ctx,1,1,1,1);
++    CGContextFillRect(ctx,output);
++    CGContextConcatCTM(ctx,CGPDFPageGetDrawingTransform(page,kCGPDFCropBox,output,0,true));
++    CGContextDrawPDFPage(ctx,page);
++    CGImageRef image = CGBitmapContextCreateImage(ctx);
++    CFMutableDataRef data = CFDataCreateMutable(NULL,0);
++    CGImageDestinationRef dest = image && data ? CGImageDestinationCreateWithData(data, CFSTR("public.png"), 1, NULL) : NULL;
++    if (!dest) return 6;
++    CGImageDestinationAddImage(dest,image,NULL);
++    if (!CGImageDestinationFinalize(dest) || CFDataGetLength(data) > pngLimit) return 7;
++    size_t size = (size_t)CFDataGetLength(data);
++    if (fwrite(CFDataGetBytePtr(data),1,size,stdout) != size || fflush(stdout) != 0) return 8;
++
++    CGPDFDocumentRelease(doc);
++    CGDataProviderRelease(provider);
++    CGImageRelease(image);
++    CGContextRelease(ctx);
++    CGColorSpaceRelease(color);
++    CFRelease(bytes);
++    CFRelease(dest);
++    CFRelease(data);
++    return 0;
++}
++
++int main(int argc, char **argv) {
++    (void)argv;
++    // One bounded document on stdin, one static PNG on stdout.
++    return argc == 1 ? render() : 1;
++}
+diff --git a/apps/desktop/electron/native/pdf-raster.sb b/apps/desktop/electron/native/pdf-raster.sb
+new file mode 100644
+index 0000000000000000000000000000000000000000..b5c0ed0fb2891e9090b72c6e567bf348cb1afaab
+--- /dev/null
++++ b/apps/desktop/electron/native/pdf-raster.sb
+@@ -0,0 +1,6 @@
++(version 1)
++(allow default)
++(deny network*)
++(deny process-exec (require-not (literal (param "RASTER_BIN"))))
++(deny file-write*)
++(deny file-read-data (require-all (require-not (literal (param "RASTER_BIN"))) (require-any (subpath "/Users") (subpath "/Volumes") (subpath "/private/tmp") (subpath "/private/var/tmp"))))
 diff --git a/apps/desktop/electron/notification-ipc.ts b/apps/desktop/electron/notification-ipc.ts
 index 2c784ec2a2e709f7fc953d88399b3078aaa5e12b..5492eec425bbd695225966f3bc91032d19a23b3b 100644
 --- a/apps/desktop/electron/notification-ipc.ts
@@ -12017,6 +12106,42 @@ index c93a53e419252ff7d13d44cfd79abd9cdcee85a0..ce47890fe4f37dae777ac122c82eadea
 +
 +  const result = await flight.response
 
+diff --git a/apps/desktop/scripts/build-pdf-raster.mjs b/apps/desktop/scripts/build-pdf-raster.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..fa81c77f4ad9549882d9125ad786376524016f1b
+--- /dev/null
++++ b/apps/desktop/scripts/build-pdf-raster.mjs
+@@ -0,0 +1,30 @@
++// Build-time only. The app can use the shipped executable without Xcode.
++import { execFileSync } from 'node:child_process'
++import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, renameSync, rmSync } from 'node:fs'
++import { join, resolve } from 'node:path'
++import { macosSysroot, xcrunClangArgv } from './macos-sysroot.mjs'
++
++export function buildPdfRaster({ source, distDir, platform }) {
++  if (platform !== 'darwin') return
++
++  const native = resolve(source, 'apps/desktop/electron/native')
++  const output = resolve(distDir, 'native')
++  mkdirSync(output, { recursive: true })
++  // Keep the executable's final basename while clang assigns its ad hoc identifier.
++  const stage = mkdtempSync(join(output, '.pdf-raster-'))
++  const binary = join(stage, 'pdf-raster')
++  const profile = 'pdf-raster.sb'
++  try {
++    execFileSync('xcrun', [
++      ...xcrunClangArgv(macosSysroot()), '-arch', 'arm64', '-arch', 'x86_64', '-mmacosx-version-min=13.0',
++      '-O2', '-Wall', '-Wextra', '-Werror', '-framework', 'CoreFoundation', '-framework', 'CoreGraphics',
++      '-framework', 'ImageIO', join(native, 'pdf-raster.c'), '-o', binary,
++    ], { stdio: 'inherit', timeout: 120_000 })
++    chmodSync(binary, 0o755)
++    copyFileSync(join(native, profile), join(stage, profile))
++    renameSync(binary, join(output, 'pdf-raster'))
++    renameSync(join(stage, profile), join(output, profile))
++  } finally {
++    rmSync(stage, { recursive: true, force: true })
++  }
++}
 diff --git a/apps/desktop/scripts/check-bot-monitor-layout.mjs b/apps/desktop/scripts/check-bot-monitor-layout.mjs
 new file mode 100644
 index 0000000000000000000000000000000000000000..501bcce5590cd9af9cfa23a8965f4aad7cab99c6
@@ -12125,6 +12250,67 @@ index 0000000000000000000000000000000000000000..501bcce5590cd9af9cfa23a8965f4aad
 +  if (server) {await new Promise(resolve => server.close(resolve))}
 +  await rm(scratch, { recursive: true, force: true })
 +}
+diff --git a/apps/desktop/scripts/prepared-native-deps.mjs b/apps/desktop/scripts/prepared-native-deps.mjs
+index 117bb3c415a3042a0c42fc436b8368d171b26695..e294acc1588ecf74dde8d338412c724da430919d 100644
+--- a/apps/desktop/scripts/prepared-native-deps.mjs
++++ b/apps/desktop/scripts/prepared-native-deps.mjs
+@@ -13,6 +13,6 @@ function nativeIdentity(source) {
+     fileDigest(path.join(import.meta.dirname, 'prepared-native-deps.mjs')),
+-    ...['build-command-screenshot-monitor.mjs', 'build-hud-modifier-monitor.mjs']
++    ...['build-command-screenshot-monitor.mjs', 'build-hud-modifier-monitor.mjs', 'build-pdf-raster.mjs']
+       .map(name => fileDigest(path.join(import.meta.dirname, name))),
+     ...['command-screenshot-monitor.m', 'hud-modifier-gesture.h', 'hud-modifier-gesture.cs',
+-      'hud-modifier-monitor.m', 'hud-modifier-monitor-win.cs', 'hud-modifier-monitor-x11.c']
++      'hud-modifier-monitor.m', 'hud-modifier-monitor-win.cs', 'hud-modifier-monitor-x11.c', 'pdf-raster.c', 'pdf-raster.sb']
+       .map(name => fileDigest(path.join(source, 'apps/desktop/electron/native', name))),
+diff --git a/apps/desktop/scripts/prepared-native-deps.test.mjs b/apps/desktop/scripts/prepared-native-deps.test.mjs
+index 6ae7595477ba21b88760c15c89115a969f907f8c..ec3978e298509206e398cf3feee2800fde20bdb3 100644
+--- a/apps/desktop/scripts/prepared-native-deps.test.mjs
++++ b/apps/desktop/scripts/prepared-native-deps.test.mjs
+@@ -33,2 +33,6 @@ test('native consumption copies admitted modules and helpers, rejecting changed
+     fs.writeFileSync(path.join(out, helper), 'helper fixture', { mode: 0o755 })
++    const pdfSource = path.join(app, 'electron/native/pdf-raster.c')
++    const pdfPolicy = path.join(app, 'electron/native/pdf-raster.sb')
++    fs.writeFileSync(pdfSource, 'raster source fixture')
++    fs.writeFileSync(pdfPolicy, 'policy fixture')
+     const selection = { source, nativeDeps: out, platform: 'linux', arch: 'x64', nativeToolchain: 'compiler-a' }
+@@ -37,2 +41,9 @@ test('native consumption copies admitted modules and helpers, rejecting changed
+     assert.equal(native.readNativeInputs(selection), out)
++    for (const input of [pdfSource, pdfPolicy]) {
++      const original = fs.readFileSync(input)
++      fs.appendFileSync(input, ' changed')
++      assert.throws(() => native.readNativeInputs(selection), /run preparation again/)
++      fs.writeFileSync(input, original)
++      assert.equal(native.readNativeInputs(selection), out)
++    }
+     assert.throws(() => native.readNativeInputs({ ...selection, nativeToolchain: 'compiler-b' }), /run preparation again/)
+diff --git a/apps/desktop/scripts/stage-native-deps.mjs b/apps/desktop/scripts/stage-native-deps.mjs
+index 34cb4929892ab531fce08b10b7bcc439a6617ff2..b4e1358a7b5e7a8878a189f01ee472189ef32098 100644
+--- a/apps/desktop/scripts/stage-native-deps.mjs
++++ b/apps/desktop/scripts/stage-native-deps.mjs
+@@ -32,2 +32,3 @@ import { buildCommandScreenshotMonitor } from './build-command-screenshot-monito
+ import { buildHudModifierMonitor, hudModifierBinaryRelativePath } from './build-hud-modifier-monitor.mjs'
++import { buildPdfRaster } from './build-pdf-raster.mjs'
+ import { parseArgs } from 'node:util'
+@@ -740,2 +741,3 @@ export function nativeTreeComplete(out, platform, arch) {
+   if (platform === 'win32' && arch !== 'arm64') required.push('get-windows/lib/binding')
++  if (native && platform === 'darwin') required.push('native/pdf-raster', 'native/pdf-raster.sb')
+   if (native && ['darwin', 'linux', 'win32'].includes(platform)) {
+@@ -772,2 +774,3 @@ export async function prepareDesktopNativeDependencies({ source, out, platform =
+     buildHudModifierMonitor({ source, distDir: product, platform, arch })
++    if (platform === process.platform) buildPdfRaster({ source, distDir: product, platform })
+   }, { source })
+diff --git a/apps/desktop/scripts/stage-native-deps.test.mjs b/apps/desktop/scripts/stage-native-deps.test.mjs
+index 3a2b475f5adc031ea3776010c05ae50e2a71b8f9..2f7fc8728e638b257f420bcb2fd8b0d338f6f9d0 100644
+--- a/apps/desktop/scripts/stage-native-deps.test.mjs
++++ b/apps/desktop/scripts/stage-native-deps.test.mjs
+@@ -740,2 +740,6 @@ test('a native tree missing a piece this host could stage is incomplete; unfixab
+       put('node-pty/prebuilds/any-target/spawn-helper')
++      assert.equal(nativeTreeComplete(tmp, 'darwin', process.arch), false) // PDF raster was not built
++      put('native/pdf-raster')
++      assert.equal(nativeTreeComplete(tmp, 'darwin', process.arch), false) // sandbox profile is missing
++      put('native/pdf-raster.sb')
+       assert.equal(nativeTreeComplete(tmp, 'darwin', process.arch), true)
 diff --git a/apps/desktop/src/api/client.ts b/apps/desktop/src/api/client.ts
 index 68c5a3e1b74856ec19591084e20c681d92984ba5..611d1a2baa53cdd89d6052f9c30747ffa88a1a5e 100644
 --- a/apps/desktop/src/api/client.ts
