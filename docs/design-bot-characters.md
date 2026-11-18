@@ -538,7 +538,8 @@ The [Mac Local gateway](verification.md#authorize-a-mac-local-pdf-snapshot)
 can authorize a single-use snapshot tied to the saved reply and file
 revision. The [Mac Local popover](verification.md#preview-the-first-page-of-a-mac-local-pdf)
 opts in through the current Monitor route and receives the rendered
-first page after an explicit click.
+first page after an explicit click. A [native memory watchdog](verification.md#guard-mac-pdf-raster-memory)
+stops that child when its sampled peak physical footprint reaches 128 MiB.
 
 [Preview file](verification.md#preview-a-delivered-text-file-in-a-bots-character-unreleased)
 can read one small UTF-8 `.txt`, `.md` or `.csv` file directly inside the

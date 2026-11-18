@@ -8259,20 +8259,82 @@ index 3206f7e63c2e2e7bdbdfe49868e44303252d0264..5d05cbfd620e3af6c3623f8bc6f29420
 -  if (heldQuitForActiveWork(event)) {
 +  if (deferConfigQuit(event)) {
      appQuitting = false
+diff --git a/apps/desktop/electron/native/pdf-raster-memory.test.c b/apps/desktop/electron/native/pdf-raster-memory.test.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..23c32f309256ae1f4b0b7535da3f845a21496b4f
+--- /dev/null
++++ b/apps/desktop/electron/native/pdf-raster-memory.test.c
+@@ -0,0 +1,31 @@
++// Insert a bounded allocation inside the parser call without changing the shipped helper.
++#include <CoreGraphics/CoreGraphics.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <time.h>
++#include <unistd.h>
++
++static CGPDFDocumentRef parser_with_pressure(CGDataProviderRef provider);
++#define CGPDFDocumentCreateWithProvider parser_with_pressure
++#define main pdf_raster_main
++#include "pdf-raster.c"
++#undef main
++#undef CGPDFDocumentCreateWithProvider
++
++static CGPDFDocumentRef parser_with_pressure(CGDataProviderRef provider) {
++    fputs("pressure-start\n", stderr);
++    const size_t bytes = 160 * 1024 * 1024;
++    const size_t page = (size_t)getpagesize();
++    volatile unsigned char *memory = malloc(bytes);
++    if (!memory) _Exit(10);
++    for (size_t offset = 0; offset < bytes; offset += page) memory[offset] = 1;
++    const struct timespec hold = {0, 350 * 1000 * 1000};
++    nanosleep(&hold, NULL);
++    free((void *)memory);
++    fputs("pressure-return\n", stderr);
++    return CGPDFDocumentCreateWithProvider(provider);
++}
++
++int main(void) {
++    return pdf_raster_main(1, NULL);
++}
 diff --git a/apps/desktop/electron/native/pdf-raster.c b/apps/desktop/electron/native/pdf-raster.c
 new file mode 100644
-index 0000000000000000000000000000000000000000..bf33a49c7f672acf6844c09cb6a906c6717af980
+index 0000000000000000000000000000000000000000..9384c3d660ffce6bb34a2700cd7167c6f5d76ac4
 --- /dev/null
 +++ b/apps/desktop/electron/native/pdf-raster.c
-@@ -0,0 +1,71 @@
+@@ -0,0 +1,103 @@
 +#include <CoreFoundation/CoreFoundation.h>
 +#include <CoreGraphics/CoreGraphics.h>
 +#include <ImageIO/ImageIO.h>
++#include <libproc.h>
 +#include <math.h>
++#include <pthread.h>
 +#include <stdio.h>
++#include <stdlib.h>
 +#include <string.h>
++#include <sys/resource.h>
++#include <time.h>
++#include <unistd.h>
 +
-+enum { inputLimit = 512 * 1024, pngLimit = 128 * 1024, maxEdge = 640, maxPoints = 8192 };
++enum {
++    inputLimit = 512 * 1024, pngLimit = 128 * 1024, maxEdge = 640, maxPoints = 8192,
++    memoryLimit = 128 * 1024 * 1024, memoryExit = 9
++};
++
++static void enforce_memory_budget(void) {
++    struct rusage_info_v4 usage;
++    if (proc_pid_rusage(getpid(), RUSAGE_INFO_V4, (rusage_info_t *)&usage) != 0 ||
++        usage.ri_lifetime_max_phys_footprint >= memoryLimit) _Exit(memoryExit);
++}
++
++static void *watch_memory(void *unused) {
++    (void)unused;
++    const struct timespec interval = {0, 10 * 1000 * 1000};
++    // shortcut: a sampled peak guard can overshoot, use a kernel cap when available.
++    for (;;) {
++        nanosleep(&interval, NULL);
++        enforce_memory_budget();
++    }
++}
 +
 +static int render(void) {
 +    static UInt8 input[inputLimit + 1];
@@ -8318,6 +8380,7 @@ index 0000000000000000000000000000000000000000..bf33a49c7f672acf6844c09cb6a906c6
 +    CGImageDestinationAddImage(dest,image,NULL);
 +    if (!CGImageDestinationFinalize(dest) || CFDataGetLength(data) > pngLimit) return 7;
 +    size_t size = (size_t)CFDataGetLength(data);
++    enforce_memory_budget();
 +    if (fwrite(CFDataGetBytePtr(data),1,size,stdout) != size || fflush(stdout) != 0) return 8;
 +
 +    CGPDFDocumentRelease(doc);
@@ -8334,7 +8397,13 @@ index 0000000000000000000000000000000000000000..bf33a49c7f672acf6844c09cb6a906c6
 +int main(int argc, char **argv) {
 +    (void)argv;
 +    // One bounded document on stdin, one static PNG on stdout.
-+    return argc == 1 ? render() : 1;
++    if (argc != 1) return 1;
++    enforce_memory_budget();
++    pthread_t watchdog;
++    if (pthread_create(&watchdog, NULL, watch_memory, NULL) != 0) return memoryExit;
++    int result = render();
++    if (result == 0) enforce_memory_budget();
++    return result;
 +}
 diff --git a/apps/desktop/electron/native/pdf-raster.sb b/apps/desktop/electron/native/pdf-raster.sb
 new file mode 100644
@@ -8378,11 +8447,11 @@ index 2c784ec2a2e709f7fc953d88399b3078aaa5e12b..5492eec425bbd695225966f3bc91032d
  }
 diff --git a/apps/desktop/electron/pdf-raster.test.ts b/apps/desktop/electron/pdf-raster.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..cb0734d712b48c72b064a71a44d776e859a73dea
+index 0000000000000000000000000000000000000000..3460e5e658523ee3734946e5b8bb0a0b5b5ba3ba
 --- /dev/null
 +++ b/apps/desktop/electron/pdf-raster.test.ts
-@@ -0,0 +1,147 @@
-+import { type spawn } from 'node:child_process'
+@@ -0,0 +1,171 @@
++import { execFileSync, type spawn, spawnSync } from 'node:child_process'
 +import { EventEmitter } from 'node:events'
 +import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 +import { tmpdir } from 'node:os'
@@ -8390,6 +8459,8 @@ index 0000000000000000000000000000000000000000..cb0734d712b48c72b064a71a44d776e8
 +import { PassThrough } from 'node:stream'
 +
 +import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
++
++import { macosSysroot, xcrunClangArgv } from '../scripts/macos-sysroot.mjs'
 +
 +import { createPdfRaster } from './pdf-raster'
 +
@@ -8529,6 +8600,28 @@ index 0000000000000000000000000000000000000000..cb0734d712b48c72b064a71a44d776e8
 +    await expect(pending).resolves.toEqual(png)
 +  })
 +})
++
++it.skipIf(process.platform !== 'darwin')('stops the native PDF parser while a controlled allocation exceeds its budget', () => {
++  const root = mkdtempSync(join(tmpdir(), 'raster-memory-test-'))
++
++  try {
++    const binary = join(root, 'pdf-raster-memory')
++    const source = join(import.meta.dirname, 'native', 'pdf-raster-memory.test.c')
++    execFileSync('xcrun', [
++      ...xcrunClangArgv(macosSysroot()), '-O2', '-Wall', '-Wextra', '-Werror', '-mmacosx-version-min=13.0',
++      '-framework', 'CoreFoundation', '-framework', 'CoreGraphics', '-framework', 'ImageIO', source, '-o', binary,
++    ])
++    const result = spawnSync(binary, [], { input: pdf, encoding: 'utf8', env: {}, timeout: 2500 })
++
++    expect(result.error).toBeUndefined()
++    expect(result.status).toBe(9)
++    expect(result.stdout).toBe('')
++    expect(result.stderr).toContain('pressure-start')
++    expect(result.stderr).not.toContain('pressure-return')
++  } finally {
++    rmSync(root, { recursive: true, force: true })
++  }
++}, 30_000)
 diff --git a/apps/desktop/electron/pdf-raster.ts b/apps/desktop/electron/pdf-raster.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..98437535643c52457dd8c8a0348291af42cc21ce

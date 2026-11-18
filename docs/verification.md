@@ -1,3 +1,18 @@
+# Guard Mac PDF raster memory
+
+The Mac raster helper checks its kernel-reported peak physical
+footprint before parsing, every 10 ms while working, and before
+publishing a successful result. It exits at 128 MiB or on a failed
+measurement. The watchdog runs as a thread in the existing helper.
+The parent keeps its timeout and discards output from nonzero exits.
+
+A signed Apple Silicon regression inserted a bounded 160 MiB
+allocation during parsing. The previous build returned its page.
+The guarded build stopped while the allocation was active and
+returned zero PNG bytes. Three normal documents still matched
+their reference PNGs exactly. Peak footprint is sampled, so a
+fast allocation can briefly exceed the threshold.
+
 # Preview the first page of a Mac Local PDF
 
 A PDF delivered in the current Bot Chat workspace can show **Preview
