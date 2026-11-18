@@ -1,3 +1,30 @@
+# Measure shared timing with naturally loaded full sprite sheets
+
+Five signed Mac Local fixtures used one build and the same full PNG
+and lossless WebP sheets. Two independent/aligned comparisons ran in
+opposite orders around a no-overlay control. Natural browser image
+loads spanned 0.0–0.1 ms. The visible states used 6, 6, 6, 4 and
+5 frames. A renderer test covered unequal periods and immediate row
+repaint on a state change.
+
+The two variants matched 27 drawn-frame hashes and preserved canvas
+and caption geometry. Independent timing drew 28–41 frames per actor
+in eight seconds and aligned timing drew 29–43. Each actor's populated
+frames appeared. Separate traces recorded 98 independent
+GPU buffer swaps and 88–95 aligned swaps. The three equal-period
+sprites shared 41 display frames with independent timing and
+43 with aligned timing.
+All five sprites restarted together twice during the first independent
+draw probe, after the resource sample. The trigger remains unknown.
+The other three animation probes stayed in sequence.
+
+CPU differences (independent minus aligned) were -0.21 and +1.53 points. Aligned overhead was 2.96–3.44 CPU points and
+123.2–123.5 MiB above no overlay. It exceeded
+the 2-point CPU ceiling and exceeded the
+80 MiB memory ceiling. The samples include fixture GPU work and exclude
+WindowServer. Product delivery and timing use their current paths.
+All five runs recorded zero Desktop SSH after 60 seconds and no survivors.
+
 # Measure shared frame timing in the character overlay
 
 Five signed Mac Local fixtures used one build and equal sprite strips.

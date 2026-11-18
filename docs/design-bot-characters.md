@@ -374,6 +374,13 @@ for independent clocks. The aligned trials added 2.51–2.58 CPU points and
 88.5–89.1 MiB above no overlay. Desktop production still uses independent timing.
 [Shared timing profile](verification.md#measure-shared-frame-timing-in-the-character-overlay).
 
+A follow-up used naturally loaded full PNG and lossless WebP sheets
+with mixed frame counts. It matched 27 rendered frame hashes. Traces
+counted 88–95 aligned GPU swaps and 98 with independent
+timing. Aligned overhead was 2.96–3.44 CPU points and 123.2–123.5 MiB above no
+overlay. The change stayed in the isolated fixture.
+[Full-sheet timing profile](verification.md#measure-shared-timing-with-naturally-loaded-full-sprite-sheets).
+
 A follow-up Mac run measured 111.6 MiB and 2.81 CPU points of five-pack
 overhead before tracing. About 1.51 CPU points came from the overlay
 renderer and 1.29 from the main process, which hosted Chromium's GPU
