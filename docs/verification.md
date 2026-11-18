@@ -1,3 +1,13 @@
+# Copy a delivered PDF path from a character
+
+A complete reply with one standalone PDF delivery shows the exact path in
+the character's latest output. Select **Copy path** to copy it, including
+spaces and original spelling. **Path copied** confirms success.
+
+This works for an existing workspace PDF and for a delivery path outside
+the workspace. The path stays selectable plain text. The action leaves
+the PDF unopened and sends no file preview request.
+
 # View a loaded character text file in Hermes
 
 Open a character's latest output and choose **Preview file** on a

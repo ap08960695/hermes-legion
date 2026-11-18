@@ -513,11 +513,15 @@ validated destinations for the current popover and accepts one explicit link
 click.
 
 The [Delivered file row](verification.md#see-a-delivered-text-file-in-a-bots-preview-unreleased)
-shows the exact path of a single standalone text-file delivery from a complete
+shows the exact path of a supported standalone file delivery from a complete
 reply. The path appears as plain text and the transcript remains available
 through **Open in Hermes**. **Copy path** copies the exact displayed path,
 including for a path-only delivery outside the workspace. Electron accepts the
 click only for the current popover and reports the clipboard result.
+
+[PDF deliveries](verification.md#copy-a-delivered-pdf-path-from-a-character)
+show the same selectable path and **Copy path** action, including for
+mixed-case extensions. The PDF stays unopened.
 
 [Preview file](verification.md#preview-a-delivered-text-file-in-a-bots-character-unreleased)
 can read one small UTF-8 `.txt`, `.md` or `.csv` file directly inside the
