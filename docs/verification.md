@@ -31,6 +31,31 @@ default and named profiles. The focused suite passed 70 tests with
 matching pinned-base hashes. This covers lock uncertainty before
 launch. Simultaneous starts after confirmed absence remain open.
 
+# One detached Local launch per gateway owner
+
+Direct unmanaged startup on macOS/Linux reserves the gateway home
+before the final ownership probe. The detached daemon retains that
+reservation if its ensure client times out. It releases the launch
+lock after taking the runtime locks. A contender waits within its own
+deadline and can attach when the original daemon answers. Standalone
+homes reserve independently.
+
+The previous Mac source made two launch requests when a named ensure
+followed a timed-out default ensure while its child was still booting.
+It also tried to start a root that acquired ownership during service
+lookup. The patched fixtures suppressed all three duplicate requests
+and exercised spawn failure, early exit and the ownership handoff.
+
+The isolated Mac run used the real gateway command with service lookup
+stubbed and boot paused before ownership. One detached child launched.
+Both ensures expired while it was paused. After resume, the named and
+default profiles attached to the same owner and the launch lock was
+free. The run used only loopback and local Unix sockets and stopped all
+trial processes. The focused suite passed 83 tests and 12 subtests,
+with 11 skips. The six changed patch sections applied and reversed
+with matching hashes. Windows, service-managed startup and the
+packaged Desktop sequence remain separate acceptance cases.
+
 # Celebrate a saved worker completion on Mac desktop
 
 A fresh saved worker completion uses the current pack's jumping row

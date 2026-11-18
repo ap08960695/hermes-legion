@@ -51578,7 +51578,7 @@ index cbb599dcacc02ac7ef193703c027c6df002af9d6..fbeb34374388a0ca908375481621618d
 +        return
      handle = getattr(runner, "session_api", None)
 diff --git a/gateway/run_bootstrap.py b/gateway/run_bootstrap.py
-index 0a682990e7ffb6f3ec6e49c5a1b8c43f5caf3797..887054a5cf66551586c70ccb40153ef5587a3474 100644
+index 0a682990e7ffb6f3ec6e49c5a1b8c43f5caf3797..22a6e4e01f424207a721b227f43f1736549a315e 100644
 --- a/gateway/run_bootstrap.py
 +++ b/gateway/run_bootstrap.py
 @@ -316,23 +316,2 @@ async def _start_gateway_start_control_socket(runner):
@@ -51632,7 +51632,12 @@ index 0a682990e7ffb6f3ec6e49c5a1b8c43f5caf3797..887054a5cf66551586c70ccb40153ef5
 -    # so it runs beside the boot imports instead of serially inside the pre-READY warm-up.
 -    _start_gateway_early_environment_probe()
      profile_homes = (_multiplex_profile_homes(resolved_config)
-@@ -806,2 +789,4 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool =
+@@ -790,2 +773,4 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool =
+         return False
++    from hermes_cli.gateway_launch_admission import release_gateway_launch
++    release_gateway_launch()
+     # Freeze discovery: later profile additions must restart and reserve before opening stores.
+@@ -806,2 +791,4 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool =
          _start_gateway_configure_logging(verbosity)
 +        # Only the admitted gateway overlaps optional host probes with its remaining boot imports.
 +        _start_gateway_early_environment_probe()
@@ -54919,6 +54924,85 @@ index cbd3e49f799612c230a3b5519d31d3029deb3752..e04c6e927d4f222feea5156e9b627ab0
 -    "status": _cmd_status, "list": _cmd_list, "migrate-legacy": _cmd_migrate_legacy, "migrate": _cmd_migrate,
 +    "status": _cmd_status, "memory": cmd_memory, "list": _cmd_list, "migrate-legacy": _cmd_migrate_legacy, "migrate": _cmd_migrate,
  }
+diff --git a/hermes_cli/gateway_launch_admission.py b/hermes_cli/gateway_launch_admission.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..01be3c8aa351059f8c5ad7b5f52249d724e188bb
+--- /dev/null
++++ b/hermes_cli/gateway_launch_admission.py
+@@ -0,0 +1,73 @@
++"""Serialize direct POSIX ensure launches until the daemon reserves its runtime home."""
++
++from contextlib import contextmanager
++import os
++from pathlib import Path
++import stat
++
++LAUNCH_FD_ENV = "HERMES_GATEWAY_LAUNCH_LOCK_FD"
++_LOCK_NAME = "gateway.launch.lock"
++_inherited_lock: int | None = None
++
++
++def _is_launch_lock(fd: int, path: Path) -> bool:
++    info = os.fstat(fd)
++    return (
++        fd >= 3
++        and stat.S_ISREG(info.st_mode)
++        and not info.st_mode & 0o077
++        and info.st_uid == os.getuid()  # windows-footgun: ok — POSIX callers
++        and info.st_nlink == 1
++        and os.path.samestat(info, path.lstat())
++    )
++
++
++@contextmanager
++def gateway_launch_admission(home: Path):
++    """Yield the child descriptors, or None when another ensure is already launching."""
++    if os.name != "posix":
++        yield ()
++        return
++    import fcntl
++
++    home.mkdir(mode=0o700, parents=True, exist_ok=True)
++    path = home / _LOCK_NAME
++    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
++    try:
++        if not _is_launch_lock(fd, path):
++            raise PermissionError("unsafe gateway launch lock")
++        try:
++            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
++        except BlockingIOError:
++            yield None
++        else:
++            if not _is_launch_lock(fd, path):
++                raise PermissionError("gateway launch lock changed")
++            yield (fd,)
++    finally:
++        # LOCK_UN would also unlock the detached child's copy of this file description.
++        os.close(fd)
++
++
++def adopt_gateway_launch() -> None:
++    """Mark a validated inherited launch lock close-on-exec before loading the gateway."""
++    global _inherited_lock
++    value = os.environ.pop(LAUNCH_FD_ENV, None)
++    if value is None or os.name != "posix":
++        return
++    try:
++        fd = int(value)
++        home = Path(os.environ["HERMES_HOME"])
++        if home.is_absolute() and _is_launch_lock(fd, home / _LOCK_NAME):
++            os.set_inheritable(fd, False)
++            _inherited_lock = fd
++            os.register_at_fork(after_in_child=release_gateway_launch)
++    except (KeyError, OSError, ValueError, OverflowError):
++        return
++
++
++def release_gateway_launch() -> None:
++    global _inherited_lock
++    if _inherited_lock is not None:
++        os.close(_inherited_lock)
++        _inherited_lock = None
 diff --git a/hermes_cli/gateway_memory.py b/hermes_cli/gateway_memory.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..cb9ea9091065e5dab2aa9530863b9a5601ad1c56
@@ -54946,10 +55030,14 @@ index 0000000000000000000000000000000000000000..cb9ea9091065e5dab2aa9530863b9a56
 +        raise SystemExit(1)
 +    print(json.dumps(result, indent=2))
 diff --git a/hermes_cli/gateway_runtime.py b/hermes_cli/gateway_runtime.py
-index 818ace3cc7ab9828ef87b4227ec6866648c182f5..2d7695e43b17f6b9a9be966f92b3a1f36003fbb6 100644
+index 818ace3cc7ab9828ef87b4227ec6866648c182f5..91633d25795e312545365aca72ecba9e1fd749fd 100644
 --- a/hermes_cli/gateway_runtime.py
 +++ b/hermes_cli/gateway_runtime.py
-@@ -208,2 +208,15 @@ def _refused_owner_verdict(exc: PermissionError) -> GatewayDiscovery | None:
+@@ -4,2 +4,3 @@ from __future__ import annotations
+
++from contextlib import nullcontext
+ from dataclasses import dataclass
+@@ -208,2 +209,15 @@ def _refused_owner_verdict(exc: PermissionError) -> GatewayDiscovery | None:
 
 +def _missing_owner_verdict(home: Path) -> GatewayDiscovery:
 +    from hermes_cli.gateway_runtime_discovery import missing_owner_state
@@ -54965,12 +55053,12 @@ index 818ace3cc7ab9828ef87b4227ec6866648c182f5..2d7695e43b17f6b9a9be966f92b3a1f3
 +
 +
  def _served_by_multiplexer(home: Path, *, timeout: float) -> GatewayDiscovery | None:
-@@ -212,3 +225,3 @@ def _served_by_multiplexer(home: Path, *, timeout: float) -> GatewayDiscovery |
+@@ -212,3 +226,3 @@ def _served_by_multiplexer(home: Path, *, timeout: float) -> GatewayDiscovery |
      multiplexer's live descriptor proves service; a held ``gateway.lock`` alone does not."""
 -    from hermes_cli.gateway_runtime_discovery import DiscoveryError, query_identify
 +    from hermes_cli.gateway_runtime_discovery import query_identify
      from hermes_cli.gateway_runtime_multiplex import multiplexer_root_for
-@@ -219,16 +232,16 @@ def _served_by_multiplexer(home: Path, *, timeout: float) -> GatewayDiscovery |
+@@ -219,16 +233,16 @@ def _served_by_multiplexer(home: Path, *, timeout: float) -> GatewayDiscovery |
          payload = query_identify(root, timeout=timeout)
 -    except PermissionError as exc:
 -        # The multiplexer's pipe proved the boundary: name it for the secondary too (#140706), unless
@@ -54999,12 +55087,12 @@ index 818ace3cc7ab9828ef87b4227ec6866648c182f5..2d7695e43b17f6b9a9be966f92b3a1f3
 +            return _refused_owner_verdict(exc) or _refused(root)
 +        raise
      result = _endpoint(payload, home, control_home=root)
-@@ -294,3 +307,3 @@ def discover_gateway_endpoint(profile_home: str | Path, *, timeout: float = 2.0)
+@@ -294,3 +308,3 @@ def discover_gateway_endpoint(profile_home: str | Path, *, timeout: float = 2.0)
      """
 -    from hermes_cli.gateway_runtime_discovery import DiscoveryError, missing_owner_state, query_identify
 +    from hermes_cli.gateway_runtime_discovery import DiscoveryError, query_identify
 
-@@ -300,13 +313,8 @@ def discover_gateway_endpoint(profile_home: str | Path, *, timeout: float = 2.0)
+@@ -300,13 +314,8 @@ def discover_gateway_endpoint(profile_home: str | Path, *, timeout: float = 2.0)
      try:
 -        return _endpoint(query_identify(home, timeout=timeout), home)
 -    except (FileNotFoundError, ConnectionRefusedError):
@@ -55024,10 +55112,66 @@ index 818ace3cc7ab9828ef87b4227ec6866648c182f5..2d7695e43b17f6b9a9be966f92b3a1f3
 +            if served is not None:
 +                return served
      except TimeoutError:
-@@ -322,2 +330,3 @@ def discover_gateway_endpoint(profile_home: str | Path, *, timeout: float = 2.0)
+@@ -322,2 +331,3 @@ def discover_gateway_endpoint(profile_home: str | Path, *, timeout: float = 2.0)
          return GatewayDiscovery("inaccessible", reason_code="invalid_control_peer")
 +    return _missing_owner_verdict(home)
 
+@@ -472,13 +482,20 @@ def ensure_gateway_runtime(profile_home: str | Path, *, timeout: float = DEFAULT
+                     service = discover_existing_gateway_service(target, deadline=deadline)
+-                # Runtime locks settle races remaining after this second probe.
+-                observed = discover_gateway_endpoint(home, timeout=remaining(deadline))
+-                if observed.state != "absent":
+-                    continue
+-                if service is not None:
+-                    start_existing_gateway_service(service, deadline=deadline)
+-                else:
+-                    from hermes_cli.gateway_runtime_start import spawn_unmanaged_gateway, stdio_log_size
+-                    child_home, child_offset = target, stdio_log_size(target)
+-                    child = spawn_unmanaged_gateway(target, deadline=deadline, idle_exit=idle_exit)
+-                requested = True
++                from hermes_cli.gateway_launch_admission import gateway_launch_admission
++                admission = gateway_launch_admission(target) if service is None else nullcontext(())
++                with admission as launch_fds:
++                    if launch_fds is not None:
++                        observed = discover_gateway_endpoint(home, timeout=remaining(deadline))
++                        if observed.state != "absent":
++                            continue
++                        if service is not None:
++                            start_existing_gateway_service(service, deadline=deadline)
++                        else:
++                            from hermes_cli.gateway_runtime_discovery import missing_owner_state
++                            from hermes_cli.gateway_runtime_start import spawn_unmanaged_gateway, stdio_log_size
++                            if launch_fds and target != home and missing_owner_state(target) != "absent":
++                                continue
++                            child_home, child_offset = target, stdio_log_size(target)
++                            child = spawn_unmanaged_gateway(target, deadline=deadline, idle_exit=idle_exit,
++                                                            launch_fds=launch_fds)
++                    requested = True
+             time.sleep(min(delay, remaining(deadline)))
+diff --git a/hermes_cli/gateway_runtime_start.py b/hermes_cli/gateway_runtime_start.py
+index ac185f2479f400d411c438b9796364e2df4aba4b..527eab7d51af56f7d5bdca3435d342318c53a05b 100644
+--- a/hermes_cli/gateway_runtime_start.py
++++ b/hermes_cli/gateway_runtime_start.py
+@@ -9,2 +9,3 @@ import sys
+ from hermes_cli._subprocess_compat import windows_detach_popen_kwargs, _WINDOWS_GATEWAY_BREAKAWAY_ENV
++from hermes_cli.gateway_launch_admission import LAUNCH_FD_ENV
+ from hermes_cli.gateway_runtime_service import RuntimeStartError, remaining
+@@ -35,3 +36,3 @@ DAEMON_STRIPPED_ENV = (
+ def spawn_unmanaged_gateway(profile_home: Path, *, deadline: float, idle_exit: bool = False,
+-                            force: bool = False) -> subprocess.Popen:
++                            force: bool = False, launch_fds: tuple[int, ...] = ()) -> subprocess.Popen:
+     """Request a daemon, not readiness. Refuse Windows no-breakaway fallback.
+@@ -71,2 +72,5 @@ def spawn_unmanaged_gateway(profile_home: Path, *, deadline: float, idle_exit: b
+         env.pop(key, None)
++    env.pop(LAUNCH_FD_ENV, None)
++    if launch_fds:
++        env[LAUNCH_FD_ENV] = str(launch_fds[0])
+     remaining(deadline)
+@@ -77,3 +81,3 @@ def spawn_unmanaged_gateway(profile_home: Path, *, deadline: float, idle_exit: b
+             remaining(deadline)
+-            return subprocess.Popen(command, cwd=root, env=env, close_fds=True,
++            return subprocess.Popen(command, cwd=root, env=env, close_fds=True, pass_fds=launch_fds,
+                                     stdin=subprocess.DEVNULL, stdout=output, stderr=output,
 diff --git a/hermes_cli/goal_command.py b/hermes_cli/goal_command.py
 index 0c19ebf3641b5e809a20f999988c19a38428881d..cc59114db3a89152e24266ed1cfc7596de919e8f 100644
 --- a/hermes_cli/goal_command.py
@@ -60336,25 +60480,31 @@ index ab93f87785dc2843071e197be44b6682837973ff..a4dc1deb33fd0ac767f84edf4ceb9c8c
 +    return migrate_control_state('loop:', old_session_id, new_session_id, LoopState.from_json, _get_session_db)
  
 diff --git a/hermes_cli/main.py b/hermes_cli/main.py
-index 03f6c60555fa0578a6063d29017437e6d268d7cf..93a523d6c60eec23192b9bc43b864fa58436747a 100644
+index 03f6c60555fa0578a6063d29017437e6d268d7cf..1ab57df5fad39d4d24e86ff31b62c55e3303a8e7 100644
 --- a/hermes_cli/main.py
 +++ b/hermes_cli/main.py
-@@ -1347,3 +1347,3 @@ def _resolve_last_session(source: str = "cli") -> Optional[str]:
+@@ -67,2 +67,5 @@ def _argv_is_gateway_run(argv: list) -> bool:
+ if _argv_is_gateway_run(sys.argv[1:]):
++    if "HERMES_GATEWAY_LAUNCH_LOCK_FD" in os.environ:
++        from hermes_cli.gateway_launch_admission import adopt_gateway_launch
++        adopt_gateway_launch()
+     try:
+@@ -1347,3 +1350,3 @@ def _resolve_last_session(source: str = "cli") -> Optional[str]:
          if ws_key:
 -            sessions = db.search_sessions(source=source, limit=1, workspace_key=ws_key, skip_launch_stubs=True)
 +            sessions = db.search_sessions(source=source, limit=1, workspace_key=ws_key, skip_launch_stubs=True, ids_only=True)
              if sessions:
-@@ -1351,3 +1351,3 @@ def _resolve_last_session(source: str = "cli") -> Optional[str]:
+@@ -1351,3 +1354,3 @@ def _resolve_last_session(source: str = "cli") -> Optional[str]:
          # Fallback: global MRU for this source.
 -        sessions = db.search_sessions(source=source, limit=1, skip_launch_stubs=True)
 +        sessions = db.search_sessions(source=source, limit=1, skip_launch_stubs=True, ids_only=True)
          return sessions[0]["id"] if sessions else None
-@@ -1364,3 +1364,3 @@ def _resolve_session_by_name_or_id(name_or_id: str) -> Optional[str]:
+@@ -1364,3 +1367,3 @@ def _resolve_session_by_name_or_id(name_or_id: str) -> Optional[str]:
          # Exact session ID first, then title (with auto-latest for lineage).
 -        session = db.get_session(name_or_id)
 +        session = db.get_session_metadata(name_or_id)
          resolved_id = session["id"] if session else db.resolve_session_by_title(name_or_id)
-@@ -2765,3 +2765,3 @@ _BUILTIN_SUBCOMMANDS = frozenset(
+@@ -2765,3 +2768,3 @@ _BUILTIN_SUBCOMMANDS = frozenset(
          "config", "console", "cron", "curator", "dashboard", "serve", "debug", "doctor",
 -        "dump", "egress", "fallback", "gateway", "hooks", "import", "insights",
 +        "dump", "egress", "fallback", "gateway", "goal", "hooks", "import", "import-agent", "insights",
@@ -84510,10 +84660,10 @@ index c4e4080046e70116f98165e92debbe3e98ecfeec..999318a1677ce3f47db910ca86c84915
 +    monkeypatch.setattr(profiles, "_get_wrapper_dir", lambda: tmp_path / "wrappers")
      (tmp_path / "profiles" / "beta").mkdir(parents=True)
 diff --git a/tests/hermes_cli/test_gateway_runtime_ensure.py b/tests/hermes_cli/test_gateway_runtime_ensure.py
-index 8eefb2f03f6b1714ecb3f9b19e130c686de03b47..80a7fc4ee8daf15a93590fe430fa2385c55ebf7a 100644
+index 8eefb2f03f6b1714ecb3f9b19e130c686de03b47..a24a9f19bbdda2eb20de4ed90aeb8499090ed265 100644
 --- a/tests/hermes_cli/test_gateway_runtime_ensure.py
 +++ b/tests/hermes_cli/test_gateway_runtime_ensure.py
-@@ -372,2 +372,97 @@ def test_unmanaged_root_home_child_ignores_sticky_active_profile(tmp_path, monke
+@@ -372,2 +372,255 @@ def test_unmanaged_root_home_child_ignores_sticky_active_profile(tmp_path, monke
 
 +@pytest.mark.parametrize("named", [False, True])
 +@pytest.mark.parametrize("probe_error,reason", [
@@ -84610,14 +84760,172 @@ index 8eefb2f03f6b1714ecb3f9b19e130c686de03b47..80a7fc4ee8daf15a93590fe430fa2385
 +        assert lock.is_dir()
 +
 +
++@pytest.mark.platforms("linux", "macos")
++@pytest.mark.parametrize("claim_owner", [False, True])
++def test_root_launch_admission_survives_ensure_timeout(tmp_path, monkeypatch, claim_owner):
++    import select
++    from hermes_cli import gateway_runtime as runtime, gateway_runtime_discovery as discovery
++    from hermes_cli import gateway_runtime_service as service, gateway_runtime_start as start
++
++    root = tmp_path / ".hermes"
++    named = root / "profiles" / "alpha"
++    named.mkdir(parents=True, mode=0o700)
++    (root / "config.yaml").write_text("gateway: {multiplex_profiles: true}\n", encoding="utf-8")
++    monkeypatch.setattr(service, "discover_existing_gateway_service", lambda *a, **k: None)
++    children = []
++    raw_popen = subprocess.Popen
++    child_code = """
++import os
++import sys
++from pathlib import Path
++from hermes_cli.gateway_launch_admission import LAUNCH_FD_ENV, adopt_gateway_launch, release_gateway_launch
++from gateway.runtime_ownership import ProfileOwnership
++fd = int(os.environ[LAUNCH_FD_ENV])
++adopt_gateway_launch()
++assert LAUNCH_FD_ENV not in os.environ and not os.get_inheritable(fd)
++if sys.stdin.readline().strip() == "claim":
++    owner = ProfileOwnership()
++    owner.reserve([Path(sys.argv[1])])
++    release_gateway_launch()
++    print("claimed", flush=True)
++    sys.stdin.readline()
++    owner.close()
++"""
++
++    def spawn(command, **kwargs):
++        if "hermes_cli.main" not in command:
++            return raw_popen(command, **kwargs)
++        assert kwargs["env"]["HERMES_HOME"] == str(root)
++        # Without the admission implementation the baseline stub still blocks,
++        # so its failure comes from a duplicate launch.
++        code = child_code if kwargs.get("pass_fds") else "import sys; sys.stdin.readline()"
++        kwargs.update(stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
++        proc = raw_popen([sys.executable, "-c", code, str(root)], **kwargs)
++        children.append(proc)
++        return proc
++
++    monkeypatch.setattr(start.subprocess, "Popen", spawn)
++    try:
++        assert runtime.ensure_gateway_runtime(root, timeout=0.4).reason_code == "deadline"
++        child = children[0]
++        assert child.poll() is None
++        assert runtime.ensure_gateway_runtime(named, timeout=0.4).reason_code == "deadline"
++        assert children == [child]
++        if not claim_owner:
++            child.stdin.close()
++            assert child.wait(timeout=5) == 0
++            assert runtime.ensure_gateway_runtime(named, timeout=0.4).reason_code == "deadline"
++            assert len(children) == 2
++            return
++
++        child.stdin.write("claim\n")
++        child.stdin.flush()
++        assert select.select([child.stdout], [], [], 5)[0]
++        assert child.stdout.readline().strip() == "claimed"
++        from hermes_cli.gateway_launch_admission import gateway_launch_admission
++        with gateway_launch_admission(root) as fds:
++            assert fds  # Launch lock is free while the live child holds gateway.lock.
++        assert discovery.missing_owner_state(root) == "starting"
++
++        def identify(path, *, timeout):
++            if path == named:
++                raise FileNotFoundError
++            return {"runtime_protocol": 1, "state": "ready", "instance_id": "owner",
++                    "served_profiles": [{"home": str(named), "profile_id": "alpha"}],
++                    "authority_epoch": 1, "api_origin": "http://127.0.0.1:4321", "supervisor": "none",
++                    "capabilities": ["session-authority-v1"]}
++
++        monkeypatch.setattr(discovery, "query_identify", identify)
++        result = runtime.ensure_gateway_runtime(named, timeout=0.5)
++        assert result.state == "ready" and result.endpoint.instance_id == "owner"
++        assert children == [child]
++    finally:
++        for proc in children:
++            if proc.poll() is None:
++                proc.kill()
++            proc.wait(timeout=5)
++            proc.stdin.close()
++            proc.stdout.close()
++
++
++@pytest.mark.platforms("linux", "macos")
++def test_root_launch_admission_releases_after_spawn_failure(tmp_path, monkeypatch):
++    from hermes_cli import gateway_runtime as runtime
++    from hermes_cli import gateway_runtime_service as service, gateway_runtime_start as start
++
++    monkeypatch.setattr(service, "discover_existing_gateway_service", lambda *a, **k: None)
++    launches = []
++
++    def fail(command, **kwargs):
++        launches.append(command)
++        raise OSError("fixture spawn failure")
++
++    monkeypatch.setattr(start.subprocess, "Popen", fail)
++    for _ in range(2):
++        assert runtime.ensure_gateway_runtime(tmp_path, timeout=0.5).reason_code == "spawn_failed"
++    assert len(launches) == 2
++
++
++@pytest.mark.platforms("linux", "macos")
++def test_launch_admission_scope_and_unsafe_lock(tmp_path):
++    from hermes_cli.gateway_launch_admission import gateway_launch_admission
++
++    root = tmp_path / "root"
++    standalone = root / "profiles" / "standalone"
++    with gateway_launch_admission(root) as root_fds:
++        assert root_fds
++        with gateway_launch_admission(root) as contender:
++            assert contender is None
++        with gateway_launch_admission(standalone) as independent:
++            assert independent
++
++    witness = tmp_path / "witness"
++    witness.write_text("keep", encoding="utf-8")
++    lock = root / "gateway.launch.lock"
++    lock.unlink()
++    lock.symlink_to(witness)
++    with pytest.raises(OSError):
++        with gateway_launch_admission(root):
++            pytest.fail("symlinks cannot grant launch admission")
++    assert witness.read_bytes() == b"keep"
++
++
++@pytest.mark.platforms("linux", "macos")
++def test_named_launch_rechecks_root_ownership_after_service_lookup(tmp_path, monkeypatch):
++    from gateway.runtime_ownership import ProfileOwnership
++    from hermes_cli import gateway_runtime as runtime
++    from hermes_cli import gateway_runtime_service as service, gateway_runtime_start as start
++
++    root = tmp_path / ".hermes"
++    named = root / "profiles" / "alpha"
++    named.mkdir(parents=True, mode=0o700)
++    (root / "config.yaml").write_text("gateway: {multiplex_profiles: true}\n", encoding="utf-8")
++    owner = ProfileOwnership()
++
++    def lookup(target, **kwargs):
++        assert target == root
++        owner.reserve([root])
++        return None
++
++    def refuse_spawn(*args, **kwargs):
++        pytest.fail("the root already claimed gateway.lock")
++
++    monkeypatch.setattr(service, "discover_existing_gateway_service", lookup)
++    monkeypatch.setattr(start, "spawn_unmanaged_gateway", refuse_spawn)
++    try:
++        assert runtime.ensure_gateway_runtime(named, timeout=0.4).reason_code == "deadline"
++    finally:
++        owner.close()
++
++
  @pytest.mark.parametrize("standalone", [False, True])
-@@ -375,3 +470,4 @@ def test_named_profile_without_multiplex_evidence_starts_the_host_gateway(tmp_pa
+@@ -375,3 +628,4 @@ def test_named_profile_without_multiplex_evidence_starts_the_host_gateway(tmp_pa
      """`gateway run` refuses a profiles/<name> home a gateway of its own, so ensure must start the host."""
 -    from hermes_cli import gateway_runtime as runtime, gateway_runtime_service as service, gateway_runtime_start as start
 +    from hermes_cli import gateway_runtime as runtime, gateway_runtime_discovery as discovery
 +    from hermes_cli import gateway_runtime_service as service, gateway_runtime_start as start
 
-@@ -382,4 +478,9 @@ def test_named_profile_without_multiplex_evidence_starts_the_host_gateway(tmp_pa
+@@ -382,4 +636,9 @@ def test_named_profile_without_multiplex_evidence_starts_the_host_gateway(tmp_pa
          (home / "config.yaml").write_text("gateway:\n  standalone: true\n", encoding="utf-8")
 +    def identify(path, *, timeout):
 +        if standalone and path == root:
