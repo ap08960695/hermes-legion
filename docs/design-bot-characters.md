@@ -355,6 +355,13 @@ drawing only the visible region of each frame. The fixture drew 8,320 of
 transitions in each tight run. This added 113.6–114.5 MiB and
 2.57–2.61 CPU points over no overlay. The tighter-paint prototype exceeded the resource budget. Keep full-frame painting.
 
+A matched Mac test compared 96 × 104 and 192 × 208 canvas backings at
+unchanged logical size on a 2× display. The 1× backing added 115.3–117.0 MiB
+and 2.05–2.26 CPU points over no overlay. Five sprites kept moving with the
+same geometry and cadence. The 1× captures softened small sprite details
+and missed the resource gate. Keep display-scaled canvas backings.
+[Measurement method](verification.md#five-character-canvas-backing-resolution).
+
 Hovering over a character caption reveals the full name, source and status
 as text inside the overlay. The existing output button also reveals details
 when focused. The detail box passes pointer input through. Passive captions

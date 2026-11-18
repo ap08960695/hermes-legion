@@ -1,3 +1,25 @@
+# Five-character canvas backing resolution
+
+Six isolated Mac Electron runs used one bundle with five synthetic full
+sprite sheets. Two opposite-order 2×/1× pairs were bracketed by no-overlay
+baselines. At 2× display scale, each character kept its 96 × 104 logical
+size and changed only its backing from 192 × 208 to 96 × 104. The
+measurement sampled 20 seconds after 18 seconds of warmup. CPU is the
+percentage of one core, including fixture GPU work and excluding
+WindowServer. Memory is the median summed physical footprint.
+
+| Canvas backing | Added memory over no overlay | Added CPU points |
+|---|---:|---:|
+| 2× | 113.5–116.7 MiB | 2.58–2.62 |
+| 1× | 115.3–117.0 MiB | 2.05–2.26 |
+
+All five packs moved in both modes with matching rectangles and cadence.
+The 1× backing softened sprite details and exceeded the memory budget
+with the full sprite sheets still resident. The desktop keeps its
+display-scaled backing. Each trial recorded zero Desktop SSH after 60
+seconds and zero surviving processes. Real bot activity and pointer
+interactions were outside the benchmark.
+
 # Preview a delivered PNG in a bot’s character (unreleased)
 
 The latest-output popover can preview a single static PNG from the
