@@ -300,6 +300,11 @@ still add 120.8 MiB in summed macOS physical footprint over no overlay, of
 which the overlay renderer accounts for 96.2 MiB. The remaining release
 budget needs work. [Current verification](verification.md#pet-overlay-boots-without-the-desktop-shell-unreleased).
 
+Vite now groups the shared class-name helper with the renderer's UI
+foundations. Opening the overlay avoids loading the Markdown vendor chunk.
+The normal Markdown renderer still imports it.
+[Import and Local smoke checks](verification.md#keep-the-markdown-vendor-chunk-off-the-overlay-boot-path).
+
 The [five-mode Mac comparison](verification.md#where-the-pet-overlay-uses-memory-unreleased)
 attributes 20.6 MiB to the blank overlay, 33.8 MiB to loading the production
 overlay above blank and 58.1 MiB to the five-pack workload above the atlas-free

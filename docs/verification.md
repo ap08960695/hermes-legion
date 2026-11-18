@@ -1,3 +1,19 @@
+# Keep the Markdown vendor chunk off the overlay boot path
+
+The built overlay entry reached the entire Markdown vendor chunk through
+ordinary buttons' class-name helper. Moving that helper to the shared UI
+foundations reduced statically reachable overlay JavaScript from
+3,871,493 bytes in 48 files to 3,522,873 bytes in 47 files. The built
+manifest still links Markdown from the normal Chat renderer. The same
+check rejected dropping the helper from all groups because the resulting
+overlay reached the syntax-highlighting bundle.
+
+The isolated Mac fixture loaded five moving sprites before and after.
+The old renderer requested the Markdown chunk. The new renderer left it
+off the request list. Both kept matching geometry and animation cadence.
+A single matched comparison measured physical footprint and CPU. The
+five-character resource target remains open.
+
 # Five-character canvas backing resolution
 
 Six isolated Mac Electron runs used one bundle with five synthetic full
