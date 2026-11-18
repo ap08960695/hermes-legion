@@ -1,3 +1,19 @@
+# Give Mac desktop pet landings more weight
+
+Dragging a pet above the floor now ends in an accelerating fall, a
+stronger squash and two diminishing hops. A soft shadow contracts at
+the landing spot while one small dust puff marks the first impact.
+Both effects clear when the pet settles. Reduce Motion settles the
+pet immediately and skips the effects.
+
+An isolated Mac Local fixture used one display with five pets. From
+both release heights, the first sampled frame stayed at the release
+position, the first rebound reached about 16 px, and the second
+reached about 5.6 px. The 2.3-second comparison shows the previous
+overlay on the left and the new one on the right. The 60-second Local
+gate recorded zero Desktop SSH links and all four product processes
+stopped. No Hermes model ran.
+
 # Drop Mac desktop pets to the floor after dragging
 
 Drag a visible sprite anywhere in the display work area. Releasing it

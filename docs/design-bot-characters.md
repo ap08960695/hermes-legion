@@ -621,9 +621,11 @@ The shared, transparent panel covers the available display work areas.
 It paints the installed sprites and has no status cards or Move
 bar. Each character moves on its own. Drag a painted part of a sprite
 anywhere in the display's work area. On release above the floor, the
-pet falls straight down, squashes and bounces before settling. The pet
-keeps its horizontal placement on the chosen display when the preview
-reopens. Positions saved by earlier builds also settle to the floor.
+pet accelerates downward, squashes on impact and takes two smaller
+hops. Its shadow tightens at the landing spot and a brief dust puff
+marks the first contact. The pet keeps its horizontal placement on
+the chosen display when the preview reopens. Positions saved by
+earlier builds also settle to the floor.
 Left and Right move a focused pet along the floor. Reduce Motion
 settles the pet immediately. When a Hermes text field is focused,
 the overlay also settles immediately and keeps clear of the field.
