@@ -1,3 +1,24 @@
+# Measure shared frame timing in the character overlay
+
+Five signed Mac Local fixtures used one build and equal sprite strips.
+Two independent/aligned comparisons ran in opposite orders around a
+no-overlay control. Fixture-delayed image loads spanned 1026–1028 ms. The experimental timing path draws the first ready
+pose and aligns later deadlines. A renderer test covered staggered
+image readiness, an overdue frame, and cancellation on hide.
+
+The two variants matched 30 drawn-frame hashes and preserved canvas
+and caption geometry. Independent timing drew 40–42 frames per actor
+in eight seconds and aligned timing drew 44. All six frames
+appeared in order. Separate traces recorded 49–82 independent
+GPU buffer swaps and 43 aligned swaps. Draws from all five sprites shared a timestamp 0–42 times with
+independent timing and 38–44 times when aligned. Independent frames
+were already grouped in the second draw probe.
+
+Shared timing saved 0.84–1.58 CPU points across the two pairs. Aligned overhead was 2.51–2.58 CPU points and
+88.5–89.1 MiB above no overlay. Both trials exceeded the 2-point CPU and 80 MiB memory ceilings. The samples include fixture GPU work and exclude
+WindowServer. Product delivery and timing use their current paths.
+All five runs recorded zero Desktop SSH after 60 seconds and no survivors.
+
 # Profile animation with matched mixed-state strips
 
 Five fresh signed Mac Local fixtures used equal PNG/WebP row strips,

@@ -367,6 +367,13 @@ GPU swaps with motion and 0 with held poses in eight seconds.
 The two moving samples used 91.33–92.18 MiB above no overlay.
 [Mixed-state profile](verification.md#profile-animation-with-matched-mixed-state-strips).
 
+A shared clock prototype aligned equal-period sprite steps after
+staggered image changes. It matched 30 rendered frame hashes and had
+43 GPU swaps in its eight-second traces, compared with 49–82
+for independent clocks. The aligned trials added 2.51–2.58 CPU points and
+88.5–89.1 MiB above no overlay. Desktop production still uses independent timing.
+[Shared timing profile](verification.md#measure-shared-frame-timing-in-the-character-overlay).
+
 A follow-up Mac run measured 111.6 MiB and 2.81 CPU points of five-pack
 overhead before tracing. About 1.51 CPU points came from the overlay
 renderer and 1.29 from the main process, which hosted Chromium's GPU
