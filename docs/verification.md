@@ -56,6 +56,36 @@ with 11 skips. The six changed patch sections applied and reversed
 with matching hashes. Windows, service-managed startup and the
 packaged Desktop sequence remain separate acceptance cases.
 
+# Attribute the current Mac Local pet overlay cost
+
+One signed isolated Mac run sampled four 9-second windows with the
+main window minimized throughout. The blank overlay had a transparent
+document with zero root children, canvases and received atlas bytes.
+The publisher staged five saved assignments. The same renderer and
+window bounds then displayed five distinct half atlases. All five
+moved before and after the sample. The final sample closed the overlay.
+
+| Comparison | CPU points on one core | Physical footprint | RSS |
+| --- | ---: | ---: | ---: |
+| Blank above first off | +0.60 | +104.3 MiB | +220.6 MiB |
+| Five moving above blank | +1.68 | +56.3 MiB | +51.4 MiB |
+| Five moving above first off | +2.27 | +160.6 MiB | +272.0 MiB |
+| Final off above first off | −1.14 | +20.7 MiB | +59.1 MiB |
+
+The blank renderer alone used 160.6 MiB RSS and 50.6 MiB footprint,
+compared with 202.8 MiB and 79.0 MiB while painting five moving pets.
+The app-wide blank comparison includes publisher activity. The
+moving comparison includes loading, painting and animation. Summed
+RSS may count shared pages. GPU and networking ran in the Electron
+main process. This short sequence still exceeds the 2-point CPU and
+80 MiB RSS targets.
+
+The packaged app selected a named Local profile, issued one ensure
+against the prestarted isolated gateway and recorded zero Desktop
+SSH over 60 seconds. At most four Hermes processes ran and all
+exited. The test used no inference. Longer samples, a held five-pet
+baseline and default GPU configuration remain open.
+
 # Celebrate a saved worker completion on Mac desktop
 
 A fresh saved worker completion uses the current pack's jumping row

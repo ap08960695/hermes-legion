@@ -317,6 +317,14 @@ physical footprint with the same CPU use. Keep the hint under the current
 Electron setup. Evaluate atlas residency separately before changing storage
 or pixel fidelity.
 
+The current packaged Local fixture measured the blank overlay renderer
+at 160.6 MiB RSS, 79% of the same renderer's RSS with five moving
+pets. Five moving pets added 2.27 CPU points and 272.0 MiB RSS over
+preview off. The shell already exceeds the full RSS target by itself.
+Compare a leaner overlay entry at fixed geometry before investing in
+further atlas transport changes.
+[Current attribution](verification.md#attribute-the-current-mac-local-pet-overlay-cost).
+
 A matched Mac run tested decoding just the active row of each character's
 sprite sheet. Five moving characters used 32.8 MiB less physical footprint
 than with full sheets, but used 0.23 percentage points more of one CPU core.
