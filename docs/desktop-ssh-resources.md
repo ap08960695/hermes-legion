@@ -65,6 +65,13 @@ until it finishes. Then Desktop seals new SSH bootstraps and runs the bounded
 SSH and local backend shutdowns in parallel before exiting. Bundle-swap
 startup stays parked while this handoff is pending.
 
+An isolated packaged Mac fixture cold-started a named Local profile and
+ran the real Desktop restart handler. The supervisor started the replacement
+app after the first exited, keeping both launches under the same network
+and SSH restrictions. The new renderer reached the same detached gateway.
+See [verification](verification.md#packaged-mac-local-cold-start-and-restart)
+for the two Local observation windows and the fixture boundaries.
+
 POSIX execution also acquires a remote kernel lock **before starting Python**.
 The inherited descriptor reserves the remote home's single helper slot through
 actual cleanup, even after the local client has disappeared. Other application

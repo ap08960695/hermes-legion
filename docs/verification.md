@@ -10637,3 +10637,23 @@ bootstrap, kept bundle-swap startup parked beyond its 15-second fallback,
 then sealed SSH and exited after the existing six-plus-one-second budget.
 The focused run passed 41 tests with the real OpenSSH case excluded.
 Three Electron development bundles built. Live app relaunch remains unverified.
+
+### Packaged Mac Local cold start and restart
+
+A signed isolated arm64 package used the patched main and preload with
+the existing renderer. The trial began with an empty synthetic gateway
+home and a registry containing one Local connection. The first Desktop
+app started the detached gateway for the named profile through one
+`gateway ensure`. It also completed a read-only dashboard status request
+from the renderer.
+
+After a 60-second Local gate, the renderer called the production restart
+IPC. The first app exited cleanly and the supervisor replayed the launch
+inside the same OS sandbox. The new app issued one ensure, returned
+status for the same named profile, and retained the gateway PID, instance
+and control socket identity through a second 60-second gate.
+
+The sandbox denied external networking and system SSH execution. No
+Desktop SSH process was observed. The fixture stubbed service discovery
+and the native macOS relaunch call. Native scheduling, supervised gateway
+startup, remote SSH and production adoption remain unverified.
