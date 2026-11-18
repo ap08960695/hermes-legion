@@ -47071,6 +47071,65 @@ index fabd763235b15b0790ef708a5eb6f9846889c6b8..65d849eb5e9e070b264d054b7a627270
 +                    # retaining a filesystem-sized default buffer for every served profile.
 +                    handle = os.fdopen(fd, 'r+', buffering=4096, encoding='utf-8')  # windows-footgun: ok — write-only
                      try:
+diff --git a/gateway/session_ancillary.py b/gateway/session_ancillary.py
+index 54f72c73cf4b9801f18c93cc9614af9094a19a95..57961a7310ca629ce661720587fba7be3eaba6f3 100644
+--- a/gateway/session_ancillary.py
++++ b/gateway/session_ancillary.py
+@@ -37,2 +37,6 @@ def handlers(connection):
+
++def _valid_child_session_id(value):
++    return isinstance(value, str) and 0 < len(value) <= 512
++
++
+ async def subagent_control(connection, ref, params, *, steer):
+@@ -41,4 +45,9 @@ async def subagent_control(connection, ref, params, *, steer):
+     fields = {'session_id', 'profile', 'subagent_id'} | ({'text'} if steer else set())
++    expected_child = params.get('child_session_id')
++    if not steer and 'child_session_id' in params:
++        if not _valid_child_session_id(expected_child):
++            raise RuntimeStoreError('invalid_params')
++        fields.add('child_session_id')
+     if (set(params) - fields or not ref.session_id or any(not isinstance(params.get(k), str) or not params[k]
+-                                                           for k in fields - {'profile'})):
++                                                           for k in fields - {'profile', 'child_session_id'})):
+         raise RuntimeStoreError('invalid_params')
+@@ -50,3 +59,5 @@ async def subagent_control(connection, ref, params, *, steer):
+         _require_current_route(connection.authority, ref)
+-        child = next((r['agent'] for r in _owner_objects(connection.authority, ref)[1] if r.get('subagent_id') == sub), None)
++        child = next((r['agent'] for r in _owner_objects(connection.authority, ref)[1]
++                      if r.get('subagent_id') == sub
++                      and (expected_child is None or r.get('child_session_id') == expected_child)), None)
+     if not steer:
+@@ -212,4 +223,9 @@ async def read(connection, ref, params, *, kind):
+         if kind == 'subagents':
+-            return {'subagents': [{key: record.get(key) for key in _SUBAGENT_FIELDS}
+-                                  for record in records], 'delegations': []}
++            subagents = []
++            for record in records:
++                item = {key: record.get(key) for key in _SUBAGENT_FIELDS}
++                if record['child_session_id'] is not None:
++                    item['child_session_id'] = record['child_session_id']
++                subagents.append(item)
++            return {'subagents': subagents, 'delegations': []}
+         if kind == 'tail':
+@@ -484,7 +500,13 @@ def subagent_records(parent, session_id=None, *, session_db=None, route=None, in
+     target_sids = _compression_lineage(expected_db, target_sid)
++    records = []
+     with registry._active_subagents_lock:
+-        return [dict(record) for record in registry._active_subagents.values()
+-                if (parent is not None and registry._is_descendant_of(record.get('agent'), parent))
+-                or _has_fallback_evicted_ancestor(record.get('agent'), target_sids, expected_db, effective_route, registry)
+-                or _owned_by_lineage(record, target_sids, expected_db)]
++        for record in registry._active_subagents.values():
++            child = record.get('agent')
++            resident = parent is not None and registry._is_descendant_of(child, parent)
++            if (resident or _has_fallback_evicted_ancestor(child, target_sids, expected_db, effective_route, registry)
++                    or _owned_by_lineage(record, target_sids, expected_db)):
++                # Lineage-only records are readable but cannot be controlled from this parent.
++                child_id = getattr(child, 'session_id', None) if resident else None
++                records.append(dict(record, child_session_id=child_id if _valid_child_session_id(child_id) else None))
++    return records
+
 diff --git a/gateway/session_authority.py b/gateway/session_authority.py
 index 3bc6c596c77c495c1cf318495a84319c211dd523..95d024cb2bbde15bae57bfa4b814cd445e6c2b13 100644
 --- a/gateway/session_authority.py
@@ -72898,6 +72957,41 @@ index 0000000000000000000000000000000000000000..1fb95db7c33b5baa012ac6c2be825526
 +
 +if __name__ == '__main__':
 +    main()
+diff --git a/tests/gateway/fixtures/subagent_controls_peer.py b/tests/gateway/fixtures/subagent_controls_peer.py
+index bb23e86491aee0caa9360cf66a4c990a5e7ab6c1..45830bc3a9176c6bf33a0d6e1d1946f7e1b9c0d9 100644
+--- a/tests/gateway/fixtures/subagent_controls_peer.py
++++ b/tests/gateway/fixtures/subagent_controls_peer.py
+@@ -52,9 +52,28 @@ async def probe():
+         try:
+-            for name, ancestor in [('owned', parent), ('sibling', other_parent)]:
++            for name, ancestor in [('owned', parent), ('sibling', other_parent), ('lineage', other_parent)]:
+                 child = children[name] = Agent()
+                 child._subagent_id = name
++                child.session_id = name + '-session'
+                 child._delegate_parent_ref = weakref.ref(ancestor)
+-                child._parent_session_id = ancestor.session_id
++                child._parent_session_id = sid if name == 'lineage' else ancestor.session_id
++                child._session_db = authority.db
+                 _register_child(child, ancestor, name + '-goal', owner_session_id=None,
+                                 owner_transport=None, owner_session_record=None)
++            listing = await rpc(ws, 'subagent.list', session_id=sid)
++            receipt['targets'] = {row['subagent_id']: row.get('child_session_id')
++                                  for row in listing['result']['subagents']}
++            for key, name, identity in [('mismatch', 'owned', 'sibling-session'),
++                                        ('foreign', 'sibling', 'sibling-session'),
++                                        ('read_only', 'lineage', 'lineage-session'),
++                                        ('malformed', 'owned', None),
++                                        ('exact', 'owned', 'owned-session')]:
++                attempted = await rpc(ws, 'subagent.interrupt', session_id=sid, subagent_id=name,
++                                      child_session_id=identity)
++                receipt[key] = attempted.get('result', attempted.get('error'))
++            children['owned'].session_id = 'owned-replacement-session'
++            stale = await rpc(ws, 'subagent.interrupt', session_id=sid, subagent_id='owned',
++                              child_session_id='owned-session')
++            receipt['stale'] = stale.get('result', stale.get('error'))
++            receipt['matched_delivery'] = {name: len(child.stopped) for name, child in children.items()}
++            children['owned'].stopped.clear()
+             # The exact Desktop producer frames (subagent-controls.tsx).
 diff --git a/tests/gateway/fixtures/transport_policy_probe.py b/tests/gateway/fixtures/transport_policy_probe.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..ec841b94e8595cc15f649b922826db8acf91ed94
@@ -77646,6 +77740,26 @@ index 0000000000000000000000000000000000000000..5becd154771e2fe659ddcf693a7fa977
 +        await connection.close()
 +        unbind_owner(authority)
 +        store.close_all_db_handles()
+diff --git a/tests/gateway/test_session_subagent_controls.py b/tests/gateway/test_session_subagent_controls.py
+index 12f3da229011999f040aff2b892b848918c9766a..969b19c4093d6bc8690ff35e9920fea6cb128726 100644
+--- a/tests/gateway/test_session_subagent_controls.py
++++ b/tests/gateway/test_session_subagent_controls.py
+@@ -23,2 +23,10 @@ def test_desktop_subagent_steer_and_stop_reach_only_this_sessions_children(tmp_p
+     receipt = json.loads((home / 'receipt.json').read_text())
++    assert receipt['targets'] == {'owned': 'owned-session', 'lineage': None}, receipt
++    assert receipt['mismatch'] == {'found': False, 'subagent_id': 'owned'}, receipt
++    assert receipt['foreign'] == {'found': False, 'subagent_id': 'sibling'}, receipt
++    assert receipt['read_only'] == {'found': False, 'subagent_id': 'lineage'}, receipt
++    assert receipt['malformed']['data']['reason'] == 'invalid_params', receipt
++    assert receipt['stale'] == {'found': False, 'subagent_id': 'owned'}, receipt
++    assert receipt['exact'] == {'found': True, 'subagent_id': 'owned'}, receipt
++    assert receipt['matched_delivery'] == {'owned': 1, 'sibling': 0, 'lineage': 0}, receipt
+     assert receipt['owned'] == {'steer': {'status': 'queued', 'subagent_id': 'owned', 'text': 'check owned'},
+@@ -27,3 +35,3 @@ def test_desktop_subagent_steer_and_stop_reach_only_this_sessions_children(tmp_p
+                                   'stop': {'found': False, 'subagent_id': 'sibling'}}, receipt
+-    assert receipt['delivered'] == {'owned': [['check owned'], 1], 'sibling': [[], 0]}, receipt
++    assert receipt['delivered'] == {'owned': [['check owned'], 1], 'sibling': [[], 0], 'lineage': [[], 0]}, receipt
+     assert receipt['late']['status'] == 'rejected', receipt
 diff --git a/tests/gateway/test_session_viewer_automation.py b/tests/gateway/test_session_viewer_automation.py
 index 42f4e11fa9f64027661d0bb225fc7bd1f7f7713f..119327b34db615072119f44678564e8ac042502a 100644
 --- a/tests/gateway/test_session_viewer_automation.py

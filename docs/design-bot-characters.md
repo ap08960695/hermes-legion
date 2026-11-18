@@ -451,3 +451,12 @@ its saved workspace generation and the exact current reply. It rechecks the
 revision on click and reads through a directory descriptor without following
 symlinks. The overlay shows the snapshot as plain text. Other deliveries still
 show their path. The five-character resource budget remains open.
+## Match a running character to its worker
+
+The owning session’s `subagent.list` can include `child_session_id` for a
+resident worker it can control. It matches the worker session ID in Monitor.
+A client can supply it with `subagent_id` to `subagent.interrupt`. The gateway
+checks both IDs under the same parent and interrupts that worker instance. A
+stale or mismatched pair leaves the worker alone. Readable lineage entries
+without a controllable worker omit the field. Existing callers can still
+interrupt with only `subagent_id`. Stop and Pause remain future overlay work.
