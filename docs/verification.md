@@ -1,3 +1,22 @@
+# Keep desktop pets clear of focused Hermes text fields on Mac
+
+Desktop pets temporarily step away from a focused field in the Hermes
+main window. Positioning includes the wandering range. A pet hides if
+there is insufficient space above or below. The shift is temporary, so
+blurring the field or minimizing Hermes restores the original anchor.
+
+An isolated packaged Local build dragged a pet over the real Bot Monitor
+search field. It moved 38 points when the field gained focus,
+kept the other four anchors fixed, and returned to its saved point on
+blur and minimize. The regressions exercise focus and scroll geometry,
+native zoom and bounds, invalid geometry, and the no-room case.
+
+The 60-second Local gate recorded zero Desktop SSH links. The trial
+used at most four product processes and stopped them. The fixture used
+in-process GPU and networking. The evidence includes crops from the
+packaged renderer. Native screen capture, cross-app text inputs, live
+multiple displays, and resource budgets remain open.
+
 # Resize desktop pets from the existing Pet Size slider
 
 On Mac, Settings › Appearance › Pet › Size also controls assigned
