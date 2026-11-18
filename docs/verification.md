@@ -1,3 +1,24 @@
+# Resize desktop pets from the existing Pet Size slider
+
+On Mac, Settings › Appearance › Pet › Size also controls assigned
+desktop pets. The half-size factor and 96 × 104 point bounds keep
+them compact. Shared-clock sprites repaint promptly after resizing.
+The overlay checks the current pointer against the new hit targets.
+
+An isolated packaged Local run showed the same five desktop pets at
+32 × 34 points before and 62 × 68 after saving 65%. The larger size
+survived an overlay reload. Tests covered the upper bound, invalid
+scale fallback, and pointer gating without cursor movement.
+
+At default size, two 25-second five-pet samples added 2.77 CPU
+points of one core, 115.8 MiB of physical footprint, and
+240.6 MiB of RSS on average against the mean of the two preview-off
+samples in a separate run of the same build. Both runs used GPU and
+networking in-process, stayed within four product processes, and passed
+the 60-second Local gate with zero Desktop SSH links. All product
+processes stopped, and no model ran.
+The larger size and default GPU path have no resource samples.
+
 # Remember desktop pet positions on Mac
 
 Drag a desktop pet or move it with the arrow keys. Hermes remembers its
