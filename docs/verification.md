@@ -1,3 +1,20 @@
+# Remember desktop pet positions on Mac
+
+Drag a desktop pet or move it with the arrow keys. Hermes remembers its
+placement on this Mac for the 64 most recently moved pets. A cancelled
+drag leaves the last saved spot intact. When display space changes, the
+existing placement bounds keep the pet on an available display.
+
+The test reproduced a reset on remount before the fix. It now checks
+committed and cancelled drags, keyboard placement, neighbor anchors
+and simulated display removal. In the packaged Mac Local test, the
+dragged pet kept its position through an overlay reload, an overlay
+close and reopen with a new renderer, and a full app restart. All six
+generated pets painted. Four-corner dragging and transparent release
+passed on one display. Both acceptance launches passed the 60-second
+Local gate with zero Desktop SSH links and stopped their processes.
+GPU and networking ran in-process. No model ran.
+
 # Poll less often for minimized Mac desktop pets
 
 An active character preview requests a roster refresh every eight
