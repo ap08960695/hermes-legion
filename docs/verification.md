@@ -1,3 +1,22 @@
+# Verify PDF preview through Mac Local Monitor
+
+A signed isolated Desktop build opened **Bots → Monitor → Show bot
+characters** against one loopback gateway. The character's **Preview
+file** action redeemed the current workspace ticket once, read the
+file once, and started one sandboxed raster helper. The 413 × 640
+first-page PNG matched the reference byte for byte. **Expand preview**
+increased the displayed height from 68 to 192 px.
+
+Replacing the file after the offer produced **File preview unavailable**
+before disk read or rasterization. An outside-workspace PDF offered
+**Copy path**. The intercepted clipboard received the exact path,
+including spaces and Unicode.
+
+The fixture used Chromium's process-per-site switch. Both windows
+shared one renderer, and the raster start accounted for four product
+processes. The Local60 gate passed before input with zero Desktop
+SSH. The app and gateway stopped with no survivors.
+
 # Guard Mac PDF raster memory
 
 The Mac raster helper checks its kernel-reported peak physical
