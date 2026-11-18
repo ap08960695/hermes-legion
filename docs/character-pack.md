@@ -129,6 +129,22 @@ activity will look correct: fill the native rows before seeking visual acceptanc
 The shared validator also reports empty atlases, undersized/collapsed poses,
 multi-pose outliers and invisible pixels retaining RGB colour.
 
+### Using generated art
+
+1. Ask an authorized image tool for one original character in several poses on
+   a transparent background. Keep the same colors, scale and distinguishing
+   features across poses. Ask for generous empty space between them.
+2. Open the source over a colored backdrop to check its alpha. Crop one pose
+   at a time so nearby poses and marks stay out of the cell. Size the poses
+   together and align their feet, wheels or base to the same baseline.
+3. Export **192 × 208 px** RGBA frames and assemble them with the
+   [creator skill's recipe](../skills/character-pack-creator/SKILL.md#assemble-and-describe-the-folder).
+   Check the first and last frames of each loop together. Use a new pack
+   folder and keep the generated source, prompt and permission terms with it.
+4. Check the finished sheet against the **4 MiB** Desktop limit, run lint
+   and terminal preview, then import into the intended bot profile. Check
+   the result in Monitor at the size people will see on the desktop.
+
 ## Preview without adopting the pack
 
 `show --pack` uses the exact bytes that passed validation, copied into a private

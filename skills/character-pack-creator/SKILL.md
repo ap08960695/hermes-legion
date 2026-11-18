@@ -41,6 +41,9 @@ available authorized image tool, or original programmatic art. Keep image/model
 calls within the existing allowance; this skill supplies no provider or quota.
 Ask image tools for individual poses/strips, then assemble exact geometry locally.
 Do not rely on an image model to draw a perfectly aligned atlas.
+Check generated alpha over a colored backdrop. Crop each pose separately,
+scale related poses together and align their feet, wheels or base before
+assembly. Inspect the last-to-first transition in both walk directions.
 
 Each frame is transparent RGBA **192 × 208 px**. Keep size/baseline stable, leave
 padding, and make meaningful adjacent changes (blink/breathe/type/walk) for loops.

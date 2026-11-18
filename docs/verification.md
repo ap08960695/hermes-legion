@@ -1,3 +1,25 @@
+# Create six packs from generated art
+
+Six original generated characters passed the public creator workflow.
+Each retained transparent alpha, fit all nine native rows without
+warnings, stayed below 4 MiB and emitted 39 terminal preview frames.
+The isolated Mac Local build showed all six in Monitor after their
+per-profile selections were saved and reopened. The sprite replies
+matched the exact imported atlases. All six moved with Hermes minimized,
+and the four-corner drag probe passed on one display.
+
+| 25-second sample on the same minimized fixture | Mean physical footprint | CPU, percent of one core |
+| --- | ---: | ---: |
+| Preview off | 606.0 MiB | 1.46% |
+| Five generated characters | 765.8 MiB | 4.31% |
+| Preview off again | 573.2 MiB | 1.49% |
+
+Five characters added 159.8 MiB and 2.85 CPU points against the initial
+off sample. Both exceed the release targets. The preview renderer
+exited when stopped. GPU and networking ran in-process, activity used
+isolated profiles, and no model ran. The trial opened zero Desktop SSH
+links and stopped all of its processes.
+
 # Count character frames from the validated atlas
 
 The installed-character reader reuses the atlas it opens for validation.
