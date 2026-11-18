@@ -1,3 +1,21 @@
+# Named Local profiles preserve gateway probe failures
+
+When a named profile has no control socket of its own, Hermes probes
+the root gateway. A denied, timed-out or invalid response now keeps
+its diagnostic and stops startup for that attempt. A profile that
+explicitly opts out with `gateway.standalone: true` can still start
+its own gateway. The root can still start when discovery finds it
+absent. The Windows pipe-proven owner diagnostic is preserved.
+
+Four Local startup regressions failed on the previous source. The
+patched Mac suite passed 65 tests with 11 skips across gateway ensure,
+discovery, standalone refusal and simulated Windows pipe identity.
+It exercised a real unsafe socket path and stubbed service startup.
+The process cap stayed below four under a local Unix socket sandbox.
+The three changed patch sections applied and reversed with matching
+hashes against the pinned source. The intermittent Desktop duplicate
+and simultaneous cold starts after confirmed absence still need proof.
+
 # Celebrate a saved worker completion on Mac desktop
 
 A fresh saved worker completion uses the current pack's jumping row
