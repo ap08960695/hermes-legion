@@ -158,6 +158,15 @@ multi-pose outliers and invisible pixels retaining RGB colour.
    and terminal preview, then import into the intended bot profile. Check
    the result in Monitor at the size people will see on the desktop.
 
+For a celebration, give the five jumping cells distinct poses. Start with a
+crouch, stretch into takeoff, tuck at the peak, extend on descent and settle
+back to the original baseline. Use one art scale across the set so movement
+comes from the drawings and their vertical offsets. When revising an existing
+pack, compare the decoded pixels in every untouched cell, including the unused
+cells, and import the revision under a new slug.
+
+![Moon Jelly crouching, taking off, cheering in the air, descending and settling in five transparent sprite cells](images/moon-jelly-celebration-frames.webp)
+
 ## Preview without adopting the pack
 
 `show --pack` uses the exact bytes that passed validation, copied into a private

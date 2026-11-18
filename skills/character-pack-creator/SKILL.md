@@ -62,10 +62,13 @@ left to right, with exactly these counts for the complete recipe:
 | 7 | running | 6 | run (working in place) |
 | 8 | review | 6 | review |
 
-These are atlas rows, not new interaction events. Think, handoff, retry,
-collaboration and celebration mappings are future runtime work; record requested
-gaps rather than inventing manifest keys. Inspect both directional sequences
-separately; the seven-state terminal cycle does not exercise them.
+A fresh saved worker completion on Mac desktop uses the jumping row once.
+Give the five cells a crouch, takeoff, peak, descent and landing at a shared
+scale. Match the original resting baseline at the start and finish. For a
+single-row revision, compare the decoded pixels of every untouched cell and
+use a new pack slug. Dedicated custom rows for thinking, handoff, retry and
+collaboration remain future work. Inspect both directional sequences separately
+because the seven-state terminal cycle skips them.
 
 ## Assemble and describe the folder
 
