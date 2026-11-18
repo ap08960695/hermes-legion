@@ -181,6 +181,32 @@ two loops at desktop size to check the seam. Hermes supplies the
 
 ![Six Puddle Frog waiting poses with a planted foot, a foot tap and a blink](images/puddle-frog-waiting-frames.webp)
 
+## Add optional action art
+
+The [six generated packs](../examples/character-pack/generated/README.md) pair
+importable native atlases with source art for parcel throws and catches,
+angry stomps, sleep and yawns, and weighted landings. Their PNG contact sheets
+show the native and optional frames at the Mac gateway's **96 × 104 px**
+cell size. Puddle Frog also has a separate question-mark waiting strip so its
+existing foot-tap loop can be kept intact.
+
+Give each optional action four to eight transparent frames. For a throw,
+show the parcel held, drawn back, released and in flight. For a catch, show
+the same parcel arriving, making contact, compressing the body and coming to
+rest. For a stomp or landing, hold the contact point through the squash,
+raise the body briefly on rebound and settle on the original baseline. Loose
+details such as a scarf or leaves should follow the body's change of direction.
+For a walk or roll, keep contact and passing poses distinct and check the
+seam at the end of both directions. A heavier pet spends longer low on the
+planted foot or compressed suspension and rises less between steps.
+
+Keep pending action art in a separate transparent sheet with its row order,
+frame counts, anchor and suggested timing beside it. Use one question-mark
+pictogram in waiting art and keep labels and sleep letters out of the
+frames. The native lint, preview and import commands use the schema 1
+manifest and native atlas. The separate action sheet is available for future
+event wiring and creator review.
+
 ## Preview without adopting the pack
 
 `show --pack` uses the exact bytes that passed validation, copied into a private

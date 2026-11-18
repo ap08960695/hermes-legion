@@ -14,20 +14,28 @@ ALLOWED_SUFFIXES = {".md", ".py", ".json", ".yaml", ".yml", ".patch"}
 SPECIAL = {"LICENSE", ".gitignore"}
 IMAGE_SUFFIXES = {".webp", ".gif"}
 MAX_IMAGE_BYTES = 500_000
+MAX_PACK_IMAGE_BYTES = 750_000
+GENERATED_PACK_DIR = Path("examples/character-pack/generated")
+GENERATED_PACKS = {"copper-reed", "jellune", "mothsmith", "parcel-bug", "puddlecap", "terracotta-fern"}
+PACK_IMAGES = {"spritesheet.webp", "actions.webp", "contact-sheet.png"}
 
 
-def read_documentation_image(path):
+def read_release_image(path, *, pack=False):
+    label, limit = ("character pack", MAX_PACK_IMAGE_BYTES) if pack else ("documentation", MAX_IMAGE_BYTES)
     with path.open("rb") as stream:
-        data = stream.read(MAX_IMAGE_BYTES + 1)
-    if len(data) > MAX_IMAGE_BYTES:
-        raise ValueError("documentation image too large")
+        data = stream.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError(f"{label} image too large")
     if path.suffix == ".webp":
         valid = (data.startswith(b"RIFF") and data[8:12] == b"WEBP"
                  and int.from_bytes(data[4:8], "little") == len(data) - 8)
+    elif path.suffix == ".png":
+        valid = (data.startswith(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR")
+                 and data.endswith(b"\0\0\0\0IEND\xaeB`\x82"))
     else:
         valid = data.startswith((b"GIF87a", b"GIF89a")) and data.endswith(b";")
     if not valid:
-        raise ValueError("invalid documentation image")
+        raise ValueError(f"invalid {label} image")
     return data
 
 
@@ -55,8 +63,10 @@ def verify(root, *, history=False):
         name = rel.as_posix()
         if name == MANIFEST:
             continue
-        if rel.parent == Path("docs/images") and path.suffix in IMAGE_SUFFIXES:
-            data = read_documentation_image(path)
+        pack_image = (rel.parent.parent == GENERATED_PACK_DIR and rel.parent.name in GENERATED_PACKS
+                      and path.name in PACK_IMAGES)
+        if pack_image or (rel.parent == Path("docs/images") and path.suffix in IMAGE_SUFFIXES):
+            data = read_release_image(path, pack=pack_image)
         else:
             if path.name not in SPECIAL and path.suffix not in ALLOWED_SUFFIXES:
                 raise ValueError("unexpected file type")

@@ -10858,3 +10858,22 @@ for five walking pets at either height. Owned WindowServer crops
 matched the reference sprite cells with at least 99.61% silhouette
 overlap. All four panels closed with no surviving processes. Integrated
 CPU and packaged interaction acceptance remain open.
+
+### Six generated character packs in the release inventory
+
+The animation art lane adds six schema 1 packs with canonical WebP
+atlases, optional source actions and contact sheets. The release
+verifier admits only the three expected image names for the six
+generated pack directories with a 750,000-byte cap per image. The
+existing documentation image policy retains its 500,000-byte cap.
+Every release entry still requires its exact SHA-256 hash.
+
+On Mac, the patched pet CLI validated and imported all six packs
+without warnings into an isolated Hermes home. The installed loader
+rendered each native idle loop in a real pseudo-terminal. Moon Jelly
+also imported from a copy containing only the manifest and native
+atlas. Its idle playback matched byte for byte. The import preserved
+the canonical atlas and motion weight and selected no active pet.
+The 18 staged images decoded and optional action rows matched their
+frame metadata and transparent padding. Networking was denied.
+Desktop interactions and optional action wiring remain open.

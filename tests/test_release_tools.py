@@ -132,6 +132,38 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unlisted or changed"):
             release.verify(self.root)
 
+    def test_generated_character_pack_images_have_own_limits(self):
+        png = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
+        )
+        webp = bytearray(base64.b64decode("UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAAAcQ/Y/+BwAAAA=="))
+        webp.extend(b"JUNK" + (500_000).to_bytes(4, "little") + b"\0" * 500_000)
+        webp[4:8] = (len(webp) - 8).to_bytes(4, "little")
+        folder = "examples/character-pack/generated/jellune"
+        self.add_inventory_file(f"{folder}/spritesheet.webp", webp)
+        self.add_inventory_file(f"{folder}/actions.webp", webp)
+        self.add_inventory_file(f"{folder}/contact-sheet.png", png)
+        self.assertEqual(release.verify(self.root), 6)
+
+    def test_generated_character_pack_image_refusals(self):
+        webp = base64.b64decode("UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAAAcQ/Y/+BwAAAA==")
+        generated = "examples/character-pack/generated"
+        for name, payload, reason in (
+            (f"{generated}/unknown/actions.webp", webp, "unexpected file type"),
+            (f"{generated}/jellune/extra.webp", webp, "unexpected file type"),
+            (f"{generated}/jellune/nested/actions.webp", webp, "unexpected file type"),
+            (f"{generated}/jellune/contact-sheet.png", webp, "invalid character pack image"),
+            (f"{generated}/jellune/actions.webp", webp + b"0" * 750_000, "character pack image too large"),
+        ):
+            with self.subTest(name=name):
+                manifest = self.root / release.MANIFEST
+                original = manifest.read_bytes()
+                target = self.add_inventory_file(name, payload)
+                with self.assertRaisesRegex(ValueError, reason):
+                    release.verify(self.root)
+                target.unlink()
+                manifest.write_bytes(original)
+
     def test_other_binary_payloads_are_still_refused(self):
         gif = base64.b64decode("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7")
         for name, payload, error in (

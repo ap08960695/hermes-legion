@@ -70,9 +70,26 @@ A fresh saved worker completion on Mac desktop uses the jumping row once.
 Give the five cells a crouch, takeoff, peak, descent and landing at a shared
 scale. Match the original resting baseline at the start and finish. For a
 single-row revision, compare the decoded pixels of every untouched cell and
-use a new pack slug. Dedicated custom rows for thinking, handoff, retry and
-collaboration remain future work. Inspect both directional sequences separately
-because the seven-state terminal cycle skips them.
+use a new pack slug. Inspect both directional sequences separately because the
+seven-state terminal cycle skips them. Include a planted contact, weight
+transfer, passing pose and recovery in each direction. Use a lower rise and a
+longer contact for a heavy character.
+
+For optional source art, prepare four to eight poses each for parcel throw,
+parcel catch, angry stomp with steam, sleep and yawn, and a weighted landing.
+Use the same art scale and baseline as the native rows. Show the parcel leaving
+and being secured. Give the body a grounded squash and a smaller rebound,
+letting loose details follow the main motion. Use one question-mark pictogram
+for waiting if requested. Keep labels and sleep letters out of the sprites.
+Put working and thinking poses in the native running and review rows.
+
+Keep optional source frames and their sequence metadata beside the native pack.
+A **96 × 104 px** cell matches the current Mac gateway's half-size atlas;
+keep the imported native cells at **192 × 208 px**. Record the cell dimensions,
+anchor measured from its top-left corner, left-to-right frame order, and
+suggested frame durations. Export a labeled PNG contact sheet. The native
+manifest has fixed fields and the importer only copies the native atlas and
+metadata.
 
 ## Assemble and describe the folder
 
