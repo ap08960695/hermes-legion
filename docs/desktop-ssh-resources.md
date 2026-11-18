@@ -43,12 +43,16 @@ use `ControlMaster=no` and `ProxyCommand=false`; losing the socket cannot silent
 open another connection. OpenSSH otherwise permits normal connection fallback
 when a mux socket is unavailable. [OpenSSH configuration reference](https://man.openbsd.org/ssh_config).
 
-One programmatic command per host may execute at a time, including platform
-probes, mux verification and no-mux reachability checks. At most 256 more requests
-wait in the host queue; excess requests receive a busy error. Closing a connection
-cancels its queued/active work. Aborted establishment flights are replaced behind
-the old teardown barrier. Failures share a one-to-30-second exponential cooldown;
-a usable backend publication resets it. This adds no automatic retry loop.
+Within one Electron main process, the host queue admits one operation at a
+time, including master starts, programmatic commands, platform probes, mux
+verification and no-mux reachability checks. Masters for distinct authentication
+identities on the same configured host now start in sequence. Each identity
+keeps its own socket, so multiple established masters can coexist. At most 256
+more requests wait in the host queue and excess requests receive a busy error.
+Closing a connection cancels its queued/active work. Aborted establishment
+flights are replaced behind the old teardown barrier. Failures share a
+one-to-30-second exponential cooldown and a usable backend publication resets
+it. Reconnect still requires a caller.
 
 POSIX execution also acquires a remote kernel lock **before starting Python**.
 The inherited descriptor reserves the remote home's single helper slot through

@@ -10609,3 +10609,16 @@ Unicode and nested-shape checks agree. A fresh native full-recall card returned
 all three codes in three physical requests without a post-completion request.
 All 959 installed kit targets match on both hosts. No new general latency,
 provider cache-saving or Desktop UI claim is made.
+
+## Desktop SSH master startup admission (unreleased)
+
+A fake-SSH test requested three incompatible identities for one configured
+host. Before the fix, all three started immediately. With the fix, the second
+waited for the first to close its startup client, and cancelling the third
+while queued spawned no master for it. The same-host queue leaves each
+established master's socket scoped to its authentication identity.
+
+The scoped Mac selection passed 37 tests using fake SSH clients and the three
+Electron main/preload bundles built. Both changed patch sections applied and
+reversed with matching pinned source hashes. Live SSH, app shutdown and the
+installed app's behavior remain unverified.
