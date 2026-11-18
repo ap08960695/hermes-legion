@@ -1,3 +1,22 @@
+# Poll less often for minimized Mac desktop pets
+
+An active character preview requests a roster refresh every eight
+seconds while the Mac window is hidden. Visible Monitor keeps its
+five-second interval. The 15-second expiry still removes stale actors.
+
+The isolated packaged Local run recorded six roster replies across
+two 25-second five-pet samples. Replies were about nine seconds apart.
+All five characters stayed visible. All six returned after reload
+and passed four-corner dragging and transparent release on one display.
+
+Added CPU over the initial preview-off sample was 2.26 and 1.55 points
+of one core, averaging 1.90. Round 295 measured 2.33 points in one
+sample. Added footprint ranged from 56.2 to 124.5 MiB, with an 84.0–85.9
+MiB overlay renderer. The overall resource targets need more evidence.
+Both rounds used the same packs and in-process GPU and networking.
+The isolated launch opened zero Desktop SSH links and stopped all
+of its processes.
+
 # Send smaller atlases to Mac desktop pets
 
 The Mac overlay asks for 96 × 104 pixel cells and displays them at the
