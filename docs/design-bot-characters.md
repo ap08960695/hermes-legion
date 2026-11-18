@@ -647,3 +647,11 @@ shows the hint again, and clicking the pet retains the current output
 and chat actions. The overlay remembers the last 64 actor/request pairs
 so a roster refresh can keep the waiting pose without replaying its cue.
 [Verification](verification.md#show-the-mac-desktop-pet-that-needs-an-answer).
+
+## Flag a newly saved worker error
+
+A saved worker error can show a short **Worker failed** bubble after the
+pet lands. The report must be recorded during this preview and within
+the last 15 seconds. Reopening a preview keeps the failed pose and the
+saved report available. Click the pet, then **Open in Hermes**, to see
+the report. Reduce Motion holds the cue still. [Verification](verification.md#flag-newly-saved-worker-errors-on-mac-desktop-pets).

@@ -1,3 +1,21 @@
+# Flag newly saved worker errors on Mac desktop pets
+
+The **Worker failed** bubble appears after the worker report pet lands
+and clears on its own. It uses a saved, uniquely identified error from
+the current preview and the last 15 seconds. The report's text stays in
+the output popover and report. The bubble lets pointer input pass
+through, and Reduce Motion holds it still before it disappears.
+
+Tests exercise fresh and replayed reports, age at landing, errors
+predating the preview, and failed poses without a saved error. The
+Mac Local fixture saved a terminal error for a working worker in its
+isolated database. The cue appeared once after landing, and **Open in
+Hermes** showed the matching task, Error status and saved message.
+The saved error stayed visible and quiet after reopening the preview.
+The 5.1-second clip shows the isolated overlay renderer. The trial
+passed the 60-second Local gate with zero Desktop SSH links. It ran at
+most four product processes and stopped them. No model ran.
+
 # Show the Mac desktop pet that needs an answer
 
 A new clarification in the focused canonical Bot Chat shows a short
