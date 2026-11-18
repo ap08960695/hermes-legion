@@ -1,3 +1,13 @@
+# Check Close button contrast in the Hermes image viewer
+
+The existing Close button uses a white icon on an opaque dark circle
+in the image viewer. The control has a white keyboard outline with a
+dark outer ring. The styling stays inside the image-viewer dialog.
+
+In the isolated Mac workflow, the button remained visible over a white
+PDF page and a dark PNG. The same Close control handled pointer and
+keyboard dismissal, and Escape returned to Monitor.
+
 # Open a rendered PDF first page in Hermes
 
 After **Preview file** renders a PDF on Mac Local, **View first page**
