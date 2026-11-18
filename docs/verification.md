@@ -1,3 +1,14 @@
+# View a loaded character text file in Hermes
+
+Open a character's latest output and choose **Preview file** on a
+delivered text file. Once it loads, choose **View text**. The Hermes
+source viewer shows the filename and scrollable literal source.
+Closing it returns to the current screen.
+
+Text, Markdown and CSV use the same read-only source view. The file
+preview must contain text before the action appears. The handoff
+uses the existing snapshot and does not read or watch the file.
+
 # View a loaded character PNG in Hermes
 
 Open a character's latest output and choose **Preview file** on its

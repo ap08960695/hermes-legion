@@ -552,6 +552,12 @@ viewer returns to the current screen. The handoff uses the loaded bytes
 and leaves the file and its path untouched.
 [Local image viewer proof](verification.md#view-a-loaded-character-png-in-hermes).
 
+**View text** opens a loaded nonempty text, Markdown or CSV snapshot
+in Hermes' read-only source viewer. The viewer shows the filename and
+keeps markup, spaces and tabs literal. It reads the current snapshot
+without opening a file path or starting a file watch.
+[Local text viewer proof](verification.md#view-a-loaded-character-text-file-in-hermes).
+
 ## Match a running character to its worker
 
 The owning session’s `subagent.list` can include `child_session_id` for a
