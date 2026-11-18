@@ -8284,10 +8284,10 @@ index 2c784ec2a2e709f7fc953d88399b3078aaa5e12b..5492eec425bbd695225966f3bc91032d
  }
 diff --git a/apps/desktop/electron/pet-overlay-ipc.test.ts b/apps/desktop/electron/pet-overlay-ipc.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..9b055424afbcf425c359d385ba3844bf37822332
+index 0000000000000000000000000000000000000000..36585313c7286ecfbeaa4090407b24e995dc4526
 --- /dev/null
 +++ b/apps/desktop/electron/pet-overlay-ipc.test.ts
-@@ -0,0 +1,230 @@
+@@ -0,0 +1,269 @@
 +import { EventEmitter } from 'node:events'
 +
 +import { afterEach, expect, it, vi } from 'vitest'
@@ -8306,11 +8306,11 @@ index 0000000000000000000000000000000000000000..9b055424afbcf425c359d385ba3844bf
 +afterEach(() => { powerMonitor.removeAllListeners(); io.on.clear() })
 +
 +it('pauses character snapshots on main hide/minimize and screen lock/suspend; retires observers in mascot mode', () => {
-+  const main = Object.assign(new EventEmitter(), { isDestroyed: () => false, isVisible: (): boolean => true, isMinimized: (): boolean => false })
++  const main = Object.assign(new EventEmitter(), { isDestroyed: () => false, isVisible: (): boolean => true, isMinimized: (): boolean => false, webContents: { send: vi.fn() } })
 +  const send = vi.fn()
 +  const overlay = Object.assign(new EventEmitter(), { isDestroyed: () => false, webContents: { send } })
 +  registerPetOverlayIpc({ getMainWindow: () => main as never, getPetOverlayWindow: () => overlay as never, openPetOverlay: vi.fn(), closePetOverlay: vi.fn() })
-+  const publish = (payload: unknown) => io.on.get('hermes:pet-overlay:state')!({}, payload)
++  const publish = (payload: unknown) => io.on.get('hermes:pet-overlay:state')!({ sender: main.webContents }, payload)
 +  const payload = { info: { enabled: true }, characterPreview: { characters: [{ id: 'owner' }], expiresAt: Date.now() + 15000 } }
 +  publish(payload)
 +  expect(send.mock.lastCall?.[1].charactersPaused).toBe(false)
@@ -8349,10 +8349,10 @@ index 0000000000000000000000000000000000000000..9b055424afbcf425c359d385ba3844bf
 +})
 +
 +it('drops retained snapshots and native observers when the overlay closes without a final state push', () => {
-+  const main = Object.assign(new EventEmitter(), { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false })
++  const main = Object.assign(new EventEmitter(), { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, webContents: { send: vi.fn() } })
 +  const overlay = Object.assign(new EventEmitter(), { isDestroyed: () => false, webContents: { send: vi.fn() } })
 +  registerPetOverlayIpc({ getMainWindow: () => main as never, getPetOverlayWindow: () => overlay as never, openPetOverlay: vi.fn(), closePetOverlay: vi.fn() })
-+  io.on.get('hermes:pet-overlay:state')!({}, { characterPreview: { characters: [], expiresAt: 0 } })
++  io.on.get('hermes:pet-overlay:state')!({ sender: main.webContents }, { characterPreview: { characters: [], expiresAt: 0 } })
 +  expect(powerMonitor.listenerCount('lock-screen')).toBe(1)
 +  overlay.emit('closed')
 +  expect(powerMonitor.listenerCount('lock-screen')).toBe(0)
@@ -8518,23 +8518,61 @@ index 0000000000000000000000000000000000000000..9b055424afbcf425c359d385ba3844bf
 +  report('wrong window', overlay.webContents); report('too large'.repeat(1200)); report('allowed'); report('replayed')
 +  expect(overlay.webContents.send.mock.lastCall?.[1].characterFile).toEqual({ id, request, text: 'allowed' })
 +})
++
++it('relays Stop once from the live overlay and accepts only its matching receipt', () => {
++  const main = Object.assign(new EventEmitter(), { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false,
++    webContents: { send: vi.fn() } })
++
++  const overlay = Object.assign(new EventEmitter(), { isDestroyed: () => false, webContents: { send: vi.fn() } })
++  registerPetOverlayIpc({ getMainWindow: () => main as never, getPetOverlayWindow: () => overlay as never,
++    openPetOverlay: vi.fn(), closePetOverlay: vi.fn() })
++  const state = io.on.get('hermes:pet-overlay:state')!, control = io.on.get('hermes:pet-overlay:control')!
++  const id = 'worker'
++  const preview = { characterPreview: { characters: [{ outputId: id, actionsOnly: true }], expiresAt: Date.now() + 15_000 } }
++  const publish = (sender = main.webContents) => state({ sender }, preview)
++  const send = (type: string, request: number, sender = overlay.webContents) => control({ sender }, { type, id, request })
++
++  const offer = (request: number, sender = main.webContents) => state({ sender },
++    { ...preview, characterOutput: { id, request, text: null, canStop: true } })
++
++  const receipt = (request: number) => state({ sender: main.webContents },
++    { ...preview, characterOutput: { id, request, text: null, stopStatus: 'requested' } })
++
++  publish(overlay.webContents)
++  send('character-output', 1)
++  expect(main.webContents.send).not.toHaveBeenCalled()
++  publish()
++  send('character-output', 1); offer(1)
++  send('character-output', 2); offer(2, overlay.webContents)
++  send('character-stop', 1); send('character-stop', 2)
++  offer(2)
++  receipt(2)
++  expect(overlay.webContents.send.mock.lastCall?.[1].characterOutput.canStop).toBe(true)
++  send('character-stop', 2, main.webContents)
++  control({ sender: overlay.webContents }, { type: 'character-stop', id, request: 2, child_session_id: 'forged' })
++  send('character-stop', 2); send('character-stop', 2)
++  receipt(1); receipt(2)
++  expect(main.webContents.send.mock.calls.filter(([, frame]) => frame.type === 'character-stop')).toEqual([
++    ['hermes:pet-overlay:control', { type: 'character-stop', id, request: 2 }]
++  ])
++  expect(overlay.webContents.send.mock.lastCall?.[1].characterOutput).toEqual({ id, request: 2, text: null, stopStatus: 'requested' })
++})
 diff --git a/apps/desktop/electron/pet-overlay-ipc.ts b/apps/desktop/electron/pet-overlay-ipc.ts
-index 59d8dd527dae029c695a8520996f6051d75df371..37b7165b74841658431f527824aee641d3ac8fcf 100644
+index 59d8dd527dae029c695a8520996f6051d75df371..6e7b706e2725f7bc2d137433668cdcc077d9e261 100644
 --- a/apps/desktop/electron/pet-overlay-ipc.ts
 +++ b/apps/desktop/electron/pet-overlay-ipc.ts
-@@ -2,3 +2,6 @@
+@@ -2,3 +2,5 @@
  // main.ts; window handles stay injected because main.ts owns their lifecycle.
 -import { type BrowserWindow, ipcMain, screen } from 'electron'
 +import { type BrowserWindow, ipcMain, powerMonitor, screen } from 'electron'
 +
-+import type { PetCharacterOutput } from '../src/store/pet-characters'
-+import type { PetCharacterPreview } from '../src/store/pet-characters'
++import type { PetCharacterOutput, PetCharacterPreview } from '../src/store/pet-characters'
 
-@@ -11,2 +14,3 @@ export interface PetOverlayIpcDeps {
+@@ -11,2 +13,3 @@ export interface PetOverlayIpcDeps {
    closePetOverlay: () => void
 +  openExternalUrl?: (url: string) => Promise<unknown>
  }
-@@ -30,2 +34,23 @@ export function placePetOverlay(bounds, mainWindow: BrowserWindow | null) {
+@@ -30,2 +33,23 @@ export function placePetOverlay(bounds, mainWindow: BrowserWindow | null) {
 
 +// shortcut: standalone absolute URLs only until the output retains document link spans.
 +function outputWebLinks(text: string): string[] {
@@ -8558,14 +8596,14 @@ index 59d8dd527dae029c695a8520996f6051d75df371..37b7165b74841658431f527824aee641
 +}
 +
  export function registerPetOverlayIpc({
-@@ -34,4 +59,103 @@ export function registerPetOverlayIpc({
+@@ -34,4 +58,103 @@ export function registerPetOverlayIpc({
    openPetOverlay,
 -  closePetOverlay
 +  closePetOverlay,
 +  openExternalUrl
  }: PetOverlayIpcDeps) {
 +  let lastCharacterPayload: Record<string, unknown> | null = null
-+  let outputAction: (Pick<PetCharacterOutput, 'id' | 'request' | 'canOpen'> & { window: BrowserWindow; links?: string[]; file?: 'offered' | 'pending' }) | null = null
++  let outputAction: (Pick<PetCharacterOutput, 'id' | 'request' | 'canOpen'> & { window: BrowserWindow; links?: string[]; file?: 'offered' | 'pending'; stop?: 'offered' | 'pending' }) | null = null
 +  let stopObserving: (() => void) | null = null
 +  let locked = false, suspended = false
 +
@@ -8575,11 +8613,11 @@ index 59d8dd527dae029c695a8520996f6051d75df371..37b7165b74841658431f527824aee641
 +    return locked || suspended || !main || main.isDestroyed() || !main.isVisible() || main.isMinimized()
 +  }
 +
-+  const visibleOutput = (id: string) => {
++  const visibleOutput = (id: string, workerOnly = false) => {
 +    const preview = lastCharacterPayload?.characterPreview as PetCharacterPreview | undefined
 +
 +    return !charactersPaused() && preview && preview.expiresAt > Date.now() &&
-+      Array.isArray(preview.characters) && preview.characters.slice(0, 5).some(actor => actor?.outputId === id)
++      Array.isArray(preview.characters) && preview.characters.slice(0, 5).some(actor => actor?.outputId === id && (!workerOnly || actor.actionsOnly === true))
 +  }
 +
 +  const sendCharacters = () => {
@@ -8663,18 +8701,22 @@ index 59d8dd527dae029c695a8520996f6051d75df371..37b7165b74841658431f527824aee641
 +  }
 +
    // `request` is `{ bounds, screen }`. A fresh pop-out passes viewport-space
-@@ -144,3 +268,60 @@ export function registerPetOverlayIpc({
+@@ -144,3 +267,77 @@ export function registerPetOverlayIpc({
    // Main renderer → overlay: forward the latest pet state for the overlay to render.
 -  ipcMain.on('hermes:pet-overlay:state', (_event, payload) => {
 +  ipcMain.on('hermes:pet-overlay:state', (event, payload) => {
++    const main = getMainWindow()
++
++    if (!main || event.sender !== main.webContents) {return}
++
 +    if (payload?.characterPreview) {
 +      const { characterOutput, characterFile, ...snapshot } = payload
 +
 +      if (characterFile) {
-+        const overlay = getPetOverlayWindow(), main = getMainWindow()
++        const overlay = getPetOverlayWindow()
 +        const { id, request, text } = characterFile
 +
-+        if (!main || event.sender !== main.webContents || !overlay || overlay.isDestroyed() ||
++        if (!overlay || overlay.isDestroyed() ||
 +            outputAction?.file !== 'pending' || outputAction.window !== overlay || outputAction.id !== id ||
 +            outputAction.request !== request || !visibleOutput(id) ||
 +            !(text === null || (typeof text === 'string' && text.length <= 8192))) {return}
@@ -8687,13 +8729,25 @@ index 59d8dd527dae029c695a8520996f6051d75df371..37b7165b74841658431f527824aee641
 +      }
 +
 +      if (characterOutput) {
-+        const overlay = getPetOverlayWindow(), main = getMainWindow()
-+        const { id, request, text, unavailable, canOpen, canLink, deliveredFile, canPreviewFile } = characterOutput
++        const overlay = getPetOverlayWindow()
++        const { id, request, text, unavailable, canOpen, canLink, deliveredFile, canPreviewFile, canStop, stopStatus } = characterOutput
 +
-+        if (!main || event.sender !== main.webContents || !overlay || overlay.isDestroyed() ||
-+            !outputAction || outputAction.window !== overlay || outputAction.links || id !== outputAction.id ||
-+            request !== outputAction.request || !visibleOutput(id) ||
-+            !(text === null || (typeof text === 'string' && text.length <= 1200))) {return}
++        if (!overlay || overlay.isDestroyed() || !outputAction || outputAction.window !== overlay || id !== outputAction.id ||
++            request !== outputAction.request || !visibleOutput(id)) {return}
++
++        if (stopStatus !== undefined) {
++          if (outputAction.stop !== 'pending' ||
++              (stopStatus !== 'requested' && stopStatus !== 'refused' && stopStatus !== 'unconfirmed')) {return}
++
++          outputAction = null
++          overlay.webContents.send('hermes:pet-overlay:state', { ...lastCharacterPayload, charactersPaused: false,
++            characterOutput: { id, request, text: null, stopStatus } })
++
++          return
++        }
++
++        if (outputAction.links || !(text === null || (typeof text === 'string' && text.length <= 1200))) {return}
++        const stoppable = canStop === true && visibleOutput(id, true)
 +
 +        const file = unavailable !== true &&
 +          typeof deliveredFile === 'string' && deliveredFile.length <= 600 && deliveredFile.startsWith('/') ? deliveredFile : undefined
@@ -8702,11 +8756,12 @@ index 59d8dd527dae029c695a8520996f6051d75df371..37b7165b74841658431f527824aee641
 +        const links = openExternalUrl && canLink === true && unavailable !== true && typeof text === 'string' ? outputWebLinks(text) : []
 +        const previewable = file && canPreviewFile === true
 +
-+        outputAction = openable || links.length || previewable ? { id, request, window: overlay, links,
++        outputAction = openable || links.length || previewable || stoppable ? { id, request, window: overlay, links,
++          ...(stoppable ? { stop: 'offered' } : {}),
 +          ...(openable ? { canOpen: true } : {}), ...(previewable ? { file: 'offered' } : {}) } : null
 +        overlay.webContents.send('hermes:pet-overlay:state', { ...lastCharacterPayload, charactersPaused: false,
 +          characterOutput: { id, request, text, ...(unavailable === true ? { unavailable: true } : {}),
-+            ...(openable ? { canOpen: true } : {}), ...(links.length ? { links } : {}), ...(file ? { deliveredFile: file } : {}),
++            ...(openable ? { canOpen: true } : {}), ...(stoppable ? { canStop: true } : {}), ...(links.length ? { links } : {}), ...(file ? { deliveredFile: file } : {}),
 +            ...(previewable ? { canPreviewFile: true } : {}) } })
 +
 +        return
@@ -8725,15 +8780,15 @@ index 59d8dd527dae029c695a8520996f6051d75df371..37b7165b74841658431f527824aee641
 +    stopObserving?.()
 +    stopObserving = null
      const petOverlayWindow = getPetOverlayWindow()
-@@ -152,3 +333,3 @@ export function registerPetOverlayIpc({
+@@ -152,3 +349,3 @@ export function registerPetOverlayIpc({
    // Overlay → main renderer: control messages (pop back in, composer submit).
 -  ipcMain.on('hermes:pet-overlay:control', (_event, payload) => {
 +  ipcMain.on('hermes:pet-overlay:control', (event, payload) => {
      const mainWindow = getMainWindow()
-@@ -159,2 +340,53 @@ export function registerPetOverlayIpc({
+@@ -159,2 +356,58 @@ export function registerPetOverlayIpc({
 
 +    if (payload?.type === 'character-output' || payload?.type === 'character-output-close' ||
-+        payload?.type === 'character-output-open' || payload?.type === 'character-output-link' || payload?.type === 'character-output-file') {
++        payload?.type === 'character-output-open' || payload?.type === 'character-stop' || payload?.type === 'character-output-link' || payload?.type === 'character-output-file') {
 +      const overlay = getPetOverlayWindow()
 +
 +      if (!overlay || overlay.isDestroyed() || event.sender !== overlay.webContents) {return}
@@ -8764,7 +8819,12 @@ index 59d8dd527dae029c695a8520996f6051d75df371..37b7165b74841658431f527824aee641
 +        return
 +      }
 +
-+      if (payload.type === 'character-output-file') {
++      if (payload.type === 'character-stop') {
++        if (Object.keys(payload).length !== 3 || outputAction?.stop !== 'offered' || outputAction.window !== overlay ||
++            outputAction.id !== id || outputAction.request !== request || !visibleOutput(id, true)) {return}
++
++        outputAction.stop = 'pending'
++      } else if (payload.type === 'character-output-file') {
 +        if (Object.keys(payload).length !== 3 || outputAction?.file !== 'offered' ||
 +            outputAction.window !== overlay || outputAction.id !== id || outputAction.request !== request) {return}
 +
@@ -21548,10 +21608,10 @@ index de446bdb6a589e02ff3634ae483fe46d4a108ff2..447b3cacb7b6af2b6d1aca49f9487795
   *
 diff --git a/apps/desktop/src/app/pet-overlay/pet-characters.tsx b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..3ba34d6d765f76e70fff7f07a5d7754f6b26a196
+index 0000000000000000000000000000000000000000..4f59ff52fa69c2e501aecbe6b28873489b487675
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
-@@ -0,0 +1,191 @@
+@@ -0,0 +1,199 @@
 +import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 +import { type ReactNode, type RefObject, useEffect, useId, useRef, useState } from 'react'
 +
@@ -21565,13 +21625,14 @@ index 0000000000000000000000000000000000000000..3ba34d6d765f76e70fff7f07a5d7754f
 +  preview: PetCharacterPreview
 +  moveHandle: ReactNode
 +  paused: boolean
-+  output: (PetCharacterOutput & { loading?: true; fileLoading?: true; fileText?: string | null }) | null
++  output: (PetCharacterOutput & { loading?: true; fileLoading?: true; fileText?: string | null; stopPending?: true }) | null
 +  showActions: boolean
 +  onOutput: (id: string | null, showActions?: boolean) => void
 +  onPreview: () => void
 +  onOpen: () => void
 +  onOpenLink: (index: number) => void
 +  onPreviewFile: () => void
++  onStop: () => void
 +}
 +
 +const labelStyle = { display: 'block', width: '100%', fontSize: 12, borderRadius: 8, padding: 6,
@@ -21641,7 +21702,7 @@ index 0000000000000000000000000000000000000000..3ba34d6d765f76e70fff7f07a5d7754f
 +}
 +
 +/** The overlay displays snapshots. Only the main renderer resolves output addresses. */
-+export function PetCharacters({ info, preview, moveHandle, paused, output, showActions, onOutput, onPreview, onOpen, onOpenLink, onPreviewFile }: PetCharactersProps) {
++export function PetCharacters({ info, preview, moveHandle, paused, output, showActions, onOutput, onPreview, onOpen, onOpenLink, onPreviewFile, onStop }: PetCharactersProps) {
 +  const reduced = useReducedMotion()
 +  const root = useRef<HTMLDivElement>(null)
 +  const captionId = useId()
@@ -21658,7 +21719,11 @@ index 0000000000000000000000000000000000000000..3ba34d6d765f76e70fff7f07a5d7754f
 +
 +  const actors = preview.characters.slice(0, 5)
 +  const outputActor = output && preview.characters.find(actor => actor.outputId === output.id)
-+  const title = showActions ? 'Output actions' : 'Latest output'
++  const title = outputActor?.actionsOnly ? 'Worker actions' : showActions ? 'Output actions' : 'Latest output'
++
++  const stopLabel = output?.loading ? 'Checking worker…' : output?.stopPending ? 'Requesting stop…' :
++    output?.stopStatus === 'requested' ? 'Stop requested' : output?.stopStatus === 'unconfirmed' ? 'Stop unconfirmed' :
++      output?.stopStatus === 'refused' ? 'Could not stop worker' : 'Stop unavailable'
 +
 +  return <div ref={root} style={{ display: 'flex', alignItems: 'flex-end', pointerEvents: 'none', position: 'relative' }}>
 +    {actors.length > 0 && moveHandle}
@@ -21671,9 +21736,12 @@ index 0000000000000000000000000000000000000000..3ba34d6d765f76e70fff7f07a5d7754f
 +        boxShadow: '0 4px 14px #0005', fontSize: 12 }}>
 +      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
 +        <strong>{title} · {outputActor.name}</strong>
-+        <button aria-label={showActions ? "Close output actions" : "Close latest output"} onClick={() => onOutput(null)} type="button">×</button>
++        <button aria-label={outputActor.actionsOnly ? "Close worker actions" : showActions ? "Close output actions" : "Close latest output"} onClick={() => onOutput(null)} type="button">×</button>
 +      </div>
-+      {showActions ? <button onClick={onPreview} style={{ marginTop: 6, textDecoration: 'underline' }} type="button">
++      {outputActor.actionsOnly ? (output.canStop
++        ? <button onClick={onStop} style={{ marginTop: 6, textDecoration: 'underline' }} type="button">Stop worker</button>
++        : <p role="status" style={{ margin: '6px 0 0' }}>{stopLabel}</p>
++      ) : showActions ? <button onClick={onPreview} style={{ marginTop: 6, textDecoration: 'underline' }} type="button">
 +        Preview latest output
 +      </button> : <>
 +        <div style={{ marginTop: 4, overflowY: 'auto', maxHeight: output.deliveredFile ? 116 : 96, overflowWrap: 'anywhere' }}>
@@ -21707,7 +21775,7 @@ index 0000000000000000000000000000000000000000..3ba34d6d765f76e70fff7f07a5d7754f
 +        const sprite = character.sprite ?? info
 +        const sheet = { ...sprite, scale: Math.min(sprite.scale ?? 0.33, 96 / (sprite.frameW ?? 192), 104 / (sprite.frameH ?? 208)) }
 +
-+        const { outputId } = character
++        const { outputId, actionsOnly } = character
 +        const detailId = character.detail ? `${captionId}-${index}` : undefined
 +
 +        const label = <>
@@ -21722,10 +21790,10 @@ index 0000000000000000000000000000000000000000..3ba34d6d765f76e70fff7f07a5d7754f
 +        initial={reduced ? false : { opacity: 0, y: 18 }} key={character.id}
 +        style={{ margin: 0, width: 120, padding: 6, textAlign: 'center', color: 'var(--ui-text-primary)' }}
 +        transition={{ duration: reduced ? 0 : 0.18 }}>
-+        {outputId ? <button aria-describedby={detailId} aria-expanded={output?.id === outputId} aria-label={`Latest output · ${character.name} · ${character.source}`}
++        {outputId ? <button aria-describedby={detailId} aria-expanded={output?.id === outputId} aria-label={`${actionsOnly ? 'Worker actions' : 'Latest output'} · ${character.name} · ${character.source}`}
 +          data-pet-caption={character.id} data-pet-output-target="true"
 +          onClick={event => {
-+            if (!(event.ctrlKey && isMacPlatform())) {onOutput(outputId)}
++            if (!(event.ctrlKey && isMacPlatform())) {onOutput(outputId, actionsOnly)}
 +          }}
 +          onContextMenu={event => {event.preventDefault(); onOutput(outputId, true)}}
 +          onKeyDown={event => {
@@ -21744,7 +21812,7 @@ index 0000000000000000000000000000000000000000..3ba34d6d765f76e70fff7f07a5d7754f
 +  </div>
 +}
 diff --git a/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx b/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
-index 82319976a166e658f80e794b0033fed81a48d456..93e9e7a8a3e80556aa988d8304478492711c9deb 100644
+index 82319976a166e658f80e794b0033fed81a48d456..94748b207bafb7f17a4a2972f2bc8472d0f9478d 100644
 --- a/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
 +++ b/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
 @@ -10,2 +10,3 @@ import { isSubmitEnter } from '@/lib/ime'
@@ -21773,7 +21841,7 @@ index 82319976a166e658f80e794b0033fed81a48d456..93e9e7a8a3e80556aa988d8304478492
 @@ -67,2 +75,8 @@ export function PetOverlayApp() {
    const [composerOpen, setComposerOpen] = useState(false)
 +  const [characters, setCharacters] = useState<{ preview: PetCharacterPreview; paused: boolean } | null>(null)
-+  const [output, setOutput] = useState<(PetCharacterOutput & { loading?: true; fileLoading?: true; fileText?: string | null }) | null>(null)
++  const [output, setOutput] = useState<(PetCharacterOutput & { loading?: true; fileLoading?: true; fileText?: string | null; stopPending?: true }) | null>(null)
 +  const [actionsRequest, setActionsRequest] = useState<number | null>(null)
 +  const characterMode = Boolean(characters)
 +  const outputTargets = characters?.paused ? '' : characters?.preview.characters.map(character => character.outputId).join(',')
@@ -21925,7 +21993,7 @@ index 82319976a166e658f80e794b0033fed81a48d456..93e9e7a8a3e80556aa988d8304478492
 +      characterMode ? DEFAULT_SCALE : info.scale ?? DEFAULT_SCALE,
 +      characterCount
      )
-@@ -364,3 +450,41 @@ export function PetOverlayApp() {
+@@ -364,3 +450,48 @@ export function PetOverlayApp() {
      window.hermesDesktop?.petOverlay?.control({ bounds, type: 'bounds' })
 -  }, [info.enabled, info.spritesheetBase64, info.scale, info.frameW, info.frameH])
 +  }, [info.enabled, info.spritesheetBase64, info.scale, info.frameW, info.frameH, characterCount, characterMode])
@@ -21954,6 +22022,13 @@ index 82319976a166e658f80e794b0033fed81a48d456..93e9e7a8a3e80556aa988d8304478492
 +    window.hermesDesktop?.petOverlay?.control({ type: 'character-output-open', id, request })
 +  }
 +
++  const stopWorker = () => {
++    if (!output?.canStop || output.request !== actionsRequest) {return}
++    const { id, request } = output
++    setOutput({ ...output, canStop: undefined, stopPending: true })
++    window.hermesDesktop?.petOverlay?.control({ type: 'character-stop', id, request })
++  }
++
 +  const openOutputLink = (index: number) => {
 +    if (!output?.links?.[index]) {return}
 +    const { id, request } = output
@@ -21968,7 +22043,7 @@ index 82319976a166e658f80e794b0033fed81a48d456..93e9e7a8a3e80556aa988d8304478492
 +    window.hermesDesktop?.petOverlay?.control({ type: 'character-output-file', id, request })
 +  }
 
-@@ -370,2 +494,16 @@ export function PetOverlayApp() {
+@@ -370,2 +501,16 @@ export function PetOverlayApp() {
 
 +  if (characters) {
 +    const moveHandle = <button aria-label="Move characters" className="focus-visible:outline focus-visible:outline-2" data-pet-drag-handle=""
@@ -21980,17 +22055,17 @@ index 82319976a166e658f80e794b0033fed81a48d456..93e9e7a8a3e80556aa988d8304478492
 +      title="Drag or use the arrow keys to move characters" type="button">Move</button>
 +
 +    return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-end', height: '100vh', paddingBottom: PET_PADDING_BOTTOM, pointerEvents: 'none' }}>
-+      <PetCharacters info={info} moveHandle={moveHandle} onOpen={openOutput} onOpenLink={openOutputLink} onOutput={showOutput} onPreview={() => setActionsRequest(null)} onPreviewFile={previewOutputFile} output={output} paused={characters.paused} preview={characters.preview} showActions={output?.request === actionsRequest} />
++      <PetCharacters info={info} moveHandle={moveHandle} onOpen={openOutput} onOpenLink={openOutputLink} onOutput={showOutput} onPreview={() => setActionsRequest(null)} onPreviewFile={previewOutputFile} onStop={stopWorker} output={output} paused={characters.paused} preview={characters.preview} showActions={output?.request === actionsRequest} />
 +    </div>
 +  }
 +
    return (
 diff --git a/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..8a87d6d978afad37cfb7812929e2dc58dec1fe4b
+index 0000000000000000000000000000000000000000..8122865e9d5b2a2060615e5892c8770108584812
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
-@@ -0,0 +1,447 @@
+@@ -0,0 +1,477 @@
 +import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 +import type * as Motion from 'motion/react'
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -22437,6 +22512,36 @@ index 0000000000000000000000000000000000000000..8a87d6d978afad37cfb7812929e2dc58
 +  }, characterOutput: reply }))
 +  expect(screen.queryByRole('region', { name: /Output actions/ })).toBeNull()
 +  expect(screen.queryByRole('button', { name: 'Open in Hermes' })).toBeNull()
++})
++
++it('offers a single explicit Stop for the current worker action', () => {
++  render(<PetOverlayApp />)
++  const payload = preview()
++  Object.assign(payload.characterPreview.characters[0], { outputId: 'worker', actionsOnly: true })
++  act(() => emit(payload))
++  const control = vi.mocked(window.hermesDesktop!.petOverlay!.control)
++
++  fireEvent.contextMenu(screen.getByRole('button', { name: /Worker actions/ }))
++  const action = control.mock.lastCall?.[0]
++
++  if (action?.type !== 'character-output') {throw new Error('missing worker action request')}
++  const { id, request } = action
++
++  expect(screen.queryByRole('button', { name: 'Preview latest output' })).toBeNull()
++  expect(screen.queryByRole('button', { name: 'Stop worker' })).toBeNull()
++  act(() => emit({ ...payload, characterOutput: { id, request: request + 1, text: null, canStop: true } }))
++  expect(screen.queryByRole('button', { name: 'Stop worker' })).toBeNull()
++  act(() => emit({ ...payload, characterOutput: { id, request, text: null, canStop: true } }))
++  const stop = screen.getByRole('button', { name: 'Stop worker' })
++
++  fireEvent.click(stop)
++  fireEvent.click(stop)
++  expect(control.mock.calls.filter(([sent]) => sent.type === 'character-stop')).toEqual([
++    [{ type: 'character-stop', id, request }]
++  ])
++  expect(screen.getByRole('status').textContent).toBe('Requesting stop…')
++  act(() => emit({ ...payload, characterOutput: { id, request, text: null, stopStatus: 'requested' } }))
++  expect(screen.getByRole('status').textContent).toBe('Stop requested')
 +})
 diff --git a/apps/desktop/src/app/retirement-view.test.tsx b/apps/desktop/src/app/retirement-view.test.tsx
 index 4097e9f517259a342942edfd4f6d5d6845907ba6..5abd02109d4897c0db3178fed9d94c115278d6f2 100644
@@ -33589,10 +33694,10 @@ index abe8afb7e670b207a192ac15fb797fb8dfed168e..2b2824a97bb7cfd9d21057f4efdfd811
              <SelectContent>
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..44a9daea4d320eb46300269844f5356d4bd38cff
+index 0000000000000000000000000000000000000000..d6d078d7b5fc7a0e6ba5eb1a833605ef679c1bbf
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx
-@@ -0,0 +1,470 @@
+@@ -0,0 +1,516 @@
 +import { atom, host, type PluginProfileRoute } from '@hermes/plugin-sdk'
 +import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -34063,12 +34168,58 @@ index 0000000000000000000000000000000000000000..44a9daea4d320eb46300269844f5356d
 +  expect(dialog.textContent).toContain('Stopped')
 +  expect(dialog.textContent).toContain('Interrupted by request')
 +})
++
++it('resolves the exact Local worker on demand and consumes only the current Stop offer', async () => {
++  const child = { id: 'worker-session', title: 'Held task', last_active: 2000 }
++  const canonical_session = { id: 'registry', resolved_id: 'canonical-parent' }
++  const local = row('writer', { canonical_session, worker_sessions: [child] })
++  const remote = row('remote', { connectionId: 'remote', canonical_session, worker_sessions: [child] })
++  const routed = vi.spyOn(host, 'requestProfile')
++  routed.mockResolvedValueOnce({ subagents: [{ subagent_id: 'other', child_session_id: 'side-session' }] })
++  routed.mockResolvedValueOnce({ subagents: [{ subagent_id: 'owned', child_session_id: child.id, status: 'running' }] })
++  routed.mockResolvedValueOnce({ subagents: [{ subagent_id: 'owned', child_session_id: child.id, status: 'running' }] })
++  routed.mockResolvedValueOnce({ found: true, subagent_id: 'owned' })
++  const view = render(<BotMonitor now={2_000_000} onOpen={open} rows={[local, remote]} />)
++
++  fireEvent.click(screen.getByRole('button', { name: 'Show bot characters' }))
++  const workers = $petCharacterPreview.get()?.characters.filter(actor => actor.name.includes('Worker'))
++
++  expect(workers?.find(actor => actor.source === 'remote')).not.toHaveProperty('outputId')
++  const worker = workers?.find(actor => actor.source === 'local')
++  const id = worker?.outputId
++
++  expect(worker).toMatchObject({ actionsOnly: true, outputId: expect.any(String) })
++
++  if (!id) {throw new Error('missing Local worker action address')}
++  expect(routed).not.toHaveBeenCalled()
++
++  await act(async () => overlayControl({ type: 'character-output', id, request: 1 }))
++  await act(async () => overlayControl({ type: 'character-stop', id, request: 1 }))
++  await act(async () => overlayControl({ type: 'character-output', id, request: 2 }))
++  await act(async () => overlayControl({ type: 'character-output', id, request: 3 }))
++  await act(async () => overlayControl({ type: 'character-stop', id, request: 2 }))
++  await act(async () => {
++    overlayControl({ type: 'character-stop', id, request: 3 })
++    overlayControl({ type: 'character-stop', id, request: 3 })
++  })
++  expect(routed.mock.calls.map(([, method]) => method)).toEqual([
++    'subagent.list', 'subagent.list', 'subagent.list', 'subagent.interrupt'
++  ])
++  expect(routed).toHaveBeenLastCalledWith(expect.objectContaining({ connectionId: 'local', profile: 'writer' }),
++    'subagent.interrupt', { session_id: 'canonical-parent', profile: 'writer', subagent_id: 'owned', child_session_id: child.id }, 8000, { spawnPriority: 'foreground' })
++
++  const state = vi.mocked(window.hermesDesktop!.petOverlay!.pushState).mock.lastCall?.[0]
++  expect(state?.characterOutput).toEqual({ id, request: 3, text: null, stopStatus: 'requested' })
++  view.rerender(<BotMonitor now={2_000_000} onOpen={open} rows={[row('writer', { canonical_session })]} />)
++  await act(async () => overlayControl({ type: 'character-stop', id, request: 3 }))
++  expect(routed).toHaveBeenCalledTimes(4)
++})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..47d8f84308c759d7d285c29d9bdb4e4597b8d5d2
+index 0000000000000000000000000000000000000000..23defd32fe269a607eb6f0cb4333c80f7cbc878f
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx
-@@ -0,0 +1,212 @@
+@@ -0,0 +1,253 @@
 +import { atom, Button, Dialog, host, type PetCharacterPublisher, useValue } from '@hermes/plugin-sdk'
 +import { useEffect, useMemo, useRef, useState } from 'react'
 +
@@ -34091,7 +34242,7 @@ index 0000000000000000000000000000000000000000..47d8f84308c759d7d285c29d9bdb4e45
 +  target?: CharacterSpriteTarget
 +}
 +
-+type OutputReply = Awaited<ReturnType<NonNullable<Actor['character']['output']>['read']>>
++type OutputReply = Awaited<ReturnType<NonNullable<NonNullable<Actor['character']['output']>['read']>>>
 +
 +function completionIsFresh(at: number | null, now: number) {
 +  return typeof at === 'number' && at > 0 && now - at * 1000 >= 0 && now - at * 1000 < 60_000
@@ -34206,12 +34357,53 @@ index 0000000000000000000000000000000000000000..47d8f84308c759d7d285c29d9bdb4e45
 +          output, detail: stripPreviewMarkdown(detail), state: row.needsAttention ? 'failed' : awaitingInput ? 'waiting' : 'run' } })
 +      }
 +
++      const { route: workerRoute } = resolveBotConnectionRoute({ ...row.bot, sourceScoped: true })
++      const parent = row.bot.canonical_session
++      const parentId = parent?.resolved_id || parent?.id
++
 +      for (const worker of activeWorkerSessions(row.bot, now)) {
 +        if (current.length >= 5) {break}
 +
 +        if (!worker.id) {continue}
 +        const progress = workerProgress(worker, now)
-+        current.push({ target, character: { id: `${key}:worker:${worker.id}`, name: `${row.name} · ${b.monitor.worker}`, source,
++        const childId = worker.id
++
++        const output: Actor['character']['output'] = workerRoute?.mode === 'local' && workerRoute.connectionId === 'local' &&
++          parentId && childId.length <= 512 ? {
++            key: JSON.stringify([workerRoute, row.bot.installId, parent?.id, parentId, childId]),
++            prepareStop: async () => {
++              const bot = { ...row.bot, sourceScoped: true, route: workerRoute }
++              const params = { session_id: parentId, profile: workerRoute.profile }
++
++              const listing = await requestForBot<{ subagents?: { child_session_id?: string; subagent_id?: string; status?: string }[] }>(
++                bot, 'subagent.list', params, { timeoutMs: 8000 })
++
++              const matches = Array.isArray(listing?.subagents)
++                ? listing.subagents.filter(item => item?.child_session_id === childId)
++                : []
++
++              const candidate = matches[0]
++              const subagentId = candidate?.subagent_id
++
++              if (matches.length !== 1 || candidate.status !== 'running' ||
++                  typeof subagentId !== 'string' || !subagentId || subagentId.length > 512) {return undefined}
++
++              return async () => {
++                try {
++                  const result = await requestForBot<{ found?: boolean; subagent_id?: string }>(bot, 'subagent.interrupt',
++                    { ...params, subagent_id: subagentId, child_session_id: childId }, { timeoutMs: 8000, spawnPriority: 'foreground' })
++
++                  if (result?.subagent_id !== subagentId) {return 'unconfirmed'}
++
++                  return result.found === true ? 'requested' : result.found === false ? 'refused' : 'unconfirmed'
++                } catch {
++                  return 'unconfirmed'
++                }
++              }
++            }
++          } : undefined
++
++        current.push({ target, character: { id: `${key}:worker:${childId}`, name: `${row.name} · ${b.monitor.worker}`, source, output,
 +          detail: [stripPreviewMarkdown(worker.last_activity_description || worker.current_tool || worker.title || ''),
 +            progress.step ? b.roster.workerStep(progress.step.n, progress.step.max) : ''].filter(Boolean).join(' · '), state: 'run' } })
 +      }
@@ -44048,10 +44240,10 @@ index b0eb473252b6e6e149f1f0711a6d8de535e87d8e..ad1ef8e2c1e29ef4fed05dc9d0fac09d
  
 diff --git a/apps/desktop/src/store/pet-characters.ts b/apps/desktop/src/store/pet-characters.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..0f7d4afea760010ec5dd5a1f320c4ca47f1450c3
+index 0000000000000000000000000000000000000000..792bc0807cad0336f893711441d3b3928aef5761
 --- /dev/null
 +++ b/apps/desktop/src/store/pet-characters.ts
-@@ -0,0 +1,199 @@
+@@ -0,0 +1,214 @@
 +import { atom } from 'nanostores'
 +
 +import { mediaTagValues } from '@/lib/chat-messages/parts'
@@ -44065,13 +44257,18 @@ index 0000000000000000000000000000000000000000..0f7d4afea760010ec5dd5a1f320c4ca4
 +  source: string
 +  detail: string
 +  outputId?: string
++  actionsOnly?: true
 +  sprite?: PetInfo
 +  state: PetState
 +}
 +
++export type WorkerStopStatus = 'requested' | 'refused' | 'unconfirmed'
++type StopWorker = () => Promise<WorkerStopStatus>
++
 +interface OutputSource {
 +  key: string
-+  read: () => Promise<string | null | { text: string | null; complete?: boolean; file_preview?: { path: string; token: string } | null }>
++  read?: () => Promise<string | null | { text: string | null; complete?: boolean; file_preview?: { path: string; token: string } | null }>
++  prepareStop?: () => Promise<StopWorker | undefined>
 +  previewFile?: (token: string) => Promise<{ text: string | null }>
 +  open?: (stillCurrent: () => boolean) => Promise<void>
 +}
@@ -44082,6 +44279,8 @@ index 0000000000000000000000000000000000000000..0f7d4afea760010ec5dd5a1f320c4ca4
 +  text: string | null
 +  unavailable?: true
 +  canOpen?: true
++  canStop?: true
++  stopStatus?: WorkerStopStatus
 +  canLink?: true
 +  deliveredFile?: string
 +  canPreviewFile?: true
@@ -44139,13 +44338,21 @@ index 0000000000000000000000000000000000000000..0f7d4afea760010ec5dd5a1f320c4ca4
 +  return { path, excerpt: lines.join('\n') }
 +}
 +
-+export async function readPetCharacterOutput(id: string): Promise<(Pick<PetCharacterOutput, 'text' | 'unavailable' | 'canOpen' | 'canLink' | 'deliveredFile'> & { fileToken?: string }) | undefined> {
++export async function readPetCharacterOutput(id: string): Promise<(Pick<PetCharacterOutput, 'text' | 'unavailable' | 'canOpen' | 'canLink' | 'deliveredFile'> & { fileToken?: string; stop?: StopWorker }) | undefined> {
 +  const binding = currentOutputBinding(id)
 +
 +  if (!binding) {return undefined}
 +
 +  try {
-+    const reply = await binding.read()
++    if (binding.prepareStop) {
++      const stop = await binding.prepareStop()
++
++      if (currentOutputBinding(id) !== binding) {return undefined}
++
++      return { text: null, stop: stop && (async () => currentOutputBinding(id) === binding ? stop() : 'refused') }
++    }
++
++    const reply = await binding.read?.()
 +    const raw = typeof reply === 'string' ? reply : reply?.text
 +    const complete = typeof reply === 'object' && reply?.complete === true && typeof raw === 'string'
 +    const delivery = complete ? deliveredTextFile(raw) : undefined
@@ -44224,7 +44431,7 @@ index 0000000000000000000000000000000000000000..0f7d4afea760010ec5dd5a1f320c4ca4
 +        const output = item.output && (previous?.key === item.output.key ? previous : { ...item.output, id: String(++nextOutputId) })
 +
 +        if (output) {bindings.set(item.id, output)}
-+        characters.push({ ...(output ? { outputId: output.id } : {}), id: JSON.stringify([pluginId, item.id]), name: sanitizePetText(item.name, 80), source: sanitizePetText(item.source, 80), detail: sanitizePetText(item.detail, 160), state: states.has(item.state) ? item.state : 'idle', ...(sprite ? { sprite } : {}) })
++        characters.push({ ...(output ? { outputId: output.id, ...(output.prepareStop ? { actionsOnly: true as const } : {}) } : {}), id: JSON.stringify([pluginId, item.id]), name: sanitizePetText(item.name, 80), source: sanitizePetText(item.source, 80), detail: sanitizePetText(item.detail, 160), state: states.has(item.state) ? item.state : 'idle', ...(sprite ? { sprite } : {}) })
 +
 +        if (characters.length === 5) {break}
 +      }
@@ -44252,12 +44459,12 @@ index 0000000000000000000000000000000000000000..0f7d4afea760010ec5dd5a1f320c4ca4
 +  }
 +}
 diff --git a/apps/desktop/src/store/pet-overlay.ts b/apps/desktop/src/store/pet-overlay.ts
-index d47f67023fb8b820d6f6cbd455562a591600413b..746b556d2ef9ba757c5ff57e2cb4c4cf0ae67486 100644
+index d47f67023fb8b820d6f6cbd455562a591600413b..8358fad1146522aadb00b7b2d69ce63b1e3f1503 100644
 --- a/apps/desktop/src/store/pet-overlay.ts
 +++ b/apps/desktop/src/store/pet-overlay.ts
 @@ -5,2 +5,3 @@ import { persistBoolean, persistString, storedBoolean, storedString } from '@/li
  import { $petActivity, $petInfo, $petUnread, clearPetUnread, type PetActivity, type PetInfo } from '@/store/pet'
-+import { $petCharacterPreview, openPetCharacterOutput, type PetCharacterFile, type PetCharacterOutput, type PetCharacterPreview, readPetCharacterFile, readPetCharacterOutput } from '@/store/pet-characters'
++import { $petCharacterPreview, openPetCharacterOutput, type PetCharacterFile, type PetCharacterOutput, type PetCharacterPreview, readPetCharacterFile, readPetCharacterOutput, type WorkerStopStatus } from '@/store/pet-characters'
  import { $petPluginMessages, type PetPluginMessage } from '@/store/pet-plugin-messages'
 @@ -53,2 +54,6 @@ export interface PetOverlayStatePayload {
    pluginMessages?: PetPluginMessage[]
@@ -44266,15 +44473,16 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..746b556d2ef9ba757c5ff57e2cb4c4cf
 +  characterOutput?: PetCharacterOutput
 +  characterFile?: PetCharacterFile
  }
-@@ -58,2 +63,7 @@ export type PetOverlayControl =
+@@ -58,2 +63,8 @@ export type PetOverlayControl =
    | { type: 'ready' }
 +  | { type: 'character-output'; id: string; request: number }
 +  | { type: 'character-output-close' }
++  | { type: 'character-stop'; id: string; request: number }
 +  | { type: 'character-output-open'; id: string; request: number }
 +  | { type: 'character-output-file'; id: string; request: number }
 +  | { type: 'character-output-link'; id: string; request: number; index: number }
    | { type: 'submit'; text: string }
-@@ -132,5 +142,5 @@ const OVERLAY_MIN_H = 300
+@@ -132,5 +143,5 @@ const OVERLAY_MIN_H = 300
   */
 -export function overlayWindowSize(frameW: number, frameH: number, scale: number): { width: number; height: number } {
 +export function overlayWindowSize(frameW: number, frameH: number, scale: number, characterCount = 0): { width: number; height: number } {
@@ -44282,21 +44490,21 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..746b556d2ef9ba757c5ff57e2cb4c4cf
 -    width: Math.max(OVERLAY_MIN_W, Math.round(frameW * scale + OVERLAY_PAD_X)),
 +    width: Math.max(OVERLAY_MIN_W, Math.round(frameW * scale + OVERLAY_PAD_X), Math.min(5, characterCount) * 120 + 32),
      height: Math.max(OVERLAY_MIN_H, Math.round(frameH * scale + OVERLAY_PAD_Y))
-@@ -153,3 +163,4 @@ function currentPayload(): PetOverlayStatePayload {
+@@ -153,3 +164,4 @@ function currentPayload(): PetOverlayStatePayload {
      reaction: $petReaction.get(),
 -    pluginMessages: $petPluginMessages.get()
 +    pluginMessages: $petPluginMessages.get(),
 +    characterPreview: $petCharacterPreview.get()
    }
-@@ -191,3 +202,4 @@ function openOverlay(request: PetOverlayOpenRequest): void {
+@@ -191,3 +203,4 @@ function openOverlay(request: PetOverlayOpenRequest): void {
      $petReaction.subscribe(pushNow),
 -    $petPluginMessages.subscribe(pushNow)
 +    $petPluginMessages.subscribe(pushNow),
 +    $petCharacterPreview.subscribe(pushNow)
    ]
-@@ -282,4 +294,37 @@ export function initPetOverlayBridge(): () => void {
+@@ -282,4 +295,49 @@ export function initPetOverlayBridge(): () => void {
 
-+  let activeOutput: { id: string; request: number; canOpen?: true; opened?: true; fileToken?: string } | null = null
++  let activeOutput: { id: string; request: number; canOpen?: true; opened?: true; fileToken?: string; stop?: () => Promise<WorkerStopStatus> } | null = null
    controlUnsub = api.onControl(payload => {
 -    if (payload?.type === 'pop-in') {
 +    if (payload?.type === 'character-output') {
@@ -44306,11 +44514,23 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..746b556d2ef9ba757c5ff57e2cb4c4cf
 +      void readPetCharacterOutput(id).then(reply => {
 +        if (activeOutput !== action || !$petOverlayActive.get() || !reply) {return}
 +        action.canOpen = reply.canOpen
-+        const { fileToken, ...display } = reply
++        const { fileToken, stop, ...display } = reply
 +
++        action.stop = stop
 +        action.fileToken = fileToken
 +        api.pushState({ ...currentPayload(), characterOutput: { ...display, id, request,
-+          ...(fileToken ? { canPreviewFile: true } : {}) } })
++          ...(stop ? { canStop: true } : {}), ...(fileToken ? { canPreviewFile: true } : {}) } })
++      })
++    } else if (payload?.type === 'character-stop') {
++      const action = activeOutput
++
++      if (!action?.stop || action.id !== payload.id || action.request !== payload.request || !$petOverlayActive.get()) {return}
++      const stop = action.stop
++      action.stop = undefined
++      void stop().then(stopStatus => {
++        if (activeOutput === action && $petOverlayActive.get()) {
++          api.pushState({ ...currentPayload(), characterOutput: { id: action.id, request: action.request, text: null, stopStatus } })
++        }
 +      })
 +    } else if (payload?.type === 'character-output-file') {
 +      const action = activeOutput
@@ -44333,7 +44553,7 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..746b556d2ef9ba757c5ff57e2cb4c4cf
 +    } else if (payload?.type === 'pop-in') {
 +      activeOutput = null
        popInPet()
-@@ -307,2 +352,3 @@ export function initPetOverlayBridge(): () => void {
+@@ -307,2 +365,3 @@ export function initPetOverlayBridge(): () => void {
    return () => {
 +    activeOutput = null
      controlUnsub?.()
@@ -44759,7 +44979,7 @@ index 0000000000000000000000000000000000000000..48fb2a357fec113ea6d7fb268b1af5b0
 +  return Object.fromEntries(entries)
 +}
 diff --git a/apps/shared/src/gateway-contract.generated.ts b/apps/shared/src/gateway-contract.generated.ts
-index 57a5f6d6774588963334c22dccc5a7101a80b7ed..7644374197a4f451faedc85350ce7c25344b0d67 100644
+index 57a5f6d6774588963334c22dccc5a7101a80b7ed..5c2cb45d3c7df12668188467c27e0a0655876055 100644
 --- a/apps/shared/src/gateway-contract.generated.ts
 +++ b/apps/shared/src/gateway-contract.generated.ts
 @@ -812,2 +812,26 @@ export interface SharedMetricsDesktopDailyResult {
@@ -44879,11 +45099,38 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..7644374197a4f451faedc85350ce7c25
 +  effort?: string
 +}
  /** ``methods_projects._projects_payload``: every project (archived included) + the active id. */
-@@ -5288,2 +5382,3 @@ export interface CanonicalProfileRow {
+@@ -4574,2 +4668,26 @@ export interface PluginCatalogLookupEntry {
+ }
++export interface CanonicalSubagentListResult {
++  subagents?: CanonicalSubagentSnapshot[]
++  delegations?: FailedDelegation[]
++}
++export interface CanonicalSubagentSnapshot {
++  subagent_id: string
++  parent_id?: string | null
++  depth?: number | null
++  goal?: string | null
++  delegation_id?: string | null
++  model?: string | null
++  started_at?: number | null
++  status?: SubagentStatus | null
++  tool_count?: number | null
++  last_tool?: string | null
++  accepting_steer?: boolean | null
++  child_session_id?: string | null
++}
++export interface CanonicalSubagentInterruptParams {
++  session_id: string
++  profile?: string | null
++  subagent_id: string
++  child_session_id?: string | null
++}
+ export interface CanonicalShellExecParams {
+@@ -5288,2 +5406,3 @@ export interface CanonicalProfileRow {
    worker_session?: ProfileWorkerSession | null
 +  worker_sessions?: ProfileWorkerSession[] | null
    canonical_session?: ProfileCanonicalSession | null
-@@ -5293,2 +5388,23 @@ export interface CanonicalProfileRow {
+@@ -5293,2 +5412,23 @@ export interface CanonicalProfileRow {
  }
 +export interface CanonicalBotOutputParams {
 +  profile?: string | null
@@ -44907,37 +45154,37 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..7644374197a4f451faedc85350ce7c25
 +  text: string | null
 +}
  export interface CanonicalAttachedImageResult {
-@@ -6057,2 +6173,4 @@ export type ConnectorErrorReason = 'INVALID_PARAMS' | 'NOT_OWNER' | 'UNSUPPORTED
+@@ -6057,2 +6197,4 @@ export type ConnectorErrorReason = 'INVALID_PARAMS' | 'NOT_OWNER' | 'UNSUPPORTED
  export interface RpcMethods {
 +  /** Read per-account quota snapshots. Only refresh=true queries readonly credential-scoped quota endpoints. */
 +  'account.usage': { params: AccountUsageParams; result: AccountUsageResult }
    /** Registry-wide background process summary for ``/agents``. */
-@@ -6323,2 +6441,4 @@ export interface RpcMethods {
+@@ -6323,2 +6465,4 @@ export interface RpcMethods {
    'pet.select': { params: PetSlugParams; result: PetSlugResult }
 +  /** Read one installed character atlas without selecting, installing or enabling the mascot. */
 +  'pet.sprite': { params: PetSlugParams; result: PetInfoResult }
    /** Idle-frame PNG data URI for the picker (desktop CSP breaks CDN <img>). */
-@@ -6353,2 +6473,6 @@ export interface RpcMethods {
+@@ -6353,2 +6497,6 @@ export interface RpcMethods {
    'profiles.set_asset': { params: ProfilesSetAssetParams; result: ProfilesSetAssetResult }
 +  /** Role-specific THINK/ACTION configuration; linkage is not dispatch readiness. */
 +  'profiles.workflow.configure': { params: ProfileWorkflowConfigureParams; result: ProfileWorkflowResult }
 +  /** Role-specific THINK/ACTION configuration; linkage is not dispatch readiness. */
 +  'profiles.workflow.get': { params: ProfileWorkflowGetParams; result: ProfileWorkflowResult }
    /** Structured project facts for a cwd so UIs don't re-sniff the workspace. */
-@@ -6576,2 +6700,3 @@ export type RpcMethod = keyof RpcMethods
+@@ -6576,2 +6724,3 @@ export type RpcMethod = keyof RpcMethods
  export const RPC_METHODS = [
 +  'account.usage',
    'agents.list',
-@@ -6709,2 +6834,3 @@ export const RPC_METHODS = [
+@@ -6709,2 +6858,3 @@ export const RPC_METHODS = [
    'pet.select',
 +  'pet.sprite',
    'pet.thumb',
-@@ -6724,2 +6850,4 @@ export const RPC_METHODS = [
+@@ -6724,2 +6874,4 @@ export const RPC_METHODS = [
    'profiles.set_asset',
 +  'profiles.workflow.configure',
 +  'profiles.workflow.get',
    'project.facts',
-@@ -6871,3 +6999,9 @@ export interface CanonicalRpcMethods {
+@@ -6871,3 +7023,9 @@ export interface CanonicalRpcMethods {
    'kanban.run': { params: KanbanRunParams; result: KanbanRunResult }
 +  'profiles.latest_output': { params: CanonicalBotOutputParams; result: CanonicalBotOutputResult }
    'profiles.list': { params: CanonicalProfilesParams; result: CanonicalProfilesResult }
@@ -44947,7 +45194,14 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..7644374197a4f451faedc85350ce7c25
 +  /** Profile-scoped bot workflow configuration with an expected-revision fence. */
 +  'profiles.workflow.get': { params: ProfileWorkflowGetParams; result: ProfileWorkflowResult }
    /** Retire a still-queued admission; a started one is unaffected. */
-@@ -6940,3 +7074,7 @@ export const CANONICAL_RPC_METHODS = [
+@@ -6910,2 +7068,6 @@ export interface CanonicalRpcMethods {
+   'shell.exec': { params: CanonicalShellExecParams; result: ShellExecResult }
++  /** Interrupt one owned worker, optionally matching its child session ID. */
++  'subagent.interrupt': { params: CanonicalSubagentInterruptParams; result: SubagentInterruptResult }
++  /** List the session's live workers, with a child session ID for controllable workers. */
++  'subagent.list': { params: SessionParams; result: CanonicalSubagentListResult }
+   /** Adopt a registered execution after verifying the live producer claim. */
+@@ -6940,3 +7102,7 @@ export const CANONICAL_RPC_METHODS = [
    'kanban.run',
 +  'profiles.latest_output',
    'profiles.list',
@@ -44955,8 +45209,13 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..7644374197a4f451faedc85350ce7c25
 +  'profiles.workflow.configure',
 +  'profiles.workflow.get',
    'prompt.cancel',
+@@ -6964,2 +7130,4 @@ export const CANONICAL_RPC_METHODS = [
+   'shell.exec',
++  'subagent.interrupt',
++  'subagent.list',
+   'worker.adopt',
 diff --git a/apps/shared/src/gateway-contract.openrpc.json b/apps/shared/src/gateway-contract.openrpc.json
-index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..61a703cd9adf48d71c9f2c341cac4a30f6492ec9 100644
+index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..e17c93fd8e1e602deb8bb91f001dda826a8042cd 100644
 --- a/apps/shared/src/gateway-contract.openrpc.json
 +++ b/apps/shared/src/gateway-contract.openrpc.json
 @@ -8,2 +8,20 @@
@@ -45483,7 +45742,223 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..61a703cd9adf48d71c9f2c341cac4a30
 +            "title": "Worker Sessions"
 +          },
            "canonical_session": {
-@@ -29273,2 +29773,81 @@
+@@ -11289,2 +11789,215 @@
+       },
++      "CanonicalSubagentInterruptParams": {
++        "additionalProperties": false,
++        "properties": {
++          "session_id": {
++            "title": "Session Id",
++            "type": "string"
++          },
++          "profile": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Profile"
++          },
++          "subagent_id": {
++            "title": "Subagent Id",
++            "type": "string"
++          },
++          "child_session_id": {
++            "anyOf": [
++              {
++                "maxLength": 512,
++                "minLength": 1,
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Child Session Id"
++          }
++        },
++        "required": [
++          "session_id",
++          "subagent_id"
++        ],
++        "title": "CanonicalSubagentInterruptParams",
++        "type": "object"
++      },
++      "CanonicalSubagentListResult": {
++        "additionalProperties": false,
++        "properties": {
++          "subagents": {
++            "items": {
++              "$ref": "#/components/schemas/CanonicalSubagentSnapshot"
++            },
++            "title": "Subagents",
++            "type": "array"
++          },
++          "delegations": {
++            "items": {
++              "$ref": "#/components/schemas/FailedDelegation"
++            },
++            "title": "Delegations",
++            "type": "array"
++          }
++        },
++        "title": "CanonicalSubagentListResult",
++        "type": "object"
++      },
++      "CanonicalSubagentSnapshot": {
++        "additionalProperties": false,
++        "properties": {
++          "subagent_id": {
++            "title": "Subagent Id",
++            "type": "string"
++          },
++          "parent_id": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Parent Id"
++          },
++          "depth": {
++            "anyOf": [
++              {
++                "type": "integer"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Depth"
++          },
++          "goal": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Goal"
++          },
++          "delegation_id": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Delegation Id"
++          },
++          "model": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Model"
++          },
++          "started_at": {
++            "anyOf": [
++              {
++                "type": "number"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Started At"
++          },
++          "status": {
++            "anyOf": [
++              {
++                "$ref": "#/components/schemas/SubagentStatus"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null
++          },
++          "tool_count": {
++            "anyOf": [
++              {
++                "type": "integer"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Tool Count"
++          },
++          "last_tool": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Last Tool"
++          },
++          "accepting_steer": {
++            "anyOf": [
++              {
++                "type": "boolean"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Accepting Steer"
++          },
++          "child_session_id": {
++            "anyOf": [
++              {
++                "maxLength": 512,
++                "minLength": 1,
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Child Session Id"
++          }
++        },
++        "required": [
++          "subagent_id"
++        ],
++        "title": "CanonicalSubagentSnapshot",
++        "type": "object"
++      },
+       "CanonicalSubmitParams": {
+@@ -29273,2 +29986,81 @@
              "title": "Live Message Count"
 +          },
 +          "input_tokens": {
@@ -45565,7 +46040,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..61a703cd9adf48d71c9f2c341cac4a30
 +            "default": null,
 +            "title": "Delegation Reports"
            }
-@@ -29282,2 +29861,74 @@
+@@ -29282,2 +30074,74 @@
        },
 +      "ProfileDelegationReport": {
 +        "additionalProperties": false,
@@ -45640,7 +46115,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..61a703cd9adf48d71c9f2c341cac4a30
 +        "type": "object"
 +      },
        "ProfileMirrored": {
-@@ -29471,2 +30122,18 @@
+@@ -29471,2 +30335,18 @@
            },
 +          "worker_sessions": {
 +            "anyOf": [
@@ -45659,12 +46134,12 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..61a703cd9adf48d71c9f2c341cac4a30
 +            "title": "Worker Sessions"
 +          },
            "canonical_session": {
-@@ -29583,3 +30250,3 @@
+@@ -29583,3 +30463,3 @@
          "additionalProperties": false,
 -        "description": "Newest kanban/tool worker row, so rosters can show a profile as working.",
 +        "description": "Observed worker metadata, separate from human-facing conversation previews.",
          "properties": {
-@@ -29610,2 +30277,136 @@
+@@ -29610,2 +30490,136 @@
              "title": "Last Active"
 +          },
 +          "last_activity_description": {
@@ -45801,7 +46276,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..61a703cd9adf48d71c9f2c341cac4a30
 +            "default": null,
 +            "title": "Model"
            }
-@@ -29618,2 +30419,145 @@
+@@ -29618,2 +30632,145 @@
        },
 +      "ProfileWorkflowConfigureParams": {
 +        "additionalProperties": false,
@@ -45947,7 +46422,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..61a703cd9adf48d71c9f2c341cac4a30
 +        "type": "object"
 +      },
        "ProfilesConfigureApplied": {
-@@ -36096,2 +37040,37 @@
+@@ -36096,2 +37253,37 @@
              "title": "Index"
 +          },
 +          "title": {
@@ -45985,7 +46460,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..61a703cd9adf48d71c9f2c341cac4a30
 +            "default": null,
 +            "title": "Expected Revision"
            }
-@@ -48113,2 +49092,20 @@
+@@ -48113,2 +49305,20 @@
      },
 +    {
 +      "name": "profiles.latest_output",
@@ -46006,7 +46481,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..61a703cd9adf48d71c9f2c341cac4a30
 +      }
 +    },
      {
-@@ -48131,2 +49128,56 @@
+@@ -48131,2 +49341,56 @@
      },
 +    {
 +      "name": "profiles.output_file",
@@ -46059,6 +46534,45 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..61a703cd9adf48d71c9f2c341cac4a30
 +        "name": "result",
 +        "schema": {
 +          "$ref": "#/components/schemas/ProfileWorkflowResult"
++        }
++      }
++    },
+     {
+@@ -48545,2 +49809,38 @@
+     },
++    {
++      "name": "subagent.interrupt",
++      "summary": "Interrupt one owned worker, optionally matching its child session ID.",
++      "params": [
++        {
++          "name": "params",
++          "schema": {
++            "$ref": "#/components/schemas/CanonicalSubagentInterruptParams"
++          }
++        }
++      ],
++      "result": {
++        "name": "result",
++        "schema": {
++          "$ref": "#/components/schemas/SubagentInterruptResult"
++        }
++      }
++    },
++    {
++      "name": "subagent.list",
++      "summary": "List the session's live workers, with a child session ID for controllable workers.",
++      "params": [
++        {
++          "name": "params",
++          "schema": {
++            "$ref": "#/components/schemas/SessionParams"
++          }
++        }
++      ],
++      "result": {
++        "name": "result",
++        "schema": {
++          "$ref": "#/components/schemas/CanonicalSubagentListResult"
 +        }
 +      }
 +    },
@@ -77741,10 +78255,12 @@ index 0000000000000000000000000000000000000000..5becd154771e2fe659ddcf693a7fa977
 +        unbind_owner(authority)
 +        store.close_all_db_handles()
 diff --git a/tests/gateway/test_session_subagent_controls.py b/tests/gateway/test_session_subagent_controls.py
-index 12f3da229011999f040aff2b892b848918c9766a..969b19c4093d6bc8690ff35e9920fea6cb128726 100644
+index 12f3da229011999f040aff2b892b848918c9766a..73baa475a64a240748adf06b373952523baa9a0c 100644
 --- a/tests/gateway/test_session_subagent_controls.py
 +++ b/tests/gateway/test_session_subagent_controls.py
-@@ -23,2 +23,10 @@ def test_desktop_subagent_steer_and_stop_reach_only_this_sessions_children(tmp_p
+@@ -22,3 +22,12 @@ def test_desktop_subagent_steer_and_stop_reach_only_this_sessions_children(tmp_p
+     assert result.returncode == 0, result.stdout + result.stderr
++    assert "violates its wire contract" not in result.stderr, result.stderr
      receipt = json.loads((home / 'receipt.json').read_text())
 +    assert receipt['targets'] == {'owned': 'owned-session', 'lineage': None}, receipt
 +    assert receipt['mismatch'] == {'found': False, 'subagent_id': 'owned'}, receipt
@@ -77755,7 +78271,7 @@ index 12f3da229011999f040aff2b892b848918c9766a..969b19c4093d6bc8690ff35e9920fea6
 +    assert receipt['exact'] == {'found': True, 'subagent_id': 'owned'}, receipt
 +    assert receipt['matched_delivery'] == {'owned': 1, 'sibling': 0, 'lineage': 0}, receipt
      assert receipt['owned'] == {'steer': {'status': 'queued', 'subagent_id': 'owned', 'text': 'check owned'},
-@@ -27,3 +35,3 @@ def test_desktop_subagent_steer_and_stop_reach_only_this_sessions_children(tmp_p
+@@ -27,3 +36,3 @@ def test_desktop_subagent_steer_and_stop_reach_only_this_sessions_children(tmp_p
                                    'stop': {'found': False, 'subagent_id': 'sibling'}}, receipt
 -    assert receipt['delivered'] == {'owned': [['check owned'], 1], 'sibling': [[], 0]}, receipt
 +    assert receipt['delivered'] == {'owned': [['check owned'], 1], 'sibling': [[], 0], 'lineage': [[], 0]}, receipt
@@ -109196,7 +109712,7 @@ index a7346e3f0a6d57a6ea1eeb0a05517eb943b737d0..da2738697b6257c235c147bd6f5b3662
 +    expected_revision: str | None = None
  
 diff --git a/tui_gateway/contracts/profiles_vault_complete_foreign_subagents.py b/tui_gateway/contracts/profiles_vault_complete_foreign_subagents.py
-index 79519693dd5fba61c15cb2f19cfef03bd64f647f..aa1e3e790d495b7d88ce3b4119ef2dce7b0ade62 100644
+index 79519693dd5fba61c15cb2f19cfef03bd64f647f..31b7f1151c84a1ee39935ba9e18276fc97aedd16 100644
 --- a/tui_gateway/contracts/profiles_vault_complete_foreign_subagents.py
 +++ b/tui_gateway/contracts/profiles_vault_complete_foreign_subagents.py
 @@ -18,3 +18,3 @@ from .common import OpenModel, ProfileParams, SessionParams, SubagentStatus
@@ -109248,7 +109764,28 @@ index 79519693dd5fba61c15cb2f19cfef03bd64f647f..aa1e3e790d495b7d88ce3b4119ef2dce
      worker_session: ProfileWorkerSession | None = None
 +    worker_sessions: list[ProfileWorkerSession] | None = Field(default=None, max_length=20)
      canonical_session: ProfileCanonicalSession | None = None
-@@ -700 +730,51 @@ method("subagent.tail", params=SubagentIdParams, result=SubagentTailResult,
+@@ -689,2 +719,20 @@ method("subagent.interrupt", params=SubagentIdParams, result=SubagentInterruptRe
+
++class CanonicalSubagentSnapshot(SubagentSnapshot):
++    child_session_id: str | None = Field(default=None, min_length=1, max_length=512)
++
++
++class CanonicalSubagentListResult(SubagentListResult):
++    subagents: list[CanonicalSubagentSnapshot] = Field(default_factory=list)
++
++
++class CanonicalSubagentInterruptParams(SubagentIdParams):
++    child_session_id: str | None = Field(default=None, min_length=1, max_length=512)
++
++
++canonical_method("subagent.list", params=SessionParams, result=CanonicalSubagentListResult,
++                 doc="List the session's live workers, with a child session ID for controllable workers.")
++canonical_method("subagent.interrupt", params=CanonicalSubagentInterruptParams, result=SubagentInterruptResult,
++                 doc="Interrupt one owned worker, optionally matching its child session ID.")
++
++
+ class SubagentTailResult(Result):
+@@ -700 +748,51 @@ method("subagent.tail", params=SubagentIdParams, result=SubagentTailResult,
         doc="Last 16KB of an owned child's live transcript.")
 +
 +

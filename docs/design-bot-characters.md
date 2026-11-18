@@ -459,4 +459,14 @@ A client can supply it with `subagent_id` to `subagent.interrupt`. The gateway
 checks both IDs under the same parent and interrupts that worker instance. A
 stale or mismatched pair leaves the worker alone. Readable lineage entries
 without a controllable worker omit the field. Existing callers can still
-interrupt with only `subagent_id`. Stop and Pause remain future overlay work.
+interrupt with only `subagent_id`.
+The authenticated gateway contract documents the optional identity field.
+
+Right-click a running Local worker caption to open **Worker actions**.
+The menu checks the canonical parent once. **Stop worker** appears when
+the gateway returns a unique running worker with that child session ID.
+Clicking Stop consumes that menu's offer and sends the matched pair to
+the owning gateway. Reopening the menu creates a fresh offer. The
+menu distinguishes an accepted request from a refusal or a missing
+acknowledgment. Monitor shows the worker's eventual status. Pause
+remains open.
