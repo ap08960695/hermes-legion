@@ -546,6 +546,12 @@ line breaks. The clipboard action uses the current preview and does not
 read the file again. **Copy path** remains available for delivered files.
 [Local clipboard proof](verification.md#copy-text-from-a-loaded-character-preview).
 
+**View image** appears after a PNG decodes in the character popover.
+It opens the same snapshot in Hermes' zoomable image viewer. Closing the
+viewer returns to the current screen. The handoff uses the loaded bytes
+and leaves the file and its path untouched.
+[Local image viewer proof](verification.md#view-a-loaded-character-png-in-hermes).
+
 ## Match a running character to its worker
 
 The owning session’s `subagent.list` can include `child_session_id` for a

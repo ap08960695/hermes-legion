@@ -1,3 +1,15 @@
+# View a loaded character PNG in Hermes
+
+Open a character's latest output and choose **Preview file** on its
+delivered PNG. Once the image appears, choose **View image**. Hermes
+opens its existing image viewer with zoom controls and a close button.
+Closing the viewer returns to the current screen. Text and failed
+image previews omit the action.
+
+Renderer and Electron tests cover the decoded image button, exact
+snapshot handoff, stale request, wrong sender, extra payload and a
+closed output. The handoff uses the loaded PNG bytes.
+
 # Copy text from a loaded character preview
 
 In a character's latest output, choose **Preview file** on a delivered
