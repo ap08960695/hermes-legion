@@ -1,3 +1,15 @@
+# Copy text from a loaded character preview
+
+In a character's latest output, choose **Preview file** on a delivered
+text file and then **Copy text**. A successful clipboard write shows
+**Text copied**. Empty, unavailable and PNG previews omit the action.
+
+An isolated signed Mac Local fixture intercepted the clipboard write and
+received all 1,590 UTF-8 bytes from the loaded snapshot, including its
+spaces, tabs and line breaks. Copying caused no additional file reads or
+file RPCs. The PNG fixture only offered **Copy path** after loading.
+Local60 found zero Desktop SSH. All fixture processes stopped.
+
 # Expand a loaded file preview in a bot character
 
 The file preview header offers **Expand preview** and **Reduce preview**

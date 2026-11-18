@@ -541,6 +541,11 @@ The header remains reachable while the file preview scrolls. **Reduce
 preview** restores the compact view. A new output starts compact.
 [Local expansion proof](verification.md#expand-a-loaded-file-preview-in-a-bot-character).
 
+**Copy text** copies the loaded text snapshot, including whitespace and
+line breaks. The clipboard action uses the current preview and does not
+read the file again. **Copy path** remains available for delivered files.
+[Local clipboard proof](verification.md#copy-text-from-a-loaded-character-preview).
+
 ## Match a running character to its worker
 
 The owning session’s `subagent.list` can include `child_session_id` for a
