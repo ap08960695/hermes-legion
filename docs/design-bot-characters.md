@@ -368,6 +368,13 @@ the grip leaves the composer closed. Arrow keys nudge the overlay when
 the grip has focus. The guarded Local Mac drag confirmed native movement,
 one final bounds message, passive click-through and output after the drop.
 
+Right-click or Control-click an actionable caption to see Output actions.
+Preview latest output displays the reply already read for that selection.
+Open in Hermes appears when that reply authorizes it and requires a
+separate click. Passive captions continue to pass secondary input through.
+The isolated Mac fixture verified both gestures and the existing Open
+command boundary.
+
 The [cross-panel regression](verification.md#edit-profile-to-monitor-character-handoff-unreleased)
 verifies that the saved character reaches Monitor after a roster reload, even
 with the optimistic metadata cache cleared. The isolated Mac walkthrough
