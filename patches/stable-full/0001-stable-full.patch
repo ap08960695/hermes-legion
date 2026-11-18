@@ -22644,14 +22644,15 @@ index de446bdb6a589e02ff3634ae483fe46d4a108ff2..447b3cacb7b6af2b6d1aca49f9487795
   *
 diff --git a/apps/desktop/src/app/pet-overlay/pet-characters.tsx b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..f7ff7edaaad48c16135d135b6e1000aa5b078aab
+index 0000000000000000000000000000000000000000..db6e20a3cf7bff5a34da8c8f43303031d5720f27
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
-@@ -0,0 +1,435 @@
+@@ -0,0 +1,518 @@
 +import { AnimatePresence, motion, useIsPresent, useReducedMotion } from 'motion/react'
 +import { type CSSProperties, type RefObject, useEffect, useRef, useState } from 'react'
 +
 +import { DEFAULT_STATE_ROWS, PetSprite, roamWalkRow } from '@/components/pet/pet-sprite'
++import { FolderOpen } from '@/lib/icons'
 +import { isMacPlatform } from '@/lib/platform'
 +import type { PetInfo } from '@/store/pet'
 +import type { PetCharacter, PetCharacterFileContent, PetCharacterOutput, PetCharacterPreview } from '@/store/pet-characters'
@@ -22696,6 +22697,8 @@ index 0000000000000000000000000000000000000000..f7ff7edaaad48c16135d135b6e1000aa
 +const steps = new Map([['ArrowLeft', [-8, 0]], ['ArrowRight', [8, 0]], ['ArrowUp', [0, -8]], ['ArrowDown', [0, 8]]])
 +
 +type Point = { x: number; y: number }
++type HandoffCue = { key: string; from: string; to: string; start: Point; end: Point }
++const HANDOFF_WINDOW_MS = 15_000
 +type WalkDirection = -1 | 0 | 1
 +type WalkClock = { actors: Set<() => void>; timer: number | null }
 +
@@ -22963,6 +22966,10 @@ index 0000000000000000000000000000000000000000..f7ff7edaaad48c16135d135b6e1000aa
 +export function PetCharacters({ desktop, info, preview, paused, output, showActions, onHitTargetsChanged, onOutput, onPreview, onOpen, onOpenLink, onPreviewFile, onCopy, onViewFile, onBrokenImage, onStop }: PetCharactersProps) {
 +  const reduced = useReducedMotion()
 +  const walkClock = useRef<WalkClock>({ actors: new Set(), timer: null })
++  const panelRef = useRef<HTMLDivElement>(null)
++  const handoffClock = useRef({ since: 0, revision: 0, seen: new Map<string, number>() })
++  const [cue, setCue] = useState<HandoffCue | null>(null)
++  const desktopReady = Boolean(desktop)
 +  const [expiredAt, setExpiredAt] = useState(0)
 +  const [foreground, setForeground] = useState<string>()
 +  const [expandedRequest, setExpandedRequest] = useState<number>()
@@ -22980,6 +22987,74 @@ index 0000000000000000000000000000000000000000..f7ff7edaaad48c16135d135b6e1000aa
 +  const hitTargets = visible ? JSON.stringify([actors.map(({ id, outputId }) => [id, outputId]), outputActor?.id]) : ''
 +
 +  useEffect(onHitTargetsChanged, [hitTargets, onHitTargetsChanged])
++
++  useEffect(() => {
++    const state = handoffClock.current
++    const roster = preview.characters.slice(0, 5)
++
++    if (!visible || !desktopReady || reduced || !roster.length) {
++      state.since = state.revision = 0
++      state.seen.clear()
++      setCue(null)
++
++      return
++    }
++
++    const now = Date.now()
++
++    state.since ||= now
++
++    const visibleIds = new Set(roster.map(actor => actor.id))
++
++    setCue(current => current && !output && visibleIds.has(current.from) && visibleIds.has(current.to) ? current : null)
++
++    if (preview.expiresAt < state.revision) {return}
++    state.revision = preview.expiresAt
++    const cutoff = Math.max(state.since, now - HANDOFF_WINDOW_MS)
++
++    for (const [key, at] of state.seen) {
++      if (at <= cutoff) {state.seen.delete(key)}
++    }
++
++    let selected: { from: string; to: string; at: number; key: string } | undefined
++
++    for (const actor of roster) {
++      const handoff = actor.handoff
++
++      if (actor.state !== 'run' || !handoff || !(handoff.at > cutoff && handoff.at <= now)) {continue}
++      const key = JSON.stringify([handoff.from, actor.id])
++
++      if (handoff.at <= (state.seen.get(key) ?? 0)) {continue}
++
++      // Drop the current backlog if unusually rapid roster churn fills the dedupe window.
++      if (state.seen.size >= 32 && !state.seen.has(key)) {
++        state.since = now
++
++        return
++      }
++
++      state.seen.set(key, handoff.at)
++
++      if (handoff.from !== actor.id && visibleIds.has(handoff.from) && (!selected || handoff.at > selected.at)) {
++        selected = { from: handoff.from, to: actor.id, at: handoff.at, key }
++      }
++    }
++
++    const panel = panelRef.current
++
++    if (!selected || !panel || output || panel.querySelector('[data-pet-dragging]')) {return}
++    const buttons = Array.from(panel.querySelectorAll<HTMLButtonElement>('[data-pet-caption]'))
++
++    const anchor = (id: string) => {
++      const rect = buttons.find(button => button.dataset.petCaption === id)?.querySelector('canvas')?.getBoundingClientRect()
++
++      return rect?.width && rect.height ? { x: rect.left + rect.width / 2, y: Math.max(10, rect.top + rect.height * 0.3) } : null
++    }
++
++    const start = anchor(selected.from), end = anchor(selected.to)
++
++    if (start && end) {setCue({ ...selected, key: JSON.stringify([selected.key, selected.at]), start, end })}
++  }, [desktopReady, output, preview, reduced, visible])
 +
 +  if (!visible) {return null}
 +  const primary = desktop?.areas[0]
@@ -23000,7 +23075,7 @@ index 0000000000000000000000000000000000000000..f7ff7edaaad48c16135d135b6e1000aa
 +    output?.stopStatus === 'requested' ? 'Stop requested' : output?.stopStatus === 'unconfirmed' ? 'Stop unconfirmed' :
 +      output?.stopStatus === 'refused' ? 'Could not stop worker' : 'Stop unavailable'
 +
-+  return <div style={{ position: 'fixed', inset: 0, pointerEvents: 'none' }}>
++  return <div onPointerDown={() => setCue(null)} ref={panelRef} style={{ position: 'fixed', inset: 0, pointerEvents: 'none' }}>
 +    {output && outputActor && <section aria-label={`${title} · ${outputActor.name}`} data-pet-output-target="true"
 +      onKeyDown={event => {if (event.key === 'Escape') {onOutput(null)}}} role="region"
 +      style={{ position: 'fixed', zIndex: 2, ...(desktop && primary
@@ -23081,6 +23156,14 @@ index 0000000000000000000000000000000000000000..f7ff7edaaad48c16135d135b6e1000aa
 +      {actors.map((actor, index) => <Character actor={actor} clock={walkClock} desktop={desktop} foreground={actor.id === foreground} fromRight={actors.length - index - 1} info={info} key={actor.id} onGrab={setForeground} onHitTargetsChanged={onHitTargetsChanged} onOutput={onOutput}
 +        open={actor.id === outputActor?.id} reduced={reduced} slot={(index + 1) * 100 / (actors.length + 1)} />)}
 +    </AnimatePresence>
++    {cue && !reduced && !output && <motion.span animate={{ x: cue.end.x - cue.start.x, y: cue.end.y - cue.start.y, opacity: [0, 1, 1, 0] }}
++      aria-hidden="true" data-pet-handoff="" initial={{ x: 0, y: 0, opacity: 0 }} key={cue.key}
++      onAnimationComplete={() => setCue(current => current?.key === cue.key ? null : current)}
++      style={{ position: 'fixed', left: cue.start.x - 10, top: cue.start.y - 10, zIndex: 1,
++        pointerEvents: 'none', color: '#f5ca62', filter: 'drop-shadow(0 1px 2px #19211e)' }}
++      transition={{ duration: 0.65, ease: 'easeInOut', opacity: { duration: 0.65, times: [0, 0.15, 0.8, 1] } }}>
++      <FolderOpen size={20} />
++    </motion.span>}
 +  </div>
 +}
 diff --git a/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx b/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
@@ -23376,10 +23459,10 @@ index 82319976a166e658f80e794b0033fed81a48d456..b5270ffab86f2056461846f8bf61008a
    return (
 diff --git a/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..8bb9a5efe7ae7ad271c79e33441c0385fca4d62a
+index 0000000000000000000000000000000000000000..ed1916f2d889084db69cd63b3d6b4297714ec988
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
-@@ -0,0 +1,751 @@
+@@ -0,0 +1,803 @@
 +import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 +import type * as Motion from 'motion/react'
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -23849,6 +23932,58 @@ index 0000000000000000000000000000000000000000..8bb9a5efe7ae7ad271c79e33441c0385
 +  expect(neighbor.style.cssText).toBe(other)
 +  act(() => emit({ ...payload, characterDesktop: { bounds: primary, areas: [primary] } }))
 +  expect(spriteRect()).toMatchObject({ x: 0, y: 613 })
++})
++
++it('passes one click-through folder on a fresh handoff and consumes replayed or suppressed starts', () => {
++  const { container } = render(<PetOverlayApp />)
++  const area = { x: 0, y: 24, width: 1000, height: 700 }
++  const [parent, worker] = preview().characterPreview.characters
++
++  const frame = (revision: number, characters: NonNullable<PetOverlayStatePayload['characterPreview']>['characters'], paused = false) =>
++    ({ ...normal, charactersPaused: paused, characterDesktop: { bounds: area, areas: [area] },
++      characterPreview: { expiresAt: revision + 15000, characters } })
++
++  const initial = Date.now()
++  const start = (id: string, at: number, from = parent.id) => ({ ...worker, state: 'run' as const, id, handoff: { from, at } })
++  const findCue = () => container.querySelector<HTMLElement>('[data-pet-handoff]')
++  vi.spyOn(HTMLCanvasElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLCanvasElement) {
++    return new DOMRect(this.closest('button')?.dataset.petCaption === parent.id ? 620 : 720, 600, 40, 40)
++  })
++
++  const a = frame(initial, [parent, start('old', initial - 1000)])
++  act(() => emit(a))
++  expect(findCue()).toBeNull()
++  act(() => vi.advanceTimersByTime(1000))
++  const b = frame(Date.now(), [parent, start('new', initial + 250)])
++  act(() => emit(b))
++  expect(findCue()?.getAttribute('aria-hidden')).toBe('true')
++  expect(findCue()?.style.pointerEvents).toBe('none')
++  fireEvent.pointerDown(screen.getAllByRole('button')[0])
++  expect(findCue()).toBeNull()
++  act(() => emit(a))
++  act(() => emit(b))
++  expect(findCue()).toBeNull()
++
++  act(() => vi.advanceTimersByTime(1000))
++  const missing = start('solo', initial + 1250)
++  act(() => emit(frame(Date.now(), [missing])))
++  act(() => emit(frame(Date.now(), [parent, missing])))
++  expect(findCue()).toBeNull()
++
++  act(() => vi.advanceTimersByTime(1000))
++  io.reduced = true
++  const reduced = start('quiet', initial + 2250)
++  act(() => emit(frame(Date.now(), [parent, reduced])))
++  expect(findCue()).toBeNull()
++  io.reduced = false
++  act(() => emit(frame(Date.now(), [parent, reduced])))
++  expect(findCue()).toBeNull()
++
++  act(() => vi.advanceTimersByTime(1000))
++  const asleep = start('asleep', initial + 3250)
++  act(() => emit(frame(Date.now(), [parent, asleep], true)))
++  act(() => emit(frame(Date.now(), [parent, asleep])))
++  expect(findCue()).toBeNull()
 +})
 +
 +it('retires an exiting pet as a hit target and restores the same key on a quick return', () => {
@@ -35541,10 +35676,10 @@ index abe8afb7e670b207a192ac15fb797fb8dfed168e..2b2824a97bb7cfd9d21057f4efdfd811
              <SelectContent>
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..657e669290059eef59189a3b559dc52f71855956
+index 0000000000000000000000000000000000000000..f0cd969d29f4ec5fbf6338920e8183ff861a1742
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx
-@@ -0,0 +1,619 @@
+@@ -0,0 +1,621 @@
 +import { atom, host, type PluginProfileRoute } from '@hermes/plugin-sdk'
 +import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -35600,7 +35735,7 @@ index 0000000000000000000000000000000000000000..657e669290059eef59189a3b559dc52f
 +
 +it('previews only after explicit opt-in, uses source-qualified live observations and clears stale/unmounted data', () => {
 +  const rows = [row('writer', { worker_sessions: [
-+    { id: 'live', title: 'Read fixture', last_active: 2000, iteration: 2, max_iterations: 5 },
++    { id: 'live', title: 'Read fixture', started_at: 1999.5, last_active: 2000, iteration: 2, max_iterations: 5 },
 +    { id: 'ended', last_active: 2000, ended_at: 1999 },
 +    { id: 'old', last_active: 1800 },
 +    { last_active: 2000, title: 'No stable worker identity' }
@@ -35615,6 +35750,8 @@ index 0000000000000000000000000000000000000000..657e669290059eef59189a3b559dc52f
 +    JSON.stringify(['hermes-bots', 'second::writer:bot'])
 +  ])
 +  expect($petCharacterPreview.get()?.characters[1].detail).toContain('step 2/5')
++  expect($petCharacterPreview.get()?.characters[1].handoff).toEqual({ from: JSON.stringify(['hermes-bots', 'local::writer:bot']), at: 1_999_500 })
++  expect($petCharacterPreview.get()?.characters[2].handoff).toBeUndefined()
 +  expect($petCharacterPreview.get()?.characters[2].source).toBe('Second device')
 +  expect(open).not.toHaveBeenCalled(); expect(request).not.toHaveBeenCalled()
 +  view.rerender(<BotMonitor now={2_000_000} onOpen={open} rows={rows} stale />)
@@ -36166,10 +36303,10 @@ index 0000000000000000000000000000000000000000..657e669290059eef59189a3b559dc52f
 +})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..b6b6ad611f83bbb689e5a6da7d8794244f8e15b1
+index 0000000000000000000000000000000000000000..2924ee760e118a017a0d7b76c9c9ba37be45f782
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx
-@@ -0,0 +1,261 @@
+@@ -0,0 +1,264 @@
 +import { atom, Button, Dialog, host, type PetCharacterPublisher, useValue } from '@hermes/plugin-sdk'
 +import { useEffect, useMemo, useRef, useState } from 'react'
 +
@@ -36361,7 +36498,10 @@ index 0000000000000000000000000000000000000000..b6b6ad611f83bbb689e5a6da7d879424
 +            }
 +          } : undefined
 +
++        const startedAt = typeof worker.started_at === 'number' ? Math.round(worker.started_at * 1000) : 0
++
 +        current.push({ target, character: { id: `${key}:worker:${childId}`, name: `${row.name} · ${b.monitor.worker}`, source, output,
++          ...(startedAt > 0 && startedAt <= now ? { handoff: { from: `${key}:bot`, at: startedAt } } : {}),
 +          detail: [stripPreviewMarkdown(worker.last_activity_description || worker.current_tool || worker.title || ''),
 +            progress.step ? b.roster.workerStep(progress.step.n, progress.step.max) : ''].filter(Boolean).join(' · '), state: 'run' } })
 +      }
@@ -46201,10 +46341,10 @@ index b0eb473252b6e6e149f1f0711a6d8de535e87d8e..ad1ef8e2c1e29ef4fed05dc9d0fac09d
  
 diff --git a/apps/desktop/src/store/pet-characters.ts b/apps/desktop/src/store/pet-characters.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..8b66cd58a8e4800e20b93bf7e4593c267d9a57dc
+index 0000000000000000000000000000000000000000..dd6f97ac6f5fdc3cf24f8a29ef87ed84daec4a60
 --- /dev/null
 +++ b/apps/desktop/src/store/pet-characters.ts
-@@ -0,0 +1,238 @@
+@@ -0,0 +1,248 @@
 +import { atom } from 'nanostores'
 +
 +import { mediaTagValues } from '@/lib/chat-messages/parts'
@@ -46220,6 +46360,7 @@ index 0000000000000000000000000000000000000000..8b66cd58a8e4800e20b93bf7e4593c26
 +  detail: string
 +  outputId?: string
 +  actionsOnly?: true
++  handoff?: { from: string; at: number }
 +  sprite?: PetInfo
 +  state: PetState
 +}
@@ -46416,7 +46557,16 @@ index 0000000000000000000000000000000000000000..8b66cd58a8e4800e20b93bf7e4593c26
 +        const output = item.output && (previous?.key === item.output.key ? previous : { ...item.output, id: String(++nextOutputId) })
 +
 +        if (output) {bindings.set(item.id, output)}
-+        characters.push({ ...(output ? { outputId: output.id, ...(output.prepareStop ? { actionsOnly: true as const } : {}) } : {}), id: JSON.stringify([pluginId, item.id]), name: sanitizePetText(item.name, 80), source: sanitizePetText(item.source, 80), detail: sanitizePetText(item.detail, 160), state: states.has(item.state) ? item.state : 'idle', ...(sprite ? { sprite } : {}) })
++        const start = item.handoff
++
++        const handoff = start && typeof start.from === 'string' && start.from && start.from.length <= 256 &&
++          start.from !== item.id && Number.isSafeInteger(start.at) && start.at > 0 && start.at <= now
++          ? { from: JSON.stringify([pluginId, start.from]), at: start.at } : undefined
++
++        characters.push({ ...(output ? { outputId: output.id, ...(output.prepareStop ? { actionsOnly: true as const } : {}) } : {}),
++          id: JSON.stringify([pluginId, item.id]), name: sanitizePetText(item.name, 80), source: sanitizePetText(item.source, 80),
++          detail: sanitizePetText(item.detail, 160), state: states.has(item.state) ? item.state : 'idle',
++          ...(sprite ? { sprite } : {}), ...(handoff ? { handoff } : {}) })
 +
 +        if (characters.length === 5) {break}
 +      }

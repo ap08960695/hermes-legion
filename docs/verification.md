@@ -1,3 +1,28 @@
+# Show a desktop pet handoff when a worker starts
+
+Mac desktop pets pass a short, click-through folder from delegating bot
+to worker when Monitor observes a fresh worker start. Both actors must
+be visible. Baseline, replayed and suppressed starts produce no cue.
+Reduced motion and pause suppress it. The cue changes no worker state.
+
+The packaged Mac Local fixture supplied an exact worker-start timestamp
+through the gateway's Monitor roster with Hermes minimized. Two polls
+published the same start. The overlay played a single folder cue across
+240 screen points in 658 ms. A cropped macOS recording captured the
+folder between sprites. Four-corner drag and latest-output checks passed.
+
+| Preview | CPU, percent of one core | Mean physical footprint |
+| --- | ---: | ---: |
+| Off | 0.83% | 487.1 MiB |
+| Five moving pets | 2.85% | 566.3 MiB |
+| Increase | 2.02 percentage points | 79.2 MiB |
+
+The short steady samples were taken before the handoff. CPU was just
+above target and memory was near the upper target. GPU and networking
+ran in-process. Local60 found zero Desktop SSH links and all four or
+fewer product processes stopped. The fixture used a controlled worker
+start and ran no model-backed task.
+
 # Animate individual desktop pet arrivals and departures
 
 A desktop pet scales and fades in around its feet when it appears.
