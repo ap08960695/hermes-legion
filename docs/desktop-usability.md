@@ -4,6 +4,8 @@
 
 The rail offers **New chat**, **History** and **Search**. New chat opens a native blank tab, retaining any earlier unsent draft. Search first lists recent conversations and commands; choose **Search all saved chats** to carry the exact query into the native History full-text search. This is not limited to the newest conversation page. Native profile, archive, pin and project rules still apply.
 
+Open **Settings** from the navigation rail in Focus or Workspace. In a compact window it sits beside **History**. The Settings shortcut (⌘, on Mac, Ctrl+, on Windows and Linux) and the command palette also open Settings. Standalone chat windows have a Settings gear in their titlebar.
+
 In Hub, **Back** returns through the actual file/folder navigation history. At the starting file it returns to Hub and retains the previous search. Folder browsing and supported previews remain inside Hermes. Missing, inaccessible and unsupported files keep their existing preview gates.
 
 A collection search names its scope. No matches are distinct from an empty collection. Use **Clear search and filters** to recover the collection or **Search all Hub** to keep the query and expand its scope. Searching does not grant bot membership or share a private chat file.

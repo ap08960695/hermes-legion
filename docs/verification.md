@@ -1,3 +1,16 @@
+# Use one Settings control in the Desktop main window
+
+Focus and Workspace open Settings from the rail. The titlebar gear and
+its width reservation apply to standalone chat windows. Compact layouts
+show Settings next to History. The keyboard shortcut and command
+palette retain their existing routing.
+
+Regression tests cover the gear in both main-window presentations,
+the standalone button and titlebar width on either side. The signed
+Mac Local fixture exercises 940, 480, 640 and 641 px windows, including
+rail clicks, Command-comma, and compact Tab, Enter and Space. Standalone
+window coverage is at the renderer test level.
+
 # Set motion weight on assigned Mac desktop pets
 
 Character packs accept optional `motion_weight` values of `light`,
