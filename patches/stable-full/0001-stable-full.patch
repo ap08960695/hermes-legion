@@ -9143,10 +9143,10 @@ index 0000000000000000000000000000000000000000..69595a89989d84c3f8e7e0def2559df8
 +}
 diff --git a/apps/desktop/electron/pet-overlay-ipc.test.ts b/apps/desktop/electron/pet-overlay-ipc.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..c70981183d21840d5c6166bb81550397e4dc7afe
+index 0000000000000000000000000000000000000000..b02d4c563d0c066e5eb97e89efc0c5ebd34c5f3b
 --- /dev/null
 +++ b/apps/desktop/electron/pet-overlay-ipc.test.ts
-@@ -0,0 +1,713 @@
+@@ -0,0 +1,756 @@
 +import { EventEmitter } from 'node:events'
 +
 +import { afterEach, expect, it, vi } from 'vitest'
@@ -9767,6 +9767,49 @@ index 0000000000000000000000000000000000000000..c70981183d21840d5c6166bb81550397
 +  expect(current().characterPreview.characters[0].sprite.spritesheetBase64).toBe('second')
 +})
 +
++it('delivers one copy of each live atlas while preserving per-actor metadata', async () => {
++  const main = Object.assign(new EventEmitter(), { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false,
++    webContents: { send: vi.fn() } })
++
++  const overlay = Object.assign(new EventEmitter(), { isDestroyed: () => false, webContents: { send: vi.fn() } })
++  registerPetOverlayIpc({ getMainWindow: () => main as never, getPetOverlayWindow: () => overlay as never,
++    openPetOverlay: vi.fn(), closePetOverlay: vi.fn() })
++  const send = io.on.get('hermes:pet-overlay:state')!
++  const control = io.on.get('hermes:pet-overlay:control')!
++  const current = () => overlay.webContents.send.mock.lastCall?.[1].characterPreview.characters
++  const actor = (id: string, spritesheetBase64: string, scale: number) => ({ id, sprite: { spritesheetBase64, scale } })
++
++  const publish = (...characters: ReturnType<typeof actor>[]) => send({ sender: main.webContents }, {
++    characterPreview: { expiresAt: Date.now() + 15_000, characters }
++  })
++
++  const first = actor('first', 'shared atlas', 1)
++  const second = actor('second', 'shared atlas', 2)
++  const distinct = actor('distinct', 'distinct atlas', 3)
++
++  await publish(first, second, distinct)
++  const [a, b, c] = current()
++
++  expect(a.sprite.spritesheetBase64).toBe('shared atlas')
++  expect(b).toMatchObject({ spriteRef: a.spriteRef, sprite: { scale: 2 } })
++  expect(b.sprite.spritesheetBase64).toBeUndefined()
++  expect(c.sprite.spritesheetBase64).toBe('distinct atlas')
++  expect(c.spriteRef).not.toBe(a.spriteRef)
++
++  await publish(second, distinct)
++  expect(current()[0]).toMatchObject({ spriteRef: a.spriteRef, sprite: { scale: 2 } })
++  expect(current()[0].sprite.spritesheetBase64).toBeUndefined()
++
++  control({ sender: overlay.webContents }, { type: 'ready' })
++  await publish(second, first, distinct)
++  expect(current().map(item => item.sprite.spritesheetBase64)).toEqual(['shared atlas', undefined, 'distinct atlas'])
++  expect(current()[0].spriteRef).not.toBe(a.spriteRef)
++
++  await publish(distinct)
++  await publish(first, second)
++  expect(current().map(item => item.sprite.spritesheetBase64)).toEqual(['shared atlas', undefined])
++})
++
 +it('resolves publisher atlas references only for the last accepted actor, version and frame', async () => {
 +  const frame = {}
 +
@@ -9861,7 +9904,7 @@ index 0000000000000000000000000000000000000000..c70981183d21840d5c6166bb81550397
 +  expect(set).toHaveBeenLastCalledWith('-1\n')
 +})
 diff --git a/apps/desktop/electron/pet-overlay-ipc.ts b/apps/desktop/electron/pet-overlay-ipc.ts
-index 59d8dd527dae029c695a8520996f6051d75df371..a597b43738f610cc2f8a13b2652fb492becd3f33 100644
+index 59d8dd527dae029c695a8520996f6051d75df371..3a8cf1a80963ffd587484953551ea0a0fa08a6f4 100644
 --- a/apps/desktop/electron/pet-overlay-ipc.ts
 +++ b/apps/desktop/electron/pet-overlay-ipc.ts
 @@ -2,5 +2,10 @@
@@ -9950,7 +9993,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a597b43738f610cc2f8a13b2652fb492
 +}
 +
  export function registerPetOverlayIpc({
-@@ -34,4 +107,251 @@ export function registerPetOverlayIpc({
+@@ -34,4 +107,250 @@ export function registerPetOverlayIpc({
    openPetOverlay,
 -  closePetOverlay
 +  closePetOverlay,
@@ -9962,7 +10005,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a597b43738f610cc2f8a13b2652fb492
 +  let lastCharacterFrame: WebFrameMain | null = null
 +  let focusedInput: Rectangle | undefined
 +  let atlasVersion = 0
-+  let deliveredAtlases: { window: BrowserWindow; sprites: Map<string, { version: number; bytes: string }> } | null = null
++  let deliveredAtlases: { window: BrowserWindow; versions: Map<string, number> } | null = null
 +  let outputAction: (Pick<PetCharacterOutput, 'id' | 'request' | 'canOpen'> & { window: BrowserWindow; links?: string[]; deliveredFile?: string; fileText?: string; imageReady?: true; pdfPage?: string; pdfRender?: AbortController; file?: 'offered' | 'pending'; stop?: 'offered' | 'pending' }) | null = null
 +  let stopObserving: (() => void) | null = null
 +  let locked = false, suspended = false
@@ -10026,26 +10069,25 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a597b43738f610cc2f8a13b2652fb492
 +      Array.isArray(preview.characters) && preview.characters.slice(0, MAX_PREVIEW_CHARACTERS).some(actor => actor?.outputId === id && (!workerOnly || actor.actionsOnly === true))
 +  }
 +
-+  // Send atlas bytes once per actor version; an overlay document resolves later references.
++  // Send each live atlas once per overlay document, keeping actor metadata inline.
 +  const sendCharacterState = (overlay: BrowserWindow, payload: Record<string, unknown>) => {
 +    const preview = payload.characterPreview as PetCharacterPreview | undefined
 +
 +    if (!Array.isArray(preview?.characters)) {return}
-+    const previous = deliveredAtlases?.window === overlay ? deliveredAtlases.sprites : null
-+    const sprites = new Map<string, { version: number; bytes: string }>()
++    const previous = deliveredAtlases?.window === overlay ? deliveredAtlases.versions : null
++    const versions = new Map<string, number>()
 +
 +    const characters = preview.characters.slice(0, MAX_PREVIEW_CHARACTERS).map(actor => {
 +      const bytes = actor?.sprite?.spritesheetBase64
 +
 +      if (typeof actor?.id !== 'string' || typeof bytes !== 'string' || !bytes) {return actor}
-+      const prior = previous?.get(actor.id)
-+      const reuse = prior?.bytes === bytes
-+      const version = reuse ? prior.version : ++atlasVersion
++      const prior = versions.get(bytes) ?? previous?.get(bytes)
++      const version = prior ?? ++atlasVersion
 +
-+      sprites.set(actor.id, { version, bytes })
++      versions.set(bytes, version)
 +
 +      return { ...actor, spriteRef: version,
-+        ...(reuse ? { sprite: { ...actor.sprite, spritesheetBase64: undefined } } : {}) }
++        ...(prior !== undefined ? { sprite: { ...actor.sprite, spritesheetBase64: undefined } } : {}) }
 +    })
 +
 +    const layout = desktop?.window === overlay ? desktop.layout : undefined
@@ -10053,7 +10095,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a597b43738f610cc2f8a13b2652fb492
 +    const characterDesktop = input ? { ...layout, input } : layout
 +
 +    overlay.webContents.send('hermes:pet-overlay:state', { ...payload, characterDesktop, characterPreview: { ...preview, characters } })
-+    deliveredAtlases = { window: overlay, sprites }
++    deliveredAtlases = { window: overlay, versions }
 +  }
 +
 +  const sendCharacters = () => {
@@ -10203,7 +10245,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a597b43738f610cc2f8a13b2652fb492
 +  }
 +
    // `request` is `{ bounds, screen }`. A fresh pop-out passes viewport-space
-@@ -72,2 +392,16 @@ export function registerPetOverlayIpc({
+@@ -72,2 +391,16 @@ export function registerPetOverlayIpc({
    })
 +  ipcMain.on('hermes:pet-overlay:characters-supported', event => {
 +    const main = getMainWindow()
@@ -10220,16 +10262,16 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a597b43738f610cc2f8a13b2652fb492
 +    if (region) {state.input.set(region)}
 +  })
    ipcMain.handle('hermes:pet-overlay:close', async () => {
-@@ -86,3 +420,3 @@ export function registerPetOverlayIpc({
+@@ -86,3 +419,3 @@ export function registerPetOverlayIpc({
 
 -    if (!petOverlayWindow || petOverlayWindow.isDestroyed() || !bounds) {
 +    if (!petOverlayWindow || petOverlayWindow.isDestroyed() || !bounds || desktop?.window === petOverlayWindow) {
        return
-@@ -115,2 +449,3 @@ export function registerPetOverlayIpc({
+@@ -115,2 +448,3 @@ export function registerPetOverlayIpc({
    ipcMain.on('hermes:pet-overlay:ignore-mouse', (_event, ignore) => {
 +    if (linuxInput && linuxInput.phase !== 'idle') {return}
      const petOverlayWindow = getPetOverlayWindow()
-@@ -144,3 +479,155 @@ export function registerPetOverlayIpc({
+@@ -144,3 +478,155 @@ export function registerPetOverlayIpc({
    // Main renderer → overlay: forward the latest pet state for the overlay to render.
 -  ipcMain.on('hermes:pet-overlay:state', (_event, payload) => {
 +  ipcMain.on('hermes:pet-overlay:state', async (event, payload) => {
@@ -10386,12 +10428,12 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a597b43738f610cc2f8a13b2652fb492
 +    stopObserving?.()
 +    stopObserving = null
      const petOverlayWindow = getPetOverlayWindow()
-@@ -152,3 +639,3 @@ export function registerPetOverlayIpc({
+@@ -152,3 +638,3 @@ export function registerPetOverlayIpc({
    // Overlay → main renderer: control messages (pop back in, composer submit).
 -  ipcMain.on('hermes:pet-overlay:control', (_event, payload) => {
 +  ipcMain.on('hermes:pet-overlay:control', (event, payload) => {
      const mainWindow = getMainWindow()
-@@ -159,2 +646,100 @@ export function registerPetOverlayIpc({
+@@ -159,2 +645,100 @@ export function registerPetOverlayIpc({
 
 +    if (payload?.type === 'character-output' || payload?.type === 'character-output-close' ||
 +        payload?.type === 'character-output-open' || payload?.type === 'character-stop' || payload?.type === 'character-output-link' ||
@@ -10492,7 +10534,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a597b43738f610cc2f8a13b2652fb492
 +    }
 +
      // Double-click toggles the app window: hide it away if it's up front, bring it
-@@ -192,2 +777,14 @@ export function registerPetOverlayIpc({
+@@ -192,2 +776,14 @@ export function registerPetOverlayIpc({
    })
 +
 +  return {
@@ -26650,7 +26692,7 @@ index 0000000000000000000000000000000000000000..196e3f6937601681f6ad162ba1599e7a
 +  </div>
 +}
 diff --git a/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx b/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
-index 82319976a166e658f80e794b0033fed81a48d456..665b27ab9a1f4559f371cfedbc47cbb52f2c4d78 100644
+index 82319976a166e658f80e794b0033fed81a48d456..e61f63b87641cc26dd5c2148e6b997bb7a7db032 100644
 --- a/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
 +++ b/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
 @@ -10,2 +10,4 @@ import { isSubmitEnter } from '@/lib/ime'
@@ -26697,20 +26739,30 @@ index 82319976a166e658f80e794b0033fed81a48d456..665b27ab9a1f4559f371cfedbc47cbb5
 +  const refreshHitRef = useRef<(() => void) | null>(null)
 +  const refreshHit = useCallback(() => refreshHitRef.current?.(), [])
    const composerOpenRef = useRef(false)
-@@ -94,2 +117,37 @@ export function PetOverlayApp() {
+@@ -94,2 +117,47 @@ export function PetOverlayApp() {
      const off = window.hermesDesktop?.petOverlay?.onState(payload => {
 +      const preview = payload.characterPreview ?? null
-+      setCharacters(current => preview ? {
-+        preview: { ...preview, characters: preview.characters.flatMap(actor => {
-+          if (actor?.spriteRef === undefined || actor.sprite?.spritesheetBase64) {return [actor]}
-+          const cached = current?.preview.characters.find(previous => previous.id === actor.id && previous.spriteRef === actor.spriteRef)
-+          const bytes = cached?.sprite?.spritesheetBase64
++      setCharacters(current => {
++        if (!preview) {return null}
++        const atlases = new Map<number, string>()
 +
-+          return bytes && actor.sprite ? [{ ...actor, sprite: { ...actor.sprite, spritesheetBase64: bytes } }] : []
-+        }) },
-+        paused: payload.charactersPaused !== false,
-+        desktop: payload.characterDesktop
-+      } : null)
++        for (const actor of [...(current?.preview.characters ?? []), ...preview.characters]) {
++          const bytes = actor?.sprite?.spritesheetBase64
++
++          if (bytes && actor.spriteRef !== undefined) {atlases.set(actor.spriteRef, bytes)}
++        }
++
++        return {
++          preview: { ...preview, characters: preview.characters.flatMap(actor => {
++            if (actor?.spriteRef === undefined || actor.sprite?.spritesheetBase64) {return [actor]}
++            const bytes = atlases.get(actor.spriteRef)
++
++            return bytes && actor.sprite ? [{ ...actor, sprite: { ...actor.sprite, spritesheetBase64: bytes } }] : []
++          }) },
++          paused: payload.charactersPaused !== false,
++          desktop: payload.characterDesktop
++        }
++      })
 +
 +      setOutput(current => {
 +        if (!current || payload.charactersPaused !== false ||
@@ -26735,16 +26787,16 @@ index 82319976a166e658f80e794b0033fed81a48d456..665b27ab9a1f4559f371cfedbc47cbb5
 +
 +      if (preview) {setComposerOpen(false)}
        setPetInfo(payload.info)
-@@ -104,3 +162,3 @@ export function PetOverlayApp() {
+@@ -104,3 +172,3 @@ export function PetOverlayApp() {
 
 -      if (lastReactionRef.current === null) {
 +      if (preview || lastReactionRef.current === null) {
          lastReactionRef.current = reaction?.id ?? 0
-@@ -127,2 +185,3 @@ export function PetOverlayApp() {
+@@ -127,2 +195,3 @@ export function PetOverlayApp() {
    // returns to a solid pixel.
 +  // eslint-disable-next-line no-restricted-syntax -- clear a detached gesture from the native move listener.
    useEffect(() => {
-@@ -138,2 +197,8 @@ export function PetOverlayApp() {
+@@ -138,2 +207,8 @@ export function PetOverlayApp() {
 
 +      if (target?.closest('[data-pet-output-target]')) {return true}
 +
@@ -26753,7 +26805,7 @@ index 82319976a166e658f80e794b0033fed81a48d456..665b27ab9a1f4559f371cfedbc47cbb5
 +      }
 +
        if (!pet || !target || !pet.contains(target)) {
-@@ -169,4 +234,18 @@ export function PetOverlayApp() {
+@@ -169,4 +244,18 @@ export function PetOverlayApp() {
 
 -    const onMove = (ev: MouseEvent) => {
 -      if (dragRef.current || composerOpenRef.current) {
@@ -26774,7 +26826,7 @@ index 82319976a166e658f80e794b0033fed81a48d456..665b27ab9a1f4559f371cfedbc47cbb5
 +
 +      if (dragRef.current || composerOpenRef.current || document.querySelector('[data-pet-dragging]')) {
          setIgnore(false)
-@@ -179,6 +258,30 @@ export function PetOverlayApp() {
+@@ -179,6 +268,30 @@ export function PetOverlayApp() {
 
 +    const recheck = () => {
 +      cancelAnimationFrame(releaseCheck)
@@ -26805,12 +26857,12 @@ index 82319976a166e658f80e794b0033fed81a48d456..665b27ab9a1f4559f371cfedbc47cbb5
 +      window.removeEventListener('pointercancel', onRelease)
 +      cancelAnimationFrame(releaseCheck)
        clearTimeout(clickTimerRef.current)
-@@ -206,3 +309,3 @@ export function PetOverlayApp() {
+@@ -206,3 +319,3 @@ export function PetOverlayApp() {
    const onPetPointerDown = (e: React.PointerEvent) => {
 -    if (e.button !== 0) {
 +    if (e.button !== 0 || dragRef.current) {
        return
-@@ -210,4 +313,8 @@ export function PetOverlayApp() {
+@@ -210,4 +323,8 @@ export function PetOverlayApp() {
 
 -    ;(e.target as Element).setPointerCapture?.(e.pointerId)
 +    const target = e.currentTarget
@@ -26820,12 +26872,12 @@ index 82319976a166e658f80e794b0033fed81a48d456..665b27ab9a1f4559f371cfedbc47cbb5
 +      target,
 +      pointerId: e.pointerId,
        height: window.outerHeight,
-@@ -225,3 +332,3 @@ export function PetOverlayApp() {
+@@ -225,3 +342,3 @@ export function PetOverlayApp() {
 
 -    if (!drag) {
 +    if (!drag || drag.pointerId !== e.pointerId) {
        return
-@@ -243,6 +350,4 @@ export function PetOverlayApp() {
+@@ -243,6 +360,4 @@ export function PetOverlayApp() {
      const drag = dragRef.current
 -    dragRef.current = null
 -    ;(e.target as Element).releasePointerCapture?.(e.pointerId)
@@ -26833,18 +26885,18 @@ index 82319976a166e658f80e794b0033fed81a48d456..665b27ab9a1f4559f371cfedbc47cbb5
 -    if (!drag) {
 +    if (!drag || drag.pointerId !== e.pointerId) {
        return
-@@ -250,2 +355,5 @@ export function PetOverlayApp() {
+@@ -250,2 +365,5 @@ export function PetOverlayApp() {
 
 +    dragRef.current = null
 +    drag.target.releasePointerCapture?.(e.pointerId)
 +
      if (drag.moved) {
-@@ -316,3 +424,3 @@ export function PetOverlayApp() {
+@@ -316,3 +434,3 @@ export function PetOverlayApp() {
 
 -  usePetZoomGesture(petRef, onScale, Boolean(info.enabled && info.spritesheetBase64))
 +  usePetZoomGesture(petRef, onScale, Boolean(info.enabled && info.spritesheetBase64 && !characterMode))
 
-@@ -330,7 +438,32 @@ export function PetOverlayApp() {
+@@ -330,7 +448,32 @@ export function PetOverlayApp() {
 
 -    const { width, height } = overlayWindowSize(
 -      info.frameW ?? DEFAULT_FRAME_W,
@@ -26882,7 +26934,7 @@ index 82319976a166e658f80e794b0033fed81a48d456..665b27ab9a1f4559f371cfedbc47cbb5
 +    const { width, height } = overlayWindowSize(info.frameW ?? DEFAULT_FRAME_W, info.frameH ?? DEFAULT_FRAME_H,
 +      info.scale ?? DEFAULT_SCALE)
 
-@@ -364,3 +497,67 @@ export function PetOverlayApp() {
+@@ -364,3 +507,67 @@ export function PetOverlayApp() {
      window.hermesDesktop?.petOverlay?.control({ bounds, type: 'bounds' })
 -  }, [info.enabled, info.spritesheetBase64, info.scale, info.frameW, info.frameH])
 +  }, [info.enabled, info.spritesheetBase64, info.scale, info.frameW, info.frameH, characterMode, desktopMode])
@@ -26951,7 +27003,7 @@ index 82319976a166e658f80e794b0033fed81a48d456..665b27ab9a1f4559f371cfedbc47cbb5
 +      : current)
 +  }
 
-@@ -370,2 +567,6 @@ export function PetOverlayApp() {
+@@ -370,2 +577,6 @@ export function PetOverlayApp() {
 
 +  if (characters) {
 +    return <PetCharacters desktop={characters.desktop} info={info} onBrokenImage={clearBrokenImage} onCopy={copyOutput} onHitTargetsChanged={refreshHit} onOpen={openOutput} onOpenLink={openOutputLink} onOutput={showOutput} onPreview={() => setActionsRequest(null)} onPreviewFile={previewOutputFile} onStop={stopWorker} onViewFile={viewFile} output={output} paused={characters.paused} preview={characters.preview} showActions={output?.request === actionsRequest} />
@@ -26960,10 +27012,10 @@ index 82319976a166e658f80e794b0033fed81a48d456..665b27ab9a1f4559f371cfedbc47cbb5
    return (
 diff --git a/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..4ad87f0f34b53033fcd21bd13876f59d6db81cce
+index 0000000000000000000000000000000000000000..748e03908ac85c8dfd104dbf81866ec15b770a6a
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
-@@ -0,0 +1,1427 @@
+@@ -0,0 +1,1429 @@
 +import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 +import type * as Motion from 'motion/react'
 +import type { ComponentProps } from 'react'
@@ -27128,7 +27180,8 @@ index 0000000000000000000000000000000000000000..4ad87f0f34b53033fcd21bd13876f59d
 +  expect(screen.getAllByTestId('sprite').map(canvas => canvas.dataset.slug)).toEqual(['Writer own atlas', 'Owned fixture'])
 +})
 +
-+it('uses atlas references only for the matching actor and delivered version', () => {
++it('shares delivered atlas bytes across actors and drops stale versions', () => {
++  io.reduced = true
 +  render(<PetOverlayApp />)
 +  const payload = preview()
 +  const first = payload.characterPreview.characters[0]
@@ -27141,12 +27194,13 @@ index 0000000000000000000000000000000000000000..4ad87f0f34b53033fcd21bd13876f59d
 +  const previous = { ...first, spriteRef: 1, sprite }
 +  const reference = { ...previous, sprite: { ...sprite, spritesheetBase64: undefined } }
 +
-+  publish([previous])
-+  expect(screen.getByRole('figure').querySelector('canvas')?.dataset.atlas).toBe('installed atlas')
-+  publish([reference])
-+  expect(screen.getByRole('figure').querySelector('canvas')?.dataset.atlas).toBe('installed atlas')
-+  publish([{ ...reference, id: 'different' }])
-+  expect(screen.queryAllByRole('figure')).toHaveLength(0)
++  const second = { ...reference, id: 'different', sprite: { ...reference.sprite, displayName: 'other metadata' } }
++
++  publish([second, previous])
++  expect(screen.getAllByTestId('sprite').map(canvas => canvas.dataset.atlas)).toEqual(['installed atlas', 'installed atlas'])
++  expect(screen.getAllByTestId('sprite').map(canvas => canvas.dataset.slug)).toEqual(['other metadata', 'custom'])
++  publish([second])
++  expect(screen.getByTestId('sprite').dataset.atlas).toBe('installed atlas')
 +  publish([{ ...previous, spriteRef: 2, sprite: { ...sprite, spritesheetBase64: 'replacement' } }])
 +  expect(screen.getByRole('figure').querySelector('canvas')?.dataset.atlas).toBe('replacement')
 +  publish([reference])
