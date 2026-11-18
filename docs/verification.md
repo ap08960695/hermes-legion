@@ -1,3 +1,23 @@
+# Send smaller atlases to Mac desktop pets
+
+The Mac overlay asks for 96 × 104 pixel cells and displays them at the
+same screen size as the original 192 × 208 cells. The gateway keeps the
+original row counts and imports. Older gateways that reject the option
+get one request for the full atlas. A file replacement during decode
+cannot cache the old image under the new revision.
+
+Six generated packs went from 6.51 to 1.96 MiB of PNG data. Against the
+preceding packaged Mac Local run with the same six packs, five-pet
+memory overhead fell from 144.5 to 77.1 MiB. Mean overlay renderer
+footprint fell from 145.4 to 83.2 MiB. Total CPU overhead was 2.33 points
+of one core, above the two-point target.
+
+All six characters moved at 32 × 34 CSS pixels and returned after
+reload. Four-corner drag and transparent release passed on one display.
+The 25-second samples used staged activity and in-process GPU and
+networking. The isolated launch opened zero Desktop SSH links and
+stopped all of its processes.
+
 # Reuse installed atlases in the desktop overlay
 
 Electron sends an assigned atlas to the overlay on first use or change.
