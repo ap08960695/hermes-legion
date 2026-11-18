@@ -614,3 +614,16 @@ lock or suspend pauses the panel.
 
 The output popover still uses the current character and its expiring
 output binding. [Mac Local verification](verification.md#keep-monitor-characters-moving-when-hermes-is-minimized).
+
+## Show pets without window chrome
+
+The shared, transparent panel spans the bottom of the display's work
+area. It paints the installed sprites and has no status cards or Move
+bar. Each character moves on its own. Drag a painted part of a sprite
+to reposition that character in the panel. Arrow keys move a focused
+character, and reduced motion keeps the pets still between actions.
+
+A waiting character can show **Needs your answer** on hover or focus.
+Click an actionable character to open its current output or worker
+actions. Empty canvas pixels pass mouse input through. The overlay
+still uses one panel for up to five pets. [Mac Local verification](verification.md#show-uncluttered-sprites-on-a-transparent-desktop-overlay).

@@ -1,3 +1,18 @@
+# Show uncluttered sprites on a transparent desktop overlay
+
+The Mac overlay reapplies its clear native backing when the window is
+revealed. A controlled WindowServer capture reproduced an opaque
+#121212 backdrop even with transparent CSS. After the fix, the same
+empty pixel followed two different backgrounds behind the panel.
+Five sprites from the installed Lanternling example remained visible
+while Hermes was minimized. The capture included only windows from
+the isolated test app.
+
+The character controls use the painted sprite for pointer hit-testing.
+Scoped regressions cover empty pixels, individual drag, cancelled
+drag, keyboard nudging, and current-output selection. The five-actor
+and 15 fps sprite limits still apply.
+
 # Keep Monitor characters moving when Hermes is minimized
 
 A signed Mac Local build showed five characters in one floating panel.
