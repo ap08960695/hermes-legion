@@ -1,3 +1,32 @@
+# Count character frames from the validated atlas
+
+The installed-character reader reuses the atlas it opens for validation.
+One alpha scan supplies the native rows and activity frame counts.
+The cut-off at the first blank cell, legacy fallback row, and terminal
+frame limits stay the same. The saved pack and sprite response keep their
+original image bytes. Metadata reads leave the terminal frame cache alone.
+
+The regression reported nine image opens before this change and one after.
+Both legacy and current atlas fixtures exercised alpha gaps, empty rows,
+and terminal rendering parity. The packaged Mac Local comparison used
+the same six assigned packs and byte-identical Desktop assets. It
+sampled 30 seconds per condition with Hermes minimized and GPU and
+networking in-process. The final overlay showed all six moving and
+passed four-corner drag with transparent release.
+
+| Added physical footprint over preview off | Before | After |
+| --- | ---: | ---: |
+| Gateway with five packs | 40.7 MiB | 10.9 MiB |
+| Gateway with six packs | 37.8 MiB | 10.9 MiB |
+| All product processes with five packs | 118.2 MiB | 140.6 MiB |
+
+Active five-pack totals were 721.6 and 686.1 MiB. The preview-off
+baselines differed by 57.9 MiB. Five-pack CPU overhead was
+1.81 and 3.54 points of one core. Whole-preview
+improvement remains unverified. Two temporary compact-renderer trials
+were reverted after higher measured CPU overhead. All Local launches
+opened zero Desktop SSH links and stopped their processes.
+
 # Create and assign six original desktop character packs
 
 The public creator workflow produced six original packs with different

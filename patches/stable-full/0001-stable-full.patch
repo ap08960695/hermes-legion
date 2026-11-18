@@ -106821,10 +106821,10 @@ index 0000000000000000000000000000000000000000..311135c3b6a927d916f693212ede910a
 +    assert root_meta.read_bytes() == root_before
 diff --git a/tests/tui_gateway/test_pet_character_sprite.py b/tests/tui_gateway/test_pet_character_sprite.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..87870b19700b473536a9e5c1e7b42e03903f877f
+index 0000000000000000000000000000000000000000..0cc5a940461406385ed0222d9d819fcd4e407269
 --- /dev/null
 +++ b/tests/tui_gateway/test_pet_character_sprite.py
-@@ -0,0 +1,106 @@
+@@ -0,0 +1,153 @@
 +"""Installed character reads never select/install a mascot or cross profile paths."""
 +from pathlib import Path
 +import base64
@@ -106878,6 +106878,53 @@ index 0000000000000000000000000000000000000000..87870b19700b473536a9e5c1e7b42e03
 +    assert {str(p): p.read_bytes() for p in home.rglob("*") if p.is_file()} == before
 +    absent = server.handle_request({"id": "absent", "method": "pet.sprite", "params": {"profile": "absent", "slug": "same"}})
 +    assert absent.get("error"), absent
++
++
++@pytest.mark.parametrize("rows", [8, 9])
++def test_character_counts_decode_once_without_touching_terminal_cache(fleet, monkeypatch, rows):
++    from agent.pet import constants, render
++
++    server, home = fleet
++    sheet = home / "profiles/alpha/pets/same/spritesheet.png"
++    width, height = constants.FRAME_W, constants.FRAME_H
++    image = Image.new("RGBA", (width * 8, height * rows))
++    counts = [7, 2, 3, 4, 5, 6, 0, 7, 8][:rows]
++    for row, count in enumerate(counts):
++        for column in range(count):
++            image.putpixel((column * width, row * height), (100, 80, 60, 9))
++        if count + 1 < 8:
++            image.putpixel((count * width, row * height), (100, 80, 60, 8))
++            image.putpixel(((count + 1) * width, row * height), (100, 80, 60, 255))
++    image.save(sheet)
++
++    classic = render.PetRenderer(str(sheet), mode="unicode", scale=0.45)
++    expected_terminal = classic.frame("idle", 0)
++    old_cache = render._raw_frames.cache_info()
++    open_image = Image.open
++    opens = []
++
++    def count_open(path, *args, **kwargs):
++        if isinstance(path, (str, Path)) and Path(path) == sheet:
++            opens.append(path)
++        return open_image(path, *args, **kwargs)
++
++    with monkeypatch.context() as probe:
++        probe.setattr(Image, "open", count_open)
++        result = server.handle_request({
++            "id": "metadata", "method": "pet.sprite", "params": {"profile": "alpha", "slug": "same"},
++        })["result"]
++        assert result["enabled"]
++        assert len(opens) == 1
++        assert render._raw_frames.cache_info() == old_cache
++    names = constants.state_rows_for_grid(rows)
++    assert result["stateRows"] == names
++    assert result["framesByRow"] == dict(zip(names, counts, strict=True))
++    assert result["framesByState"] == {
++        state.value: min(constants.FRAMES_PER_STATE, counts[constants.state_row_index(state, rows)])
++        for state in constants.PetState
++    }
++    assert {state: classic.frame_count(state) for state in result["framesByState"]} == result["framesByState"]
++    assert classic.frame("idle", 0) == expected_terminal
 +
 +
 +@pytest.mark.parametrize("case", ["missing", "traversal", "sheet-link", "metadata-link", "folder-link", "oversized", "huge-geometry", "animated", "malformed-metadata", "invalid-body", "declared-escape", "nested-link", "fallback-link"])
@@ -112725,7 +112772,7 @@ index 2ee5564f08d18f307a36adaa1dea304a0369a6f1..7c7f4e3bbc32dfcc0eb9b46cab925423
      "project": _cfg_get_project,
 diff --git a/tui_gateway/methods_pet_characters.py b/tui_gateway/methods_pet_characters.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..1403616ce9f067a4c909e91282049ff62cdebfeb
+index 0000000000000000000000000000000000000000..8cb9561baef2212dde66828f5221c660acd3eced
 --- /dev/null
 +++ b/tui_gateway/methods_pet_characters.py
 @@ -0,0 +1,93 @@
@@ -112811,7 +112858,7 @@ index 0000000000000000000000000000000000000000..1403616ce9f067a4c909e91282049ff6
 +                    or image.height // constants.FRAME_H not in (8, 9)):
 +                return _ok(rid, disabled)
 +            image.load()
-+        payload = _pet_sprite_payload(pet, scale=constants.DEFAULT_SCALE)
++            payload = _pet_sprite_payload(pet, scale=constants.DEFAULT_SCALE, atlas=image)
 +        after = pet.spritesheet.stat()
 +        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
 +            return _ok(rid, disabled)
@@ -113054,15 +113101,76 @@ index 67bf1e3c30a2c8a364db907f3906995972430052..4be689f312fc0c624704ac47599a2dcc
 +                after_model_turn=True)
              if verdict_msg := decision.get("message") or "":
 diff --git a/tui_gateway/server.py b/tui_gateway/server.py
-index b9ab08d4b480137f1194aa37831f51e4dfc915f8..4b8bf61eb9a676f7cf436ae2508dd31c57ad9fde 100644
+index b9ab08d4b480137f1194aa37831f51e4dfc915f8..0a91c859a82b6d544f1075e7c888c983aae4275c 100644
 --- a/tui_gateway/server.py
 +++ b/tui_gateway/server.py
-@@ -2166,3 +2166,3 @@ from . import (
+@@ -1792,3 +1792,3 @@ def _clone_pet_payload(payload: dict) -> dict:
+
+-def _pet_row_frame_counts(spritesheet) -> dict:
++def _pet_row_frame_counts(spritesheet, *, atlas=None) -> dict:
+     """Real frame count per concrete spritesheet row name."""
+@@ -1797,7 +1797,7 @@ def _pet_row_frame_counts(spritesheet) -> dict:
+         from agent.pet import constants, render
+-        with Image.open(spritesheet) as opened:
+-            image = opened.convert("RGBA")
++        with (Image.open(spritesheet) if atlas is None else contextlib.nullcontext(atlas)) as opened:
++            alpha = (opened if opened.mode == "RGBA" else opened.convert("RGBA")).getchannel("A")
+         W, H = constants.FRAME_W, constants.FRAME_H
+-        cols = max(1, image.width // W)
+-        row_count = max(1, image.height // H)
++        cols = max(1, alpha.width // W)
++        row_count = max(1, alpha.height // H)
+         rows = constants.state_rows_for_grid(row_count)
+@@ -1806,3 +1806,5 @@ def _pet_row_frame_counts(spritesheet) -> dict:
+             top = row_idx * H
+-            blank = lambda col: render._frame_is_blank(image.crop((col * W, top, col * W + W, top + H)))
++            def blank(col):
++                cell = alpha.crop((col * W, top, (col + 1) * W, top + H))
++                return cell.getextrema()[1] <= render._BLANK_ALPHA
+             out[name] = next((col for col in range(cols) if blank(col)), cols)  # frames before the first blank cell
+@@ -1830,3 +1832,3 @@ def _pet_config_scale() -> float:
+
+-def _pet_sprite_payload(pet, *, scale: float) -> dict:
++def _pet_sprite_payload(pet, *, scale: float, atlas=None) -> dict:
+     """Renderer payload (spritesheet bytes + geometry) for *pet* — one shape for ``pet.info`` (active
+@@ -1845,7 +1847,19 @@ def _pet_sprite_payload(pet, *, scale: float) -> dict:
+             return _clone_pet_payload(cached)
+-    try:  # real (padding-trimmed) frame count per state; {} → the canvas uses the static framesPerState
+-        from agent.pet import render
+-        frames_by_state = render.state_frame_counts(str(pet.spritesheet))
+-    except Exception:
+-        frames_by_state = {}
++    frames_by_row = _pet_row_frame_counts(pet.spritesheet, atlas=atlas)
++    if atlas is not None:
++        # Installed character atlases have complete native rows. Resolve aliases without caching frame pixels.
++        row_count = atlas.height // constants.FRAME_H
++        state_rows = constants.state_rows_for_grid(row_count)
++        frames_by_state = {
++            state.value: min(constants.FRAMES_PER_STATE, frames_by_row.get(
++                state_rows[constants.state_row_index(state, row_count)], 0))
++            for state in constants.PetState
++        }
++    else:
++        state_rows = _pet_state_rows(pet.spritesheet)
++        try:  # {} lets the canvas fall back to framesPerState.
++            from agent.pet import render
++            frames_by_state = render.state_frame_counts(str(pet.spritesheet))
++        except Exception:
++            frames_by_state = {}
+     raw = pet.spritesheet.read_bytes()
+@@ -1858,4 +1872,4 @@ def _pet_sprite_payload(pet, *, scale: float) -> dict:
+         "framesByState": frames_by_state,
+-        "framesByRow": _pet_row_frame_counts(pet.spritesheet), "loopMs": constants.LOOP_MS,
+-        "scale": scale, "stateRows": _pet_state_rows(pet.spritesheet),
++        "framesByRow": frames_by_row, "loopMs": constants.LOOP_MS,
++        "scale": scale, "stateRows": state_rows,
+     }
+@@ -2166,3 +2180,3 @@ from . import (
      methods_config_set as _methods_config_set, methods_images as _methods_images,
 -    methods_profiles as _methods_profiles, methods_prompt as _methods_prompt, methods_session as _methods_session,
 +    methods_profiles as _methods_profiles, methods_prompt as _methods_prompt, methods_session as _methods_session, methods_pet_characters as _methods_pet_characters,
      methods_tools as _methods_tools, methods_tools_plugin_servers as _methods_tools_plugin_servers,
-@@ -2182,3 +2182,3 @@ for _m in (
+@@ -2182,3 +2196,3 @@ for _m in (
      _methods_complete_helpers, _methods_slash, _methods_voice, _methods_browser,
 -    _methods_browser_control, _methods_session, _methods_prompt, _methods_config,
 +    _methods_browser_control, _methods_session, _methods_pet_characters, _methods_prompt, _methods_config,
