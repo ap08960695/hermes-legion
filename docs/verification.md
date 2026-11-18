@@ -1,3 +1,21 @@
+# Supervise the Mac PDF raster helper
+
+The private Mac supervisor accepts a PDF byte snapshot and starts the
+packaged helper with its sandbox policy on demand. It caps stdin at
+512 KiB and stdout at 128 KiB. The PNG must have a complete header and
+end marker, with each edge in 1–640 px. A timeout, cancellation, stream
+failure, or overflow terminates the child and discards its output. A
+second request is refused while the first child owns the slot, through
+its close event.
+
+A standalone Apple Silicon probe used the shipped unpacked layout and
+policy. It reproduced three saved first-page PNGs, rejected malformed
+and oversized inputs, and reaped the child after timeout and cancellation.
+Only one render ran at a time. macOS refused nested profiles, so the
+successful probe applied the shipped sandbox directly to the child.
+Gateway authorization, Desktop IPC, the viewer, and a runtime RSS
+limit remain open. Character PDFs still offer **Copy path**.
+
 # Stage the macOS PDF raster helper
 
 Mac native preparation builds the PDF raster executable with arm64

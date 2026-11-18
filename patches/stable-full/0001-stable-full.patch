@@ -8371,6 +8371,265 @@ index 2c784ec2a2e709f7fc953d88399b3078aaa5e12b..5492eec425bbd695225966f3bc91032d
 +
 +  return { dispose: () => linux?.dispose(), show }
  }
+diff --git a/apps/desktop/electron/pdf-raster.test.ts b/apps/desktop/electron/pdf-raster.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..cb0734d712b48c72b064a71a44d776e859a73dea
+--- /dev/null
++++ b/apps/desktop/electron/pdf-raster.test.ts
+@@ -0,0 +1,147 @@
++import { type spawn } from 'node:child_process'
++import { EventEmitter } from 'node:events'
++import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
++import { tmpdir } from 'node:os'
++import { join } from 'node:path'
++import { PassThrough } from 'node:stream'
++
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
++
++import { createPdfRaster } from './pdf-raster'
++
++const pdf = Buffer.from('%PDF-fixture')
++const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jP1sAAAAASUVORK5CYII=', 'base64')
++
++class FakeChild extends EventEmitter {
++  stdin = new PassThrough()
++  stdout = new PassThrough()
++  kill = vi.fn()
++}
++
++describe('PDF raster supervisor', () => {
++  let root: string
++  let appPath: string
++  let binary: string
++  let policy: string
++  let child: FakeChild
++  let launch: ReturnType<typeof vi.fn>
++
++  function raster(platform: NodeJS.Platform = 'darwin') {
++    return createPdfRaster(appPath, { platform, spawnHelper: launch as unknown as typeof spawn, timeoutMs: 50 })
++  }
++
++  beforeEach(() => {
++    root = mkdtempSync(join(tmpdir(), 'raster-test-'))
++    appPath = join(root, 'app.asar')
++    const native = join(root, 'app.asar.unpacked', 'dist', 'native')
++    mkdirSync(native, { recursive: true })
++    binary = join(native, 'pdf-raster')
++    policy = join(native, 'pdf-raster.sb')
++    writeFileSync(binary, '', { mode: 0o700 })
++    writeFileSync(policy, '')
++    child = new FakeChild()
++    launch = vi.fn(() => child)
++  })
++
++  afterEach(() => {
++    vi.useRealTimers()
++    rmSync(root, { recursive: true, force: true })
++  })
++
++  it('runs the packaged helper in the sandbox and accepts output only after clean close', async () => {
++    const readInput = vi.fn()
++    child.stdin.on('data', readInput)
++    const render = raster()
++    const pending = render(pdf)
++    expect(launch).toHaveBeenCalledWith('/usr/bin/sandbox-exec', [
++      '-D', 'RASTER_BIN=' + binary, '-f', policy, binary,
++    ], { env: {}, stdio: ['pipe', 'pipe', 'ignore'] })
++    expect(readInput).toHaveBeenCalledExactlyOnceWith(pdf)
++    child.stdout.write(png.subarray(0, 20))
++    child.stdout.write(png.subarray(20))
++    child.emit('exit', 0)
++    await expect(render(pdf)).resolves.toBeUndefined()
++    child.emit('close', 0)
++    await expect(pending).resolves.toEqual(png)
++  })
++
++  it('declines unsupported, oversized, malformed, cancelled and unstaged input without spawning', async () => {
++    await expect(raster('linux')(pdf)).resolves.toBeUndefined()
++    const render = raster()
++    await expect(render(Buffer.concat([pdf, Buffer.alloc(512 * 1024)]))).resolves.toBeUndefined()
++    await expect(render(Buffer.from('wrong format'))).resolves.toBeUndefined()
++    await expect(render(pdf, AbortSignal.abort())).resolves.toBeUndefined()
++    rmSync(policy)
++    await expect(render(pdf)).resolves.toBeUndefined()
++    expect(launch).not.toHaveBeenCalled()
++  })
++
++  it.each(['timeout', 'abort', 'overflow', 'stdin error', 'spawn error'])(
++    'kills on %s and holds its slot through close', async (event) => {
++      vi.useFakeTimers()
++      const render = raster()
++      const controller = new AbortController()
++      const pending = render(pdf, controller.signal)
++      child.stdout.write(png)
++
++      switch (event) {
++        case 'timeout': await vi.advanceTimersByTimeAsync(50);
++
++ break
++
++        case 'abort': controller.abort();
++
++ break
++
++        case 'overflow': child.stdout.write(Buffer.alloc(128 * 1024));
++
++ break
++
++        case 'stdin error': child.stdin.emit('error', new Error('closed pipe'));
++
++ break
++
++        case 'spawn error': child.emit('error', new Error('spawn failed'));
++
++ break
++      }
++
++      expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGKILL')
++      await expect(render(pdf)).resolves.toBeUndefined()
++      expect(launch).toHaveBeenCalledTimes(1)
++      child.emit('close', 0)
++      await expect(pending).resolves.toBeUndefined()
++
++      child = new FakeChild()
++      const retry = render(pdf)
++      child.stdout.write(png)
++      child.emit('close', 0)
++      await expect(retry).resolves.toEqual(png)
++      expect(launch).toHaveBeenCalledTimes(2)
++    },
++  )
++
++  it('discards truncation, oversized dimensions and nonzero exits', async () => {
++    const render = raster()
++    const tooWide = Buffer.from(png)
++    tooWide.writeUInt32BE(641, 16)
++
++    for (const [image, code] of [[png.subarray(0, 29), 0], [tooWide, 0], [png, 3]] as const) {
++      child = new FakeChild()
++      const pending = render(pdf)
++      child.stdout.write(image)
++      child.emit('close', code)
++      await expect(pending).resolves.toBeUndefined()
++    }
++  })
++
++  it('releases the slot after a synchronous launch failure', async () => {
++    const render = raster()
++    launch.mockImplementationOnce(() => { throw new Error('launch failed') })
++    await expect(render(pdf)).resolves.toBeUndefined()
++    const pending = render(pdf)
++    child.stdout.write(png)
++    child.emit('close', 0)
++    await expect(pending).resolves.toEqual(png)
++  })
++})
+diff --git a/apps/desktop/electron/pdf-raster.ts b/apps/desktop/electron/pdf-raster.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..98437535643c52457dd8c8a0348291af42cc21ce
+--- /dev/null
++++ b/apps/desktop/electron/pdf-raster.ts
+@@ -0,0 +1,100 @@
++import { spawn } from 'node:child_process'
++import { lstatSync, realpathSync } from 'node:fs'
++import { isAbsolute, join } from 'node:path'
++
++const inputLimit = 512 * 1024
++const outputLimit = 128 * 1024
++const maxEdge = 640
++const pdfHeader = Buffer.from('%PDF-')
++const pngHeader = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex')
++const pngEnd = Buffer.from('0000000049454e44ae426082', 'hex')
++
++type RasterOptions = {
++  platform?: NodeJS.Platform
++  spawnHelper?: typeof spawn
++  timeoutMs?: number
++}
++
++function boundedPng(bytes: Buffer) {
++  if (bytes.length < 45 || !bytes.subarray(0, 16).equals(pngHeader) || !bytes.subarray(-12).equals(pngEnd)) {
++    return false
++  }
++
++  const width = bytes.readUInt32BE(16)
++  const height = bytes.readUInt32BE(20)
++
++  return width > 0 && height > 0 && width <= maxEdge && height <= maxEdge
++}
++
++// The main process owns one supervisor. The caller supplies only an authorized snapshot.
++export function createPdfRaster(appPath: string, {
++  platform = process.platform, spawnHelper = spawn, timeoutMs = 2500,
++}: RasterOptions = {}) {
++  const native = join(appPath.replace(/app\.asar$/, 'app.asar.unpacked'), 'dist', 'native')
++  const stagedBinary = join(native, 'pdf-raster')
++  const policy = join(native, 'pdf-raster.sb')
++  let busy = false
++
++  return async (input: Buffer, signal?: AbortSignal): Promise<Buffer | undefined> => {
++    if (platform !== 'darwin' || busy || signal?.aborted || !isAbsolute(appPath) ||
++      input.length > inputLimit || !input.subarray(0, pdfHeader.length).equals(pdfHeader)) {return}
++
++    try {
++      const stat = lstatSync(stagedBinary)
++
++      if (!stat.isFile() || (stat.mode & 0o111) === 0 || !lstatSync(policy).isFile()) {return}
++      const binary = realpathSync(stagedBinary)
++      busy = true
++
++      const child = spawnHelper('/usr/bin/sandbox-exec', [
++        '-D', 'RASTER_BIN=' + binary, '-f', policy, binary,
++      ], { env: {}, stdio: ['pipe', 'pipe', 'ignore'] })
++
++      return new Promise((resolve) => {
++        const chunks: Buffer[] = []
++        let length = 0
++        let failed = false
++
++        const stop = () => {
++          if (failed) {return}
++          failed = true
++          chunks.length = 0
++          child.kill('SIGKILL')
++        }
++
++        const timeout = setTimeout(stop, timeoutMs)
++        signal?.addEventListener('abort', stop, { once: true })
++        child.on('error', stop)
++        child.stdin.on('error', stop)
++        child.stdout.on('error', stop)
++        child.stdout.on('data', (chunk: Buffer) => {
++          if (failed) {return}
++          length += chunk.length
++
++          if (length > outputLimit) {
++            stop()
++
++            return
++          }
++
++          chunks.push(chunk)
++        })
++        // An exit or error can precede stream closure and buffered output.
++        child.once('close', (code) => {
++          clearTimeout(timeout)
++          signal?.removeEventListener('abort', stop)
++          busy = false
++          const bytes = !failed && code === 0 ? Buffer.concat(chunks, length) : undefined
++          resolve(bytes && boundedPng(bytes) ? bytes : undefined)
++        })
++
++        if (signal?.aborted) {stop()}
++        else {child.stdin.end(input)}
++      })
++    } catch {
++      busy = false
++
++      return undefined
++    }
++  }
++}
 diff --git a/apps/desktop/electron/pet-overlay-ipc.test.ts b/apps/desktop/electron/pet-overlay-ipc.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..8420e544d5b12bba032d6322b924feffd5069392

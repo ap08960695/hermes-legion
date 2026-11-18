@@ -532,8 +532,9 @@ The [static raster fixture](verification.md#measure-a-static-first-page-pdf-prev
 converted only page one to a bounded PNG. Its images passed the existing
 gateway PNG validator. This approach leaves PDF links and viewer controls
 out of the character preview. Mac builds now stage the executable and
-its sandbox policy together. Preview authorization, helper supervision,
-and the renderer handoff still need integration.
+its sandbox policy together. The [private Mac supervisor](verification.md#supervise-the-mac-pdf-raster-helper)
+admits one render at a time and releases the slot when the helper closes.
+Preview authorization and the renderer handoff still need integration.
 
 [Preview file](verification.md#preview-a-delivered-text-file-in-a-bots-character-unreleased)
 can read one small UTF-8 `.txt`, `.md` or `.csv` file directly inside the
