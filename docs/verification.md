@@ -1,3 +1,32 @@
+# Drag Mac desktop pets to the screen edges
+
+The Mac character panel covers the connected work areas. Each pet moves
+independently using global pointer coordinates. A drag clamps the whole
+sprite to the pointer's display, with a nearest-display fallback for
+gaps. A display change rehomes stranded pets. Five characters start in
+a smaller bottom-right group and keep their horizontal movement.
+
+The signed packaged Mac Local fixture used one 1710 × 1009 work area
+with Hermes minimized. Chromium pointer input placed one pet at all
+four work-area corners, kept the other four in place, and restored
+click-through after each release on transparent pixels. Re-grabbing the
+pet after it overlapped a neighbor returned it to its starting spot.
+The latest-output popover fit within the work area. A mock with two
+offset displays covered the seam and disconnect behavior. This Mac had
+one connected display.
+
+| Preview | CPU, percent of one core | Mean physical footprint |
+| --- | ---: | ---: |
+| Off | {off['cpu_one_core_pct']:.2f}% | {off['footprint_mean_mib']:.1f} MiB |
+| Five moving pets | {on['cpu_one_core_pct']:.2f}% | {on['footprint_mean_mib']:.1f} MiB |
+| Increase | {cpu:.2f} percentage points | {ram:.1f} MiB |
+
+The warmed 20-second samples include Electron and the loopback gateway.
+GPU and networking ran in-process for the fixture. Local60 reported
+zero Desktop SSH links. Stopping preview released the overlay renderer
+and all fixture processes exited. Physical pointer input, multiple
+connected displays, Spaces and default GPU topology remain open.
+
 # Pace desktop pet movement at 10 Hz
 
 The desktop overlay caps horizontal wandering at 10 position changes per
