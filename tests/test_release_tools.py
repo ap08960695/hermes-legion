@@ -1,4 +1,5 @@
 """Behavior checks use disposable repositories only; no Hermes or model imports."""
+import base64
 import hashlib
 import importlib.util
 import json
@@ -110,6 +111,43 @@ class ReleaseTests(unittest.TestCase):
 
     def test_exact_inventory(self):
         self.assertEqual(release.verify(self.root), 3)
+
+    def add_inventory_file(self, name, payload):
+        target = self.root / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)
+        manifest = self.root / release.MANIFEST
+        inventory = json.loads(manifest.read_text())
+        inventory["files"].append({"path": name, "sha256": self.sha(payload)})
+        manifest.write_text(json.dumps(inventory))
+        return target
+
+    def test_screenshot_formats_in_documentation_inventory(self):
+        gif = base64.b64decode("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7")
+        webp = base64.b64decode("UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAAAcQ/Y/+BwAAAA==")
+        target = self.add_inventory_file("docs/images/motion.gif", gif)
+        self.add_inventory_file("docs/images/still.webp", webp)
+        self.assertEqual(release.verify(self.root), 5)
+        target.write_bytes(gif[:-2] + b"A;")
+        with self.assertRaisesRegex(ValueError, "unlisted or changed"):
+            release.verify(self.root)
+
+    def test_other_binary_payloads_are_still_refused(self):
+        gif = base64.b64decode("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7")
+        for name, payload, error in (
+            ("examples/motion.gif", gif, "unexpected file type"),
+            ("docs/images/binary.md", gif, "binary content refused"),
+            ("docs/images/fake.webp", gif, "invalid documentation image"),
+            ("docs/images/large.gif", gif + b"\0" * 500000, "documentation image too large"),
+        ):
+            with self.subTest(name=name):
+                manifest = self.root / release.MANIFEST
+                original = manifest.read_bytes()
+                target = self.add_inventory_file(name, payload)
+                with self.assertRaisesRegex(ValueError, error):
+                    release.verify(self.root)
+                target.unlink()
+                manifest.write_bytes(original)
 
     def git(self, *args):
         return subprocess.check_output(

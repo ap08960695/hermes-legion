@@ -2,7 +2,12 @@
 
 The release boundary is an explicit manifest of public files. Source patch context is public too, including removed lines. A new repository history is used so deleted private files and original author metadata cannot travel with an old checkout.
 
-The public tree contains only reviewed code changes, synthetic tests, English documentation, generic role templates and rewritten skills. No operational report, original persona, private rename map, production log, conversation, memory, database, account file, authentication state, browser data or credential is an export input.
+The public tree contains reviewed code changes, synthetic tests, English documentation, fixture-only screenshots, generic role templates and rewritten skills. No operational report, original persona, private rename map, production log, conversation, memory, database, account file, authentication state, browser data or credential is an export input.
+
+Capture documentation images with isolated demo data. Crop private interface
+areas, strip embedded metadata, and review text with visual inspection and OCR.
+The release verifier accepts inventoried WebP and GIF files directly under
+`docs/images/`, checks their file signatures, and caps each at 500,000 bytes.
 
 Checks cover the full directory, exact Git commit/tree and all reachable history, metadata and the final archive. Gitleaks runs locally with redacted reports and no allow-comment bypass. A separate private-identifier review covers personal/project names, internal URLs, host paths, real operational IDs and other data that a credential scanner cannot recognize. No private identifier dictionary or finding snippet is distributed.
 

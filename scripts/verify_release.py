@@ -12,6 +12,23 @@ MANIFEST = "RELEASE-MANIFEST.json"
 IGNORED_DIRS = {".git", "__pycache__"}
 ALLOWED_SUFFIXES = {".md", ".py", ".json", ".yaml", ".yml", ".patch"}
 SPECIAL = {"LICENSE", ".gitignore"}
+IMAGE_SUFFIXES = {".webp", ".gif"}
+MAX_IMAGE_BYTES = 500_000
+
+
+def read_documentation_image(path):
+    with path.open("rb") as stream:
+        data = stream.read(MAX_IMAGE_BYTES + 1)
+    if len(data) > MAX_IMAGE_BYTES:
+        raise ValueError("documentation image too large")
+    if path.suffix == ".webp":
+        valid = (data.startswith(b"RIFF") and data[8:12] == b"WEBP"
+                 and int.from_bytes(data[4:8], "little") == len(data) - 8)
+    else:
+        valid = data.startswith((b"GIF87a", b"GIF89a")) and data.endswith(b";")
+    if not valid:
+        raise ValueError("invalid documentation image")
+    return data
 
 
 def verify(root, *, history=False):
@@ -38,13 +55,16 @@ def verify(root, *, history=False):
         name = rel.as_posix()
         if name == MANIFEST:
             continue
-        if path.name not in SPECIAL and path.suffix not in ALLOWED_SUFFIXES:
-            raise ValueError("unexpected file type")
+        if rel.parent == Path("docs/images") and path.suffix in IMAGE_SUFFIXES:
+            data = read_documentation_image(path)
+        else:
+            if path.name not in SPECIAL and path.suffix not in ALLOWED_SUFFIXES:
+                raise ValueError("unexpected file type")
+            data = path.read_bytes()
+            if b"\0" in data:
+                raise ValueError("binary content refused")
+            data.decode("utf-8")
         observed.add(name)
-        data = path.read_bytes()
-        if b"\0" in data:
-            raise ValueError("binary content refused")
-        data.decode("utf-8")
         if hashlib.sha256(data).hexdigest() != expected.get(name):
             raise ValueError("unlisted or changed release file")
     if observed != set(expected):
