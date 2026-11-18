@@ -174,6 +174,13 @@ opens the saved report.
 
 ![Eight Moon Jelly poses showing a dropped parcel, a soft stumble and a quiet recovery](images/moon-jelly-failure-frames.webp)
 
+For a bot waiting for an answer, use six cells that loop smoothly. Keep the
+supporting foot in the same place while the other foot lifts and taps. Play
+two loops at desktop size to check the seam. Hermes supplies the
+“Needs your answer” label live.
+
+![Six Puddle Frog waiting poses with a planted foot, a foot tap and a blink](images/puddle-frog-waiting-frames.webp)
+
 ## Preview without adopting the pack
 
 `show --pack` uses the exact bytes that passed validation, copied into a private
