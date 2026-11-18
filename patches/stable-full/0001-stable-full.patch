@@ -12121,10 +12121,10 @@ index 0000000000000000000000000000000000000000..443ae995b6ec4535bec2ab73453ec0b4
 +}
 diff --git a/apps/desktop/electron/ssh-fanout.test.ts b/apps/desktop/electron/ssh-fanout.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..5aefe516bb72108deabf46c2227537e70233657c
+index 0000000000000000000000000000000000000000..62c6c29b44771e5221966256979153426f20a7cd
 --- /dev/null
 +++ b/apps/desktop/electron/ssh-fanout.test.ts
-@@ -0,0 +1,681 @@
+@@ -0,0 +1,700 @@
 +import assert from 'node:assert/strict'
 +import { execFile } from 'node:child_process'
 +import { EventEmitter } from 'node:events'
@@ -12509,28 +12509,47 @@ index 0000000000000000000000000000000000000000..5aefe516bb72108deabf46c2227537e7
 +  }
 +})
 +
-+test('failed profile dials share a transport cooldown before one later retry', async () => {
++test.each([3_600_000, -3_600_000])('shares bounded mux retries after a %i ms wall-clock jump', async wallShift => {
++  const delays = [1000, 2000, 4000, 8000, 16_000, 30_000, 30_000]
++  let spawns = 0
 +  let masters = 0
++  let profiles = 0
 +
 +  const f = fixture((_binary, args) => {
++    spawns++
++
 +    if (args.includes('-M')) {
 +      masters++
++      const failed = masters <= delays.length
 +
-+      return child({ code: masters === 1 ? 255 : 0, stderr: masters === 1 ? 'Connection refused' : '' })
++      return child({ code: failed ? 255 : 0, stderr: failed ? 'Connection refused' : '' })
 +    }
 +
 +    return child({ code: args.includes('check') ? 255 : 0 })
 +  })
 +
-+  vi.useFakeTimers()
++  const open = () => f.connection(`profile-${++profiles}`).open()
++  const held = (retryAfterMs: number) => assert.rejects(open(), { kind: 'reconnect-backoff', retryAfterMs })
++
++  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] })
 +
 +  try {
-+    await assert.rejects(f.connection('first').open())
-+    await assert.rejects(f.connection('second').open(), (error: any) => error.kind === 'reconnect-backoff')
-+    assert.equal(masters, 1)
-+    await vi.advanceTimersByTimeAsync(1000)
-+    await f.connection('third').open()
-+    assert.equal(masters, 2)
++    for (const [index, delay] of delays.entries()) {
++      await assert.rejects(open(), { kind: 'unreachable' })
++      assert.equal(masters, index + 1)
++      const beforeCooldown = spawns
++
++      vi.setSystemTime(Date.now() + wallShift)
++      await Promise.all(Array.from({ length: 8 }, () => held(delay)))
++      await vi.advanceTimersByTimeAsync(delay - 1)
++      await held(1)
++      assert.equal(spawns, beforeCooldown, 'cooldown must block even mux checks')
++
++      await vi.advanceTimersByTimeAsync(1)
++    }
++
++    await Promise.all(Array.from({ length: 8 }, open))
++    assert.equal(masters, delays.length + 1, 'profiles must share one recovery dial')
 +  } finally {
 +    await f.cleanup()
 +    vi.useRealTimers()
@@ -12808,10 +12827,10 @@ index 0000000000000000000000000000000000000000..5aefe516bb72108deabf46c2227537e7
 +})
 diff --git a/apps/desktop/electron/ssh-transport.ts b/apps/desktop/electron/ssh-transport.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..f164cee1dec963c1e952ccda5b90404b23f56344
+index 0000000000000000000000000000000000000000..162c242c2f427932fc63fc463f0537076158e043
 --- /dev/null
 +++ b/apps/desktop/electron/ssh-transport.ts
-@@ -0,0 +1,189 @@
+@@ -0,0 +1,191 @@
 +// Electron main owns all profile/window SSH transports. Backend ownership stays profile scoped.
 +type Flight = { controller: AbortController; promise: Promise<void> }
 +type Transport = { flight?: Flight; closing?: Promise<void>; failures: number; retryAt: number }
@@ -12839,7 +12858,7 @@ index 0000000000000000000000000000000000000000..f164cee1dec963c1e952ccda5b90404b
 +export function recordSshFailure(key: string): void {
 +  const value = state(key)
 +  value.failures = Math.min(value.failures + 1, 6)
-+  value.retryAt = Date.now() + Math.min(1000 * 2 ** (value.failures - 1), 30_000)
++  value.retryAt = performance.now() + Math.min(1000 * 2 ** (value.failures - 1), 30_000)
 +}
 +
 +export function markSshTransportHealthy(key: string): void {
@@ -12858,11 +12877,13 @@ index 0000000000000000000000000000000000000000..f164cee1dec963c1e952ccda5b90404b
 +    return value.flight.promise
 +  }
 +
-+  if (Date.now() < value.retryAt) {
++  const retryAfterMs = value.retryAt - performance.now()
++
++  if (retryAfterMs > 0) {
 +    return Promise.reject(
 +      Object.assign(new Error('SSH reconnect is cooling down; retry shortly.'), {
 +        kind: 'reconnect-backoff',
-+        retryAfterMs: value.retryAt - Date.now()
++        retryAfterMs: Math.ceil(retryAfterMs)
 +      })
 +    )
 +  }

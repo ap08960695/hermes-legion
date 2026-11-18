@@ -10708,3 +10708,17 @@ harness cleanup. A fresh request completed on the same lock inode.
 Peak sampled use was four processes including the observer and 70 MiB
 summed RSS. Outbound networking and SSH execution were denied. This
 proves the local pipe-loss path for owned same-group processes.
+
+### Mac SSH reconnect cooldown across wall-clock changes
+
+Desktop SSH measures the shared ControlMaster retry window with a
+monotonic clock. On the old code a one-hour jump forward caused a new
+dial during cooldown; a one-hour rollback increased the first reported
+wait from 1,000 to 3,601,000 ms.
+
+The local fake-transport regression moves wall time in both directions
+through seven consecutive failures. Eight compatible profiles produce
+zero SSH invocations during each cooldown, including with 1 ms left.
+The delays grow from 1 to 30 seconds and stay capped there. Eight
+concurrent callers share one recovery dial at expiry. The Mac run denies
+all networking and real SSH execution.
