@@ -1,3 +1,14 @@
+# Preview a delivered PNG in a bot’s character (unreleased)
+
+The latest-output popover can preview a single static PNG from the
+current Bot Chat’s Local workspace. Clicking **Preview file** rechecks
+the same reply and reads through the same no-follow file path as text.
+The gateway limits the snapshot to 128 KiB and 1024 pixels per side and
+declines animated PNGs, compressed metadata and international text metadata.
+The image uses its file name as a label. A refused or undecodable snapshot
+reports **File preview unavailable**. An outside-workspace PNG shows its
+path and **Copy path**.
+
 # Preview a delivered text file in a bot’s character (unreleased)
 
 **Preview file** appears when the complete saved reply delivers one

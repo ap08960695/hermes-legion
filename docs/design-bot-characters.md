@@ -460,6 +460,13 @@ markup and CSV formulas. The contents start at the first line. The **File path**
 disclosure shows the filename and expands to the exact path. Before a preview
 loads, the path appears directly in the popover. The five-character resource
 budget remains open.
+
+Static PNG previews reuse the workspace and reply checks. The gateway bounds
+the file to 128 KiB and 1024 × 1024 pixels and rejects animation, compressed
+metadata and international text metadata. The popover shows the snapshot
+with the usual **File path** and **Copy path** controls. An outside-workspace
+PNG offers the path without an image.
+
 ## Match a running character to its worker
 
 The owning session’s `subagent.list` can include `child_session_id` for a

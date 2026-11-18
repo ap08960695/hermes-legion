@@ -8284,10 +8284,10 @@ index 2c784ec2a2e709f7fc953d88399b3078aaa5e12b..5492eec425bbd695225966f3bc91032d
  }
 diff --git a/apps/desktop/electron/pet-overlay-ipc.test.ts b/apps/desktop/electron/pet-overlay-ipc.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..977f01f9bc82ebcf498a93ceff6dc8d337ddd1cb
+index 0000000000000000000000000000000000000000..f0223004f1df35738ed3e8f6bdb19b3a7357d214
 --- /dev/null
 +++ b/apps/desktop/electron/pet-overlay-ipc.test.ts
-@@ -0,0 +1,312 @@
+@@ -0,0 +1,334 @@
 +import { EventEmitter } from 'node:events'
 +
 +import { afterEach, expect, it, vi } from 'vitest'
@@ -8493,7 +8493,7 @@ index 0000000000000000000000000000000000000000..977f01f9bc82ebcf498a93ceff6dc8d3
 +  expect(openExternalUrl).toHaveBeenCalledExactlyOnceWith(second)
 +})
 +
-+it('relays one file request and one matching result without exposing the file capability to the overlay', () => {
++it.each(['txt', 'PnG'])('relays one %s request and one matching result without exposing the file capability', (suffix) => {
 +  const main = Object.assign(new EventEmitter(), { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false,
 +    webContents: { send: vi.fn() } })
 +
@@ -8504,19 +8504,41 @@ index 0000000000000000000000000000000000000000..977f01f9bc82ebcf498a93ceff6dc8d3
 +  const preview = { characterPreview: { characters: [{ outputId: 'owned' }], expiresAt: Date.now() + 15000 } }
 +  const id = 'owned', request = 1
 +  const send = (payload: unknown, sender = overlay.webContents) => control({ sender }, payload)
-+  const report = (text: string, sender = main.webContents) => state({ sender }, { ...preview, characterFile: { id, request, text } })
++
++  const report = (text: string | null, sender = main.webContents, png_base64?: string) =>
++    state({ sender }, { ...preview, characterFile: { id, request, text, png_base64 } })
++
 +  const file = { type: 'character-output-file', id, request }
++  const picture = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1cAAAAASUVORK5CYII='
 +
 +  state({ sender: main.webContents }, preview)
 +  send({ type: 'character-output', id, request })
 +  state({ sender: main.webContents }, { ...preview, characterOutput: { id, request, text: 'reply',
-+    deliveredFile: '/fixture/file.txt', canPreviewFile: true } })
++    deliveredFile: `/fixture/file.${suffix}`, canPreviewFile: true } })
 +  report('not requested')
 +  expect(overlay.webContents.send.mock.lastCall?.[1].characterOutput).toMatchObject({ canPreviewFile: true })
 +  send(file, main.webContents); send({ ...file, path: 'forged' }); send(file); send(file)
 +  expect(main.webContents.send.mock.calls.filter(([, p]) => p.type === file.type)).toEqual([['hermes:pet-overlay:control', file]])
-+  report('wrong window', overlay.webContents); report('too large'.repeat(1200)); report('allowed'); report('replayed')
-+  expect(overlay.webContents.send.mock.lastCall?.[1].characterFile).toEqual({ id, request, text: 'allowed' })
++  report('wrong window', overlay.webContents)
++  report('too large'.repeat(1200))
++
++  if (suffix === 'PnG') {
++    report(null, main.webContents, 'https://fixture.invalid/image.png')
++    const oversized = Buffer.alloc(128 * 1024 + 1)
++    Buffer.from(picture, 'base64').copy(oversized)
++    report(null, main.webContents, oversized.toString('base64'))
++    report('conflicting representations', main.webContents, picture)
++    expect(overlay.webContents.send.mock.lastCall?.[1].characterFile).toBeUndefined()
++    report(null, main.webContents, picture)
++  } else {
++    report(null, main.webContents, picture)
++    expect(overlay.webContents.send.mock.lastCall?.[1].characterFile).toBeUndefined()
++    report('allowed')
++  }
++
++  report('replayed')
++  expect(overlay.webContents.send.mock.lastCall?.[1].characterFile).toEqual(suffix === 'PnG'
++    ? { id, request, text: null, png_base64: picture } : { id, request, text: 'allowed' })
 +})
 +
 +it('relays Stop once from the live overlay and accepts only its matching receipt', () => {
@@ -8601,7 +8623,7 @@ index 0000000000000000000000000000000000000000..977f01f9bc82ebcf498a93ceff6dc8d3
 +  expect(io.writeText).toHaveBeenCalledTimes(2)
 +})
 diff --git a/apps/desktop/electron/pet-overlay-ipc.ts b/apps/desktop/electron/pet-overlay-ipc.ts
-index 59d8dd527dae029c695a8520996f6051d75df371..ee38ea137566b16ee5585a2c312e78aba6d2a197 100644
+index 59d8dd527dae029c695a8520996f6051d75df371..e2962193e91feecee1a6b61f93da43317d15c9ca 100644
 --- a/apps/desktop/electron/pet-overlay-ipc.ts
 +++ b/apps/desktop/electron/pet-overlay-ipc.ts
 @@ -2,3 +2,5 @@
@@ -8615,7 +8637,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..ee38ea137566b16ee5585a2c312e78ab
    closePetOverlay: () => void
 +  openExternalUrl?: (url: string) => Promise<unknown>
  }
-@@ -30,2 +33,23 @@ export function placePetOverlay(bounds, mainWindow: BrowserWindow | null) {
+@@ -30,2 +33,35 @@ export function placePetOverlay(bounds, mainWindow: BrowserWindow | null) {
 
 +// shortcut: standalone absolute URLs only until the output retains document link spans.
 +function outputWebLinks(text: string): string[] {
@@ -8638,8 +8660,20 @@ index 59d8dd527dae029c695a8520996f6051d75df371..ee38ea137566b16ee5585a2c312e78ab
 +  return [...links]
 +}
 +
++const MAX_PNG_BYTES = 128 * 1024
++
++function boundedPng(value: unknown): value is string {
++  if (typeof value !== 'string' || value.length > Math.ceil(MAX_PNG_BYTES / 3) * 4 || !value.startsWith('iVBORw0KGgo')) {
++    return false
++  }
++
++  const bytes = Buffer.from(value, 'base64')
++
++  return bytes.length <= MAX_PNG_BYTES && bytes.toString('base64') === value
++}
++
  export function registerPetOverlayIpc({
-@@ -34,4 +58,103 @@ export function registerPetOverlayIpc({
+@@ -34,4 +70,103 @@ export function registerPetOverlayIpc({
    openPetOverlay,
 -  closePetOverlay
 +  closePetOverlay,
@@ -8744,7 +8778,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..ee38ea137566b16ee5585a2c312e78ab
 +  }
 +
    // `request` is `{ bounds, screen }`. A fresh pop-out passes viewport-space
-@@ -144,3 +267,78 @@ export function registerPetOverlayIpc({
+@@ -144,3 +279,81 @@ export function registerPetOverlayIpc({
    // Main renderer → overlay: forward the latest pet state for the overlay to render.
 -  ipcMain.on('hermes:pet-overlay:state', (_event, payload) => {
 +  ipcMain.on('hermes:pet-overlay:state', (event, payload) => {
@@ -8757,16 +8791,19 @@ index 59d8dd527dae029c695a8520996f6051d75df371..ee38ea137566b16ee5585a2c312e78ab
 +
 +      if (characterFile) {
 +        const overlay = getPetOverlayWindow()
-+        const { id, request, text } = characterFile
++        const { id, request, text, png_base64 } = characterFile
 +
 +        if (!overlay || overlay.isDestroyed() ||
 +            outputAction?.file !== 'pending' || outputAction.window !== overlay || outputAction.id !== id ||
 +            outputAction.request !== request || !visibleOutput(id) ||
 +            !(text === null || (typeof text === 'string' && text.length <= 8192))) {return}
 +
++        if (png_base64 !== undefined &&
++            (text !== null || !/\.png$/i.test(outputAction.deliveredFile ?? '') || !boundedPng(png_base64))) {return}
++
 +        outputAction.file = undefined
 +        overlay.webContents.send('hermes:pet-overlay:state', { ...lastCharacterPayload, charactersPaused: false,
-+          characterFile: { id, request, text } })
++          characterFile: { id, request, text, ...(png_base64 ? { png_base64 } : {}) } })
 +
 +        return
 +      }
@@ -8824,12 +8861,12 @@ index 59d8dd527dae029c695a8520996f6051d75df371..ee38ea137566b16ee5585a2c312e78ab
 +    stopObserving?.()
 +    stopObserving = null
      const petOverlayWindow = getPetOverlayWindow()
-@@ -152,3 +350,3 @@ export function registerPetOverlayIpc({
+@@ -152,3 +365,3 @@ export function registerPetOverlayIpc({
    // Overlay → main renderer: control messages (pop back in, composer submit).
 -  ipcMain.on('hermes:pet-overlay:control', (_event, payload) => {
 +  ipcMain.on('hermes:pet-overlay:control', (event, payload) => {
      const mainWindow = getMainWindow()
-@@ -159,2 +357,77 @@ export function registerPetOverlayIpc({
+@@ -159,2 +372,77 @@ export function registerPetOverlayIpc({
 
 +    if (payload?.type === 'character-output' || payload?.type === 'character-output-close' ||
 +        payload?.type === 'character-output-open' || payload?.type === 'character-stop' || payload?.type === 'character-output-link' ||
@@ -21671,24 +21708,24 @@ index de446bdb6a589e02ff3634ae483fe46d4a108ff2..447b3cacb7b6af2b6d1aca49f9487795
   *
 diff --git a/apps/desktop/src/app/pet-overlay/pet-characters.tsx b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..d8de9319068947a4af310246c1ee48a0ee71775b
+index 0000000000000000000000000000000000000000..78a396a6c322bd29656240f6ec3f6487023200e7
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
-@@ -0,0 +1,215 @@
+@@ -0,0 +1,220 @@
 +import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 +import { type ReactNode, type RefObject, useEffect, useId, useRef, useState } from 'react'
 +
 +import { PetSprite } from '@/components/pet/pet-sprite'
 +import { isMacPlatform } from '@/lib/platform'
 +import type { PetInfo } from '@/store/pet'
-+import type { PetCharacter, PetCharacterOutput, PetCharacterPreview } from '@/store/pet-characters'
++import type { PetCharacter, PetCharacterFileContent, PetCharacterOutput, PetCharacterPreview } from '@/store/pet-characters'
 +
 +interface PetCharactersProps {
 +  info: PetInfo
 +  preview: PetCharacterPreview
 +  moveHandle: ReactNode
 +  paused: boolean
-+  output: (PetCharacterOutput & { loading?: true; fileLoading?: true; fileText?: string | null; pathCopied?: boolean; stopPending?: true }) | null
++  output: (PetCharacterOutput & { loading?: true; fileLoading?: true; file?: PetCharacterFileContent; pathCopied?: boolean; stopPending?: true }) | null
 +  showActions: boolean
 +  onOutput: (id: string | null, showActions?: boolean) => void
 +  onPreview: () => void
@@ -21696,6 +21733,7 @@ index 0000000000000000000000000000000000000000..d8de9319068947a4af310246c1ee48a0
 +  onOpenLink: (index: number) => void
 +  onPreviewFile: () => void
 +  onCopyPath: () => void
++  onBrokenImage: () => void
 +  onStop: () => void
 +}
 +
@@ -21766,7 +21804,7 @@ index 0000000000000000000000000000000000000000..d8de9319068947a4af310246c1ee48a0
 +}
 +
 +/** The overlay displays snapshots. Only the main renderer resolves output addresses. */
-+export function PetCharacters({ info, preview, moveHandle, paused, output, showActions, onOutput, onPreview, onOpen, onOpenLink, onPreviewFile, onCopyPath, onStop }: PetCharactersProps) {
++export function PetCharacters({ info, preview, moveHandle, paused, output, showActions, onOutput, onPreview, onOpen, onOpenLink, onPreviewFile, onCopyPath, onBrokenImage, onStop }: PetCharactersProps) {
 +  const reduced = useReducedMotion()
 +  const root = useRef<HTMLDivElement>(null)
 +  const captionId = useId()
@@ -21785,7 +21823,9 @@ index 0000000000000000000000000000000000000000..d8de9319068947a4af310246c1ee48a0
 +  const outputActor = output && preview.characters.find(actor => actor.outputId === output.id)
 +  const title = outputActor?.actionsOnly ? 'Worker actions' : showActions ? 'Output actions' : 'Latest output'
 +
-+  const fileReady = typeof output?.fileText === 'string'
++  const file = output?.file
++  const fileReady = typeof file?.text === 'string' || Boolean(file?.png_base64)
++  const filename = output?.deliveredFile?.split('/').at(-1)
 +
 +  const filePath = output?.deliveredFile && <code dir="ltr" style={{ display: 'block', whiteSpace: 'pre-wrap', userSelect: 'text' }}>
 +    {output.deliveredFile}
@@ -21826,17 +21866,19 @@ index 0000000000000000000000000000000000000000..d8de9319068947a4af310246c1ee48a0
 +            <div role="status">{output.pathCopied === true ? 'Path copied' : output.pathCopied === false ? 'Could not copy path' : ''}</div>
 +            {fileReady ? <details>
 +              <summary style={{ cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-+                File path — {output.deliveredFile.split('/').at(-1)}
++                File path — {filename}
 +              </summary>
 +              {filePath}
 +            </details> : filePath}
 +          </div>}
-+          {typeof output.fileText === 'string' && <pre aria-label="File preview" style={{ margin: 0, whiteSpace: 'pre-wrap', userSelect: 'text' }}>
-+            {output.fileText || 'Empty file'}
++          {file?.png_base64 && <img alt={`Preview of ${filename}`} onError={onBrokenImage} src={`data:image/png;base64,${file.png_base64}`}
++            style={{ display: 'block', margin: '0 auto', maxHeight: 68, maxWidth: '100%' }} />}
++          {typeof file?.text === 'string' && <pre aria-label="File preview" style={{ margin: 0, whiteSpace: 'pre-wrap', userSelect: 'text' }}>
++            {file.text || 'Empty file'}
 +          </pre>}
 +          {output.fileLoading && <p role="status" style={{ margin: 0 }}>Loading file…</p>}
-+          {output.fileText === null && <p role="status" style={{ margin: 0 }}>File preview unavailable</p>}
-+          {!output.fileLoading && output.fileText === undefined && (output.text || output.loading || output.unavailable || !output.deliveredFile) && <p role="status" style={{ margin: 0 }}>
++          {file?.text === null && !file.png_base64 && <p role="status" style={{ margin: 0 }}>File preview unavailable</p>}
++          {!output.fileLoading && !file && (output.text || output.loading || output.unavailable || !output.deliveredFile) && <p role="status" style={{ margin: 0 }}>
 +            {output.loading ? 'Loading…' : output.unavailable ? 'Output unavailable' : output.text || 'No text output yet'}
 +          </p>}
 +        </div>
@@ -21891,12 +21933,12 @@ index 0000000000000000000000000000000000000000..d8de9319068947a4af310246c1ee48a0
 +  </div>
 +}
 diff --git a/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx b/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
-index 82319976a166e658f80e794b0033fed81a48d456..d882029e3d22bb4b8dea9da064fdf9f89c7e9586 100644
+index 82319976a166e658f80e794b0033fed81a48d456..2473435f41e58167ed558b8250430ab171635be8 100644
 --- a/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
 +++ b/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
 @@ -10,2 +10,3 @@ import { isSubmitEnter } from '@/lib/ime'
  import { $petActivity, $petInfo, setPetInfo } from '@/store/pet'
-+import type { PetCharacterOutput, PetCharacterPreview } from '@/store/pet-characters'
++import type { PetCharacterFileContent, PetCharacterOutput, PetCharacterPreview } from '@/store/pet-characters'
  import { overlayWindowSize } from '@/store/pet-overlay'
 @@ -14,2 +15,4 @@ import { setAwaitingResponse, setBusy } from '@/store/session'
 
@@ -21920,7 +21962,7 @@ index 82319976a166e658f80e794b0033fed81a48d456..d882029e3d22bb4b8dea9da064fdf9f8
 @@ -67,2 +75,8 @@ export function PetOverlayApp() {
    const [composerOpen, setComposerOpen] = useState(false)
 +  const [characters, setCharacters] = useState<{ preview: PetCharacterPreview; paused: boolean } | null>(null)
-+  const [output, setOutput] = useState<(PetCharacterOutput & { loading?: true; fileLoading?: true; fileText?: string | null; pathCopied?: boolean; stopPending?: true }) | null>(null)
++  const [output, setOutput] = useState<(PetCharacterOutput & { loading?: true; fileLoading?: true; file?: PetCharacterFileContent; pathCopied?: boolean; stopPending?: true }) | null>(null)
 +  const [actionsRequest, setActionsRequest] = useState<number | null>(null)
 +  const characterMode = Boolean(characters)
 +  const outputTargets = characters?.paused ? '' : characters?.preview.characters.map(character => character.outputId).join(',')
@@ -21938,7 +21980,7 @@ index 82319976a166e658f80e794b0033fed81a48d456..d882029e3d22bb4b8dea9da064fdf9f8
 +        const file = payload.characterFile
 +
 +        if (current.fileLoading && file?.id === current.id && file.request === current.request) {
-+          return { ...current, fileLoading: undefined, fileText: file.text }
++          return { ...current, fileLoading: undefined, file: { text: file.text, png_base64: file.png_base64 } }
 +        }
 +
 +        const copy = payload.characterPathCopy
@@ -22078,7 +22120,7 @@ index 82319976a166e658f80e794b0033fed81a48d456..d882029e3d22bb4b8dea9da064fdf9f8
 +      characterMode ? DEFAULT_SCALE : info.scale ?? DEFAULT_SCALE,
 +      characterCount
      )
-@@ -364,3 +456,55 @@ export function PetOverlayApp() {
+@@ -364,3 +456,61 @@ export function PetOverlayApp() {
      window.hermesDesktop?.petOverlay?.control({ bounds, type: 'bounds' })
 -  }, [info.enabled, info.spritesheetBase64, info.scale, info.frameW, info.frameH])
 +  }, [info.enabled, info.spritesheetBase64, info.scale, info.frameW, info.frameH, characterCount, characterMode])
@@ -22134,8 +22176,14 @@ index 82319976a166e658f80e794b0033fed81a48d456..d882029e3d22bb4b8dea9da064fdf9f8
 +    setOutput({ ...output, canPreviewFile: undefined, fileLoading: true })
 +    window.hermesDesktop?.petOverlay?.control({ type: 'character-output-file', id, request })
 +  }
++
++  const clearBrokenImage = () => {
++    setOutput(current => current?.request === output?.request && current?.file?.png_base64
++      ? { ...current, file: { text: null } }
++      : current)
++  }
 
-@@ -370,2 +514,16 @@ export function PetOverlayApp() {
+@@ -370,2 +520,16 @@ export function PetOverlayApp() {
 
 +  if (characters) {
 +    const moveHandle = <button aria-label="Move characters" className="focus-visible:outline focus-visible:outline-2" data-pet-drag-handle=""
@@ -22147,17 +22195,17 @@ index 82319976a166e658f80e794b0033fed81a48d456..d882029e3d22bb4b8dea9da064fdf9f8
 +      title="Drag or use the arrow keys to move characters" type="button">Move</button>
 +
 +    return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-end', height: '100vh', paddingBottom: PET_PADDING_BOTTOM, pointerEvents: 'none' }}>
-+      <PetCharacters info={info} moveHandle={moveHandle} onCopyPath={copyOutputPath} onOpen={openOutput} onOpenLink={openOutputLink} onOutput={showOutput} onPreview={() => setActionsRequest(null)} onPreviewFile={previewOutputFile} onStop={stopWorker} output={output} paused={characters.paused} preview={characters.preview} showActions={output?.request === actionsRequest} />
++      <PetCharacters info={info} moveHandle={moveHandle} onBrokenImage={clearBrokenImage} onCopyPath={copyOutputPath} onOpen={openOutput} onOpenLink={openOutputLink} onOutput={showOutput} onPreview={() => setActionsRequest(null)} onPreviewFile={previewOutputFile} onStop={stopWorker} output={output} paused={characters.paused} preview={characters.preview} showActions={output?.request === actionsRequest} />
 +    </div>
 +  }
 +
    return (
 diff --git a/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..cee4560c1fa1a8fb2a161b2f5f17801cdb187a4a
+index 0000000000000000000000000000000000000000..0c0f5da96ec84ba447ce89d9f85490658f183219
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
-@@ -0,0 +1,512 @@
+@@ -0,0 +1,540 @@
 +import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 +import type * as Motion from 'motion/react'
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -22669,6 +22717,34 @@ index 0000000000000000000000000000000000000000..cee4560c1fa1a8fb2a161b2f5f17801c
 +  expect(screen.getByRole('status').textContent).toBe('Requesting stop…')
 +  act(() => emit({ ...payload, characterOutput: { id, request, text: null, stopStatus: 'requested' } }))
 +  expect(screen.getByRole('status').textContent).toBe('Stop requested')
++})
++
++
++it('renders a clicked PNG snapshot with a fixed image URL and reports decode failure', () => {
++  render(<PetOverlayApp />)
++  const payload = preview()
++  Object.assign(payload.characterPreview.characters[0], { outputId: 'image' })
++  act(() => emit(payload))
++  fireEvent.click(screen.getByRole('button', { name: /Latest output/ }))
++  const control = vi.mocked(window.hermesDesktop!.petOverlay!.control)
++  const request = control.mock.lastCall?.[0]
++
++  if (request?.type !== 'character-output') {throw new Error('missing fixture request')}
++  const { id } = request
++  const picture = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1cAAAAASUVORK5CYII='
++  act(() => emit({ ...payload, characterOutput: { id, request: request.request, text: null,
++    deliveredFile: '/fixture/diagram.PnG', canPreviewFile: true } }))
++  expect(screen.queryByRole('img', { name: 'Preview of diagram.PnG' })).toBeNull()
++  fireEvent.click(screen.getByRole('button', { name: 'Preview file' }))
++  expect(control).toHaveBeenLastCalledWith({ type: 'character-output-file', id, request: request.request })
++
++  act(() => emit({ ...payload, characterFile: { id, request: request.request, text: null, png_base64: picture } }))
++  const image = screen.getByRole('img', { name: 'Preview of diagram.PnG' })
++  expect(image.getAttribute('src')).toBe('data:image/png;base64,' + picture)
++  expect(screen.getByRole('button', { name: 'Copy path' })).toBeTruthy()
++  fireEvent.error(image)
++  expect(screen.queryByRole('img', { name: 'Preview of diagram.PnG' })).toBeNull()
++  expect(screen.getByText('File preview unavailable')).toBeTruthy()
 +})
 diff --git a/apps/desktop/src/app/retirement-view.test.tsx b/apps/desktop/src/app/retirement-view.test.tsx
 index 4097e9f517259a342942edfd4f6d5d6845907ba6..5abd02109d4897c0db3178fed9d94c115278d6f2 100644
@@ -34408,10 +34484,10 @@ index 0000000000000000000000000000000000000000..d6d078d7b5fc7a0e6ba5eb1a833605ef
 +})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..23defd32fe269a607eb6f0cb4333c80f7cbc878f
+index 0000000000000000000000000000000000000000..060ee460691edae8603276937d0f1a3badc594b2
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx
-@@ -0,0 +1,253 @@
+@@ -0,0 +1,254 @@
 +import { atom, Button, Dialog, host, type PetCharacterPublisher, useValue } from '@hermes/plugin-sdk'
 +import { useEffect, useMemo, useRef, useState } from 'react'
 +
@@ -34435,6 +34511,7 @@ index 0000000000000000000000000000000000000000..23defd32fe269a607eb6f0cb4333c80f
 +}
 +
 +type OutputReply = Awaited<ReturnType<NonNullable<NonNullable<Actor['character']['output']>['read']>>>
++type FileReply = Awaited<ReturnType<NonNullable<NonNullable<Actor['character']['output']>['previewFile']>>>
 +
 +function completionIsFresh(at: number | null, now: number) {
 +  return typeof at === 'number' && at > 0 && now - at * 1000 >= 0 && now - at * 1000 < 60_000
@@ -34525,7 +34602,7 @@ index 0000000000000000000000000000000000000000..23defd32fe269a607eb6f0cb4333c80f
 +          read: () => requestForBot<OutputReply>(bot, 'profiles.latest_output',
 +            { canonical_id: canonical }, { timeoutMs: 8000 }),
 +          ...(route.mode === 'local' && route.connectionId === 'local' ? {
-+            previewFile: (token: string) => requestForBot<{ text: string | null }>(bot, 'profiles.output_file',
++            previewFile: (token: string) => requestForBot<FileReply>(bot, 'profiles.output_file',
 +              { canonical_id: canonical, token }, { timeoutMs: 8000 })
 +          } : {}),
 +          open: async (current: () => boolean) => {
@@ -44432,10 +44509,10 @@ index b0eb473252b6e6e149f1f0711a6d8de535e87d8e..ad1ef8e2c1e29ef4fed05dc9d0fac09d
  
 diff --git a/apps/desktop/src/store/pet-characters.ts b/apps/desktop/src/store/pet-characters.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..9bab3030d9fbc8a588d05a8c54f186c8f1d46ccc
+index 0000000000000000000000000000000000000000..315d905a96cbff01ecf0bd0aba07c63ea08517e0
 --- /dev/null
 +++ b/apps/desktop/src/store/pet-characters.ts
-@@ -0,0 +1,214 @@
+@@ -0,0 +1,220 @@
 +import { atom } from 'nanostores'
 +
 +import { mediaTagValues } from '@/lib/chat-messages/parts'
@@ -44461,7 +44538,7 @@ index 0000000000000000000000000000000000000000..9bab3030d9fbc8a588d05a8c54f186c8
 +  key: string
 +  read?: () => Promise<string | null | { text: string | null; complete?: boolean; file_preview?: { path: string; token: string } | null }>
 +  prepareStop?: () => Promise<StopWorker | undefined>
-+  previewFile?: (token: string) => Promise<{ text: string | null }>
++  previewFile?: (token: string) => Promise<PetCharacterFileContent>
 +  open?: (stillCurrent: () => boolean) => Promise<void>
 +}
 +
@@ -44479,10 +44556,14 @@ index 0000000000000000000000000000000000000000..9bab3030d9fbc8a588d05a8c54f186c8
 +  links?: string[]
 +}
 +
-+export interface PetCharacterFile {
++export interface PetCharacterFileContent {
++  text: string | null
++  png_base64?: string
++}
++
++export interface PetCharacterFile extends PetCharacterFileContent {
 +  id: string
 +  request: number
-+  text: string | null
 +}
 +
 +export interface PetCharacterPublisher {
@@ -44513,7 +44594,7 @@ index 0000000000000000000000000000000000000000..9bab3030d9fbc8a588d05a8c54f186c8
 +}
 +
 +// shortcut: identify one standalone text delivery until the gateway projects structured attachments.
-+function deliveredTextFile(text: string): { path: string; excerpt: string } | undefined {
++function deliveredPreviewFile(text: string): { path: string; excerpt: string } | undefined {
 +  if (text.length > 600 || /(?:^|\n)[ \t]*(?:`{3,}|~{3,})/.test(text)) {return undefined}
 +  const [value, ...other] = mediaTagValues(text)
 +
@@ -44524,7 +44605,7 @@ index 0000000000000000000000000000000000000000..9bab3030d9fbc8a588d05a8c54f186c8
 +  const quoted = (quote === '"' || quote === "'") && value.endsWith(quote)
 +  const path = quoted ? value.slice(1, -1) : value
 +
-+  if (index < 0 || (!quoted && /\s/u.test(path)) || !/^\/(?!\/)[^"\x60\\\p{C}\p{Zl}\p{Zp}]+\.(?:[Tt][Xx][Tt]|[Mm][Dd]|[Cc][Ss][Vv])$/u.test(path)) {return undefined}
++  if (index < 0 || (!quoted && /\s/u.test(path)) || !/^\/(?!\/)[^"\x60\\\p{C}\p{Zl}\p{Zp}]+\.(?:[Tt][Xx][Tt]|[Mm][Dd]|[Cc][Ss][Vv]|[Pp][Nn][Gg])$/u.test(path)) {return undefined}
 +  lines.splice(index, 1)
 +
 +  return { path, excerpt: lines.join('\n') }
@@ -44547,7 +44628,7 @@ index 0000000000000000000000000000000000000000..9bab3030d9fbc8a588d05a8c54f186c8
 +    const reply = await binding.read?.()
 +    const raw = typeof reply === 'string' ? reply : reply?.text
 +    const complete = typeof reply === 'object' && reply?.complete === true && typeof raw === 'string'
-+    const delivery = complete ? deliveredTextFile(raw) : undefined
++    const delivery = complete ? deliveredPreviewFile(raw) : undefined
 +    const offered = complete ? reply.file_preview : undefined
 +
 +    const fileToken = delivery && offered?.path === delivery.path && binding.previewFile &&
@@ -44571,21 +44652,23 @@ index 0000000000000000000000000000000000000000..9bab3030d9fbc8a588d05a8c54f186c8
 +  }
 +}
 +
-+export async function readPetCharacterFile(id: string, token: string): Promise<string | null | undefined> {
++export async function readPetCharacterFile(id: string, token: string): Promise<PetCharacterFileContent | undefined> {
 +  const binding = currentOutputBinding(id)
 +
 +  if (!binding?.previewFile) {return undefined}
-+  let text: string | null = null
++  let file: PetCharacterFileContent = { text: null }
 +
 +  try {
 +    const reply = await binding.previewFile(token)
 +
-+    if (typeof reply?.text === 'string' && reply.text.length <= 8192) {text = reply.text}
++    if (typeof reply?.text === 'string' && reply.text.length <= 8192) {file = { text: reply.text }}
++
++    if (reply?.text === null && typeof reply.png_base64 === 'string') {file = { text: null, png_base64: reply.png_base64 }}
 +  } catch {
 +    // File absence and a stale gateway ticket share the unavailable state.
 +  }
 +
-+  return currentOutputBinding(id) === binding ? text : undefined
++  return currentOutputBinding(id) === binding ? file : undefined
 +}
 +
 +export async function openPetCharacterOutput(id: string, popoverCurrent: () => boolean): Promise<void> {
@@ -44651,7 +44734,7 @@ index 0000000000000000000000000000000000000000..9bab3030d9fbc8a588d05a8c54f186c8
 +  }
 +}
 diff --git a/apps/desktop/src/store/pet-overlay.ts b/apps/desktop/src/store/pet-overlay.ts
-index d47f67023fb8b820d6f6cbd455562a591600413b..d91bb8c97a59687ad2f9b5a9e37ad617ba566ead 100644
+index d47f67023fb8b820d6f6cbd455562a591600413b..21f90a6fa76983b4be6b367a64f2b5b88318614c 100644
 --- a/apps/desktop/src/store/pet-overlay.ts
 +++ b/apps/desktop/src/store/pet-overlay.ts
 @@ -5,2 +5,3 @@ import { persistBoolean, persistString, storedBoolean, storedString } from '@/li
@@ -44770,9 +44853,9 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..d91bb8c97a59687ad2f9b5a9e37ad617
 +      if (!action?.fileToken || action.opened || action.id !== payload.id || action.request !== payload.request) {return}
 +      const token = action.fileToken
 +      action.fileToken = undefined
-+      void readPetCharacterFile(action.id, token).then(text => {
-+        if (activeOutput !== action || action.opened || !$petOverlayActive.get() || text === undefined) {return}
-+        api.pushState({ ...currentPayload(), characterFile: { id: action.id, request: action.request, text } })
++      void readPetCharacterFile(action.id, token).then(file => {
++        if (activeOutput !== action || action.opened || !$petOverlayActive.get() || !file) {return}
++        api.pushState({ ...currentPayload(), characterFile: { ...file, id: action.id, request: action.request } })
 +      })
 +    } else if (payload?.type === 'character-output-open') {
 +      const action = activeOutput
@@ -47968,11 +48051,12 @@ index 0000000000000000000000000000000000000000..6dd5de7bd1df30dc611f51f2bc5480ac
 +    return result
 diff --git a/gateway/session_bot_file.py b/gateway/session_bot_file.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..d9988e5ee3a417b825d7385c3bb3f4c89ed34ca3
+index 0000000000000000000000000000000000000000..4c135674848f5ab27b8084bd1a765b8c751b34f7
 --- /dev/null
 +++ b/gateway/session_bot_file.py
-@@ -0,0 +1,108 @@
-+"""Bounded, click-only text snapshots for the current Bot Chat workspace."""
+@@ -0,0 +1,148 @@
++"""Bounded, click-only file snapshots for the current Bot Chat workspace."""
++from base64 import b64encode
 +import hmac
 +import json
 +import os
@@ -47987,7 +48071,9 @@ index 0000000000000000000000000000000000000000..d9988e5ee3a417b825d7385c3bb3f4c8
 +
 +_TOKEN_KEY = secrets.token_bytes(32)
 +_TTL = 30
-+_PREVIEW_BYTES = 8192
++_TEXT_BYTES = 8192
++_PNG_BYTES = 128 * 1024
++_PNG_MAX_SIDE = 1024
 +
 +
 +def preview_supported():
@@ -48015,7 +48101,7 @@ index 0000000000000000000000000000000000000000..d9988e5ee3a417b825d7385c3bb3f4c8
 +        value = value[1:-1]
 +    elif any(char.isspace() for char in value):
 +        return None
-+    if not value.startswith('/') or not value.lower().endswith(('.txt', '.md', '.csv')):
++    if not value.startswith('/') or not value.lower().endswith(('.txt', '.md', '.csv', '.png')):
 +        return None
 +    if any(not part or part.startswith('.') for part in value[1:].split('/')):
 +        return None
@@ -48051,14 +48137,51 @@ index 0000000000000000000000000000000000000000..d9988e5ee3a417b825d7385c3bb3f4c8
 +    _, candidate = snapshot()
 +    if not candidate or not hmac.compare_digest(_token(candidate, expiry), token):
 +        return None
-+    text = _read_workspace_text(candidate[0])
-+    if text is None or expiry <= monotonic():
++    result = _read_delivery(candidate[0])
++    if result is None or expiry <= monotonic():
 +        return None
 +    _, current = snapshot()
-+    return text if current == candidate and expiry > monotonic() else None
++    return result if current == candidate and expiry > monotonic() else None
 +
 +
-+def _read_workspace_text(path):
++def _static_png(data):
++    from agent.image_eviction_policy import image_dimensions_from_bytes
++
++    if len(data) < 33 or not data.startswith(b'\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR'):
++        return False
++    if not all(0 < side <= _PNG_MAX_SIDE for side in image_dimensions_from_bytes(data)):
++        return False
++
++    # Avoid extra frames or metadata inflation before handing the image to Chromium.
++    offset, saw_image = 33, False
++    while offset + 12 <= len(data):
++        length = int.from_bytes(data[offset:offset + 4], 'big')
++        kind = data[offset + 4:offset + 8]
++        offset += 12 + length
++        if offset > len(data) or kind in (b'IHDR', b'acTL', b'fcTL', b'fdAT', b'iCCP', b'zTXt', b'iTXt'):
++            return False
++        if kind == b'IEND':
++            return saw_image and length == 0 and offset == len(data)
++        saw_image = saw_image or kind == b'IDAT'
++    return False
++
++
++def _read_delivery(path):
++    png = path.suffix.lower() == '.png'
++    data = _read_workspace_file(path, _PNG_BYTES if png else _TEXT_BYTES)
++    if data is None:
++        return None
++    if png:
++        return {'text': None, 'png_base64': b64encode(data).decode('ascii')} if _static_png(data) else None
++    if any(byte < 32 and byte not in (9, 10, 13) for byte in data):
++        return None
++    try:
++        return {'text': data.decode('utf-8')}
++    except UnicodeError:
++        return None
++
++
++def _read_workspace_file(path, limit):
 +    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 +    try:
 +        directory = os.open('/', directory_flags)
@@ -48070,14 +48193,14 @@ index 0000000000000000000000000000000000000000..d9988e5ee3a417b825d7385c3bb3f4c8
 +            leaf = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
 +            with os.fdopen(leaf, 'rb') as stream:
 +                info = os.fstat(stream.fileno())
-+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > _PREVIEW_BYTES:
++                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > limit:
 +                    return None
-+                data = stream.read(_PREVIEW_BYTES + 1)
++                data = stream.read(limit + 1)
 +        finally:
 +            os.close(directory)
-+        if len(data) <= _PREVIEW_BYTES and not any(byte < 32 and byte not in (9, 10, 13) for byte in data):
-+            return data.decode('utf-8')
-+    except (OSError, UnicodeError, NotImplementedError):
++        if len(data) <= limit:
++            return data
++    except (OSError, NotImplementedError):
 +        return None
 +    return None
 diff --git a/gateway/session_bot_workflow.py b/gateway/session_bot_workflow.py
@@ -48195,7 +48318,7 @@ index 65887575dec12b3ddb9f859ebe56156264ea120e..e893e94cd8d03641e6f1b56877ac9d2a
 +                if method in GROUP_METHODS or method in PROFILE_READS:
                      result = await dispatch_group_control(self, method, params)
 diff --git a/gateway/session_group_controls.py b/gateway/session_group_controls.py
-index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..250d2c53e2be371e0ddd647c123308ac58227b34 100644
+index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..bf545449b66bdfc778a5a310975d97611c9caa46 100644
 --- a/gateway/session_group_controls.py
 +++ b/gateway/session_group_controls.py
 @@ -2,2 +2,3 @@
@@ -48223,7 +48346,7 @@ index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..250d2c53e2be371e0ddd647c123308ac
 +                    return _read_bot_output(authority, actor, supplied.get('canonical_id'), can_preview=can_preview)
 +
 +                if method == 'profiles.output_file':
-+                    return {'text': read_preview(supplied.get('token'), snapshot)}
++                    return read_preview(supplied.get('token'), snapshot) or {'text': None}
 +                result, candidate = snapshot()
 +                if candidate:
 +                    result['file_preview'] = issue_preview(candidate)
@@ -77970,10 +78093,14 @@ index 7f2323ea35ae9b638fc4a392e01d180c466b7529..bd12d861dc5ec2ee464fce1dae6dc000
 +    monkeypatch.setattr(run, '_load_gateway_config', lambda config_path=None: {'platform_toolsets': {'cli': []}})
      monkeypatch.setattr('hermes_cli.lifecycle.invoke_hook', lambda name, **kwargs: None)
 diff --git a/tests/gateway/test_session_group_controls.py b/tests/gateway/test_session_group_controls.py
-index 91f30aa217762d0aa80a9dccfcf5134050a9d3eb..026aa5137cf211764d0314c989159b298db876a2 100644
+index 91f30aa217762d0aa80a9dccfcf5134050a9d3eb..bf18e3272f8acdb2c47fde60e2efaea1398615f3 100644
 --- a/tests/gateway/test_session_group_controls.py
 +++ b/tests/gateway/test_session_group_controls.py
-@@ -201,2 +201,14 @@ def _list_profiles(home):
+@@ -2,2 +2,3 @@
+ import asyncio
++from base64 import b64decode, b64encode
+ import json
+@@ -201,2 +202,14 @@ def _list_profiles(home):
 
 +def test_profiles_list_sibling_rows_report_model_provider_and_description(tmp_path, monkeypatch):
 +    """Bots page showed "Model not reported" / "No role description recorded" for every bot but the
@@ -77988,7 +78115,7 @@ index 91f30aa217762d0aa80a9dccfcf5134050a9d3eb..026aa5137cf211764d0314c989159b29
 +
 +
  def test_profiles_list_survives_an_undecodable_sibling_profile_yaml(tmp_path, monkeypatch, caplog):
-@@ -282 +294,179 @@ def test_profiles_list_cache_sees_changes_inside_one_mtime_tick(tmp_path, monkey
+@@ -282 +295,192 @@ def test_profiles_list_cache_sees_changes_inside_one_mtime_tick(tmp_path, monkey
      assert g._discovered_profile_meta('writer', meta) == {}
 +
 +
@@ -78046,12 +78173,13 @@ index 91f30aa217762d0aa80a9dccfcf5134050a9d3eb..026aa5137cf211764d0314c989159b29
 +        asyncio.run(probe())
 +
 +
-+@pytest.mark.parametrize('suffix,text', [
++@pytest.mark.parametrize('suffix,content', [
 +    ('.txt', '<img src=x>\nExact UTF-8: ก\n'),
 +    ('.Md', '# Result\n<img src=x>\nExact UTF-8: ก\n'),
 +    ('.CsV', '=1+1,ก\n"quoted,cell",2\n'),
++    ('.PnG', b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1cAAAAASUVORK5CYII=')),
 +])
-+def test_bot_output_file_reads_only_a_fresh_current_workspace_delivery(tmp_path, monkeypatch, suffix, text):
++def test_bot_output_file_reads_only_a_fresh_current_workspace_delivery(tmp_path, monkeypatch, suffix, content):
 +    import os
 +    from gateway import session_bot_file
 +    from gateway.session_identity import authenticated_subject
@@ -78064,8 +78192,12 @@ index 91f30aa217762d0aa80a9dccfcf5134050a9d3eb..026aa5137cf211764d0314c989159b29
 +    home = root / 'authority'
 +    home.mkdir()
 +    monkeypatch.setenv('HERMES_HOME', str(home))
++    is_png = isinstance(content, bytes)
++    raw = content if is_png else content.encode('utf-8')
++    expected = {'text': None, 'png_base64': b64encode(raw).decode('ascii')} if is_png else {'text': content}
++    overflow = b'x' * (128 * 1024 + 1 if is_png else 8193)
 +    path = workspace / f'two  spaces{suffix}'
-+    path.write_text(text, encoding='utf-8')
++    path.write_bytes(raw)
 +    outside = sibling / path.name
 +    outside.write_text('outside fixture', encoding='utf-8')
 +    owner = authenticated_subject({'user_id': 'reader'})
@@ -78090,13 +78222,13 @@ index 91f30aa217762d0aa80a9dccfcf5134050a9d3eb..026aa5137cf211764d0314c989159b29
 +                return (await call())['result']['file_preview']
 +
 +            reads = []
-+            read = session_bot_file._read_workspace_text
++            read = session_bot_file._read_workspace_file
 +
-+            def observe(candidate):
++            def observe(candidate, limit):
 +                reads.append(candidate)
-+                return read(candidate)
++                return read(candidate, limit)
 +
-+            monkeypatch.setattr(session_bot_file, '_read_workspace_text', observe)
++            monkeypatch.setattr(session_bot_file, '_read_workspace_file', observe)
 +            token = await offered()
 +            assert reads == []
 +            assert token['path'] == str(path)
@@ -78106,7 +78238,7 @@ index 91f30aa217762d0aa80a9dccfcf5134050a9d3eb..026aa5137cf211764d0314c989159b29
 +            assert reads == []
 +            assert 'file_preview' not in (await call(client=connection(native=False)))['result']
 +            assert 'file_preview' not in (await call(client=connection(caps=('session:read',))))['result']
-+            assert (await call('profiles.output_file', token=token['token']))['result'] == {'text': text}
++            assert (await call('profiles.output_file', token=token['token']))['result'] == expected
 +            assert reads == [path]
 +            assert 'error' in await call('profiles.output_file', client=connection(user='other'), token=token['token'])
 +            assert 'error' in await call('profiles.output_file', token=token['token'], path=str(outside))
@@ -78134,7 +78266,7 @@ index 91f30aa217762d0aa80a9dccfcf5134050a9d3eb..026aa5137cf211764d0314c989159b29
 +            path.unlink()
 +            path.write_bytes(b'\x00text')
 +            assert (await call('profiles.output_file', token=token['token']))['result'] == {'text': None}
-+            path.write_bytes(b'x' * 8193)
++            path.write_bytes(overflow)
 +            assert (await call('profiles.output_file', token=token['token']))['result'] == {'text': None}
 +
 +            path.write_bytes(b'x')
@@ -78144,14 +78276,22 @@ index 91f30aa217762d0aa80a9dccfcf5134050a9d3eb..026aa5137cf211764d0314c989159b29
 +            def grow(fd):
 +                before = fstat(fd)
 +                if before.st_ino == inode:
-+                    path.write_bytes(b'x' * 8193)
++                    path.write_bytes(overflow)
 +                return before
 +
 +            with monkeypatch.context() as race:
 +                race.setattr(os, 'fstat', grow)
 +                assert (await call('profiles.output_file', token=token['token']))['result'] == {'text': None}
 +
-+            path.write_text(text, encoding='utf-8')
++            if is_png:
++                animated = b'\x00\x00\x00\x08acTL' + b'\x00' * 12
++                metadata = b'\x00\x00\x00\x04iCCP' + b'\x00' * 8
++                for invalid in (raw[:16] + (1025).to_bytes(4, 'big') + raw[20:],
++                                raw[:33] + animated + raw[33:],
++                                raw[:33] + metadata + raw[33:], raw[:-3]):
++                    path.write_bytes(invalid)
++                    assert (await call('profiles.output_file', token=token['token']))['result'] == {'text': None}
++            path.write_bytes(raw)
 +            replacement = workspace / ('replacement.md' if suffix == '.txt' else 'replacement.txt')
 +            replacement.write_text('New workspace delivery', encoding='utf-8')
 +            count = len(reads)
@@ -109866,10 +110006,10 @@ index 7572ad12850dde68d70ad0876c10d0a32ff20b16..209cb8dbe9798bcafc95cd2a8436448d
 +    "kanban_archive",  # local patch 24
      "kanban_attach", "kanban_attach_url", "kanban_attachments",
 diff --git a/tui_gateway/contracts/canonical_projections.py b/tui_gateway/contracts/canonical_projections.py
-index 7b8931440e4299f155949b0e5943f89093dbeeaa..590a9d023ec6be617d044f797abd165892cd86f2 100644
+index 7b8931440e4299f155949b0e5943f89093dbeeaa..fcfba8b4b6701a605f953dc3cfeb5c5fff9ad2af 100644
 --- a/tui_gateway/contracts/canonical_projections.py
 +++ b/tui_gateway/contracts/canonical_projections.py
-@@ -51,2 +51,25 @@ class CanonicalProfilesParams(ProfileParams):
+@@ -51,2 +51,26 @@ class CanonicalProfilesParams(ProfileParams):
 
 +class CanonicalBotOutputParams(ProfileParams):
 +    canonical_id: str
@@ -109892,10 +110032,11 @@ index 7b8931440e4299f155949b0e5943f89093dbeeaa..590a9d023ec6be617d044f797abd1658
 +
 +class CanonicalBotFileResult(Result):
 +    text: str | None
++    png_base64: str | None = None
 +
 +
  class CanonicalRoomCreateParams(RoomParams):
-@@ -104,2 +127,4 @@ for _name, _params, _result in (
+@@ -104,2 +128,4 @@ for _name, _params, _result in (
      ('profiles.list', CanonicalProfilesParams, CanonicalProfilesResult),
 +    ('profiles.latest_output', CanonicalBotOutputParams, CanonicalBotOutputResult),
 +    ('profiles.output_file', CanonicalBotFileParams, CanonicalBotFileResult),
