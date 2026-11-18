@@ -45,14 +45,21 @@ when a mux socket is unavailable. [OpenSSH configuration reference](https://man.
 
 Within one Electron main process, the host queue admits one operation at a
 time, including master starts, programmatic commands, platform probes, mux
-verification and no-mux reachability checks. Masters for distinct authentication
-identities on the same configured host now start in sequence. Each identity
-keeps its own socket, so multiple established masters can coexist. At most 256
-more requests wait in the host queue and excess requests receive a busy error.
-Closing a connection cancels its queued/active work. Aborted establishment
-flights are replaced behind the old teardown barrier. Failures share a
-one-to-30-second exponential cooldown and a usable backend publication resets
-it. Reconnect still requires a caller.
+verification and no-mux reachability checks. At most 256 more requests wait
+in the host queue and excess requests receive a busy error. Closing a
+connection cancels its queued/active work. Aborted establishment flights are
+replaced behind the old teardown barrier. Failures share a one-to-30-second
+exponential cooldown and a usable backend publication resets it.
+
+POSIX Desktop processes sharing a private control directory reserve one
+master per configured hostname, case-insensitively. Eligible profiles
+share their owner's socket. A different authentication identity or app
+process receives `host-busy` before starting a mux client and can retry
+after the final close. The reservation persists after the launcher exits.
+Teardown releases it after the socket disappears from the private directory.
+Unconfirmed close preserves the socket and reservation. A crash can
+leave the reservation in place until ownership is reconciled. Host
+aliases and separate control directories have independent reservations.
 
 During orderly quit, bootstrap rollback and forced cleanup join the same
 socket teardown. The last holder aborts a pending master start and waits

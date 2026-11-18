@@ -10657,3 +10657,18 @@ The sandbox denied external networking and system SSH execution. No
 Desktop SSH process was observed. The fixture stubbed service discovery
 and the native macOS relaunch call. Native scheduling, supervised gateway
 startup, remote SSH and production adoption remain unverified.
+
+### SSH master admission across Desktop processes
+
+Before the fix, a different key could start a master while the same
+host's first master was still live. The regression holds a fake master
+past its launcher exit and checks compatible sharing, refusal of
+incompatible identities, and release after the final holder closes.
+A failed exit retains the socket and refuses a replacement.
+
+Two independent Mac Node processes used the same private directory
+and different case spellings of the configured host. The contender
+made zero fake SSH calls while the owner held the reservation. A clean
+close allowed an immediate retry. Killing the owner left the reservation
+closed to the contender. The 62 focused tests and development bundles
+passed. Live SSH and crash recovery on actual OpenSSH remain open.
