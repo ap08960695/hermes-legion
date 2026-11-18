@@ -1,3 +1,21 @@
+# Set motion weight on assigned Mac desktop pets
+
+Character packs accept optional `motion_weight` values of `light`,
+`standard` and `heavy`. Import preserves the value and the sprite
+route reads it independently of cached atlas bytes. Existing packs
+use standard motion. All three weights share the 10 Hz clock and
+the same floor.
+
+The packaged Mac Local fixture imported and assigned three generated
+packs. The middle of the return walk took about 0.8, 1.0 and 1.3
+seconds for light, standard and heavy. Their drops took 1.24, 1.04
+and 0.92 seconds and rebounded about 24, 16 and 10 px. A separate
+offline Chromium check froze the built stylesheet at the impact
+keyframe and verified 81%, 74% and 68% height. The 1.8-second clip
+shows the three isolated Mac overlays, light to heavy from left to
+right. The 60-second Local gate recorded zero Desktop SSH links.
+All four product processes stopped. No Hermes model ran.
+
 # Give Mac desktop pet walking more weight
 
 Desktop pets crouch before each walking leg, ease into four planted

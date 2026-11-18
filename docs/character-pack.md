@@ -68,15 +68,22 @@ my-character/
   "name": "My character",
   "author": "Your name",
   "licence": "Your art's licence or permission terms",
-  "spritesheet": "spritesheet.png"
+  "spritesheet": "spritesheet.png",
+  "motion_weight": "standard"
 }
 ```
 
-Exactly these six fields are supported. Name, author and licence must each be
+`motion_weight` is optional. The other six fields are required.
+Name, author and licence must each be
 1–160 printable characters with nonblank content; Unicode names are supported.
 The licence text records your statement; lint cannot prove ownership or legal
 permission. Use original art or art you have permission to adapt/distribute.
 Duplicate keys, other schema versions and unknown fields fail validation.
+
+For an assigned Mac desktop character, set `motion_weight` to `light`,
+`standard` or `heavy`. Light pets walk faster and take a longer, higher
+bounce. Heavy pets walk slower, squash harder on impact and rebound less.
+Omit the field for standard movement or compatibility with older pack installers.
 
 The manifest is UTF-8 (an optional BOM is accepted), at most 64 KiB. The asset
 must have the exact filename `spritesheet.png` or `spritesheet.webp` beside it,

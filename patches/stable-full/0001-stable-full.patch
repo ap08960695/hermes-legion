@@ -3439,12 +3439,20 @@ index 9a5e12ecba0400180e6b9c4c075f2d7c57859cc2..a1e17bd66f609502615c95b9f93e7c25
 +        context = "WORK OVERVIEW (goal, completed work, pending work, holds):\n" + overview + "\nRECENT CONVERSATION:\n" + str(user_input or "")[-1700:]
 +        return suggest_prompt(context, str(values.get("draft") or ""), str(values.get("scope") or ""))
      if template:
+diff --git a/agent/pet/constants.py b/agent/pet/constants.py
+index 8eacf7cdb0fcb32afa1118106a301f63cd57cefc..d30db35b3dfe0a6c5a1cd2b566b54994cb4c72bb 100644
+--- a/agent/pet/constants.py
++++ b/agent/pet/constants.py
+@@ -19,2 +19,3 @@ FRAMES_PER_STATE = 6
+ LOOP_MS = 1100  # full-loop duration for one state, ms (petdex default)
++MOTION_WEIGHTS = ("light", "standard", "heavy")
+
 diff --git a/agent/pet/importer.py b/agent/pet/importer.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..241808d2697a1d086e7922b9d5a34ea9b7fd6bd1
+index 0000000000000000000000000000000000000000..05cebacc20527e95f07058c37b6087688407ec1f
 --- /dev/null
 +++ b/agent/pet/importer.py
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,78 @@
 +"""Import validated native creator packs without replacing installed entries."""
 +from __future__ import annotations
 +
@@ -3499,12 +3507,15 @@ index 0000000000000000000000000000000000000000..241808d2697a1d086e7922b9d5a34ea9
 +    meta = report["pack"]
 +    root = store.pets_dir().resolve()
 +    target = root / slug
-+    pet = store.InstalledPet(slug, meta["name"], "", target, target / meta["spritesheet"])
++    weight = meta.get("motion_weight")
++    pet = store.InstalledPet(slug, meta["name"], "", target, target / meta["spritesheet"], motion_weight=weight)
 +    staged = Path(tempfile.mkdtemp(prefix=".pet-import-", dir=root))
 +    try:
 +        payload = staged / "payload"
 +        payload.mkdir(mode=0o700)
 +        pet_meta = {"id": slug, "displayName": meta["name"], "description": "", "spritesheetPath": meta["spritesheet"]}
++        if weight is not None:
++            pet_meta["motionWeight"] = weight
 +        files = {
 +            "manifest.json": (json.dumps(meta, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
 +            "pet.json": (json.dumps(pet_meta, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
@@ -3570,10 +3581,10 @@ index 18f17cb1aff73efd5553fbc1f67f911541ecbbf4..49e01fffc3e7beeb283c297da7891052
  @dataclass(frozen=True)
 diff --git a/agent/pet/pack.py b/agent/pet/pack.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..0a22dbcd02e6fb9d2dae2e86950fd10b766d3b74
+index 0000000000000000000000000000000000000000..4c599d82e6c25a396d33925c7ee37a0397f9d3a7
 --- /dev/null
 +++ b/agent/pet/pack.py
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,96 @@
 +"""Read-only lint for local native-atlas creator folders; not an installer."""
 +from __future__ import annotations
 +
@@ -3582,6 +3593,8 @@ index 0000000000000000000000000000000000000000..0a22dbcd02e6fb9d2dae2e86950fd10b
 +import os
 +import stat
 +from pathlib import Path
++
++from agent.pet.constants import MOTION_WEIGHTS
 +
 +IMAGE_LIMIT = 16 * 1024 * 1024
 +MANIFEST_LIMIT = 64 * 1024
@@ -3645,8 +3658,10 @@ index 0000000000000000000000000000000000000000..0a22dbcd02e6fb9d2dae2e86950fd10b
 +    except RecursionError as exc:
 +        raise ValueError("manifest nesting is too deep") from exc
 +    required = {"schema_version", "format", "name", "author", "licence", "spritesheet"}
-+    if not isinstance(meta, dict) or set(meta) != required:
-+        raise ValueError("manifest requires exactly schema_version, format, name, author, licence and spritesheet")
++    if not isinstance(meta, dict) or not required <= meta.keys() <= required | {"motion_weight"}:
++        raise ValueError("manifest requires schema_version, format, name, author, licence and spritesheet")
++    if "motion_weight" in meta and meta["motion_weight"] not in MOTION_WEIGHTS:
++        raise ValueError("motion_weight must be light, standard or heavy")
 +    if type(meta["schema_version"]) is not int or meta["schema_version"] != 1 or meta["format"] != "hermes-native-atlas":
 +        raise ValueError("unsupported character pack format or schema version")
 +    for field in ("name", "author", "licence"):
@@ -3666,6 +3681,26 @@ index 0000000000000000000000000000000000000000..0a22dbcd02e6fb9d2dae2e86950fd10b
 +def validate_pack(root: Path) -> dict:
 +    """Lint the draft native-atlas folder schema without importing pet settings."""
 +    return load_pack(root)[0]
+diff --git a/agent/pet/store.py b/agent/pet/store.py
+index f9c8b817318ced3527e1e5e4def04a26796dd804..594a578b569b006cd92f4372002a8f6aeda51ede 100644
+--- a/agent/pet/store.py
++++ b/agent/pet/store.py
+@@ -24,2 +24,4 @@ from hermes_constants import get_hermes_home
+
++from .constants import MOTION_WEIGHTS
++
+ logger = logging.getLogger(__name__)
+@@ -47,2 +49,3 @@ class InstalledPet:
+     created_by: str = ""  # "generator" for pets hatched locally; "" for petdex installs
++    motion_weight: str | None = None
+
+@@ -104,3 +107,5 @@ def load_pet(slug: str) -> InstalledPet | None:
+     name, desc, by = (str(meta.get(k, "") or d) for k, d in (("displayName", slug), ("description", ""), ("createdBy", "")))
+-    return InstalledPet(slug, name, desc, directory, _resolve_spritesheet(directory, meta), by)
++    weight = meta.get("motionWeight")
++    return InstalledPet(slug, name, desc, directory, _resolve_spritesheet(directory, meta), by,
++                        motion_weight=weight if weight in MOTION_WEIGHTS else None)
+
 diff --git a/agent/process_bootstrap.py b/agent/process_bootstrap.py
 index 85dccfc737fb732db0bf79198259464e9cb89baa..2c5ceb2e8aa0aee55c183d1c3ca6379432d9dd4c 100644
 --- a/agent/process_bootstrap.py
@@ -22935,10 +22970,10 @@ index 0000000000000000000000000000000000000000..cfd558ab8cc274b91b75a0ebc07d1374
 +}
 diff --git a/apps/desktop/src/app/pet-overlay/pet-characters.tsx b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..6d93dfe7668d09855aac2c8189a4c0e6a390d5af
+index 0000000000000000000000000000000000000000..78acbbcad269a1588b4066eae328b8008fd71c6c
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
-@@ -0,0 +1,835 @@
+@@ -0,0 +1,847 @@
 +import { AnimatePresence, motion, type TargetAndTransition, useIsPresent, useReducedMotion } from 'motion/react'
 +import { type CSSProperties, useCallback, useEffect, useRef, useState } from 'react'
 +
@@ -23047,6 +23082,10 @@ index 0000000000000000000000000000000000000000..6d93dfe7668d09855aac2c8189a4c0e6
 +const STEP_SHAPES = ['translateY(0px) scaleY(0.98)', 'translateY(-1px) scaleY(1.01)',
 +  'translateY(-2px) scaleY(1.03)', 'translateY(-1px) scaleY(1.01)',
 +  'translateY(0px) scaleY(0.95)', 'translateY(0px) scaleY(0.95)']
++
++const LIGHT_MOTION = { pace: 1.25, dropDuration: 1240, bounceHeight: 24, impactScale: 0.81 }
++const STANDARD_MOTION = { pace: 1, dropDuration: 1040, bounceHeight: 16, impactScale: 0.74 }
++const HEAVY_MOTION = { pace: 0.75, dropDuration: 920, bounceHeight: 10, impactScale: 0.68 }
 +
 +const WALK_LEG = Array.from({ length: 30 }, (_, tick) => {
 +  if (tick < 2) {return { progress: 0, shape: 'translateY(0px) scaleY(0.92)' }}
@@ -23171,6 +23210,10 @@ index 0000000000000000000000000000000000000000..6d93dfe7668d09855aac2c8189a4c0e6
 +  const [direction, setDirection] = useState<WalkDirection>(0)
 +  const { outputId, actionsOnly } = actor
 +  const sprite = actor.sprite ?? info
++
++  const { pace, dropDuration, bounceHeight, impactScale } = sprite.motionWeight === 'light' ? LIGHT_MOTION :
++    sprite.motionWeight === 'heavy' ? HEAVY_MOTION : STANDARD_MOTION
++
 +  const width = sprite.frameW ?? 192
 +  const height = sprite.frameH ?? 208
 +  const configuredScale = info.scale
@@ -23238,9 +23281,10 @@ index 0000000000000000000000000000000000000000..6d93dfe7668d09855aac2c8189a4c0e6
 +    const inbound = outbound === 1 ? -1 : 1
 +
 +    const move = () => {
-+      const phase = cycle.tick++ % 90
++      const phase = Math.floor(cycle.tick)
++      cycle.tick = (cycle.tick + pace) % 90
 +
-+      if (phase === 0) {cycle.scale = 0.75 + Math.random() * 0.25}
++      if (cycle.tick < pace) {cycle.scale = 0.75 + Math.random() * 0.25}
 +      // Brake at each endpoint before showing the work pose or changing direction.
 +      const returning = phase >= 60
 +      const stride = WALK_LEG[phase - (returning ? 60 : 12)]
@@ -23260,7 +23304,7 @@ index 0000000000000000000000000000000000000000..6d93dfe7668d09855aac2c8189a4c0e6
 +    }
 +
 +    return subscribeFrame(move)
-+  }, [canWalk, distance, subscribeFrame, walking])
++  }, [canWalk, distance, pace, subscribeFrame, walking])
 +
 +  // eslint-disable-next-line no-restricted-syntax -- retire an imperative pointer capture when the actor leaves.
 +  useEffect(() => {
@@ -23318,7 +23362,10 @@ index 0000000000000000000000000000000000000000..6d93dfe7668d09855aac2c8189a4c0e6
 +  return <figure aria-hidden={present && !occluded ? undefined : true} aria-label={label}
 +    data-pet-drop-ground={dropping ? '' : undefined} hidden={occluded}
 +    style={desktop && fitted ? { position: 'absolute', margin: 0, left: fitted.x - desktop.bounds.x, top: (top ?? fitted.y) - desktop.bounds.y,
-+      zIndex: foreground ? 1 : undefined, '--pet-shadow-spread': dropping ? 1 + Math.min(0.5, -dropOffset / 560) : undefined } as CSSProperties
++      zIndex: foreground ? 1 : undefined,
++      ...(dropping ? { '--pet-shadow-spread': 1 + Math.min(0.5, -dropOffset / 560),
++        '--pet-drop-duration': `${dropDuration}ms`, '--pet-impact-scale': impactScale } : {})
++    } as CSSProperties
 +      : { position: 'absolute', margin: 0, '--pet-x': `${current.x}px`, '--pet-y': `${current.y}px`,
 +        left: `clamp(64px, calc(${slot}% + var(--pet-x)), calc(100% - 64px))`,
 +        bottom: 'clamp(8px, calc(20px - var(--pet-y)), calc(100% - 112px))', translate: '-50% 0' } as CSSProperties}>
@@ -23439,7 +23486,7 @@ index 0000000000000000000000000000000000000000..6d93dfe7668d09855aac2c8189a4c0e6
 +        onPointerUp={event => finish(event.pointerId)}
 +        style={{ display: 'block', padding: 0, border: 0, background: 'transparent', pointerEvents: present && !dropping ? 'auto' : 'none',
 +          cursor: held ? 'grabbing' : 'grab', touchAction: 'none', scaleX: walk.mirror ? -1 : 1, originY: 1,
-+          ...(dropping ? { '--pet-drop-offset': `${dropOffset}px`, '--pet-bounce-offset': `${Math.max(dropOffset * 0.3, -16)}px` } : {})
++          ...(dropping ? { '--pet-drop-offset': `${dropOffset}px`, '--pet-bounce-offset': `${Math.max(dropOffset * 0.3, -bounceHeight)}px` } : {})
 +        } as CSSProperties}
 +        transition={{ duration: desktop?.input ? 0 : reduced && !desktop ? 0 : 0.18, ease: 'easeOut' }} type="button" variants={desktop ? { waiting: { opacity: 0 }, leave } : undefined}>
 +        <PetSprite animate={present && !reduced && !occluded} info={sheet} maxFps={15} rowOverride={walk.row} stateOverride={walking && direction !== 0 ? 'run' : actor.state}
@@ -24077,10 +24124,10 @@ index 82319976a166e658f80e794b0033fed81a48d456..d0c7de7c09dc4ed513dae2dd7c75c60f
    return (
 diff --git a/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..f53fe3ce8eaff18eaa9ae7a88711909158c8e4d4
+index 0000000000000000000000000000000000000000..9bdd4c1b89ae801e6fc611dd77471ed6be3fb02e
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
-@@ -0,0 +1,1334 @@
+@@ -0,0 +1,1359 @@
 +import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 +import type * as Motion from 'motion/react'
 +import type { ComponentProps } from 'react'
@@ -24693,6 +24740,31 @@ index 0000000000000000000000000000000000000000..f53fe3ce8eaff18eaa9ae7a887119091
 +  expect(working.dataset.animate).toBe('false')
 +  expect(walker.style.getPropertyValue('--pet-walk-offset')).toBe('')
 +  expect(walker.style.getPropertyValue('--pet-walk-shape')).toBe('')
++})
++
++it('walks faster for light packs and slower for heavy packs with the same elapsed ticks', () => {
++  const travel = (motionWeight?: 'light' | 'standard' | 'heavy') => {
++    placeFixturePets()
++    const view = render(<PetOverlayApp />)
++    const area = { x: 0, y: 24, width: 1000, height: 700 }
++    const [actor] = preview().characterPreview.characters
++
++    act(() => emit({ ...normal, charactersPaused: false, characterDesktop: { bounds: area, areas: [area] },
++      characterPreview: { expiresAt: Date.now() + 15000, characters: [{ ...actor, sprite: { ...info, motionWeight } }] } }))
++    act(() => vi.advanceTimersByTime(2200))
++    const walker = screen.getByRole('figure').firstElementChild as HTMLElement
++    const distance = Math.abs(Number.parseFloat(walker.style.getPropertyValue('--pet-walk-offset')))
++
++    view.unmount()
++
++    return distance
++  }
++
++  const standard = travel('standard')
++
++  expect(travel()).toBe(standard)
++  expect(travel('light')).toBeGreaterThan(standard)
++  expect(travel('heavy')).toBeLessThan(standard)
 +})
 +
 +it('reads the displayed alpha pixel when a walking row is mirrored', () => {
@@ -33020,10 +33092,10 @@ index 4c55cbc72f7b514788c0297bae23a9a1124140d4..1cb52d4271837a0495f381bec5418b56
      return refuse(pluginId, 'unavailable', `${label} cannot run yet: the app shell is not ready.`)
 diff --git a/apps/desktop/src/lib/pet-character-sprite.ts b/apps/desktop/src/lib/pet-character-sprite.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..ed250dd2546f6b81c86580cb366d843bc2f2a81f
+index 0000000000000000000000000000000000000000..4c2884495a0c7abd46c0fd004c5dc80e9d54247b
 --- /dev/null
 +++ b/apps/desktop/src/lib/pet-character-sprite.ts
-@@ -0,0 +1,111 @@
+@@ -0,0 +1,114 @@
 +import type { PetInfo } from '@/store/pet'
 +
 +export const MAX_PREVIEW_CHARACTERS = 6
@@ -33097,11 +33169,14 @@ index 0000000000000000000000000000000000000000..ed250dd2546f6b81c86580cb366d843b
 +}
 +
 +function immutableSprite(info: PetInfo & { stateRows: string[] }, frameW: number, frameH: number): PetInfo {
++  const { motionWeight } = info
++
 +  const sprite: PetInfo = { enabled: true, slug: typeof info.slug === 'string' ? info.slug.slice(0, 128) : undefined,
 +    displayName: typeof info.displayName === 'string' ? info.displayName.slice(0, 80) : undefined,
 +    mime: info.mime, spritesheetBase64: info.spritesheetBase64, frameW, frameH, framesPerState: info.framesPerState,
 +    framesByState: info.framesByState ? { ...info.framesByState } : undefined, framesByRow: info.framesByRow ? { ...info.framesByRow } : undefined,
-+    stateRows: [...info.stateRows], loopMs: info.loopMs, scale: frameW === 96 ? 0.66 : 0.33 }
++    stateRows: [...info.stateRows], loopMs: info.loopMs, scale: frameW === 96 ? 0.66 : 0.33,
++    motionWeight: motionWeight === 'light' || motionWeight === 'standard' || motionWeight === 'heavy' ? motionWeight : undefined }
 +
 +  Object.freeze(sprite.stateRows)
 +
@@ -37041,10 +37116,10 @@ index abe8afb7e670b207a192ac15fb797fb8dfed168e..2b2824a97bb7cfd9d21057f4efdfd811
              <SelectContent>
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..1b12d33d1d24da03761b8fb3c87ccf6ea1b90c98
+index 0000000000000000000000000000000000000000..6774bc2d524afae7836f596ae4f3e3ee7716c6e3
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx
-@@ -0,0 +1,655 @@
+@@ -0,0 +1,656 @@
 +import { atom, host, type PluginProfileRoute } from '@hermes/plugin-sdk'
 +import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -37195,7 +37270,7 @@ index 0000000000000000000000000000000000000000..1b12d33d1d24da03761b8fb3c87ccf6e
 +  vi.useRealTimers()
 +  const profile = 'character-fixture'
 +  const entry = row(profile, { sourceScoped: true, connectionKind: 'local', targetProfile: profile })
-+  const sprite = { ...ownedSprite(7), slug: 'ruby-character', displayName: 'Ruby fixture character' }
++  const sprite = { ...ownedSprite(7), slug: 'ruby-character', displayName: 'Ruby fixture character', motionWeight: 'heavy' }
 +  let stored: RosterRow['ui_meta'] = { 'hermes-bots': { title: 'Keep my title' } }
 +
 +  const routed = vi.spyOn(host, 'requestProfile').mockImplementation(async (_route, method, params) => {
@@ -37245,6 +37320,7 @@ index 0000000000000000000000000000000000000000..1b12d33d1d24da03761b8fb3c87ccf6e
 +  render(<BotMonitor now={Date.now()} onOpen={open} rows={[{ ...entry, bot: { ...entry.bot, ...reloaded } }]} />)
 +  fireEvent.click(screen.getByRole('button', { name: 'Show bot characters' }))
 +  await waitFor(() => expect($petCharacterPreview.get()?.characters[0]?.sprite?.spritesheetBase64).toBe(sprite.spritesheetBase64))
++  expect($petCharacterPreview.get()?.characters[0]?.sprite?.motionWeight).toBe('heavy')
 +  expect(routed).toHaveBeenCalledWith(owner, 'pet.sprite', { profile, slug: sprite.slug }, 8000)
 +})
 +
@@ -48356,6 +48432,14 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..4f559723bb6a845b0361721e7dfef524
 +    activeOutput = null
 +    $petOverlayFile.set(null)
      controlUnsub?.()
+diff --git a/apps/desktop/src/store/pet.ts b/apps/desktop/src/store/pet.ts
+index e009b8121ca86a60fd096da012bdc3a060a95c7b..a2475c4ff5136d6ea0df604ba5392c8f1ce72378 100644
+--- a/apps/desktop/src/store/pet.ts
++++ b/apps/desktop/src/store/pet.ts
+@@ -39,2 +39,3 @@ export interface PetInfo {
+   stateRows?: string[]
++  motionWeight?: 'light' | 'standard' | 'heavy'
+ }
 diff --git a/apps/desktop/src/store/session-control.ts b/apps/desktop/src/store/session-control.ts
 index 0046d47826fe8c53df69858c9b22999ab8717597..c750a6537775a6f6450f159696861e444e4b3484 100644
 --- a/apps/desktop/src/store/session-control.ts
@@ -48584,7 +48668,7 @@ index b46d5b4247acbda0b8649e2958b4e8ba1fa01925..1b0cc54843ec80008f3a9ae2926545c4
 +      ))
  
 diff --git a/apps/desktop/src/styles.css b/apps/desktop/src/styles.css
-index 219de061127cb5fcc23b67e1f9f7ceed5777a461..be436980ca9fdc4d20daf4545be4e10cdef73e29 100644
+index 219de061127cb5fcc23b67e1f9f7ceed5777a461..857a21fba7b82f9ea7f6bab4db9a7d01dff6576f 100644
 --- a/apps/desktop/src/styles.css
 +++ b/apps/desktop/src/styles.css
 @@ -1433,2 +1433,19 @@ button {
@@ -48607,7 +48691,7 @@ index 219de061127cb5fcc23b67e1f9f7ceed5777a461..be436980ca9fdc4d20daf4545be4e10c
 +}
 +
  [data-slot='dropdown-menu-item']:focus,
-@@ -2773,2 +2790,111 @@ button[data-slot='aui_msg-reactions'] svg {
+@@ -2773,2 +2790,107 @@ button[data-slot='aui_msg-reactions'] svg {
 
 +/* Three 60-step segments in 18 seconds keep wandering at 10 position changes per second. */
 +@keyframes pet-character-wander {
@@ -48623,10 +48707,6 @@ index 219de061127cb5fcc23b67e1f9f7ceed5777a461..be436980ca9fdc4d20daf4545be4e10c
 +[data-pet-walking] > canvas {
 +  transform: var(--pet-walk-shape, none);
 +  transform-origin: bottom;
-+}
-+
-+[data-pet-drop-ground] {
-+  --pet-drop-duration: 1040ms;
 +}
 +
 +[data-pet-dropping] {
@@ -48671,7 +48751,7 @@ index 219de061127cb5fcc23b67e1f9f7ceed5777a461..be436980ca9fdc4d20daf4545be4e10c
 +
 +  51% {
 +    translate: 0;
-+    scale: 1.12 0.74;
++    scale: 1.12 var(--pet-impact-scale);
 +    animation-timing-function: ease-out;
 +  }
 +
@@ -72911,10 +72991,10 @@ index 23fe388856f2536e3077dd891d4ae29f71ade3d6..63d2f5b6f964c81800efe7b26bcd7c65
          )
 diff --git a/tests/agent/test_pet_pack_import.py b/tests/agent/test_pet_pack_import.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..647564544084cbf46c19e26b718e2547cf286234
+index 0000000000000000000000000000000000000000..f75b9784fd53d8162cf2cdeea833b8aaf2f9c693
 --- /dev/null
 +++ b/tests/agent/test_pet_pack_import.py
-@@ -0,0 +1,260 @@
+@@ -0,0 +1,282 @@
 +"""New creator imports publish once without replacing any existing store entry."""
 +from concurrent.futures import ThreadPoolExecutor
 +import errno
@@ -72973,6 +73053,28 @@ index 0000000000000000000000000000000000000000..647564544084cbf46c19e26b718e2547
 +    assert all((home / n).read_bytes() == data for n, data in before.items())
 +    assert {p.slug for p in store.installed_pets()} == {"old", "creator"}
 +    assert not list((home / "pets").glob(".pet-import-*"))
++
++
++@pytest.mark.platforms("macos", "linux", "windows")
++@pytest.mark.parametrize("weight", ["light", "standard", "heavy"])
++def test_import_preserves_motion_weight(creator, weight):
++    from agent.pet import importer, store
++
++    source, _, meta = creator
++    (source / "manifest.json").write_text(json.dumps({**meta, "motion_weight": weight}))
++    pet, _ = importer.import_pack(source, "creator")
++    assert pet.motion_weight == store.load_pet("creator").motion_weight == weight
++    assert json.loads((pet.directory / "pet.json").read_text())["motionWeight"] == weight
++
++
++@pytest.mark.parametrize("weight", [None, "medium", 1, []])
++def test_invalid_motion_weight_fails_pack_lint(creator, weight):
++    from agent.pet.pack import validate_pack
++
++    source, _, meta = creator
++    (source / "manifest.json").write_text(json.dumps({**meta, "motion_weight": weight}))
++    with pytest.raises(ValueError, match="motion_weight"):
++        validate_pack(source)
 +
 +
 +@pytest.mark.platforms("macos", "linux", "windows")
@@ -108339,10 +108441,10 @@ index 0000000000000000000000000000000000000000..311135c3b6a927d916f693212ede910a
 +    assert root_meta.read_bytes() == root_before
 diff --git a/tests/tui_gateway/test_pet_character_sprite.py b/tests/tui_gateway/test_pet_character_sprite.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..6b292877932f640a7a44313e132e56ea7436d59f
+index 0000000000000000000000000000000000000000..7ef76bc755e7f148f08374b80af2bc00df9f9934
 --- /dev/null
 +++ b/tests/tui_gateway/test_pet_character_sprite.py
-@@ -0,0 +1,231 @@
+@@ -0,0 +1,247 @@
 +"""Installed character reads never select/install a mascot or cross profile paths."""
 +from pathlib import Path
 +import base64
@@ -108396,6 +108498,22 @@ index 0000000000000000000000000000000000000000..6b292877932f640a7a44313e132e56ea
 +    assert {str(p): p.read_bytes() for p in home.rglob("*") if p.is_file()} == before
 +    absent = server.handle_request({"id": "absent", "method": "pet.sprite", "params": {"profile": "absent", "slug": "same"}})
 +    assert absent.get("error"), absent
++
++
++def test_motion_weight_stays_current_when_atlas_is_cached(fleet):
++    server, home = fleet
++    meta = home / "profiles/alpha/pets/same/pet.json"
++    original = json.loads(meta.read_text())
++    for weight in ("light", "heavy", "standard", "unrecognized", None):
++        meta.write_text(json.dumps({**original, "motionWeight": weight}))
++        for variant in (None, "half"):
++            response = server.handle_request({
++                "id": "sprite", "method": "pet.sprite",
++                "params": {"profile": "alpha", "slug": "same", **({"variant": variant} if variant else {})},
++            })
++            result = response["result"]
++            assert result["enabled"] and result["spritesheetBase64"]
++            assert result.get("motionWeight") == (weight if weight in ("light", "standard", "heavy") else None)
 +
 +
 +@pytest.mark.parametrize("rows", [8, 9])
@@ -114254,7 +114372,7 @@ index 79519693dd5fba61c15cb2f19cfef03bd64f647f..31b7f1151c84a1ee39935ba9e18276fc
 +    canonical_method(_name, params=_params, result=ProfileWorkflowResult,
 +                     doc="Profile-scoped bot workflow configuration with an expected-revision fence.")
 diff --git a/tui_gateway/contracts/projects_pets.py b/tui_gateway/contracts/projects_pets.py
-index 2f17d6b9cdc6fae78875454a9971f64f2f50ad67..c2a7917da007b53ae249c25fe7cf1dc2e106ba81 100644
+index 2f17d6b9cdc6fae78875454a9971f64f2f50ad67..7b591da84f513cfda545242ba5b23abe0f1033bd 100644
 --- a/tui_gateway/contracts/projects_pets.py
 +++ b/tui_gateway/contracts/projects_pets.py
 @@ -11,2 +11,4 @@ from __future__ import annotations
@@ -114262,7 +114380,11 @@ index 2f17d6b9cdc6fae78875454a9971f64f2f50ad67..c2a7917da007b53ae249c25fe7cf1dc2
 +from typing import Literal
 +
  from pydantic import Field
-@@ -417,2 +419,10 @@ class PetSlugParams(ProfileParams):
+@@ -338,2 +340,3 @@ class PetInfoResult(OpenModel):
+     stateRows: list[str] | None = None
++    motionWeight: Literal["light", "standard", "heavy"] | None = None
+
+@@ -417,2 +420,10 @@ class PetSlugParams(ProfileParams):
 
 +class PetSpriteParams(PetSlugParams):
 +    variant: Literal["half"] | None = None
@@ -114377,10 +114499,10 @@ index 2ee5564f08d18f307a36adaa1dea304a0369a6f1..7c7f4e3bbc32dfcc0eb9b46cab925423
      "project": _cfg_get_project,
 diff --git a/tui_gateway/methods_pet_characters.py b/tui_gateway/methods_pet_characters.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..4ef5896bdc2ac869683dc07d5e15f517f6c3d00d
+index 0000000000000000000000000000000000000000..4abbac335890c7745381b3b1eb590e903bd8ae0b
 --- /dev/null
 +++ b/tui_gateway/methods_pet_characters.py
-@@ -0,0 +1,97 @@
+@@ -0,0 +1,100 @@
 +"""Read-only installed character atlases; global mascot selection stays separate."""
 +from .method_ctx import HandlerRegistry, bind_module
 +
@@ -114471,7 +114593,10 @@ index 0000000000000000000000000000000000000000..4ef5896bdc2ac869683dc07d5e15f517
 +        after = pet.spritesheet.stat()
 +        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
 +            return _ok(rid, disabled)
-+        return _ok(rid, {"enabled": True, **payload})
++        result = {"enabled": True, **payload}
++        if pet.motion_weight is not None:
++            result["motionWeight"] = pet.motion_weight
++        return _ok(rid, result)
 +    except (OSError, ValueError, Image.DecompressionBombError):
 +        return _ok(rid, disabled)
 +

@@ -92,7 +92,7 @@ with Path("spritesheet.png").open("xb") as output:
 ```
 
 Create UTF-8 `manifest.json` beside `spritesheet.png`. Replace the descriptive
-text below with the actual brief/provenance; use only these six fields:
+text below with the actual brief and provenance. These six fields are required.
 
 ```json
 {
@@ -104,6 +104,9 @@ text below with the actual brief/provenance; use only these six fields:
   "spritesheet": "spritesheet.png"
 }
 ```
+
+When the brief specifies a motion weight for the Mac overlay, use the optional
+`motion_weight` field from the [pack contract](../../docs/character-pack.md#folder-contract-schema-1).
 
 Name/author/licence each need 1–160 printable characters with nonblank content;
 manifest limit is 64 KiB. The sheet is a static **1536 × 1872 px**, 8-column,
