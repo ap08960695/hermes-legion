@@ -12121,10 +12121,10 @@ index 0000000000000000000000000000000000000000..443ae995b6ec4535bec2ab73453ec0b4
 +}
 diff --git a/apps/desktop/electron/ssh-fanout.test.ts b/apps/desktop/electron/ssh-fanout.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..c5aa27c373885f466522d1177b4865077c34b349
+index 0000000000000000000000000000000000000000..5aefe516bb72108deabf46c2227537e70233657c
 --- /dev/null
 +++ b/apps/desktop/electron/ssh-fanout.test.ts
-@@ -0,0 +1,661 @@
+@@ -0,0 +1,681 @@
 +import assert from 'node:assert/strict'
 +import { execFile } from 'node:child_process'
 +import { EventEmitter } from 'node:events'
@@ -12138,7 +12138,13 @@ index 0000000000000000000000000000000000000000..c5aa27c373885f466522d1177b486507
 +
 +import { createQuitTeardownCoordinator } from './quit-teardown'
 +import { createBootstrapCoordinator } from './ssh-bootstrap-coordinator'
-+import { buildExecArgs, controlSocketPath, SshConnection } from './ssh-connection'
++import {
++  buildControlArgs,
++  buildExecArgs,
++  buildInteractiveSshArgs,
++  controlSocketPath,
++  SshConnection
++} from './ssh-connection'
 +import { createControlMasterHolders } from './ssh-control-master-holders'
 +import { SSH_HELPER_ADMITTED } from './ssh-exec-lifetime'
 +import { createSshTeardownTracker } from './ssh-teardown'
@@ -12340,7 +12346,7 @@ index 0000000000000000000000000000000000000000..c5aa27c373885f466522d1177b486507
 +  assert.ok(!args.includes('ControlMaster=auto'))
 +})
 +
-+test('real OpenSSH with a missing mux never dials localhost or runs configured proxies', async () => {
++test('real OpenSSH mux clients avoid TCP and configured proxies when the socket is missing', async () => {
 +  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ssh-no-fallback-'))
 +  const config = path.join(dir, 'config')
 +  const sentinel = path.join(dir, 'proxy-must-not-run')
@@ -12354,29 +12360,43 @@ index 0000000000000000000000000000000000000000..c5aa27c373885f466522d1177b486507
 +  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
 +
 +  try {
++    const endpoint = {
++      host: '127.0.0.1',
++      user: 'synthetic',
++      port: (server.address() as net.AddressInfo).port,
++      controlPath: path.join(dir, 'missing.sock')
++    }
++
 +    fs.writeFileSync(
 +      config,
-+      `Host *\n  IdentityFile none\n  IdentityAgent none\n  GlobalKnownHostsFile none\n  UserKnownHostsFile ${dir}/known_hosts\n  ProxyCommand touch ${sentinel}\n  ProxyJump 127.0.0.1\n`
++      `Host *\n  IdentityFile none\n  IdentityAgent none\n  GlobalKnownHostsFile none\n  UserKnownHostsFile ${dir}/known_hosts\n  ProxyCommand /usr/bin/touch "${sentinel}"\n  ProxyJump 127.0.0.1:${endpoint.port}\n`
 +    )
 +
-+    const args = buildExecArgs(
-+      {
-+        host: '127.0.0.1',
-+        user: 'synthetic',
-+        port: (server.address() as net.AddressInfo).port,
-+        controlPath: path.join(dir, 'missing.sock')
-+      },
-+      'true'
-+    )
-+
-+    await assert.rejects(
++    const run = (args: string[]) =>
 +      promisify(execFile)('/usr/bin/ssh', ['-F', config, ...args], {
 +        timeout: 2000,
 +        env: { HOME: dir, PATH: '/usr/bin:/bin' }
-+      }),
-+      (error: any) => error.code === 255
-+    )
-+    assert.equal(connections, 0)
++      })
++
++    const payload = buildExecArgs(endpoint, 'true')
++
++    const clients = [
++      ['payload', payload],
++      ['terminal', buildInteractiveSshArgs(endpoint, '', undefined, 'true')],
++      ['liveness', buildControlArgs(endpoint, 'check')],
++      ['teardown', buildControlArgs(endpoint, 'exit')]
++    ] as const
++
++    for (const [name, args] of clients) {
++      await assert.rejects(run(args), { code: 255 }, name)
++      assert.equal(connections, 0, name)
++      assert.equal(fs.existsSync(sentinel), false, name)
++    }
++
++    // The listener must see a deliberate direct fallback under the same sandbox.
++    const direct = payload.map(arg => (arg === 'ProxyCommand=false' ? 'ProxyCommand=none' : arg))
++    await assert.rejects(run(direct), { code: 255 })
++    assert.equal(connections, 1)
 +    assert.equal(fs.existsSync(sentinel), false)
 +  } finally {
 +    await new Promise<void>(resolve => server.close(() => resolve()))

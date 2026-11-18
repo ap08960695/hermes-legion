@@ -10682,3 +10682,16 @@ competing processes issued zero SSH calls. A clean close admitted an
 immediate retry. The busy error reports the exact lease basename and
 explains that an interruption can leave it behind. Reclamation still
 requires ownership proof.
+
+### Native missing-socket boundary on Mac
+
+The macOS OpenSSH client returned exit 255 for payload, terminal, liveness,
+and teardown requests against a missing control socket. A fenced loopback
+listener accepted zero connections and the fixture's configured proxy did
+not run. A deliberate direct-connect control reached the listener once,
+confirming it was observable. All 14 fan-out cases passed.
+
+The independent-process reservation proof was rerun with fake SSH.
+An unprivileged sshd configuration passed validation. The authenticated
+fixture stayed off because its server and master fork overlap could not
+be bounded to four processes. No trial processes survived.
