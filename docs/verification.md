@@ -1,3 +1,21 @@
+# Random desktop pet arrivals and departures on Mac
+
+Six weighted arrivals and six weighted departures run once per pet
+transition. Each selection excludes the previous preset of its kind.
+Pets land along the available ground line and may overlap. Saved drag
+positions still apply. Reduce Motion fades, and a focused Hermes text
+field suppresses travel.
+
+The packaged Mac Local overlay rendered 5 arrival styles
+and 6 actors during departure in a 8.7-second clip
+with staged roster changes and the same six assigned sprites.
+The tests check all twelve presets, bounded durations, steady anchors,
+and a pet returning during exit.
+
+The 60-second Local gate recorded zero Desktop SSH links. The trial
+used at most four product processes and stopped them. The recording
+uses only the owned overlay renderer. CPU and RSS were not remeasured.
+
 # Keep desktop pets clear of focused Hermes text fields on Mac
 
 Desktop pets temporarily step away from a focused field in the Hermes
