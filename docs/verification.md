@@ -10722,3 +10722,23 @@ zero SSH invocations during each cooldown, including with 1 ms left.
 The delays grow from 1 to 30 seconds and stay capped there. Eight
 concurrent callers share one recovery dial at expiry. The Mac run denies
 all networking and real SSH execution.
+
+### Mac blank Characters overlay with and without its preload
+
+Four isolated Electron launches alternated stock, no preload, no
+preload, stock. Each used the same built renderer, transparent
+1,710 × 1,009 CSS pixel panel at 2× and no actors or canvases. The
+no-window baseline included a prewarmed renderer that the panel reused.
+
+Median blank Electron RSS was 318.7 MiB with the preload and
+316.3 MiB without it. Incremental RSS fell from 118.0 to 115.5 MiB
+above the no-window baseline. Incremental CPU moved from 0.14 to
+0.06 points. Physical footprint above that baseline varied between
+runs. The 2.4 MiB blank RSS difference does not justify changing the
+production preload for the five-character budget.
+
+The Mac fixture used the same outer network-denying sandbox for every
+launch. Chromium's sandbox could not nest inside it and was disabled
+for this fixture. Peak was three sampled processes and 346 MiB RSS
+including the observer, with zero survivors. This comparison covers
+a blank panel and leaves the five-moving-character budget open.
