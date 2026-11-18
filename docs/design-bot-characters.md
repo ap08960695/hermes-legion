@@ -627,3 +627,12 @@ A waiting character can show **Needs your answer** on hover or focus.
 Click an actionable character to open its current output or worker
 actions. Empty canvas pixels pass mouse input through. The overlay
 still uses one panel for up to five pets. [Mac Local verification](verification.md#show-uncluttered-sprites-on-a-transparent-desktop-overlay).
+
+## Pass a folder or report after pets land
+
+When a worker starts, a folder travels from the delegating bot to the
+worker. A saved completion sends a report back to its bot. If either
+character is still arriving, the overlay waits until both are visible and
+reads their canvas positions then. Only the latest eligible cue can wait
+within the existing 15-second window. Pause, Reduce Motion, an interaction
+or a missing endpoint clears the waiting cue. [Verification](verification.md#pass-task-and-report-cues-after-mac-desktop-pets-land).

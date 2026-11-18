@@ -1,3 +1,23 @@
+# Pass task and report cues after Mac desktop pets land
+
+A new worker can enter from outside the screen. The folder cue now
+waits for both characters to finish arriving before measuring where
+to fly. A saved report uses the same check on its way back to the bot.
+Repeated snapshots do not replay the cue. The overlay keeps at most
+one pending event within its existing 15-second window.
+
+The packaged Mac Local fixture staged an actual worker session and a
+saved completion in its isolated database. In the minimized overlay,
+the folder played after a walk-in and the report after a pop-in. Each
+cue lasted about 0.67 seconds. Republishing the same report produced no
+third cue. The regressions cover both arrival orders, older starts
+in later snapshots, expiry, pause, pointer interruption and removal.
+
+The 60-second Local gate recorded zero Desktop SSH links. The trial
+stayed at four product processes and stopped all of them. The clip
+shows the isolated overlay renderer. The fixture ran no model, and
+steady CPU and RAM overhead were outside this run.
+
 # Random desktop pet arrivals and departures on Mac
 
 Six weighted arrivals and six weighted departures run once per pet
