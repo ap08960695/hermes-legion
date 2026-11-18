@@ -1,3 +1,30 @@
+# Show a desktop pet deliver a saved report
+
+On Mac, a pet carrying a newly completed report passes a short,
+click-through document to its visible parent bot. The report identifies
+the delegation and task. The cue uses the saved-report pet because the
+roster has no durable link to a particular live worker. The same task
+report plays once during a preview. Earlier reports, missing endpoints,
+pause, and reduced motion suppress it.
+
+With Hermes minimized, the packaged Local fixture created workers and
+saved one completion in an isolated session database. The normal Local
+gateway roster returned the worker's real start timestamp and sent the
+same stored result in two polls. The document traveled 440 screen
+points in 655 ms and played once. The macOS clip captured the
+document. Four-corner drag and latest-output popover checks passed.
+The fixture ran no model-backed task.
+
+| Preview | CPU, percent of one core | Mean physical footprint |
+| --- | ---: | ---: |
+| Off | 0.91% | 531.4 MiB |
+| Five moving pets | 4.77% | 600.2 MiB |
+| Increase | 3.86 percentage points | 68.8 MiB |
+
+The short samples were taken before completion. CPU exceeded the
+2-point target. GPU and networking ran in-process. Local60 found zero
+Desktop SSH links. All four product processes stopped.
+
 # Show a desktop pet handoff when a worker starts
 
 Mac desktop pets pass a short, click-through folder from delegating bot
