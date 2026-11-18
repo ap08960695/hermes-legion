@@ -32659,7 +32659,7 @@ index 64d8d4fcfba6a2fc30a68e0416bd0af72543cb76..d47d28d57ee7906997042d276c48a8ec
 +        zIndex: 45
        }}
 diff --git a/apps/desktop/src/components/pet/pet-sprite.test.tsx b/apps/desktop/src/components/pet/pet-sprite.test.tsx
-index f7e418de0684778cec8c96a9cb599ebb3b6ae5c6..4bd5e798e03e29a5ab066216c8be5b8cc2e1b26e 100644
+index f7e418de0684778cec8c96a9cb599ebb3b6ae5c6..3739f34bf1ab552eb13d32217c95f7b558379b49 100644
 --- a/apps/desktop/src/components/pet/pet-sprite.test.tsx
 +++ b/apps/desktop/src/components/pet/pet-sprite.test.tsx
 @@ -83,3 +83,3 @@ describe('PetSprite RAF scheduling', () => {
@@ -32667,7 +32667,7 @@ index f7e418de0684778cec8c96a9cb599ebb3b6ae5c6..4bd5e798e03e29a5ab066216c8be5b8c
 -    vi.spyOn(document, 'hasFocus').mockReturnValue(true)
 +    vi.spyOn(window.document, 'hasFocus').mockReturnValue(true)
      windowState = installWindowStateBridge()
-@@ -110,2 +110,197 @@ describe('PetSprite RAF scheduling', () => {
+@@ -110,2 +110,280 @@ describe('PetSprite RAF scheduling', () => {
 
 +  it('renders a static pose without animation timers and repaints a changed explicit state', () => {
 +    const raf = installRaf()
@@ -32846,6 +32846,89 @@ index f7e418de0684778cec8c96a9cb599ebb3b6ae5c6..4bd5e798e03e29a5ab066216c8be5b8c
 +    expect(raf.pending()).toBe(0)
 +  })
 +
++  it('subscribes only while a shared sprite has more cells to paint', () => {
++    const raf = installRaf()
++    const sprites = new Set<FrameRequestCallback>()
++
++    const subscribeFrame = (draw: FrameRequestCallback) => {
++      sprites.add(draw)
++
++      return () => {sprites.delete(draw)}
++    }
++
++    const info = { ...INFO, stateRows: ['idle', 'running'], framesByRow: { idle: 1, running: 2 } }
++    const pose = (row: string) => <PetSprite info={info} playOnce rowOverride={row} subscribeFrame={subscribeFrame} />
++
++    mount.render(pose('idle'))
++    expect(drawImage.mock.calls.map(([, x, y]) => [x, y])).toEqual([[0, 0]])
++    expect(sprites.size).toBe(0)
++
++    const wake = () => {
++      const now = performance.now()
++
++      act(() => raf.runNext(now))
++
++      return now
++    }
++
++    act(() => mount.root!.render(pose('running')))
++    const started = wake()
++    expect(sprites.size).toBe(1)
++    act(() => sprites.forEach(draw => draw(started + 61)))
++    expect(drawImage.mock.calls.map(([, x, y]) => [x, y])).toEqual([[0, 0], [0, 16], [16, 16]])
++    expect(sprites.size).toBe(0)
++
++    act(() => mount.root!.render(pose('idle')))
++    wake()
++    expect(sprites.size).toBe(0)
++    act(() => mount.root!.render(pose('running')))
++    wake()
++    expect(sprites.size).toBe(1)
++    expect(drawImage.mock.lastCall?.slice(1, 3)).toEqual([0, 16])
++
++    mount.unmount()
++    expect(sprites.size).toBe(0)
++    expect(raf.pending()).toBe(0)
++  })
++
++  it('waits for a shared atlas to decode and releases the clock while hidden', () => {
++    const raf = installRaf()
++    const image = Object.assign(new EventTarget(), { complete: false, naturalWidth: 0, src: '' })
++    vi.stubGlobal('Image', class {
++      constructor() {
++        return image
++      }
++    })
++    let frame: FrameRequestCallback | undefined
++
++    const subscribeFrame = (draw: FrameRequestCallback) => {
++      frame = draw
++
++      return () => {frame = undefined}
++    }
++
++    mount.render(<PetSprite info={INFO} subscribeFrame={subscribeFrame} />)
++    expect(frame).toBeUndefined()
++    expect(drawImage).not.toHaveBeenCalled()
++
++    act(() => {
++      image.complete = true
++      image.naturalWidth = 32
++      image.dispatchEvent(new Event('load'))
++      raf.runNext(performance.now())
++    })
++    expect(frame).toBeTypeOf('function')
++    expect(drawImage).toHaveBeenCalledTimes(1)
++
++    act(() => windowState.emit({ isMinimized: true, isVisible: false }))
++    expect(frame).toBeUndefined()
++    expect(raf.pending()).toBe(0)
++    act(() => windowState.emit({ isMinimized: false, isVisible: true }))
++    act(() => raf.runNext(performance.now()))
++    expect(drawImage).toHaveBeenCalledTimes(2)
++    expect(frame).toBeTypeOf('function')
++  })
++
 +  it('repaints a resized shared canvas before the next clock tick', () => {
 +    const raf = installRaf()
 +    let frame: FrameRequestCallback | undefined
@@ -32866,7 +32949,7 @@ index f7e418de0684778cec8c96a9cb599ebb3b6ae5c6..4bd5e798e03e29a5ab066216c8be5b8c
 +
    it('sleeps between visible sprite frames instead of chaining RAFs', () => {
 diff --git a/apps/desktop/src/components/pet/pet-sprite.tsx b/apps/desktop/src/components/pet/pet-sprite.tsx
-index cd3436e3cc2daac40af3d0121de65d63cfa8f418..f61f703810311bdc92c6843d647495ce1a0b9946 100644
+index cd3436e3cc2daac40af3d0121de65d63cfa8f418..b1a65f5b1eb921065741dece8e2736ec0079c979 100644
 --- a/apps/desktop/src/components/pet/pet-sprite.tsx
 +++ b/apps/desktop/src/components/pet/pet-sprite.tsx
 @@ -135,2 +135,10 @@ interface PetSpriteProps {
@@ -32885,20 +32968,31 @@ index cd3436e3cc2daac40af3d0121de65d63cfa8f418..f61f703810311bdc92c6843d647495ce
 -function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUnfocused = false }: PetSpriteProps) {
 +function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUnfocused = false, animate = true, playOnce = false, maxFps = Infinity, subscribeFrame }: PetSpriteProps) {
    const canvasRef = useRef<HTMLCanvasElement | null>(null)
-@@ -257,4 +265,6 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
+@@ -257,4 +265,12 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
 
 +    const sharedClock = animate && subscribeFrame
++    let unsubscribeFrame: (() => void) | undefined
++
++    const stopSharedFrame = () => {
++      unsubscribeFrame?.()
++      unsubscribeFrame = undefined
++    }
 +
      const scheduleFrame = (delayMs = 0) => {
 -      if (stopped || rendererPaused() || raf !== 0 || wakeTimer !== 0) {
-+      if (sharedClock || stopped || rendererPaused() || raf !== 0 || wakeTimer !== 0) {
++      if (unsubscribeFrame || stopped || rendererPaused() || raf !== 0 || wakeTimer !== 0) {
          return
-@@ -345,3 +355,3 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
+@@ -287,2 +303,4 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
+       if (rendererPaused()) {
++        stopSharedFrame()
++
+         return
+@@ -345,3 +363,3 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
          activeCount = count
 -        frame = 0
 +        frame = playOnce && !animate ? count - 1 : 0
          lastStep = now
-@@ -352,10 +362,12 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
+@@ -352,10 +370,12 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
        // differ; counts vary per row so derive the cadence here, not once.
 -      const stepMs = loopMs / count
 +      const stepMs = Math.max(loopMs / count, 1000 / maxFps)
@@ -32917,24 +33011,30 @@ index cd3436e3cc2daac40af3d0121de65d63cfa8f418..f61f703810311bdc92c6843d647495ce
 +        lastStep = sharedClock ? lastStep + advance * stepMs : now
 +      }
 
-@@ -380,3 +392,3 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
+@@ -380,3 +400,10 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
 
 -      scheduleFrame(Math.max(0, stepMs - (now - lastStep)))
-+      if (animate && (!playOnce || frame < count - 1)) {scheduleFrame(Math.max(0, stepMs - (now - lastStep)))}
++      const hasMoreFrames = !playOnce || frame < count - 1
++
++      if (sharedClock) {
++        if (count > 1 && hasMoreFrames) {unsubscribeFrame ??= sharedClock(render)}
++        else {stopSharedFrame()}
++      } else if (animate && hasMoreFrames) {
++        scheduleFrame(Math.max(0, stepMs - (now - lastStep)))
++      }
      }
-@@ -392,3 +404,6 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
+@@ -392,3 +419,5 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
      pauseController = createRendererLoopPauseController(handleVisibilityChange, { pauseWhenUnfocused })
 -    scheduleFrame()
-+    const unsubscribeFrame = sharedClock ? sharedClock(render) : undefined
 +
 +    if (sharedClock) {render(performance.now())}
 +    else {scheduleFrame()}
 
-@@ -396,2 +411,3 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
+@@ -396,2 +425,3 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
        stopped = true
-+      unsubscribeFrame?.()
++      stopSharedFrame()
        kickAnimationRef.current = () => undefined
-@@ -402,3 +418,3 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
+@@ -402,3 +432,3 @@ function PetSpriteImpl({ info, zoom = 1, stateOverride, rowOverride, pauseWhenUn
      }
 -  }, [image, frameW, frameH, frames, framesByState, framesByRow, loopMs, backingW, backingH, rows, pauseWhenUnfocused])
 +  }, [image, frameW, frameH, frames, framesByState, framesByRow, loopMs, backingW, backingH, rows, pauseWhenUnfocused, animate, playOnce, maxFps, subscribeFrame])
