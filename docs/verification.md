@@ -1,3 +1,20 @@
+# Give Mac desktop pet handoffs more weight
+
+The folder and report wind up, spin through an arc and bump at the
+receiver. Both pets pause wandering during the cue. The receiver's
+sprite briefly squashes at contact while its button stays in place.
+The cue still waits for both pets to land and remains click-through.
+Reduce Motion skips the cue.
+
+The packaged Mac Local fixture exercised a worker start and a saved
+completion. Each cue ran once for about 0.87 seconds. The folder rose
+18 px and the report about 56 px above their endpoints. Both props
+bumped 5 px at contact and the receivers briefly compressed to 89%
+height. Republishing the saved report produced no replay. The
+2.8-second comparison shows the previous overlay above the new one.
+The 60-second Local gate recorded zero Desktop SSH links. All four
+product processes stopped. No Hermes model ran.
+
 # Give Mac desktop pet landings more weight
 
 Dragging a pet above the floor now ends in an accelerating fall, a

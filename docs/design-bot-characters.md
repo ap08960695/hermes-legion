@@ -640,9 +640,12 @@ still uses one panel for up to five pets. [Mac Local verification](verification.
 When a worker starts, a folder travels from the delegating bot to the
 worker. A saved completion sends a report back to its bot. If either
 character is still arriving, the overlay waits until both are visible and
-reads their canvas positions then. Only the latest eligible cue can wait
-within the existing 15-second window. Pause, Reduce Motion, an interaction
-or a missing endpoint clears the waiting cue. [Verification](verification.md#pass-task-and-report-cues-after-mac-desktop-pets-land).
+reads their positions then. Both pets pause walking while the folder or
+report winds up, spins through an arc and bumps at the receiving pet.
+The receiver briefly squashes at contact. Only the latest eligible cue
+can wait within the existing 15-second window. Pause, Reduce Motion,
+an interaction or a missing endpoint clears the waiting cue.
+[Verification](verification.md#pass-task-and-report-cues-after-mac-desktop-pets-land).
 
 ## Show which pet needs an answer
 

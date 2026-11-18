@@ -22935,11 +22935,11 @@ index 0000000000000000000000000000000000000000..cfd558ab8cc274b91b75a0ebc07d1374
 +}
 diff --git a/apps/desktop/src/app/pet-overlay/pet-characters.tsx b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..37a994d3466bf65bcffa13cf6ed6a2865b11aad4
+index 0000000000000000000000000000000000000000..78540c44d1b68bb1c440fe3e8b35706d541f4780
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
-@@ -0,0 +1,768 @@
-+import { AnimatePresence, motion, useIsPresent, useReducedMotion } from 'motion/react'
+@@ -0,0 +1,808 @@
++import { AnimatePresence, motion, type TargetAndTransition, useIsPresent, useReducedMotion } from 'motion/react'
 +import { type CSSProperties, useCallback, useEffect, useRef, useState } from 'react'
 +
 +import { DEFAULT_STATE_ROWS, PetSprite, roamWalkRow } from '@/components/pet/pet-sprite'
@@ -23031,13 +23031,36 @@ index 0000000000000000000000000000000000000000..37a994d3466bf65bcffa13cf6ed6a286
 +}
 +
 +type HandoffEvent = { key: string; from: string; to: string; report: boolean; at: number }
-+type HandoffCue = HandoffEvent & { start: Point; end: Point }
++type HandoffCue = HandoffEvent & { start: Point; end: Point; receiver: HTMLCanvasElement }
 +const HANDOFF_WINDOW_MS = 15_000
++const HANDOFF_DURATION_MS = 860
++const HANDOFF_CONTACT = 0.76
 +const WAITING_HINT = 'Needs your answer'
 +const FAILURE_HINT = 'Worker failed'
 +const MAX_STATUS_CUES = 64
 +type WalkDirection = -1 | 0 | 1
 +type SubscribeFrame = (draw: FrameRequestCallback) => () => void
++
++function handoffFlight({ start, end }: HandoffCue): TargetAndTransition {
++  const x = end.x - start.x, y = end.y - start.y
++  const headroom = Math.max(0, Math.min(start.y, end.y) - 14)
++  const lift = Math.min(headroom, 56, Math.max(20, Math.abs(x) * 0.18))
++  const bump = Math.min(5, Math.max(0, end.y - 14))
++  const spin = x < 0 ? -360 : 360
++
++  return {
++    x: [0, 0, x * 0.25, x * 0.5, x * 0.75, x, x, x],
++    y: [0, 0, y * 0.25 - lift * 0.75, y * 0.5 - lift, y * 0.75 - lift * 0.75, y, y - bump, y],
++    rotate: [0, -spin / 20, spin * 0.25, spin * 0.5, spin * 0.75, spin, spin, spin],
++    scale: [1, 0.94, 1, 1, 1, 0.86, 1.04, 1],
++    opacity: [0, 1, 1, 1, 1, 1, 1, 0],
++    transition: {
++      duration: HANDOFF_DURATION_MS / 1000,
++      times: [0, 0.14, 0.295, 0.45, 0.605, HANDOFF_CONTACT, 0.86, 1],
++      ease: ['easeOut', 'linear', 'linear', 'linear', 'linear', 'easeOut', 'easeIn']
++    }
++  }
++}
 +
 +function fitDesktopPoint(desktop: PetCharacterDesktop, point: Point, width: number, height: number, cursor = point) {
 +  const distance = ({ x, y, width, height }: PetCharacterDesktop['areas'][number]) => {
@@ -23075,7 +23098,7 @@ index 0000000000000000000000000000000000000000..37a994d3466bf65bcffa13cf6ed6a286
 +  return fitsBelow ? below : null
 +}
 +
-+function Character({ actor, subscribeFrame, desktop, foreground, info, slot, reduced, open, claimStatusCue, onGrab, onHitTargetsChanged, onLanding, onOutput }: {
++function Character({ actor, subscribeFrame, desktop, foreground, info, slot, reduced, open, handoffActive, claimStatusCue, onGrab, onHitTargetsChanged, onLanding, onOutput }: {
 +  actor: PetCharacter
 +  subscribeFrame: SubscribeFrame
 +  desktop?: PetCharacterDesktop
@@ -23084,6 +23107,7 @@ index 0000000000000000000000000000000000000000..37a994d3466bf65bcffa13cf6ed6a286
 +  foreground: boolean
 +  reduced: boolean | null
 +  open: boolean
++  handoffActive: boolean
 +  claimStatusCue: (actorId: string, eventId: string, failureAt?: number) => boolean
 +  onGrab: (id: string) => void
 +  onHitTargetsChanged: () => void
@@ -23171,7 +23195,7 @@ index 0000000000000000000000000000000000000000..37a994d3466bf65bcffa13cf6ed6a286
 +    else if (first) {setStatusCue(statusId)}
 +  }, [actor.id, canShowHint, claimStatusCue, desktopReady, dropping, failureAt, hint, landed, present, statusId])
 +  const canWalk = !occluded && !reduced && distance !== 0 && (actor.state === 'idle' || actor.state === 'run')
-+  const parked = !present || held || dropping || hint || open
++  const parked = !present || held || dropping || hint || open || handoffActive
 +  const walking = canWalk && !parked
 +
 +  const walk = roamWalkRow(walking ? direction : 0,
@@ -23488,6 +23512,22 @@ index 0000000000000000000000000000000000000000..37a994d3466bf65bcffa13cf6ed6a286
 +  const visible = !paused && (preview.expiresAt <= 0 || preview.expiresAt > Math.max(Date.now(), expiredAt))
 +  const actors = preview.characters.slice(0, MAX_PREVIEW_CHARACTERS)
 +  const outputActor = output && actors.find(actor => actor.outputId === output.id)
++  const activeCue = desktopReady && visible && !reduced && !output ? cue : null
++
++  useEffect(() => {
++    if (!activeCue) {return}
++    const delay = HANDOFF_DURATION_MS * HANDOFF_CONTACT
++
++    const recoil = activeCue.receiver.animate?.([
++      { scale: '1', transformOrigin: '50% 100%' },
++      { scale: '1.08 0.88', transformOrigin: '50% 100%', offset: 0.32 },
++      { scale: '0.98 1.02', transformOrigin: '50% 100%', offset: 0.65 },
++      { scale: '1', transformOrigin: '50% 100%' }
++    ], { delay, duration: HANDOFF_DURATION_MS - delay, easing: 'ease-out' })
++
++    return () => recoil?.cancel()
++  }, [activeCue])
++
 +  const hitTargets = visible ? JSON.stringify([actors.map(({ id, outputId }) => [id, outputId]), outputActor?.id, desktop?.input]) : ''
 +
 +  const desktopScale = desktopReady && visible ? info.scale : undefined
@@ -23584,14 +23624,15 @@ index 0000000000000000000000000000000000000000..37a994d3466bf65bcffa13cf6ed6a286
 +    }
 +
 +    const anchor = (button: HTMLButtonElement) => {
-+      const rect = button.querySelector('canvas')?.getBoundingClientRect()
++      const rect = button.getBoundingClientRect()
 +
-+      return rect?.width && rect.height ? { x: rect.left + rect.width / 2, y: Math.max(10, rect.top + rect.height * 0.3) } : null
++      return rect.width && rect.height ? { x: rect.left + rect.width / 2, y: Math.max(10, rect.top + rect.height * 0.3) } : null
 +    }
 +
++    const sender = from.querySelector('canvas'), receiver = to.querySelector('canvas')
 +    const start = anchor(from), end = anchor(to)
 +
-+    if (start && end) {setCue({ ...pending, key: JSON.stringify([pending.key, pending.at]), start, end })}
++    if (sender && receiver && start && end) {setCue({ ...pending, key: JSON.stringify([pending.key, pending.at]), start, end, receiver })}
 +  }, [desktopReady, landingRevision, output, preview, reduced, visible])
 +
 +  if (!visible) {return null}
@@ -23694,16 +23735,15 @@ index 0000000000000000000000000000000000000000..37a994d3466bf65bcffa13cf6ed6a286
 +      </button>}
 +    </section>}
 +    <AnimatePresence>
-+      {actors.map((actor, index) => <Character actor={actor} claimStatusCue={claimStatusCue} desktop={desktop} foreground={actor.id === foreground} info={info} key={actor.id} onGrab={setForeground} onHitTargetsChanged={onHitTargetsChanged} onLanding={onLanding} onOutput={onOutput}
++      {actors.map((actor, index) => <Character actor={actor} claimStatusCue={claimStatusCue} desktop={desktop} foreground={actor.id === foreground} handoffActive={actor.id === activeCue?.from || actor.id === activeCue?.to} info={info} key={actor.id} onGrab={setForeground} onHitTargetsChanged={onHitTargetsChanged} onLanding={onLanding} onOutput={onOutput}
 +        open={actor.id === outputActor?.id} reduced={reduced} slot={(index + 1) * 100 / (actors.length + 1)} subscribeFrame={subscribeFrame} />)}
 +    </AnimatePresence>
-+    {cue && !reduced && !output && <motion.span animate={{ x: cue.end.x - cue.start.x, y: cue.end.y - cue.start.y, opacity: [0, 1, 1, 0] }}
-+      aria-hidden="true" data-pet-handoff={cue.report ? 'report' : 'task'} initial={{ x: 0, y: 0, opacity: 0 }} key={cue.key}
-+      onAnimationComplete={() => setCue(current => current?.key === cue.key ? null : current)}
-+      style={{ position: 'fixed', left: cue.start.x - 10, top: cue.start.y - 10, zIndex: 1,
-+        pointerEvents: 'none', color: cue.report ? '#f2f5fa' : '#f5ca62', filter: 'drop-shadow(0 1px 2px #19211e)' }}
-+      transition={{ duration: 0.65, ease: 'easeInOut', opacity: { duration: 0.65, times: [0, 0.15, 0.8, 1] } }}>
-+      {cue.report ? <FileText size={20} /> : <FolderOpen size={20} />}
++    {activeCue && <motion.span animate={handoffFlight(activeCue)} aria-hidden="true" data-pet-handoff={activeCue.report ? 'report' : 'task'}
++      initial={{ x: 0, y: 0, opacity: 0 }} key={activeCue.key}
++      onAnimationComplete={() => setCue(current => current?.key === activeCue.key ? null : current)}
++      style={{ position: 'fixed', left: activeCue.start.x - 10, top: activeCue.start.y - 10, zIndex: 1,
++        pointerEvents: 'none', color: activeCue.report ? '#f2f5fa' : '#f5ca62', filter: 'drop-shadow(0 1px 2px #19211e)' }}>
++      {activeCue.report ? <FileText size={20} /> : <FolderOpen size={20} />}
 +    </motion.span>}
 +  </div>
 +}
@@ -24010,10 +24050,10 @@ index 82319976a166e658f80e794b0033fed81a48d456..d0c7de7c09dc4ed513dae2dd7c75c60f
    return (
 diff --git a/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..8518a91a64e98c87e6231c0dfb688050653eff5c
+index 0000000000000000000000000000000000000000..f26532481c5cfd3ed984b621d8ebbdc00d1e7e74
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
-@@ -0,0 +1,1314 @@
+@@ -0,0 +1,1323 @@
 +import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 +import type * as Motion from 'motion/react'
 +import type { ComponentProps } from 'react'
@@ -24766,8 +24806,8 @@ index 0000000000000000000000000000000000000000..8518a91a64e98c87e6231c0dfb688050
 +  const initial = Date.now()
 +  const start = (id: string, at: number, from = parent.id) => ({ ...worker, state: 'run' as const, id, handoff: { from, at } })
 +  const findCue = () => container.querySelector<HTMLElement>('[data-pet-handoff]')
-+  vi.spyOn(HTMLCanvasElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLCanvasElement) {
-+    return new DOMRect(this.closest('button')?.dataset.petCaption === parent.id ? 620 : 720, 600, 40, 40)
++  vi.spyOn(HTMLButtonElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLButtonElement) {
++    return new DOMRect(this.dataset.petCaption === parent.id ? 620 : 720, 600, 40, 40)
 +  })
 +
 +  const a = frame(initial, [parent, start('old', initial - 1000)])
@@ -24778,16 +24818,25 @@ index 0000000000000000000000000000000000000000..8518a91a64e98c87e6231c0dfb688050
 +  act(() => emit(b))
 +  act(() => emit(b))
 +  expect(findCue()).toBeNull()
++  const canvas = container.querySelector('[data-pet-caption=new] canvas')!
++  const cancel = vi.fn()
++  const catchParcel = vi.fn(() => ({ cancel }))
++
++  Object.defineProperty(canvas, 'animate', { value: catchParcel })
 +  land('new')
 +  expect(findCue()).toBeNull()
++  expect(catchParcel).not.toHaveBeenCalled()
 +  land(parent.id)
++  expect(catchParcel).toHaveBeenCalledTimes(1)
 +  expect(findCue()?.getAttribute('aria-hidden')).toBe('true')
 +  expect(findCue()?.style.pointerEvents).toBe('none')
 +  fireEvent.pointerDown(screen.getAllByRole('button')[0])
 +  expect(findCue()).toBeNull()
++  expect(cancel).toHaveBeenCalledTimes(1)
 +  act(() => emit(a))
 +  act(() => emit(b))
 +  expect(findCue()).toBeNull()
++  expect(catchParcel).toHaveBeenCalledTimes(1)
 +
 +  act(() => vi.advanceTimersByTime(1000))
 +  const missing = start('solo', initial + 1250)
@@ -24825,8 +24874,8 @@ index 0000000000000000000000000000000000000000..8518a91a64e98c87e6231c0dfb688050
 +      characterPreview: { expiresAt: Date.now() + 15_000, characters } })
 +
 +  const cue = () => container.querySelector<HTMLElement>('[data-pet-handoff=report]')
-+  vi.spyOn(HTMLCanvasElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLCanvasElement) {
-+    return new DOMRect(this.closest('button')?.dataset.petCaption === parent.id ? 620 : 720, 600, 40, 40)
++  vi.spyOn(HTMLButtonElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLButtonElement) {
++    return new DOMRect(this.dataset.petCaption === parent.id ? 620 : 720, 600, 40, 40)
 +  })
 +
 +  const first = Date.now()
@@ -24863,7 +24912,7 @@ index 0000000000000000000000000000000000000000..8518a91a64e98c87e6231c0dfb688050
 +    act(() => emit({ ...normal, charactersPaused: false, characterDesktop: { bounds: area, areas: [area] },
 +      characterPreview: { expiresAt: Date.now() + 15000, characters } }))
 +
-+  vi.spyOn(HTMLCanvasElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(620, 600, 40, 40))
++  vi.spyOn(HTMLButtonElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(620, 600, 40, 40))
 +  frame([parent])
 +  land(parent.id)
 +  act(() => vi.advanceTimersByTime(500))
@@ -24892,7 +24941,7 @@ index 0000000000000000000000000000000000000000..8518a91a64e98c87e6231c0dfb688050
 +    act(() => emit({ ...normal, charactersPaused: paused, characterDesktop: { bounds: area, areas: [area] },
 +      characterPreview: { expiresAt: Date.now() + 15000, characters } }))
 +
-+  vi.spyOn(HTMLCanvasElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(620, 600, 40, 40))
++  vi.spyOn(HTMLButtonElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(620, 600, 40, 40))
 +  frame([parent])
 +  land(parent.id)
 +  act(() => vi.advanceTimersByTime(500))
