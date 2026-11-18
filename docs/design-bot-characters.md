@@ -360,6 +360,13 @@ In a follow-up, retaining PNG or lossless WebP per source matched
 3.36 CPU points above no overlay. Product delivery still uses full sheets.
 [Import experiment](verification.md#measure-import-time-character-rows).
 
+A reversed-order Mac comparison held the art and painted canvas geometry
+fixed. With five mixed-state strips, motion added 2.45–3.80 CPU points
+over the same visible held poses. The separate trace counted 82
+GPU swaps with motion and 0 with held poses in eight seconds.
+The two moving samples used 91.33–92.18 MiB above no overlay.
+[Mixed-state profile](verification.md#profile-animation-with-matched-mixed-state-strips).
+
 A follow-up Mac run measured 111.6 MiB and 2.81 CPU points of five-pack
 overhead before tracing. About 1.51 CPU points came from the overlay
 renderer and 1.29 from the main process, which hosted Chromium's GPU

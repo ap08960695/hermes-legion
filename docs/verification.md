@@ -1,3 +1,25 @@
+# Profile animation with matched mixed-state strips
+
+Five fresh signed Mac Local fixtures used equal PNG/WebP row strips,
+state warm-up and canvas geometry. Two overlay pairs ran in opposite
+orders with a no-overlay control between them. The static control used
+the renderer's reduced-motion path. Five painted canvases remained
+visible without drawing during the pose probes. Every moving canvas
+changed during its corresponding probe.
+
+Untraced samples measured 0.16–0.19 CPU points above no overlay for
+held poses and 2.61–3.99 for moving. Motion added 2.45–3.80 points in
+paired trials. Physical footprint above no overlay was 87.97–88.13 MiB
+for held poses and 91.33–92.18 MiB for moving. Separate eight-second
+traces recorded 0 GPU buffer swaps for held poses and 82
+for moving. The layer update counts were 0 and 82.
+Median moving swap gaps were 83.7–99.4 ms. Neither trace recorded a gap of 35 ms or less.
+CPU includes fixture GPU work and excludes WindowServer.
+
+Moving exceeded both the 2-point CPU ceiling and the 80 MiB memory ceiling.
+The test changed no product animation. All five accepted runs recorded
+zero Desktop SSH after 60 seconds and left no survivors.
+
 # Measure import-time character rows
 
 The real pack validator and atomic importer ran in a disposable Mac
