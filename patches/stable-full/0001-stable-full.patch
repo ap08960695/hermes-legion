@@ -56581,7 +56581,7 @@ index 0000000000000000000000000000000000000000..cb9ea9091065e5dab2aa9530863b9a56
 +        raise SystemExit(1)
 +    print(json.dumps(result, indent=2))
 diff --git a/hermes_cli/gateway_runtime.py b/hermes_cli/gateway_runtime.py
-index 818ace3cc7ab9828ef87b4227ec6866648c182f5..91633d25795e312545365aca72ecba9e1fd749fd 100644
+index 818ace3cc7ab9828ef87b4227ec6866648c182f5..333aac419effb7d9baafbb695a74978f4ebbb0b0 100644
 --- a/hermes_cli/gateway_runtime.py
 +++ b/hermes_cli/gateway_runtime.py
 @@ -4,2 +4,3 @@ from __future__ import annotations
@@ -56604,46 +56604,44 @@ index 818ace3cc7ab9828ef87b4227ec6866648c182f5..91633d25795e312545365aca72ecba9e
 +
 +
  def _served_by_multiplexer(home: Path, *, timeout: float) -> GatewayDiscovery | None:
-@@ -212,3 +226,3 @@ def _served_by_multiplexer(home: Path, *, timeout: float) -> GatewayDiscovery |
+@@ -212,6 +226,8 @@ def _served_by_multiplexer(home: Path, *, timeout: float) -> GatewayDiscovery |
      multiplexer's live descriptor proves service; a held ``gateway.lock`` alone does not."""
 -    from hermes_cli.gateway_runtime_discovery import DiscoveryError, query_identify
 +    from hermes_cli.gateway_runtime_discovery import query_identify
      from hermes_cli.gateway_runtime_multiplex import multiplexer_root_for
-@@ -219,16 +233,16 @@ def _served_by_multiplexer(home: Path, *, timeout: float) -> GatewayDiscovery |
++    from hermes_cli.profiles import profile_is_standalone
++
+     root = multiplexer_root_for(home)
+-    if root is None:
++    if root is None or profile_is_standalone(home):
+         return None
+@@ -219,16 +235,7 @@ def _served_by_multiplexer(home: Path, *, timeout: float) -> GatewayDiscovery |
          payload = query_identify(root, timeout=timeout)
--    except PermissionError as exc:
++    except (FileNotFoundError, ConnectionRefusedError):
++        owner = _missing_owner_verdict(root)
++        return owner if owner.state == "inaccessible" else None
+     except PermissionError as exc:
 -        # The multiplexer's pipe proved the boundary: name it for the secondary too (#140706), unless
 -        # the boot policy never serves this home (a standalone secondary starts its own gateway). Any
 -        # other refusal is "not served" before a config is read, as on POSIX, where none is proven.
 -        named = _refused_owner_verdict(exc)
 -        if named is None:
-+    except (FileNotFoundError, ConnectionRefusedError):
-+        owner = _missing_owner_verdict(root)
-+        if owner.state != "inaccessible":
-             return None
+-            return None
 -        from hermes_cli.gateway_multiplex_mode import host_serves_named_profile
 -        if host_serves_named_profile(root, home) is False:
-+        from hermes_cli.profiles import profile_is_standalone
-+        return None if profile_is_standalone(home) else owner
-+    except (OSError, ValueError, TypeError) as exc:
-+        # An uncertain host probe is only irrelevant to a deliberately standalone profile.
-+        from hermes_cli.profiles import profile_is_standalone
-+        if profile_is_standalone(home):
-             return None
+-            return None
 -        return named
 -    except (FileNotFoundError, ConnectionRefusedError, TimeoutError, DiscoveryError,
 -            OSError, ValueError, TypeError):
 -        return None
-+        if isinstance(exc, PermissionError):
-+            return _refused_owner_verdict(exc) or _refused(root)
-+        raise
++        return _refused_owner_verdict(exc) or _refused(root)
      result = _endpoint(payload, home, control_home=root)
-@@ -294,3 +308,3 @@ def discover_gateway_endpoint(profile_home: str | Path, *, timeout: float = 2.0)
+@@ -294,3 +301,3 @@ def discover_gateway_endpoint(profile_home: str | Path, *, timeout: float = 2.0)
      """
 -    from hermes_cli.gateway_runtime_discovery import DiscoveryError, missing_owner_state, query_identify
 +    from hermes_cli.gateway_runtime_discovery import DiscoveryError, query_identify
 
-@@ -300,13 +314,8 @@ def discover_gateway_endpoint(profile_home: str | Path, *, timeout: float = 2.0)
+@@ -300,13 +307,8 @@ def discover_gateway_endpoint(profile_home: str | Path, *, timeout: float = 2.0)
      try:
 -        return _endpoint(query_identify(home, timeout=timeout), home)
 -    except (FileNotFoundError, ConnectionRefusedError):
@@ -56663,11 +56661,28 @@ index 818ace3cc7ab9828ef87b4227ec6866648c182f5..91633d25795e312545365aca72ecba9e
 +            if served is not None:
 +                return served
      except TimeoutError:
-@@ -322,2 +331,3 @@ def discover_gateway_endpoint(profile_home: str | Path, *, timeout: float = 2.0)
+@@ -322,2 +324,3 @@ def discover_gateway_endpoint(profile_home: str | Path, *, timeout: float = 2.0)
          return GatewayDiscovery("inaccessible", reason_code="invalid_control_peer")
 +    return _missing_owner_verdict(home)
 
-@@ -472,13 +482,20 @@ def ensure_gateway_runtime(profile_home: str | Path, *, timeout: float = DEFAULT
+@@ -453,9 +456,9 @@ def ensure_gateway_runtime(profile_home: str | Path, *, timeout: float = DEFAULT
+                 retiring = False
+-            reserved = _starting_multiplexer_root(home) if observed.state == "absent" and not requested else None
+-            if reserved is not None and (reason := _standalone_multiplexer_reason(reserved)):
+-                return GatewayDiscovery("inaccessible", reason_code="profile_parked", detail=reason)
+-            # A default multiplexer that is still starting will serve this named profile; never
+-            # spawn a competing per-profile daemon while its reservation is pending.
+-            if reserved is not None:
+-                requested = True
++                reserved = _starting_multiplexer_root(home)
++                if reserved is not None:
++                    # A root can publish its refusal after this call has requested startup.
++                    if reason := _standalone_multiplexer_reason(reserved):
++                        return GatewayDiscovery("inaccessible", reason_code="profile_parked", detail=reason)
++                    # Wait for the root's verdict while its reservation excludes another launch.
++                    requested = True
+             if observed.state == "absent" and not requested:
+@@ -472,13 +475,22 @@ def ensure_gateway_runtime(profile_home: str | Path, *, timeout: float = DEFAULT
                      service = discover_existing_gateway_service(target, deadline=deadline)
 -                # Runtime locks settle races remaining after this second probe.
 -                observed = discover_gateway_endpoint(home, timeout=remaining(deadline))
@@ -56683,6 +56698,8 @@ index 818ace3cc7ab9828ef87b4227ec6866648c182f5..91633d25795e312545365aca72ecba9e
 +                from hermes_cli.gateway_launch_admission import gateway_launch_admission
 +                admission = gateway_launch_admission(target) if service is None else nullcontext(())
 +                with admission as launch_fds:
++                    # A contender can release admission without starting a daemon. Keep polling
++                    # and retry admission within this deadline if discovery still finds no owner.
 +                    if launch_fds is not None:
 +                        observed = discover_gateway_endpoint(home, timeout=remaining(deadline))
 +                        if observed.state != "absent":
@@ -56697,7 +56714,7 @@ index 818ace3cc7ab9828ef87b4227ec6866648c182f5..91633d25795e312545365aca72ecba9e
 +                            child_home, child_offset = target, stdio_log_size(target)
 +                            child = spawn_unmanaged_gateway(target, deadline=deadline, idle_exit=idle_exit,
 +                                                            launch_fds=launch_fds)
-+                    requested = True
++                        requested = True
              time.sleep(min(delay, remaining(deadline)))
 diff --git a/hermes_cli/gateway_runtime_start.py b/hermes_cli/gateway_runtime_start.py
 index ac185f2479f400d411c438b9796364e2df4aba4b..527eab7d51af56f7d5bdca3435d342318c53a05b 100644
@@ -86646,10 +86663,34 @@ index c4e4080046e70116f98165e92debbe3e98ecfeec..999318a1677ce3f47db910ca86c84915
 +    monkeypatch.setattr(profiles, "_get_wrapper_dir", lambda: tmp_path / "wrappers")
      (tmp_path / "profiles" / "beta").mkdir(parents=True)
 diff --git a/tests/hermes_cli/test_gateway_runtime_ensure.py b/tests/hermes_cli/test_gateway_runtime_ensure.py
-index 8eefb2f03f6b1714ecb3f9b19e130c686de03b47..a24a9f19bbdda2eb20de4ed90aeb8499090ed265 100644
+index 8eefb2f03f6b1714ecb3f9b19e130c686de03b47..2abe69d94501b472e17a6331b7b157b19790c2e4 100644
 --- a/tests/hermes_cli/test_gateway_runtime_ensure.py
 +++ b/tests/hermes_cli/test_gateway_runtime_ensure.py
-@@ -372,2 +372,255 @@ def test_unmanaged_root_home_child_ignores_sticky_active_profile(tmp_path, monke
+@@ -2,2 +2,3 @@
+ import asyncio
++from contextlib import contextmanager
+ import json
+@@ -12,2 +13,19 @@ import pytest
+
++
++@pytest.fixture
++def startup_clock(monkeypatch):
++    now = 0.0
++
++    def monotonic():
++        return now
++
++    def sleep(seconds):
++        nonlocal now
++        now += seconds
++
++    monkeypatch.setattr(time, "monotonic", monotonic)
++    monkeypatch.setattr(time, "sleep", sleep)
++    return monotonic
++
++
+ def test_unmanaged_runtime_drops_session_config_bypass_flags(tmp_path, monkeypatch):
+@@ -372,2 +390,310 @@ def test_unmanaged_root_home_child_ignores_sticky_active_profile(tmp_path, monke
 
 +@pytest.mark.parametrize("named", [False, True])
 +@pytest.mark.parametrize("probe_error,reason", [
@@ -86706,7 +86747,9 @@ index 8eefb2f03f6b1714ecb3f9b19e130c686de03b47..a24a9f19bbdda2eb20de4ed90aeb8499
 +
 +
 +@pytest.mark.platforms("linux", "macos")
-+@pytest.mark.parametrize("case", ["default", "named", "appears_before_start", "standalone", "absent"])
++@pytest.mark.parametrize("case", [
++    "default", "named", "appears_before_start", "standalone", "standalone_unsafe_local", "absent",
++])
 +def test_ensure_checks_host_lock_when_the_host_has_no_socket(tmp_path, monkeypatch, case):
 +    from hermes_cli import gateway_runtime as runtime, gateway_runtime_service as service, gateway_runtime_start as start
 +
@@ -86714,10 +86757,12 @@ index 8eefb2f03f6b1714ecb3f9b19e130c686de03b47..a24a9f19bbdda2eb20de4ed90aeb8499
 +    home = root if case == "default" else root / "profiles" / "alpha"
 +    home.mkdir(parents=True, mode=0o700)
 +    lock = root / "gateway.lock"
-+    if case in {"default", "named", "standalone"}:
++    if case in {"default", "named", "standalone", "standalone_unsafe_local"}:
 +        lock.mkdir()
-+    if case == "standalone":
++    if case in {"standalone", "standalone_unsafe_local"}:
 +        (home / "config.yaml").write_text("gateway: {standalone: true}\n", encoding="utf-8")
++    if case == "standalone_unsafe_local":
++        (home / "gateway.lock").mkdir()
 +    spawned = []
 +    looked_up = []
 +
@@ -86834,6 +86879,57 @@ index 8eefb2f03f6b1714ecb3f9b19e130c686de03b47..a24a9f19bbdda2eb20de4ed90aeb8499
 +            proc.stdout.close()
 +
 +
++@pytest.mark.parametrize("winner", ["exits", "ready", "ready_during_recheck", "holds"])
++def test_ensure_recovers_lost_launch_admission(tmp_path, monkeypatch, startup_clock, winner):
++    from types import SimpleNamespace
++    from hermes_cli import gateway_launch_admission, gateway_runtime as runtime
++    from hermes_cli import gateway_runtime_service as service, gateway_runtime_start as start
++
++    home = tmp_path / "profile"
++    attempts = []
++    spawned = []
++    owner = runtime.GatewayDiscovery("ready")
++    winner_ready = False
++
++    @contextmanager
++    def admission(target):
++        nonlocal winner_ready
++        attempts.append(target)
++        if len(attempts) == 1 or winner == "holds":
++            yield None
++            winner_ready = winner == "ready"
++            return
++        winner_ready = winner == "ready_during_recheck"
++        yield (3,)
++
++    def discover(target, *, timeout):
++        assert target == home
++        assert timeout == pytest.approx(0.2 - startup_clock())
++        return owner if winner_ready or spawned else runtime.GatewayDiscovery("absent")
++
++    def spawn(target, *, deadline, idle_exit, launch_fds):
++        assert deadline == 0.2
++        assert launch_fds == (3,)
++        spawned.append(target)
++        return SimpleNamespace(poll=lambda: None)
++
++    monkeypatch.setattr(runtime, "discover_gateway_endpoint", discover)
++    monkeypatch.setattr(service, "discover_existing_gateway_service", lambda *a, **k: None)
++    monkeypatch.setattr(gateway_launch_admission, "gateway_launch_admission", admission)
++    monkeypatch.setattr(start, "spawn_unmanaged_gateway", spawn)
++
++    result = runtime.ensure_gateway_runtime(home, timeout=0.2)
++    if winner == "holds":
++        assert (result.state, result.reason_code) == ("starting", "deadline")
++        assert startup_clock() == pytest.approx(0.2)
++        assert len(attempts) > 1 and not spawned
++        return
++    assert result is owner
++    assert 0 < startup_clock() < 0.2
++    assert attempts == ([home] if winner == "ready" else [home, home])
++    assert spawned == ([home] if winner == "exits" else [])
++
++
 +@pytest.mark.platforms("linux", "macos")
 +def test_root_launch_admission_releases_after_spawn_failure(tmp_path, monkeypatch):
 +    from hermes_cli import gateway_runtime as runtime
@@ -86905,23 +87001,100 @@ index 8eefb2f03f6b1714ecb3f9b19e130c686de03b47..a24a9f19bbdda2eb20de4ed90aeb8499
 +
 +
  @pytest.mark.parametrize("standalone", [False, True])
-@@ -375,3 +628,4 @@ def test_named_profile_without_multiplex_evidence_starts_the_host_gateway(tmp_pa
+@@ -375,3 +701,4 @@ def test_named_profile_without_multiplex_evidence_starts_the_host_gateway(tmp_pa
      """`gateway run` refuses a profiles/<name> home a gateway of its own, so ensure must start the host."""
 -    from hermes_cli import gateway_runtime as runtime, gateway_runtime_service as service, gateway_runtime_start as start
 +    from hermes_cli import gateway_runtime as runtime, gateway_runtime_discovery as discovery
 +    from hermes_cli import gateway_runtime_service as service, gateway_runtime_start as start
 
-@@ -382,4 +636,9 @@ def test_named_profile_without_multiplex_evidence_starts_the_host_gateway(tmp_pa
+@@ -382,4 +709,9 @@ def test_named_profile_without_multiplex_evidence_starts_the_host_gateway(tmp_pa
          (home / "config.yaml").write_text("gateway:\n  standalone: true\n", encoding="utf-8")
 +    def identify(path, *, timeout):
 +        if standalone and path == root:
-+            raise PermissionError
++            pytest.fail("standalone discovery must not probe the unrelated root")
 +        raise FileNotFoundError
 +
      spawned = []
 -    monkeypatch.setattr(runtime, "discover_gateway_endpoint", lambda *a, **k: runtime.GatewayDiscovery("absent"))
 +    monkeypatch.setattr(discovery, "query_identify", identify)
      monkeypatch.setattr(service, "discover_existing_gateway_service", lambda *a, **k: None)
+@@ -462,2 +794,76 @@ _REASON = "duplicate Telegram token; run hermes gateway migrate --multiplex"
+
++@pytest.mark.platforms("linux", "macos")
++@pytest.mark.parametrize("serves_profile", [False, True])
++def test_ensure_reports_the_root_it_started(tmp_path, monkeypatch, startup_clock, serves_profile):
++    from ipaddress import IPv4Address
++    from socket import INADDR_LOOPBACK
++    from types import SimpleNamespace
++    from gateway.runtime_ownership import ProfileOwnership
++    from hermes_cli import gateway_launch_admission as launch, gateway_runtime as runtime
++    from hermes_cli import gateway_runtime_discovery as discovery
++    from hermes_cli import gateway_runtime_service as service, gateway_runtime_start as start
++
++    root = tmp_path.resolve() / ".hermes"
++    home = root / "profiles" / "alpha"
++    home.mkdir(parents=True, mode=0o700)
++    launched = []
++    attempts = []
++    owner = ProfileOwnership()
++    real_admission = launch.gateway_launch_admission
++
++    @contextmanager
++    def contend_then_admit(target):
++        assert target == root
++        attempts.append(startup_clock())
++        if len(attempts) <= 2:
++            with real_admission(root) as held, real_admission(target) as contender:
++                assert held and contender is None
++                yield contender
++            return
++        with real_admission(target) as admitted:
++            yield admitted
++
++    def identify(target, *, timeout):
++        assert timeout == pytest.approx(0.2 - startup_clock())
++        if target != root or not launched:
++            raise FileNotFoundError
++        profiles = [{"home": str(root), "profile_id": "default"}]
++        if serves_profile:
++            profiles.append({"home": str(home), "profile_id": "alpha"})
++        return {"runtime_protocol": 1, "state": "ready", "instance_id": "started-root",
++                "served_profiles": profiles, "authority_epoch": 1,
++                "api_origin": f"http://{IPv4Address(INADDR_LOOPBACK)}:4321", "supervisor": "none",
++                "capabilities": ["session-authority-v1"]}
++
++    def spawn(target, *, deadline, idle_exit, launch_fds):
++        assert deadline == 0.2 and launch_fds
++        launched.append(target)
++        owner.reserve([target])
++        if not serves_profile:
++            (root / "gateway_state.json").write_text(json.dumps({
++                "gateway_state": "running", "pid": os.getpid(), "served_profiles": [],
++                "multiplex_standalone_reason": _REASON,
++            }), encoding="utf-8")
++        return SimpleNamespace(poll=lambda: None)
++
++    monkeypatch.setattr(discovery, "query_identify", identify)
++    monkeypatch.setattr(launch, "gateway_launch_admission", contend_then_admit)
++    monkeypatch.setattr(service, "discover_existing_gateway_service", lambda *a, **k: None)
++    monkeypatch.setattr(start, "spawn_unmanaged_gateway", spawn)
++    try:
++        result = runtime.ensure_gateway_runtime(home, timeout=0.2)
++    finally:
++        owner.close()
++
++    assert attempts == pytest.approx([0, 0.025, 0.0625])
++    assert launched == [root]
++    if serves_profile:
++        assert result.state == "ready"
++        assert result.endpoint.profile_id == "alpha"
++        assert result.endpoint.control_home == str(root)
++    else:
++        assert (result.state, result.reason_code, result.detail) == ("inaccessible", "profile_parked", _REASON)
++    assert startup_clock() < 0.2
++
++
+ def test_ensure_reports_a_standalone_host_reason_for_an_unserved_named_profile(tmp_path, monkeypatch):
 diff --git a/tests/hermes_cli/test_goal_aux_accounting.py b/tests/hermes_cli/test_goal_aux_accounting.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..5e09d04d20999694355f2c873fe55547816d3321
