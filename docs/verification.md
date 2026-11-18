@@ -1,3 +1,29 @@
+# Animate individual desktop pet arrivals and departures
+
+A desktop pet scales and fades in around its feet when it appears.
+It scales and fades out over 180 ms when it leaves. A departing sprite
+loses its pointer and keyboard targets at the start of the exit.
+A rapid return reuses the actor's key. Reduced motion skips transitions.
+Whole-preview pause and expiry hide the sprites immediately.
+
+The signed Mac Local fixture fed a controlled roster change through the
+packaged overlay's IPC with Hermes minimized. The renderer showed
+five pets, four, then five. It recorded 9 intermediate exit and
+8 intermediate entry frames. The bottom edge stayed fixed within one
+point. Transparent click-through returned under the stationary pointer
+on departure. Corner drag and latest-output popover checks also passed.
+
+| Preview | CPU, percent of one core | Mean physical footprint |
+| --- | ---: | ---: |
+| Off | 1.18% | 490.6 MiB |
+| Five moving pets | 3.74% | 569.3 MiB |
+| Increase | 2.56 percentage points | 78.7 MiB |
+
+Five pets were sampled for about 20 seconds in each condition. CPU
+exceeded the 2-point target. Memory was near the upper target of
+80 MiB. GPU and networking ran inside Electron main. Local60 found
+zero Desktop SSH links and the fixture stopped with zero survivors.
+
 # Walk and turn near the desktop corner
 
 Mac desktop pets take short walks between their idle or working poses.
