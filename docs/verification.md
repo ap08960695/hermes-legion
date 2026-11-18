@@ -10837,3 +10837,24 @@ were removed on exit. Peak sampled use was two processes and
 102.3 MiB RSS including the observer and capture. No processes
 survived. The fixture leaves packaged interaction and lifecycle
 acceptance open.
+
+### Mac native Characters panel height and WindowServer CPU
+
+Four network-denied AppKit launches ran in full, short, short, full
+order. Reducing panel height from 1,009 to 96 points preserved the
+five sprites, absolute anchors, 2× scale and 10 Hz walk schedule.
+An eight-second walking sample sat between two frozen samples with
+the same panel visible in each run.
+
+Median walking WindowServer CPU was 2.98% of a core at full height
+and 3.03% at short height. The short panel lowered the walking
+increment by 0.12 percentage points in the first comparison and
+raised it by 0.22 in the reversed comparison. Height provided no
+repeatable CPU saving. WindowServer numbers include other desktop
+activity.
+
+The standalone helper used about 56.5 MiB RSS and 0.36% of one core
+for five walking pets at either height. Owned WindowServer crops
+matched the reference sprite cells with at least 99.61% silhouette
+overlap. All four panels closed with no surviving processes. Integrated
+CPU and packaged interaction acceptance remain open.
