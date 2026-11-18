@@ -1,3 +1,35 @@
+# Show the Mac desktop pet that needs an answer
+
+A new clarification in the focused canonical Bot Chat shows a short
+**Needs your answer** bubble above its waiting pet after it lands.
+The bubble is click-through. Reduce Motion holds it still until it
+disappears. The hover and keyboard hint remain available while the
+request is pending. Only the matching source and profile get the cue.
+
+A packaged Mac Local fixture sent a synthetic clarification through
+the canonical session event stream with Hermes minimized. One pet
+showed the bubble for 2.8 seconds. A fresh roster refresh kept its
+waiting pose without replaying the cue. Settling the request cleared
+the pose. Source checks cover a replacement request, duplicate
+snapshots, opening output, and reduced-motion placement.
+
+Before triggering the cue, the same run measured 25 seconds per
+condition with five moving Lanternling pets sharing one installed pack.
+Totals include the Local gateway and measured Electron processes.
+
+| Preview | CPU, percent of one core | Physical footprint | RSS |
+| --- | ---: | ---: | ---: |
+| Off | 1.42% | 579.0 MiB | 892.8 MiB |
+| Five moving pets | 2.69% | 641.6 MiB | 1083.5 MiB |
+| Off again | 0.87% | 569.4 MiB | 897.1 MiB |
+| Added over mean of off samples | 1.54 points | 67.3 MiB | 188.6 MiB |
+
+RSS exceeded the 80 MiB target in this fixture. The samples used one
+pack and in-process GPU and networking. The trial ran at most four
+product processes, stopped them, and recorded zero Desktop SSH links
+through its 60-second Local gate. The clip uses only the owned overlay
+renderer. No model ran.
+
 # Pass task and report cues after Mac desktop pets land
 
 A new worker can enter from outside the screen. The folder cue now

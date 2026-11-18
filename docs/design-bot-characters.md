@@ -636,3 +636,14 @@ character is still arriving, the overlay waits until both are visible and
 reads their canvas positions then. Only the latest eligible cue can wait
 within the existing 15-second window. Pause, Reduce Motion, an interaction
 or a missing endpoint clears the waiting cue. [Verification](verification.md#pass-task-and-report-cues-after-mac-desktop-pets-land).
+
+## Show which pet needs an answer
+
+A pending clarification in the focused canonical Bot Chat makes the
+matching Mac desktop pet briefly show **Needs your answer** after it
+lands. The stationary bubble lets clicks pass through and fits inside
+the display. Reduce Motion uses a static hold. Hover or keyboard focus
+shows the hint again, and clicking the pet retains the current output
+and chat actions. The overlay remembers the last 64 actor/request pairs
+so a roster refresh can keep the waiting pose without replaying its cue.
+[Verification](verification.md#show-the-mac-desktop-pet-that-needs-an-answer).
