@@ -355,6 +355,13 @@ drawing only the visible region of each frame. The fixture drew 8,320 of
 transitions in each tight run. This added 113.6–114.5 MiB and
 2.57–2.61 CPU points over no overlay. The tighter-paint prototype exceeded the resource budget. Keep full-frame painting.
 
+Hovering over a character caption reveals the full name, source and status
+as text inside the overlay. The existing output button also reveals details
+when focused. The detail box passes pointer input through. Passive captions
+remain click-through, and a guarded Local Mac check confirmed moving from
+an output button to a passive caption restores click-through. The matching
+saved output still opens with one click on its caption.
+
 The [cross-panel regression](verification.md#edit-profile-to-monitor-character-handoff-unreleased)
 verifies that the saved character reaches Monitor after a roster reload, even
 with the optimistic metadata cache cleared. The isolated Mac walkthrough
