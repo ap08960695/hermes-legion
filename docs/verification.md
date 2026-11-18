@@ -160,6 +160,38 @@ product processes, stopped them, and recorded zero Desktop SSH links
 through its 60-second Local gate. The clip uses only the owned overlay
 renderer. No model ran.
 
+# Measure five moving Mac desktop pets with distinct packs
+
+Five active profiles used Moon Jelly Actions, Puddle Frog Waiting,
+and three other original packs. Edit Profile saved each assignment.
+The preview painted five distinct half-resolution atlases, and every
+pet changed pose or position before and after the active sample.
+
+The packaged Local build ran on Apple silicon with GPU and networking
+in-process. Hermes stayed minimized during three 25-second samples.
+The gateway, Electron main process, and main renderer kept their PIDs.
+Turning the preview on added one renderer. The last sample began five
+seconds after that renderer exited. Memory figures are per-process
+means summed across the fixture.
+
+| Preview | CPU, percent of one core | Physical footprint | RSS |
+| --- | ---: | ---: | ---: |
+| Off | 2.09% | 523.6 MiB | 862.1 MiB |
+| Five distinct moving pets | 4.51% | 668.0 MiB | 1,146.2 MiB |
+| Off again | 1.54% | 582.7 MiB | 832.2 MiB |
+| Active change from first off | +2.42 points | +144.3 MiB | +284.1 MiB |
+| Final off change from first off | −0.55 points | +59.1 MiB | −29.9 MiB |
+
+The active preview exceeded the two-point CPU and 80 MiB memory
+targets. The overlay renderer accounted for 87.9 MiB of the active
+physical footprint. The Electron main process and main renderer
+accounted for 58.4 MiB of the final off increase. One sequence measures
+these differences for this workload. Default GPU mode and longer
+sessions still need measurements.
+
+The 60-second Local gate recorded zero Desktop SSH links. At most
+four Hermes processes ran and all stopped. No Hermes model ran.
+
 # Pass task and report cues after Mac desktop pets land
 
 A new worker can enter from outside the screen. The folder cue now
