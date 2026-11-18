@@ -167,6 +167,13 @@ cells, and import the revision under a new slug.
 
 ![Moon Jelly crouching, taking off, cheering in the air, descending and settling in five transparent sprite cells](images/moon-jelly-celebration-frames.webp)
 
+For a failed worker, use the eight cells in the failed row. Give the last
+cell a clear resting pose for reduced motion and saved reports. A fresh
+failure plays the row once when the character lands. The final pose still
+opens the saved report.
+
+![Eight Moon Jelly poses showing a dropped parcel, a soft stumble and a quiet recovery](images/moon-jelly-failure-frames.webp)
+
 ## Preview without adopting the pack
 
 `show --pack` uses the exact bytes that passed validation, copied into a private

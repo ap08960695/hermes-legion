@@ -44,6 +44,8 @@ Do not rely on an image model to draw a perfectly aligned atlas.
 Check generated alpha over a colored backdrop. Crop each pose separately,
 scale related poses together and align their feet, wheels or base before
 assembly. Inspect the last-to-first transition in both walk directions.
+End the eight-cell failed row with a resting pose that reads on its own.
+Desktop holds that pose after a fresh saved failure and under Reduce Motion.
 
 Each frame is transparent RGBA **192 × 208 px**. Keep size/baseline stable, leave
 padding, and make meaningful adjacent changes (blink/breathe/type/walk) for loops.
