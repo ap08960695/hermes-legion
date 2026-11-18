@@ -54,6 +54,11 @@ flights are replaced behind the old teardown barrier. Failures share a
 one-to-30-second exponential cooldown and a usable backend publication resets
 it. Reconnect still requires a caller.
 
+During orderly quit, bootstrap rollback and forced cleanup join the same
+socket teardown. The last holder aborts a pending master start and waits
+for the startup client to close before sending one `ssh -O exit`. The
+quit deadline remains six seconds plus one second for forced cleanup.
+
 POSIX execution also acquires a remote kernel lock **before starting Python**.
 The inherited descriptor reserves the remote home's single helper slot through
 actual cleanup, even after the local client has disappeared. Other application

@@ -11777,10 +11777,10 @@ index 0000000000000000000000000000000000000000..443ae995b6ec4535bec2ab73453ec0b4
 +}
 diff --git a/apps/desktop/electron/ssh-fanout.test.ts b/apps/desktop/electron/ssh-fanout.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..da54adc987f08a703453c6786a0aceae60828e57
+index 0000000000000000000000000000000000000000..8e13a00bcad9fd13de088c71f8f8b95b6fa9ac38
 --- /dev/null
 +++ b/apps/desktop/electron/ssh-fanout.test.ts
-@@ -0,0 +1,535 @@
+@@ -0,0 +1,613 @@
 +import assert from 'node:assert/strict'
 +import { execFile } from 'node:child_process'
 +import { EventEmitter } from 'node:events'
@@ -11792,9 +11792,12 @@ index 0000000000000000000000000000000000000000..da54adc987f08a703453c6786a0aceae
 +
 +import { test, vi } from 'vitest'
 +
++import { createQuitTeardownCoordinator } from './quit-teardown'
++import { createBootstrapCoordinator } from './ssh-bootstrap-coordinator'
 +import { buildExecArgs, controlSocketPath, SshConnection } from './ssh-connection'
 +import { createControlMasterHolders } from './ssh-control-master-holders'
 +import { SSH_HELPER_ADMITTED } from './ssh-exec-lifetime'
++import { createSshTeardownTracker } from './ssh-teardown'
 +
 +function child(result?: { code?: number; stdout?: string; stderr?: string }) {
 +  const proc: any = new EventEmitter()
@@ -12164,6 +12167,81 @@ index 0000000000000000000000000000000000000000..da54adc987f08a703453c6786a0aceae
 +  }
 +})
 +
++test('quit joins one master exit when force cleanup overlaps an aborted bootstrap', async () => {
++  vi.useFakeTimers()
++  const startup = child()
++  startup.kill = vi.fn(() => true)
++  const exit = child()
++  const exits: string[][] = []
++
++  const f = fixture((_binary, args) => {
++    if (args.includes('-M')) {
++      return startup
++    }
++
++    if (args.includes('exit')) {
++      exits.push(args)
++
++      return exits.length === 1 ? exit : child({ code: 0 })
++    }
++
++    return child({ code: 255 })
++  })
++
++  const ssh = f.connection('opening-at-quit')
++  const bootstraps = createBootstrapCoordinator()
++  const teardowns = createSshTeardownTracker()
++  const finalQuit = vi.fn()
++  const quit = createQuitTeardownCoordinator(finalQuit)
++  const forceCleanup = vi.fn(() => bootstraps.forceCleanupAll())
++
++  const opening = bootstraps
++    .start('opening-at-quit', 'config', lease => {
++      lease.onForceCleanup(() => ssh.close())
++
++      return ssh.open({ signal: lease.signal })
++    })
++    .catch(error => error)
++
++  try {
++    await vi.advanceTimersByTimeAsync(0)
++    bootstraps.shutdown()
++
++    const tasks = [
++      {
++        waitForCompletion: true,
++        run: () => teardowns.finish(bootstraps.promises(), forceCleanup)
++      }
++    ]
++
++    assert.equal(quit.begin(tasks), true)
++    await vi.advanceTimersByTimeAsync(6_000)
++
++    assert.equal(forceCleanup.mock.calls.length, 1)
++    assert.deepEqual(startup.kill.mock.calls, [['SIGKILL']])
++    assert.equal(exits.length, 0)
++    assert.equal(finalQuit.mock.calls.length, 0)
++
++    startup.finish(0)
++    await vi.advanceTimersByTimeAsync(0)
++    assert.ok(exits[0].includes(`ControlPath=${ssh.controlPath}`))
++    assert.equal(finalQuit.mock.calls.length, 0)
++
++    exit.finish(0)
++    await vi.advanceTimersByTimeAsync(0)
++    assert.equal((await opening).kind, 'superseded')
++    assert.equal(exits.length, 1)
++    assert.equal(finalQuit.mock.calls.length, 1)
++    assert.equal(quit.begin(tasks), false)
++  } finally {
++    startup.finish(0)
++    exit.finish(0)
++    await vi.advanceTimersByTimeAsync(7_000)
++    await f.cleanup()
++    vi.useRealTimers()
++  }
++})
++
 +test('new profile opening waits for final-holder teardown before starting a new master', async () => {
 +  const events: string[] = []
 +  let teardown
@@ -12318,10 +12396,10 @@ index 0000000000000000000000000000000000000000..da54adc987f08a703453c6786a0aceae
 +})
 diff --git a/apps/desktop/electron/ssh-transport.ts b/apps/desktop/electron/ssh-transport.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..8e676340c5b6c9c7e29f2715f1fc38b8ab944c2b
+index 0000000000000000000000000000000000000000..65697011ef95f46b89740ad84d02d0ae1b225a16
 --- /dev/null
 +++ b/apps/desktop/electron/ssh-transport.ts
-@@ -0,0 +1,184 @@
+@@ -0,0 +1,189 @@
 +// Electron main owns all profile/window SSH transports. Backend ownership stays profile scoped.
 +type Flight = { controller: AbortController; promise: Promise<void> }
 +type Transport = { flight?: Flight; closing?: Promise<void>; failures: number; retryAt: number }
@@ -12410,7 +12488,12 @@ index 0000000000000000000000000000000000000000..8e676340c5b6c9c7e29f2715f1fc38b8
 +  const flight = value.flight
 +  flight?.controller.abort()
 +
-+  const closing = Promise.allSettled([value.closing, flight?.promise])
++  // Replacement flights wait behind the existing close, so one exit is enough.
++  if (value.closing) {
++    return value.closing
++  }
++
++  const closing = Promise.allSettled([flight?.promise])
 +    .then(run)
 +    .finally(() => {
 +      if (value.closing === closing) {

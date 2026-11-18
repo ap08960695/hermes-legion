@@ -10622,3 +10622,10 @@ The scoped Mac selection passed 37 tests using fake SSH clients and the three
 Electron main/preload bundles built. Both changed patch sections applied and
 reversed with matching pinned source hashes. Live SSH, app shutdown and the
 installed app's behavior remain unverified.
+
+An orderly-quit regression held the fake master startup client open
+through the six-second grace period. Releasing it during forced cleanup
+previously sent two exits to the same socket. The fix sends one exit,
+waits for its completion before final quit, and reports the bootstrap
+as superseded. The focused in-process run passed 33 cases, with one real
+OpenSSH case excluded. The three development Electron bundles built.
