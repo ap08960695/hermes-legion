@@ -1,3 +1,15 @@
+# Recheck desktop-pet click-through when a drag ends
+
+On release or cancellation over the pet control, the overlay checks
+the current hit again after React commits the end of the drag. The
+shared native panel can return clicks on empty pixels to the desktop
+even if the pointer has stayed still. The check runs once per
+completed gesture.
+
+The renderer regression starts on a painted sprite, releases over
+an empty point, and verifies that click-through updates without
+another mouse move.
+
 # Show uncluttered sprites on a transparent desktop overlay
 
 The Mac overlay reapplies its clear native backing when the window is
