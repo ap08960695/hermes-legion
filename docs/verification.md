@@ -10764,3 +10764,28 @@ The fixture used an outer macOS network-denying sandbox with Chromium's
 nested sandbox disabled. Peak was three sampled processes and 400.5
 MiB RSS including the observer, with zero survivors. This drives the
 production renderer from fixture IPC and leaves packaged acceptance open.
+
+### Mac Characters renderer and animation cost
+
+Six isolated launches compared the shipped renderer with walking,
+the shipped renderer with Reduce Motion, and a plain canvas prototype.
+Each reused the stock preload, full-size transparent panel at 2× and
+the same five half-size atlases and ground anchors. Both moving
+variants used a 100 ms clock. Both static runs retained the same five
+canvas frame hashes across measurement.
+
+Median Electron overhead above the no-window baseline was 117.9 MiB
+RSS for the shipped blank panel and 48.6 MiB for the prototype blank
+panel. For five pets, the shipped renderer added 158.2 MiB RSS with
+static poses and 171.1 MiB with walking. CPU above baseline was near
+zero with static poses and +4.55 points with walking. The working
+canvas prototype added 108.8 MiB and +3.38 points while walking. The
+prototype simplified movement and omitted interactions. It did not
+meet either resource target.
+
+WindowServer CPU was sampled separately from Electron. Its readings
+include other desktop activity. The fixture used the same outer
+network-denying macOS sandbox as the geometry test, with Chromium's
+nested sandbox disabled. Peak sampled use was three processes and
+401.4 MiB RSS including the observer, with zero survivors. This is a
+renderer experiment. Packaged application acceptance remains open.
