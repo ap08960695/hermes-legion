@@ -10811,3 +10811,29 @@ fixture denied network access and used the same Chromium sandbox
 setting as the earlier prototype. Peaks were three sampled processes
 and 365.5 MiB RSS including the observer, with zero survivors. Both
 variants exceeded the targets. Packaged acceptance remains open.
+
+### Mac native Core Animation Characters panel feasibility
+
+Two standalone, network-denied AppKit launches measured no window,
+a blank panel, five static sprites and five walking sprites. The
+transparent panel used the same full-size bounds at 2×, five atlases,
+sprite cells, anchors and 10 Hz walk clock as the Electron comparison.
+
+Absolute native helper RSS medians were 30.3 MiB without a window,
+35.1 MiB with a blank panel and 56.5 MiB with five walking sprites.
+The walking helper used 29.8 MiB physical footprint and 0.36% of
+one core. It passed the standalone helper's RSS and CPU limits.
+
+Separately sampled WindowServer CPU rose by 2.69–2.99 points from
+frozen to walking across the two runs. The readings include other
+desktop activity and leave integrated CPU acceptance open.
+WindowServer memory was outside the sample.
+
+After timing, ScreenCaptureKit cropped only the owned window.
+Both proof ticks matched the Electron sprite cells, with at least
+99.61% silhouette overlap across all five sprites. The first trial
+caught inverted atlas rows before the corrected runs. Both panels
+were removed on exit. Peak sampled use was two processes and
+102.3 MiB RSS including the observer and capture. No processes
+survived. The fixture leaves packaged interaction and lifecycle
+acceptance open.
