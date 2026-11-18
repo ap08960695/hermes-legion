@@ -1,3 +1,21 @@
+# Measure a static first-page PDF preview
+
+An on-demand CoreGraphics and ImageIO helper accepted PDF bytes on stdin
+and returned a PNG for page one. It capped input at 512 KiB, checked page
+geometry, allocated a bitmap with a 640 px longest edge, and capped output
+at 128 KiB. Fifteen Mac Local runs covered a two-page report, rotation
+with a nonzero page origin, and a large sheet. The existing gateway PNG
+validator accepted each output. Oversized input, excessive geometry, and
+malformed content returned no image.
+
+A supervisory test killed and reaped its child on timeout and RSS
+controls. Paired controls verified that the working sandbox blocked a
+protected fixture read, a write, child execution, and a loopback connection.
+A global file-read allowlist aborted before the helper entered main. The
+working profile denies reads under protected roots while permitting other
+system reads. Integration, packaging, and application-level measurements
+remain open. Character PDF deliveries still offer **Copy path**.
+
 # Measure PDF rendering in an isolated Local window
 
 A signed standalone Mac fixture used Electron 44.9.3 and the same

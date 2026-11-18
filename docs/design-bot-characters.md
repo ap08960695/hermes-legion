@@ -528,6 +528,12 @@ window with no preload rendered the blob with its own temporary session.
 That fixture still needs an application-level integration and resource test
 before the character can offer a PDF viewer.
 
+The [static raster fixture](verification.md#measure-a-static-first-page-pdf-preview)
+converted only page one to a bounded PNG. Its images passed the existing
+gateway PNG validator. This approach leaves PDF links and viewer controls
+out of the character preview. It still needs a production helper and
+integration with the current workspace snapshot authorization.
+
 [Preview file](verification.md#preview-a-delivered-text-file-in-a-bots-character-unreleased)
 can read one small UTF-8 `.txt`, `.md` or `.csv` file directly inside the
 current Bot Chat workspace on a Local POSIX backend. The gateway binds the offered revision to that chat,
