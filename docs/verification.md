@@ -1,3 +1,24 @@
+# Measure five desktop pets in a packaged Mac Local build
+
+An ad-hoc signed Electron 44.9.3 app loaded its packaged archive
+and unpacked renderer. Main and overlay used distinct renderer
+processes. With the main window minimized in both samples, the
+loopback gateway and the app were measured for 20.5 seconds with
+preview off and for 20.5 seconds with five moving Lanternling sprites.
+
+| Preview | CPU, percent of one core | Mean physical footprint | Mean RSS |
+| --- | ---: | ---: | ---: |
+| Off | 0.85% | 469.3 MiB | 796.6 MiB |
+| Five moving pets | 5.15% | 574.4 MiB | 902.1 MiB |
+| Increase | 4.30 percentage points | 105.1 MiB | 105.5 MiB |
+
+Both increases exceed the character preview targets of roughly
+1–2 CPU percentage points and 60–80 MiB of memory. The overlay
+renderer exited when preview stopped. Local60 reported zero Desktop
+SSH links and the entire fixture stopped without survivors. These
+are short fixture measurements. GPU and network ran inside Electron
+main to hold the four-process limit.
+
 # Recheck desktop-pet click-through when a drag ends
 
 On release or cancellation over the pet control, the overlay checks
