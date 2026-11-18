@@ -1,3 +1,18 @@
+# Give Mac desktop pet walking more weight
+
+Desktop pets crouch before each walking leg, ease into four planted
+steps, and brake to a stop before turning. The artwork bobs and
+compresses around the feet on the shared 10 Hz clock. The button
+keeps its baseline, and dragging starts from that anchor. Source
+tests exercise focus pause, mirrored alpha hits and Reduce Motion.
+
+Matched Mac Local runs used one display and four pets sharing the
+same pack. Both covered 43 px. The new gait showed a 2 px bob,
+compressed to 92% height at anticipation, and held the compressed
+contact beats. The previous gait is on the left of the 4.2-second
+comparison. Both 60-second gates recorded zero Desktop SSH links.
+All four product processes stopped after each run. No Hermes model ran.
+
 # Give Mac desktop pet handoffs more weight
 
 The folder and report wind up, spin through an arc and bump at the

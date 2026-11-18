@@ -630,6 +630,11 @@ Left and Right move a focused pet along the floor. Reduce Motion
 settles the pet immediately. When a Hermes text field is focused,
 the overlay also settles immediately and keeps clear of the field.
 
+While walking, pets crouch before each leg, bob through four steps,
+and plant each step briefly. They slow to a stop before turning.
+The artwork bends around its feet. Dragging still starts from the
+pet's stable button position, and Reduce Motion keeps the pose still.
+
 A waiting character can show **Needs your answer** on hover or focus.
 Click an actionable character to open its current output or worker
 actions. Empty canvas pixels pass mouse input through. The overlay
