@@ -10742,3 +10742,25 @@ launch. Chromium's sandbox could not nest inside it and was disabled
 for this fixture. Peak was three sampled processes and 346 MiB RSS
 including the observer, with zero survivors. This comparison covers
 a blank panel and leaves the five-moving-character budget open.
+
+### Mac Characters overlay height with five moving pets
+
+Four isolated Electron launches used full-height, bottom band, bottom
+band, full-height order. A shared bottom edge, 1,710 CSS pixel width,
+2× scale, production renderer and preload, sprite payload and five
+ground anchors held constant. Height changed from 1,009 to 256 CSS
+pixels. All five pets moved within the viewport before and after every
+eight-second active sample.
+
+Median RSS above the no-window baseline went from 117.9 to 117.0 MiB
+while blank and from 166.7 to 166.6 MiB with five moving pets. Active
+CPU went from +4.35 to +4.36 percentage points. Active physical
+footprint moved from +80.3 to +74.3 MiB across the medians, with
+opposite changes in the two pairs. The smaller panel did not address
+the CPU or RSS budget, so production geometry stays as shipped.
+
+Totals cover Electron main and its renderer and exclude WindowServer.
+The fixture used an outer macOS network-denying sandbox with Chromium's
+nested sandbox disabled. Peak was three sampled processes and 400.5
+MiB RSS including the observer, with zero survivors. This drives the
+production renderer from fixture IPC and leaves packaged acceptance open.
