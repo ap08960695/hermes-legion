@@ -602,3 +602,15 @@ the owning gateway. Reopening the menu creates a fresh offer. The
 menu distinguishes an accepted request from a refusal or a missing
 acknowledgment. Monitor shows the worker's eventual status. Pause
 remains open.
+
+## Keep the Monitor characters on the Mac desktop
+
+After **Show bot characters** in Monitor, minimizing Hermes leaves the
+characters in the existing borderless, non-activating desktop panel.
+The workspace continues its existing five-second activity refresh while
+that preview is active on Mac. Stopping the preview or leaving Monitor
+ends the background refresh. A stale snapshot still expires, and a
+lock or suspend pauses the panel.
+
+The output popover still uses the current character and its expiring
+output binding. [Mac Local verification](verification.md#keep-monitor-characters-moving-when-hermes-is-minimized).

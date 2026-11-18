@@ -1,3 +1,21 @@
+# Keep Monitor characters moving when Hermes is minimized
+
+A signed Mac Local build showed five characters in one floating panel.
+Minimizing the main window left the panel visible and inactive. Sprite
+canvas pixels changed while the main window stayed minimized. A fresh
+worker status reached the panel through the existing Monitor query,
+and a character opened its current output popover. The run exceeded
+the preview's 15-second lifetime and kept all five characters present.
+A simulated lock removed the actors and unlock brought them back.
+
+In this shared-renderer fixture, the Electron main and renderer
+averaged 0.40% of one core with the main window minimized and
+preview off, and 1.21% with five animated actors. Mean combined
+RSS rose by 24.0 MiB over short samples. Local60 recorded zero
+Desktop SSH. The app and gateway stopped with no survivors. OS
+display sleep, actual Space changes and packaged renderer overhead
+still need separate evidence.
+
 # Check Close button contrast in the Hermes image viewer
 
 The existing Close button uses a white icon on an opaque dark circle
