@@ -1,3 +1,15 @@
+# Open a rendered PDF first page in Hermes
+
+After **Preview file** renders a PDF on Mac Local, **View first page**
+opens the same image in Hermes' zoomable viewer. The control appears
+after the popover has decoded its image. Closing the viewer returns
+to Monitor. The original delivery path stays available in the popover.
+
+Electron holds one bounded PNG with the current preview action and
+hands it over only for the matching click. Opening, zooming and closing
+use the in-memory first page. A stale or replaced action cannot hand
+over its image.
+
 # Verify PDF preview through Mac Local Monitor
 
 A signed isolated Desktop build opened **Bots → Monitor → Show bot

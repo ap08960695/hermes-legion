@@ -540,6 +540,9 @@ revision. The [Mac Local popover](verification.md#preview-the-first-page-of-a-ma
 opts in through the current Monitor route and receives the rendered
 first page after an explicit click. A [native memory watchdog](verification.md#guard-mac-pdf-raster-memory)
 stops that child when its sampled peak physical footprint reaches 128 MiB.
+[View first page](verification.md#open-a-rendered-pdf-first-page-in-hermes)
+shows the loaded PNG in the existing viewer with zoom and a return
+to Monitor.
 
 [Preview file](verification.md#preview-a-delivered-text-file-in-a-bots-character-unreleased)
 can read one small UTF-8 `.txt`, `.md` or `.csv` file directly inside the

@@ -8730,10 +8730,10 @@ index 0000000000000000000000000000000000000000..98437535643c52457dd8c8a0348291af
 +}
 diff --git a/apps/desktop/electron/pet-overlay-ipc.test.ts b/apps/desktop/electron/pet-overlay-ipc.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..15a2d90bdf68cd3355b3d5bbdd6e1e0ee739e1b0
+index 0000000000000000000000000000000000000000..33bc6c0523bac7e26016c700c3ed8a9fecf8ae44
 --- /dev/null
 +++ b/apps/desktop/electron/pet-overlay-ipc.test.ts
-@@ -0,0 +1,464 @@
+@@ -0,0 +1,481 @@
 +import { EventEmitter } from 'node:events'
 +
 +import { afterEach, expect, it, vi } from 'vitest'
@@ -9133,7 +9133,7 @@ index 0000000000000000000000000000000000000000..15a2d90bdf68cd3355b3d5bbdd6e1e0e
 +  const contents = Object.assign(new EventEmitter(), { send: vi.fn(), mainFrame })
 +
 +  const main = Object.assign(new EventEmitter(), { isDestroyed: () => false, isVisible: (): boolean => true,
-+    isMinimized: () => false, webContents: contents })
++    isMinimized: () => false, show: vi.fn(), focus: vi.fn(), webContents: contents })
 +
 +  const overlay = Object.assign(new EventEmitter(), { isDestroyed: () => false, webContents: Object.assign(new EventEmitter(), { send: vi.fn() }) })
 +  const pdf = Buffer.from('%PDF-fixture')
@@ -9171,12 +9171,29 @@ index 0000000000000000000000000000000000000000..15a2d90bdf68cd3355b3d5bbdd6e1e0e
 +  act('character-output-file', 2)
 +  const success = state(sender, file(2))
 +  await state(sender, file(2))
++  const view = { type: 'character-output-view-file', id, request: 2 }
++
++  act(view.type, 2)
++  expect(contents.send.mock.calls.some(([, payload]) => payload.type === view.type)).toBe(false)
 +  expect(renderPdf).toHaveBeenCalledExactlyOnceWith(pdf, expect.any(AbortSignal))
 +  finish(png)
 +  await success
 +  expect(overlay.webContents.send.mock.lastCall?.[1].characterFile).toEqual({ id, request: 2, text: null, png_base64: png.toString('base64') })
-+  act('character-output-view-file', 2)
-+  expect(contents.send.mock.calls.some(([, payload]) => payload.type === 'character-output-view-file')).toBe(false)
++  const before = contents.send.mock.calls.length
++
++  control(sender, view)
++  control(fromOverlay, { ...view, pdfPage: 'forged' })
++  act(view.type, 1)
++  expect(contents.send).toHaveBeenCalledTimes(before)
++  act(view.type, 2)
++  expect(contents.send).toHaveBeenLastCalledWith('hermes:pet-overlay:control', { ...view, pdfPage: png.toString('base64') })
++  expect(renderPdf).toHaveBeenCalledTimes(1)
++  expect(main.show).toHaveBeenCalledOnce()
++  expect(main.focus).toHaveBeenCalledOnce()
++
++  control(fromOverlay, { type: 'character-output-close' })
++  act(view.type, 2)
++  expect(contents.send).toHaveBeenLastCalledWith('hermes:pet-overlay:control', { type: 'character-output-close' })
 +
 +  for (const [request, cancel] of [
 +    [3, () => act('character-output', 4)],
@@ -9199,7 +9216,7 @@ index 0000000000000000000000000000000000000000..15a2d90bdf68cd3355b3d5bbdd6e1e0e
 +  }
 +})
 diff --git a/apps/desktop/electron/pet-overlay-ipc.ts b/apps/desktop/electron/pet-overlay-ipc.ts
-index 59d8dd527dae029c695a8520996f6051d75df371..923ab6ebf79beef2b715cb7c308897d2bb5e5af5 100644
+index 59d8dd527dae029c695a8520996f6051d75df371..4bf299bbc96d3bf2a9311aa73300f06284ca932e 100644
 --- a/apps/desktop/electron/pet-overlay-ipc.ts
 +++ b/apps/desktop/electron/pet-overlay-ipc.ts
 @@ -2,3 +2,5 @@
@@ -9271,7 +9288,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..923ab6ebf79beef2b715cb7c308897d2
 +  renderPdf
  }: PetOverlayIpcDeps) {
 +  let lastCharacterPayload: Record<string, unknown> | null = null
-+  let outputAction: (Pick<PetCharacterOutput, 'id' | 'request' | 'canOpen'> & { window: BrowserWindow; links?: string[]; deliveredFile?: string; fileText?: string; imageReady?: true; pdfRender?: AbortController; file?: 'offered' | 'pending'; stop?: 'offered' | 'pending' }) | null = null
++  let outputAction: (Pick<PetCharacterOutput, 'id' | 'request' | 'canOpen'> & { window: BrowserWindow; links?: string[]; deliveredFile?: string; fileText?: string; imageReady?: true; pdfPage?: string; pdfRender?: AbortController; file?: 'offered' | 'pending'; stop?: 'offered' | 'pending' }) | null = null
 +  let stopObserving: (() => void) | null = null
 +  let locked = false, suspended = false
 +
@@ -9388,7 +9405,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..923ab6ebf79beef2b715cb7c308897d2
 +  }
 +
    // `request` is `{ bounds, screen }`. A fresh pop-out passes viewport-space
-@@ -144,3 +313,109 @@ export function registerPetOverlayIpc({
+@@ -144,3 +313,111 @@ export function registerPetOverlayIpc({
    // Main renderer → overlay: forward the latest pet state for the overlay to render.
 -  ipcMain.on('hermes:pet-overlay:state', (_event, payload) => {
 +  ipcMain.on('hermes:pet-overlay:state', async (event, payload) => {
@@ -9420,7 +9437,8 @@ index 59d8dd527dae029c695a8520996f6051d75df371..923ab6ebf79beef2b715cb7c308897d2
 +            action.pdfRender = controller
 +
 +            try {
-+              png_base64 = (await renderPdf(bytes, controller.signal))?.toString('base64')
++              const png = await renderPdf(bytes, controller.signal)
++              png_base64 = png && png.length <= MAX_PNG_BYTES ? png.toString('base64') : undefined
 +            } catch {
 +              png_base64 = undefined
 +            }
@@ -9429,6 +9447,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..923ab6ebf79beef2b715cb7c308897d2
 +                getPetOverlayWindow() !== overlay || overlay.isDestroyed() || !visibleOutput(id)) {return}
 +
 +            action.pdfRender = undefined
++            action.pdfPage = png_base64
 +          }
 +        } else {
 +          if (pdf_base64 !== undefined || (png_base64 !== undefined &&
@@ -9499,12 +9518,12 @@ index 59d8dd527dae029c695a8520996f6051d75df371..923ab6ebf79beef2b715cb7c308897d2
 +    stopObserving?.()
 +    stopObserving = null
      const petOverlayWindow = getPetOverlayWindow()
-@@ -152,3 +427,3 @@ export function registerPetOverlayIpc({
+@@ -152,3 +429,3 @@ export function registerPetOverlayIpc({
    // Overlay → main renderer: control messages (pop back in, composer submit).
 -  ipcMain.on('hermes:pet-overlay:control', (_event, payload) => {
 +  ipcMain.on('hermes:pet-overlay:control', (event, payload) => {
      const mainWindow = getMainWindow()
-@@ -159,2 +434,90 @@ export function registerPetOverlayIpc({
+@@ -159,2 +436,92 @@ export function registerPetOverlayIpc({
 
 +    if (payload?.type === 'character-output' || payload?.type === 'character-output-close' ||
 +        payload?.type === 'character-output-open' || payload?.type === 'character-stop' || payload?.type === 'character-output-link' ||
@@ -9522,6 +9541,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..923ab6ebf79beef2b715cb7c308897d2
 +      }
 +
 +      const { id, request } = payload
++      let pdfPage: string | undefined
 +
 +      if (typeof id !== 'string' || !Number.isSafeInteger(request) || request <= 0 || !visibleOutput(id)) {return}
 +
@@ -9576,7 +9596,8 @@ index 59d8dd527dae029c695a8520996f6051d75df371..923ab6ebf79beef2b715cb7c308897d2
 +        if (!outputAction || outputAction.window !== overlay || outputAction.id !== id || outputAction.request !== request) {return}
 +
 +        if (payload.type === 'character-output-view-file') {
-+          if ((!outputAction.imageReady && !outputAction.fileText) || Object.keys(payload).length !== 3) {return}
++          if (Object.keys(payload).length !== 3 || (!outputAction.imageReady && !outputAction.fileText && !outputAction.pdfPage)) {return}
++          pdfPage = outputAction.pdfPage
 +        } else {
 +          if (!outputAction.canOpen) {return}
 +          discardOutput()
@@ -9589,7 +9610,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..923ab6ebf79beef2b715cb7c308897d2
 +        outputAction = { id, request, window: overlay }
 +      }
 +
-+      mainWindow.webContents.send('hermes:pet-overlay:control', { type: payload.type, id, request })
++      mainWindow.webContents.send('hermes:pet-overlay:control', { type: payload.type, id, request, ...(pdfPage ? { pdfPage } : {}) })
 +
 +      return
 +    }
@@ -22505,7 +22526,7 @@ index de446bdb6a589e02ff3634ae483fe46d4a108ff2..447b3cacb7b6af2b6d1aca49f9487795
   *
 diff --git a/apps/desktop/src/app/pet-overlay/pet-characters.tsx b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..360a3e91eb17cd7f02eb0219b21649582f100604
+index 0000000000000000000000000000000000000000..b4d6c6239241ac7a4df603de670a9af4c19758b8
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
 @@ -0,0 +1,246 @@
@@ -22672,9 +22693,9 @@ index 0000000000000000000000000000000000000000..360a3e91eb17cd7f02eb0219b2164958
 +              <strong>Delivered file</strong>
 +              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
 +                {output.canPreviewFile && <button onClick={onPreviewFile} style={{ textDecoration: 'underline' }} type="button">Preview file</button>}
-+                {!pdf && (file?.text || (file?.png_base64 && decodedImageRequest === output.request)) &&
++                {(file?.text || (file?.png_base64 && decodedImageRequest === output.request)) &&
 +                  <button onClick={onViewFile} style={{ textDecoration: 'underline' }} type="button">
-+                    {file.text ? 'View text' : 'View image'}
++                    {file.text ? 'View text' : pdf ? 'View first page' : 'View image'}
 +                  </button>}
 +                {file?.text && <button onClick={() => onCopy('text')} style={{ textDecoration: 'underline' }} type="button">Copy text</button>}
 +                <button onClick={() => onCopy('path')} style={{ textDecoration: 'underline' }} type="button">Copy path</button>
@@ -23032,10 +23053,10 @@ index 82319976a166e658f80e794b0033fed81a48d456..614c356f49210553b49d063f26f1c508
    return (
 diff --git a/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..32ee51cd27cdea9b7d001b7bba52959ef8495928
+index 0000000000000000000000000000000000000000..a862f89d7f90e4b14ef876da83f111ab91f47ac1
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
-@@ -0,0 +1,648 @@
+@@ -0,0 +1,651 @@
 +import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 +import type * as Motion from 'motion/react'
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -23658,7 +23679,7 @@ index 0000000000000000000000000000000000000000..32ee51cd27cdea9b7d001b7bba52959e
 +  expect(screen.getByLabelText('File preview').parentElement?.style.maxHeight).toBe('116px')
 +})
 +
-+it('shows the PDF first page with Copy path and no file viewer action', () => {
++it('opens the decoded PDF first page in the viewer and keeps Copy path', () => {
 +  render(<PetOverlayApp />)
 +  const payload = preview()
 +  Object.assign(payload.characterPreview.characters[0], { outputId: 'pdf' })
@@ -23677,7 +23698,10 @@ index 0000000000000000000000000000000000000000..32ee51cd27cdea9b7d001b7bba52959e
 +  const png_base64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1cAAAAASUVORK5CYII='
 +  act(() => emit({ ...payload, characterFile: { id, request: request.request, text: null, png_base64 } }))
 +  const image = screen.getByRole('img', { name: 'First page of Board report.PDF' })
++  expect(screen.queryByRole('button', { name: 'View first page' })).toBeNull()
 +  fireEvent.load(image)
++  fireEvent.click(screen.getByRole('button', { name: 'View first page' }))
++  expect(control).toHaveBeenLastCalledWith({ type: 'character-output-view-file', id, request: request.request })
 +  expect(screen.getByText('First page')).toBeTruthy()
 +  expect(image.getAttribute('src')).toBe('data:image/png;base64,' + png_base64)
 +  expect(screen.getByRole('button', { name: 'Copy path' })).toBeTruthy()
@@ -35087,10 +35111,10 @@ index abe8afb7e670b207a192ac15fb797fb8dfed168e..2b2824a97bb7cfd9d21057f4efdfd811
              <SelectContent>
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..10ad92b08153dc3bc8e6fe4ace07c559ae7698af
+index 0000000000000000000000000000000000000000..657e669290059eef59189a3b559dc52f71855956
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx
-@@ -0,0 +1,607 @@
+@@ -0,0 +1,619 @@
 +import { atom, host, type PluginProfileRoute } from '@hermes/plugin-sdk'
 +import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -35694,6 +35718,18 @@ index 0000000000000000000000000000000000000000..10ad92b08153dc3bc8e6fe4ace07c559
 +    expect(rpc).toHaveBeenCalledTimes(2)
 +    expect(rpc).toHaveBeenLastCalledWith(route, 'profiles.output_file', { canonical_id: 'tip', token, pdf_preview: true }, 8000)
 +    expect(state.mock.lastCall?.[0].characterFile).toEqual({ id, request: 1, text: null, pdf_base64 })
++    const pdfPage = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1cAAAAASUVORK5CYII='
++    const view = { type: 'character-output-view-file' as const, id, request: 1, pdfPage }
++
++    await act(async () => overlayControl({ ...view, request: 2 }))
++    expect($petOverlayFile.get()).toBeNull()
++    await act(async () => overlayControl(view))
++    expect($petOverlayFile.get()).toEqual({ kind: 'image', name: 'report.PDF · First page', src: 'data:image/png;base64,' + pdfPage })
++    expect(rpc).toHaveBeenCalledTimes(2)
++    $petOverlayFile.set(null)
++    await act(async () => overlayControl({ type: 'character-output-close' }))
++    await act(async () => overlayControl(view))
++    expect($petOverlayFile.get()).toBeNull()
 +  } finally {
 +    mac.mockRestore()
 +  }
@@ -45968,7 +46004,7 @@ index 0000000000000000000000000000000000000000..8b66cd58a8e4800e20b93bf7e4593c26
 +  }
 +}
 diff --git a/apps/desktop/src/store/pet-overlay.ts b/apps/desktop/src/store/pet-overlay.ts
-index d47f67023fb8b820d6f6cbd455562a591600413b..d83f71583736d97c37534983c317bf3810e24f43 100644
+index d47f67023fb8b820d6f6cbd455562a591600413b..493ca7732b282148425339980ae58d369a79141c 100644
 --- a/apps/desktop/src/store/pet-overlay.ts
 +++ b/apps/desktop/src/store/pet-overlay.ts
 @@ -5,2 +5,3 @@ import { persistBoolean, persistString, storedBoolean, storedString } from '@/li
@@ -45993,17 +46029,18 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..d83f71583736d97c37534983c317bf38
 +  characterFile?: PetCharacterFile & PetCharacterFileSnapshot
 +  characterCopy?: PetCharacterCopy
  }
-@@ -58,2 +71,9 @@ export type PetOverlayControl =
+@@ -58,2 +71,10 @@ export type PetOverlayControl =
    | { type: 'ready' }
 +  | { type: 'character-output'; id: string; request: number }
 +  | { type: 'character-output-close' }
 +  | { type: 'character-stop'; id: string; request: number }
 +  | { type: 'character-output-open'; id: string; request: number }
-+  | { type: 'character-output-file' | 'character-output-view-file'; id: string; request: number }
++  | { type: 'character-output-file'; id: string; request: number }
++  | { type: 'character-output-view-file'; id: string; request: number; pdfPage?: string }
 +  | { type: 'character-output-copy-path' | 'character-output-copy-text'; id: string; request: number }
 +  | { type: 'character-output-link'; id: string; request: number; index: number }
    | { type: 'submit'; text: string }
-@@ -69,6 +89,7 @@ const OVERLAY_BOUNDS_KEY = 'hermes.desktop.pet-overlay-bounds.v1'
+@@ -69,6 +90,7 @@ const OVERLAY_BOUNDS_KEY = 'hermes.desktop.pet-overlay-bounds.v1'
 
 -export const $petOverlayActive = atom(storedBoolean(OVERLAY_ACTIVE_KEY, false))
 +type OverlayFile = { name: string } & ({ kind: 'image'; src: string } | { kind: 'text'; text: string })
@@ -46014,7 +46051,7 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..d83f71583736d97c37534983c317bf38
 +
 +export const $petOverlayActive = atom(storedBoolean(OVERLAY_ACTIVE_KEY, false))
 
-@@ -132,5 +153,5 @@ const OVERLAY_MIN_H = 300
+@@ -132,5 +154,5 @@ const OVERLAY_MIN_H = 300
   */
 -export function overlayWindowSize(frameW: number, frameH: number, scale: number): { width: number; height: number } {
 +export function overlayWindowSize(frameW: number, frameH: number, scale: number, characterCount = 0): { width: number; height: number } {
@@ -46022,53 +46059,53 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..d83f71583736d97c37534983c317bf38
 -    width: Math.max(OVERLAY_MIN_W, Math.round(frameW * scale + OVERLAY_PAD_X)),
 +    width: Math.max(OVERLAY_MIN_W, Math.round(frameW * scale + OVERLAY_PAD_X), Math.min(5, characterCount) * 120 + 32),
      height: Math.max(OVERLAY_MIN_H, Math.round(frameH * scale + OVERLAY_PAD_Y))
-@@ -153,3 +174,4 @@ function currentPayload(): PetOverlayStatePayload {
+@@ -153,3 +175,4 @@ function currentPayload(): PetOverlayStatePayload {
      reaction: $petReaction.get(),
 -    pluginMessages: $petPluginMessages.get()
 +    pluginMessages: $petPluginMessages.get(),
 +    characterPreview: $petCharacterPreview.get()
    }
-@@ -166,3 +188,3 @@ function pushNow(): void {
+@@ -166,3 +189,3 @@ function pushNow(): void {
   */
 -function openOverlay(request: PetOverlayOpenRequest): void {
 +function openOverlay(request: PetOverlayOpenRequest, restoreOnLaunch = true): void {
    const api = window.hermesDesktop?.petOverlay
-@@ -173,2 +195,3 @@ function openOverlay(request: PetOverlayOpenRequest): void {
+@@ -173,2 +196,3 @@ function openOverlay(request: PetOverlayOpenRequest): void {
 
 +  persistBoolean(OVERLAY_ACTIVE_KEY, restoreOnLaunch)
    $petOverlayActive.set(true)
-@@ -191,3 +214,4 @@ function openOverlay(request: PetOverlayOpenRequest): void {
+@@ -191,3 +215,4 @@ function openOverlay(request: PetOverlayOpenRequest): void {
      $petReaction.subscribe(pushNow),
 -    $petPluginMessages.subscribe(pushNow)
 +    $petPluginMessages.subscribe(pushNow),
 +    $petCharacterPreview.subscribe(pushNow)
    ]
-@@ -201,3 +225,3 @@ function openOverlay(request: PetOverlayOpenRequest): void {
+@@ -201,3 +226,3 @@ function openOverlay(request: PetOverlayOpenRequest): void {
   */
 -export function popOutPet(petRect: PetOverlayBounds): void {
 +export function popOutPet(petRect: PetOverlayBounds, { restoreOnLaunch = true } = {}): void {
    if ($petOverlayActive.get() || stateUnsubs.length) {
-@@ -209,3 +233,3 @@ export function popOutPet(petRect: PetOverlayBounds): void {
+@@ -209,3 +234,3 @@ export function popOutPet(petRect: PetOverlayBounds): void {
    if (saved) {
 -    openOverlay({ bounds: saved, screen: true })
 +    openOverlay({ bounds: saved, screen: true }, restoreOnLaunch)
 
-@@ -221,3 +245,3 @@ export function popOutPet(petRect: PetOverlayBounds): void {
+@@ -221,3 +246,3 @@ export function popOutPet(petRect: PetOverlayBounds): void {
 
 -  openOverlay({ bounds: { height, width, x, y }, screen: false })
 +  openOverlay({ bounds: { height, width, x, y }, screen: false }, restoreOnLaunch)
  }
-@@ -237,2 +261,3 @@ export function restorePetOverlay(): void {
+@@ -237,2 +262,3 @@ export function restorePetOverlay(): void {
    if (!saved) {
 +    persistBoolean(OVERLAY_ACTIVE_KEY, false)
      $petOverlayActive.set(false)
-@@ -252,3 +277,5 @@ export function popInPet(): void {
+@@ -252,3 +278,5 @@ export function popInPet(): void {
    stateUnsubs = []
 +  persistBoolean(OVERLAY_ACTIVE_KEY, false)
    $petOverlayActive.set(false)
 +  $petOverlayFile.set(null)
    void window.hermesDesktop?.petOverlay?.close()
-@@ -282,4 +309,68 @@ export function initPetOverlayBridge(): () => void {
+@@ -282,4 +310,70 @@ export function initPetOverlayBridge(): () => void {
 
 +  let activeOutput: { id: string; request: number; canOpen?: true; opened?: true; fileToken?: string; fileName?: string; file?: PetCharacterFileContent; stop?: () => Promise<WorkerStopStatus> } | null = null
    controlUnsub = api.onControl(payload => {
@@ -46116,15 +46153,17 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..d83f71583736d97c37534983c317bf38
 +    } else if (payload?.type === 'character-output-view-file') {
 +      const action = activeOutput, preview = $petCharacterPreview.get()
 +
-+      if (!action?.fileName || !action.file || action.opened || action.id !== payload.id ||
++      if (!action?.fileName || action.fileToken || action.opened || action.id !== payload.id ||
 +          action.request !== payload.request || !$petOverlayActive.get() || !preview ||
 +          preview.expiresAt <= Date.now() || !preview.characters.some(character => character.outputId === action.id)) {return}
 +
 +      const { file, fileName: name } = action
++      const pdf = /\.pdf$/i.test(name)
++      const png = pdf ? payload.pdfPage : file?.png_base64
 +
-+      if (file.png_base64) {
-+        $petOverlayFile.set({ kind: 'image', name, src: `data:image/png;base64,${file.png_base64}` })
-+      } else if (file.text) {
++      if (png) {
++        $petOverlayFile.set({ kind: 'image', name: pdf ? `${name} · First page` : name, src: `data:image/png;base64,${png}` })
++      } else if (file?.text) {
 +        $petOverlayFile.set({ kind: 'text', name, text: file.text })
 +      }
 +    } else if (payload?.type === 'character-output-open') {
@@ -46138,7 +46177,7 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..d83f71583736d97c37534983c317bf38
 +    } else if (payload?.type === 'pop-in') {
 +      activeOutput = null
        popInPet()
-@@ -307,2 +398,4 @@ export function initPetOverlayBridge(): () => void {
+@@ -307,2 +401,4 @@ export function initPetOverlayBridge(): () => void {
    return () => {
 +    activeOutput = null
 +    $petOverlayFile.set(null)
