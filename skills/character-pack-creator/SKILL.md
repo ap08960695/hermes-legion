@@ -104,7 +104,8 @@ text below with the actual brief/provenance; use only these six fields:
 
 Name/author/licence each need 1–160 printable characters with nonblank content;
 manifest limit is 64 KiB. The sheet is a static **1536 × 1872 px**, 8-column,
-9-row PNG or WebP, at most 16 MiB. For WebP use `spritesheet.webp` in the manifest.
+9-row PNG or WebP, at most 16 MiB. For Desktop character assignment, keep it at
+or below 4 MiB. For WebP use `spritesheet.webp` in the manifest.
 The asset must be that exact filename beside the manifest, with regular files
 and no symlinks in the folder path. URLs, nested paths, duplicate/unknown keys
 and other schema versions fail. ZIP, animated GIF/APNG/WebP, Lottie, sounds,
@@ -152,6 +153,17 @@ Unsupported atomic publication fails closed. Preserve any cleanup warning and
 report its path; do not delete unknown staging folders. Atomic visibility does
 not promise crash durability; store parents must remain trusted/stable.
 
+For per-bot installation, replace `BOT` with the bot's profile name.
+
+```sh
+hermes --profile BOT pets import ./my-character my-character
+```
+
+In the Desktop Bots workspace, open **Edit profile → Character**, choose
+the installed pack and save.
+**Monitor → Show bot characters** previews active bots. Choose **Include a
+sixth character** to expand the default five-character preview.
+
 Only an explicit request to activate the global pet calls
 `hermes pets select my-character`. This is not per-bot assignment. For requested
 uninstall, use `hermes pets remove my-character`; an active pet requires choosing
@@ -160,5 +172,5 @@ the creator source folder and unrelated entries intact.
 
 Return the folder, name/author/licence and provenance, validation errors/warnings,
 preview evidence or environment blocker, and imported slug if applicable.
-Distinguish installed from selected. Full character events/formats, per-bot
-assignment and five-character Desktop resource acceptance remain open.
+Distinguish installed, assigned and globally selected. Full character
+events/formats and Desktop resource acceptance need separate checks.

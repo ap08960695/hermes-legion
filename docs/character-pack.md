@@ -94,6 +94,7 @@ or a safe installer for hostile concurrent directory changes.
    gaps; leave unused cells fully transparent. Do not hide another pose inside
    one cell.
 3. Export the entire **1536 × 1872 px** sheet as static PNG or lossless WebP.
+   For a bot character on Desktop, keep the sheet at or below **4 MiB**.
    Animated GIF/APNG/WebP, Lottie and legacy eight-row sheets are outside this
    folder contract. Renaming another format to `.png` does not enable it.
 4. Fill the manifest with your name and actual permission/licence statement.
@@ -103,7 +104,8 @@ or a safe installer for hostile concurrent directory changes.
    to preview all seven current activity states. Use `--state run --once` for
    one state; explicit `--state` takes priority over `--cycle`. Without either,
    preview uses idle; omit `--once` to loop until Ctrl+C. Use `--mode unicode`
-   if needed.
+   if needed. Inspect both directional walk rows separately in the source
+   frames or the atlas.
 7. When ready, import under a new slug as described below. Existing **installed**
    pets keep `hermes pets show <slug> --cycle --once`; do not combine a slug with
    `--pack`.
@@ -181,17 +183,27 @@ This does not install a new Hermes.app build or prove the character overlay.
 
 ## Assign an installed pack to a bot
 
-On an unreleased Desktop build with the shared pet and profile configuration
-RPCs, open **Edit Profile → Character**, choose a pack installed in that
-profile, and save. **Use default** clears the assignment. **Show bot
-characters** in Monitor uses the selected sprite for that bot and its workers.
+Import into the bot's own Hermes profile. Each profile's picker lists packs
+installed there. Replace `BOT` with that profile's name.
+
+```sh
+hermes --profile BOT pets import ./my-character my-character
+hermes --profile BOT pets list --installed
+```
+
+In the Desktop Bots workspace, open the bot's **Edit profile → Character** section,
+choose the installed pack, and save. **Use default** clears the assignment.
+Open **Monitor → Show bot characters** to see the selected sprite on the bot
+and its workers when activity is present. Monitor shows five characters by
+default. Choose **Include a sixth character** when you want to see six.
+Active bots take the available slots before individual workers.
 An assigned pack must be a readable static native PNG/WebP atlas at most 4 MiB
 and 3 million pixels to appear in the preview. If the pack is unavailable,
 choose another installed pack or clear the assignment.
 
 The installed-only list makes no Petdex request. The Local Desktop dispatch
 test covers own-profile and shared-host reads, assignment, clearing, and stale
-saves. Native Desktop screen acceptance remains open.
+saves.
 
 ## Read the result
 

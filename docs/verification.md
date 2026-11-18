@@ -1,3 +1,30 @@
+# Create and assign six original desktop character packs
+
+The public creator workflow produced six original packs with different
+silhouettes. They used the blank manifest and the creator skill's atlas
+recipe. Each pack passed all nine native rows without warnings, emitted
+39 terminal preview frames and imported byte-for-byte into a named
+profile. The guide now puts the per-bot profile import and 4 MiB Desktop
+limit at the steps where creators need them.
+
+On packaged Mac Local, Edit profile found each installed pack, saved
+the assignment and showed it again on reopening. All six assignments
+also appeared in the normal Local roster. Active bots fill the preview
+before individual workers. Monitor shows five by default. Its sixth
+character is opt-in, and one limit applies to sprite loading, rendering
+and the Electron output boundary.
+
+| Overhead versus preview off | Five distinct packs | Six distinct packs |
+| --- | ---: | ---: |
+| CPU, percentage points of one core | 1.35 | 1.86 |
+| Mean physical footprint | 126.0 MiB | 123.9 MiB |
+
+All six animated and fit on the display with Hermes minimized. The
+short Mac crop excludes other app contents. The samples used the
+same staged Local roster with GPU and networking in-process. The
+distinct-pack physical footprints need budgeting work. Zero Desktop SSH
+links opened. Four or fewer Hermes processes ran and all stopped.
+
 # Batch Mac desktop pet paints on the walk clock
 
 Mac desktop pets update sprite frames and walk positions on the same
