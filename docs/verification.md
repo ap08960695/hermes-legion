@@ -1,3 +1,57 @@
+# Pace desktop pet movement at 10 Hz
+
+The desktop overlay caps horizontal wandering at 10 position changes per
+second. The installed sprite canvases keep their existing animation.
+Focus, hover, dragging, and an open popover park the selected character.
+Reduced motion uses a static pose.
+
+In a signed packaged Mac Local fixture, all five pets made 14 position
+changes over roughly 1.4 seconds with the cap, compared with 84 each
+with continuous interpolation of the same CSS path. Each canvas showed
+at least three different sprite frames in the follow-up checks. The same
+overlay renderer and 300 px band were used for all preview-on conditions.
+The main window stayed minimized and the latest-output popover fit on screen.
+
+| Condition | CPU, percent of one core | Mean physical footprint |
+| --- | ---: | ---: |
+| Preview off | 1.01% | 505.2 MiB |
+| Five pets, paced | 3.18% | 559.3 MiB |
+| Five pets, continuous CSS control | 3.34% | 557.7 MiB |
+| Five pets, pace restored | 2.79% | 556.8 MiB |
+
+Pacing saved 0.16–0.55 percentage points of one core against the continuous
+CSS control. The preview-off comparison puts paced overhead at 1.78–2.17
+CPU points and 51.6–54.1 MiB of physical footprint in this run. Memory varied
+between runs. The release budget for the default GPU topology
+still needs verification. The fixture ran GPU and networking in Electron
+main. Both successful Local probes recorded zero Desktop SSH links and the
+overlay renderer exited when preview stopped.
+
+# Isolate desktop-pet rendering cost on Mac Local
+
+A signed packaged Electron fixture kept the main window minimized. It used
+the same overlay renderer and five sprites from the installed Lanternling
+atlas for every preview-on sample. The 150 px band kept the width and bottom edge fixed.
+Pausing horizontal movement and hiding content were probe-only overrides.
+The sprite canvases kept advancing in both conditions.
+
+| Condition | CPU, percent of one core | Mean physical footprint |
+| --- | ---: | ---: |
+| Preview off | 0.92% | 520.0 MiB |
+| Five moving pets, 300 px | 6.38% | 577.2 MiB |
+| Five moving pets, 150 px | 3.60% | 571.9 MiB |
+| Horizontal movement paused, 300 px | 3.10% | 567.0 MiB |
+| Content hidden, 300 px | 2.34% | 566.9 MiB |
+| Horizontal movement paused, 150 px | 2.45% | 567.5 MiB |
+| Five moving pets, 300 px restored | 4.32% | 568.1 MiB |
+
+The restored condition used about two CPU percentage points less than the
+initial 300 px condition. The narrower band and parked horizontal movement
+both used less CPU than either 300 px moving sample. Footprint drift and
+the still-mounted overlay limit the memory conclusions. The alternate
+band was checked for sprite fit at rest. Drag range and popover fit require
+separate evidence before shipping a narrower band.
+
 # Measure five desktop pets in a packaged Mac Local build
 
 An ad-hoc signed Electron 44.9.3 app loaded its packaged archive
