@@ -4828,6 +4828,145 @@ index 3026147da07e584cbfa62013a49eb29553c36fea..1bf587ac8edc001b40dc5a43311f8404
 +through All features. Verify the real renderer at narrow and desktop widths;
 +changing presentation must preserve the mounted chat and must not submit a prompt.
    Search and saved field links resolve to the owning child before highlighting.
+diff --git a/apps/desktop/e2e/answer-cards-images.fixture.html b/apps/desktop/e2e/answer-cards-images.fixture.html
+new file mode 100644
+index 0000000000000000000000000000000000000000..efe67a2b3f6c4f7f4108b36fcf8e32aa6fba6b19
+--- /dev/null
++++ b/apps/desktop/e2e/answer-cards-images.fixture.html
+@@ -0,0 +1,38 @@
++<!doctype html>
++<html lang="en">
++  <head>
++    <meta charset="utf-8" />
++    <title>Saved answer cards</title>
++    <style>
++      #cards {
++        margin-top: 110vh;
++      }
++      article {
++        min-height: 110vh;
++      }
++    </style>
++  </head>
++  <body>
++    <button id="open">Open saved answer</button>
++    <button id="replace">Replace saved answer</button>
++    <main id="cards"></main>
++    <script type="module">
++      import { createElement } from 'react'
++      import { createRoot } from 'react-dom/client'
++      import { RichCodeBlock } from '/src/components/assistant-ui/embeds/registry.tsx'
++
++      const root = createRoot(document.querySelector('#cards'))
++      const open = key =>
++        root.render(
++          createElement(RichCodeBlock, {
++            code: localStorage.getItem(key),
++            fallback: 'Loading saved answer',
++            language: 'cards',
++            streaming: false
++          })
++        )
++      document.querySelector('#open').onclick = () => open('saved-answer')
++      document.querySelector('#replace').onclick = () => open('updated-answer')
++    </script>
++  </body>
++</html>
+diff --git a/apps/desktop/e2e/answer-cards-images.spec.ts b/apps/desktop/e2e/answer-cards-images.spec.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..2988c166bf34fc2dbf29de869f2abfd806a7e809
+--- /dev/null
++++ b/apps/desktop/e2e/answer-cards-images.spec.ts
+@@ -0,0 +1,89 @@
++import { resolve } from 'node:path'
++
++import { expect, test } from '@playwright/test'
++import { createServer } from 'vite'
++
++test.use({
++  launchOptions: {
++    args: ['--disable-gpu'],
++    executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
++  },
++  viewport: { width: 640, height: 480 }
++})
++
++test('saved answer cards request only the external images approved for that card', async ({ page }) => {
++  const server = await createServer({
++    root: resolve(import.meta.dirname, '..'),
++    optimizeDeps: { entries: ['e2e/answer-cards-images.fixture.html'] },
++    server: { port: 0, hmr: false }
++  })
++
++  try {
++    await server.listen()
++    const [origin] = server.resolvedUrls!.local
++    const fixtureOrigin = new URL(origin).origin
++    const image = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg=='
++    const embedded = `data:image/png;base64,${image}`
++    const singleUrl = 'https://single.example.invalid/image.png'
++    const galleryUrls = ['https://gallery.example.invalid/first.png', 'https://photos.example.invalid/second.png']
++    const updatedUrls = [galleryUrls[0].replace('first.png', 'updated.png'), galleryUrls[1]]
++    const cards = (urls: string[]) =>
++      JSON.stringify({
++        cards: [
++          { title: 'Single image', images: [singleUrl] },
++          { title: 'Image gallery', images: [embedded, ...urls] }
++        ]
++      })
++    const remoteRequests: string[] = []
++
++    await page.route(
++      url => (url.protocol === 'http:' || url.protocol === 'https:') && url.origin !== fixtureOrigin,
++      async route => {
++        remoteRequests.push(route.request().url())
++        await route.fulfill({ contentType: 'image/png', body: Buffer.from(image, 'base64') })
++      }
++    )
++    await page.addInitScript(
++      ({ original, updated }) => {
++        localStorage.setItem('saved-answer', original)
++        localStorage.setItem('updated-answer', updated)
++      },
++      { original: cards(galleryUrls), updated: cards(updatedUrls) }
++    )
++    await page.goto(new URL('e2e/answer-cards-images.fixture.html', origin).href)
++    await page.getByRole('button', { name: 'Open saved answer' }).click()
++
++    const single = page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'Single image' }) })
++    const gallery = page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'Image gallery' }) })
++    await single.scrollIntoViewIfNeeded()
++    await gallery.scrollIntoViewIfNeeded()
++    const embeddedImage = gallery.getByRole('img', { name: 'Image gallery 1' })
++
++    await embeddedImage.evaluate(node => (node as HTMLImageElement).decode())
++    expect(remoteRequests).toEqual([])
++    await expect(single.locator('img')).toHaveCount(0)
++    await expect(gallery.locator('img')).toHaveCount(1)
++    await expect(single.getByText('single.example.invalid', { exact: true })).toBeVisible()
++    await expect(gallery.getByText('gallery.example.invalid', { exact: true })).toBeVisible()
++    await expect(gallery.getByText('photos.example.invalid', { exact: true })).toBeVisible()
++
++    await single.getByRole('button', { name: 'Preview anyway' }).focus()
++    await page.keyboard.press('Tab')
++    const loadGallery = gallery.getByRole('button', { name: 'Preview anyway' })
++
++    await expect(loadGallery).toBeFocused()
++    await page.keyboard.press('Enter')
++    await gallery.getByRole('img', { name: 'Image gallery 3' }).scrollIntoViewIfNeeded()
++    await expect.poll(() => [...remoteRequests].sort()).toEqual([...galleryUrls].sort())
++    await expect(single.locator('img')).toHaveCount(0)
++
++    await page.getByRole('button', { name: 'Replace saved answer' }).click()
++    await gallery.scrollIntoViewIfNeeded()
++    await expect(loadGallery).toBeVisible()
++    await expect(gallery.locator('img')).toHaveCount(1)
++    await embeddedImage.evaluate(node => (node as HTMLImageElement).decode())
++    expect([...remoteRequests].sort()).toEqual([...galleryUrls].sort())
++  } finally {
++    await server.close()
++  }
++})
 diff --git a/apps/desktop/e2e/answer-cards-layout.spec.ts b/apps/desktop/e2e/answer-cards-layout.spec.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..d80ca0a6a3a135101147dae5c0f63f9cf5809a1a
@@ -8561,10 +8700,10 @@ index 2c784ec2a2e709f7fc953d88399b3078aaa5e12b..5492eec425bbd695225966f3bc91032d
  }
 diff --git a/apps/desktop/electron/pdf-raster.test.ts b/apps/desktop/electron/pdf-raster.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..3460e5e658523ee3734946e5b8bb0a0b5b5ba3ba
+index 0000000000000000000000000000000000000000..5bb1e950830430c789fe0837fea0d5c2d1ea91e8
 --- /dev/null
 +++ b/apps/desktop/electron/pdf-raster.test.ts
-@@ -0,0 +1,171 @@
+@@ -0,0 +1,227 @@
 +import { execFileSync, type spawn, spawnSync } from 'node:child_process'
 +import { EventEmitter } from 'node:events'
 +import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -8645,20 +8784,15 @@ index 0000000000000000000000000000000000000000..3460e5e658523ee3734946e5b8bb0a0b
 +    expect(launch).not.toHaveBeenCalled()
 +  })
 +
-+  it.each(['timeout', 'abort', 'overflow', 'stdin error', 'spawn error'])(
++  it.each(['timeout', 'overflow', 'stdin error', 'spawn error'])(
 +    'kills on %s and holds its slot through close', async (event) => {
 +      vi.useFakeTimers()
 +      const render = raster()
-+      const controller = new AbortController()
-+      const pending = render(pdf, controller.signal)
++      const pending = render(pdf)
 +      child.stdout.write(png)
 +
 +      switch (event) {
 +        case 'timeout': await vi.advanceTimersByTimeAsync(50);
-+
-+ break
-+
-+        case 'abort': controller.abort();
 +
 + break
 +
@@ -8704,6 +8838,67 @@ index 0000000000000000000000000000000000000000..3460e5e658523ee3734946e5b8bb0a0b
 +    }
 +  })
 +
++  it('renders the latest valid snapshot after a cancelled helper closes', async () => {
++    const render = raster()
++    const first = new AbortController()
++    const nextInput = Buffer.from('%PDF-next fixture')
++    const nextPage = Buffer.from(png)
++    nextPage.writeUInt32BE(2, 16)
++    const nextChild = new FakeChild()
++    const nextRead = vi.fn()
++    nextChild.stdin.on('data', nextRead)
++    let live = 0
++    let peak = 0
++    launch.mockReset().mockImplementationOnce(() => track(child)).mockImplementationOnce(() => track(nextChild))
++
++    function track(helper: FakeChild) {
++      peak = Math.max(peak, ++live)
++      helper.once('close', () => { live-- })
++
++      return helper
++    }
++
++    const a = render(pdf, first.signal)
++    first.abort()
++    expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGKILL')
++    const superseded = render(Buffer.from('%PDF-superseded fixture'))
++    const b = render(nextInput)
++    await expect(render(Buffer.from('malformed'))).resolves.toBeUndefined()
++    await expect(superseded).resolves.toBeUndefined()
++    expect(launch).toHaveBeenCalledTimes(1)
++
++    child.stdout.write(png)
++    child.emit('close', 0)
++    await expect(a).resolves.toBeUndefined()
++    expect(launch).toHaveBeenCalledTimes(2)
++    expect(nextRead).toHaveBeenCalledExactlyOnceWith(nextInput)
++    expect(peak).toBe(1)
++    nextChild.stdout.write(nextPage)
++    nextChild.emit('close', 0)
++    await expect(b).resolves.toEqual(nextPage)
++    expect(live).toBe(0)
++  })
++
++  it('drops the latest waiting snapshot when its caller cancels', async () => {
++    vi.useFakeTimers()
++    const render = raster()
++    const first = new AbortController()
++    const next = new AbortController()
++    const a = render(pdf, first.signal)
++    first.abort()
++    const settled = vi.fn()
++    const b = render(Buffer.from('%PDF-next fixture'), next.signal).then(settled)
++    await vi.advanceTimersByTimeAsync(0)
++    expect(settled).not.toHaveBeenCalled()
++    next.abort()
++    await b
++    expect(settled).toHaveBeenCalledExactlyOnceWith(undefined)
++
++    child.emit('close', 0)
++    await expect(a).resolves.toBeUndefined()
++    expect(launch).toHaveBeenCalledTimes(1)
++  })
++
 +  it('releases the slot after a synchronous launch failure', async () => {
 +    const render = raster()
 +    launch.mockImplementationOnce(() => { throw new Error('launch failed') })
@@ -8738,10 +8933,10 @@ index 0000000000000000000000000000000000000000..3460e5e658523ee3734946e5b8bb0a0b
 +}, 30_000)
 diff --git a/apps/desktop/electron/pdf-raster.ts b/apps/desktop/electron/pdf-raster.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..98437535643c52457dd8c8a0348291af42cc21ce
+index 0000000000000000000000000000000000000000..69595a89989d84c3f8e7e0def2559df814b8edfc
 --- /dev/null
 +++ b/apps/desktop/electron/pdf-raster.ts
-@@ -0,0 +1,100 @@
+@@ -0,0 +1,127 @@
 +import { spawn } from 'node:child_process'
 +import { lstatSync, realpathSync } from 'node:fs'
 +import { isAbsolute, join } from 'node:path'
@@ -8777,22 +8972,21 @@ index 0000000000000000000000000000000000000000..98437535643c52457dd8c8a0348291af
 +  const native = join(appPath.replace(/app\.asar$/, 'app.asar.unpacked'), 'dist', 'native')
 +  const stagedBinary = join(native, 'pdf-raster')
 +  const policy = join(native, 'pdf-raster.sb')
-+  let busy = false
++  let active: { signal?: AbortSignal } | undefined
++  let waiting: { cancel: () => void; start: () => void } | undefined
 +
-+  return async (input: Buffer, signal?: AbortSignal): Promise<Buffer | undefined> => {
-+    if (platform !== 'darwin' || busy || signal?.aborted || !isAbsolute(appPath) ||
-+      input.length > inputLimit || !input.subarray(0, pdfHeader.length).equals(pdfHeader)) {return}
++  async function render(input: Buffer, signal?: AbortSignal): Promise<Buffer | undefined> {
++    if (signal?.aborted) {return}
 +
 +    try {
 +      const stat = lstatSync(stagedBinary)
 +
 +      if (!stat.isFile() || (stat.mode & 0o111) === 0 || !lstatSync(policy).isFile()) {return}
 +      const binary = realpathSync(stagedBinary)
-+      busy = true
-+
 +      const child = spawnHelper('/usr/bin/sandbox-exec', [
 +        '-D', 'RASTER_BIN=' + binary, '-f', policy, binary,
 +      ], { env: {}, stdio: ['pipe', 'pipe', 'ignore'] })
++      active = { signal }
 +
 +      return new Promise((resolve) => {
 +        const chunks: Buffer[] = []
@@ -8827,19 +9021,47 @@ index 0000000000000000000000000000000000000000..98437535643c52457dd8c8a0348291af
 +        child.once('close', (code) => {
 +          clearTimeout(timeout)
 +          signal?.removeEventListener('abort', stop)
-+          busy = false
++          active = undefined
 +          const bytes = !failed && code === 0 ? Buffer.concat(chunks, length) : undefined
 +          resolve(bytes && boundedPng(bytes) ? bytes : undefined)
++          waiting?.start()
 +        })
 +
 +        if (signal?.aborted) {stop()}
 +        else {child.stdin.end(input)}
 +      })
 +    } catch {
-+      busy = false
-+
 +      return undefined
 +    }
++  }
++
++  return async (input: Buffer, signal?: AbortSignal): Promise<Buffer | undefined> => {
++    if (platform !== 'darwin' || signal?.aborted || !isAbsolute(appPath) ||
++      input.length > inputLimit || !input.subarray(0, pdfHeader.length).equals(pdfHeader)) {return}
++    if (!active) {return render(input, signal)}
++    if (!active.signal?.aborted) {return}
++
++    // The old helper owns the slot until close. Keep one replacement snapshot.
++    waiting?.cancel()
++
++    return new Promise((resolve) => {
++      const clear = () => {
++        waiting = undefined
++        signal?.removeEventListener('abort', cancel)
++      }
++      const cancel = () => {
++        clear()
++        resolve(undefined)
++      }
++      waiting = {
++        cancel,
++        start: () => {
++          clear()
++          resolve(render(input, signal))
++        },
++      }
++      signal?.addEventListener('abort', cancel, { once: true })
++    })
 +  }
 +}
 diff --git a/apps/desktop/electron/pet-overlay-ipc.test.ts b/apps/desktop/electron/pet-overlay-ipc.test.ts
@@ -29318,12 +29540,13 @@ index 3af40619b817f46fbb0a6b2ed4a6f6e42a0b8915..4ff6efcd2241ed39b1050c2938a5dd14
  }
 diff --git a/apps/desktop/src/components/assistant-ui/embeds/cards-embed.test.tsx b/apps/desktop/src/components/assistant-ui/embeds/cards-embed.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..fa0fcbf83c9a894bba9b54f5631b9a46374ea2f4
+index 0000000000000000000000000000000000000000..b7b5e8fed8403db3bac599cbd6d2081d256944b6
 --- /dev/null
 +++ b/apps/desktop/src/components/assistant-ui/embeds/cards-embed.test.tsx
-@@ -0,0 +1,20 @@
-+import { cleanup, render, screen } from '@testing-library/react'
+@@ -0,0 +1,41 @@
++import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 +import { afterEach, expect, it } from 'vitest'
++
 +import AnswerCards from './cards-embed'
 +afterEach(cleanup)
 +it('renders supplied title, price and source as native content without raw HTML execution', () => {
@@ -29342,87 +29565,165 @@ index 0000000000000000000000000000000000000000..fa0fcbf83c9a894bba9b54f5631b9a46
 +  expect(screen.getByText('100 units')).toBeTruthy()
 +  expect(screen.getByRole('link', { name: /Example source/ }).getAttribute('href')).toBe('https://example.com/item')
 +})
++
++it('requires fresh consent when an external image URL changes on the same host', () => {
++  const source = (filename: string) => `https://images.example.invalid/${filename}.png`
++  const card = (filename: string) => JSON.stringify({ cards: [{ title: 'Report', images: [source(filename)] }] })
++  const { rerender } = render(<AnswerCards code={card('original')} />)
++  const preview = () =>
++    screen.getByRole('button', {
++      name: 'Preview anyway',
++      description: /Report.*Images \(1\).*images\.example\.invalid/
++    })
++
++  expect(screen.queryByRole('img')).toBeNull()
++  fireEvent.click(preview())
++  expect(screen.getByRole('img', { name: 'Report' }).getAttribute('src')).toBe(source('original'))
++
++  rerender(<AnswerCards code={card('updated')} />)
++  expect(screen.queryByRole('img')).toBeNull()
++  fireEvent.click(preview())
++  expect(screen.getByRole('img', { name: 'Report' }).getAttribute('src')).toBe(source('updated'))
++})
 diff --git a/apps/desktop/src/components/assistant-ui/embeds/cards-embed.tsx b/apps/desktop/src/components/assistant-ui/embeds/cards-embed.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..b10b72e9a9f8b8b4f2c7e12e55ca7d4067423eae
+index 0000000000000000000000000000000000000000..0ee34066c6c15cfb56236c2c32e43b7d0ff6fe6a
 --- /dev/null
 +++ b/apps/desktop/src/components/assistant-ui/embeds/cards-embed.tsx
-@@ -0,0 +1,78 @@
+@@ -0,0 +1,136 @@
++import { useId, useState } from 'react'
++
 +import { ZoomableImage } from '@/components/chat/zoomable-image'
-+import { ExternalLink } from '@/lib/external-link'
-+import { parseAnswerCards } from '@/lib/answer-cards'
++import { Button } from '@/components/ui/button'
 +import { Codicon } from '@/components/ui/codicon'
 +import { useI18n } from '@/i18n'
++import { type AnswerCard, parseAnswerCards } from '@/lib/answer-cards'
++import { ExternalLink } from '@/lib/external-link'
++
 +import type { RichFenceProps } from './types'
++
++function isEmbeddedImage(url: string) {
++  return /^data:/i.test(url)
++}
++
++interface AnswerCardViewProps {
++  card: AnswerCard
++  externalImages: string[]
++}
++
++function AnswerCardView({ card, externalImages }: AnswerCardViewProps) {
++  const { t } = useI18n()
++  const id = useId()
++  const [externalImagesAllowed, setExternalImagesAllowed] = useState(false)
++  const hosts = [...new Set(externalImages.map(url => new URL(url).hostname))]
++  const visibleImages = card.images.flatMap((url, index) =>
++    externalImagesAllowed || isEmbeddedImage(url) ? [{ url, index }] : []
++  )
++
++  return (
++    <article className="flex min-w-0 flex-col gap-4 @sm:flex-row">
++      {card.images.length === 1 && visibleImages.length === 1 && (
++        <div className="h-32 w-32 max-w-full shrink-0 overflow-hidden rounded-xl border border-(--ui-stroke-tertiary) bg-(--ui-bg-quinary)">
++          <ZoomableImage
++            alt={card.title}
++            className="h-32 w-32 max-w-full object-contain"
++            decoding="async"
++            loading="lazy"
++            src={visibleImages[0].url}
++          />
++        </div>
++      )}
++      <div className="min-w-0 flex-1">
++        <h3 className="text-sm font-semibold leading-6" id={`${id}-title`}>
++          {card.title}
++        </h3>
++        {card.price && <p className="mt-1 text-2xl font-semibold tabular-nums">{card.price}</p>}
++        {card.description && <p className="mt-2 text-sm leading-6 text-(--ui-text-secondary)">{card.description}</p>}
++        {card.facts.length > 0 && <p className="mt-2 text-xs text-muted-foreground">{card.facts.join(' · ')}</p>}
++        {hosts.length > 0 && !externalImagesAllowed && (
++          <div className="mt-3 flex flex-wrap items-center gap-2">
++            <div className="min-w-0 text-xs text-muted-foreground" id={`${id}-external-images`}>
++              <p>
++                {t.artifacts.tabImages} ({externalImages.length})
++              </p>
++              <ul className="flex list-none flex-wrap gap-x-2 p-0">
++                {hosts.map(host => (
++                  <li key={host}>
++                    <bdi>{host}</bdi>
++                  </li>
++                ))}
++              </ul>
++            </div>
++            <Button
++              aria-describedby={`${id}-title ${id}-external-images`}
++              className="max-w-full whitespace-normal"
++              onClick={() => setExternalImagesAllowed(true)}
++              size="sm"
++              type="button"
++              variant="outline"
++            >
++              {t.preview.previewAnyway}
++            </Button>
++          </div>
++        )}
++        {card.images.length > 1 && visibleImages.length > 0 && (
++          <div className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(min(130px,100%),1fr))] gap-2">
++            {visibleImages.map(({ url, index }) => (
++              <ZoomableImage
++                alt={`${card.title} ${index + 1}`}
++                className="h-40 w-full rounded-xl border border-(--ui-stroke-tertiary) bg-(--ui-bg-quinary) object-contain"
++                decoding="async"
++                key={index}
++                loading="lazy"
++                src={url}
++              />
++            ))}
++          </div>
++        )}
++        {card.sources.length > 0 && (
++          <div className="mt-3 flex flex-wrap gap-2">
++            {card.sources.map(source => (
++              <ExternalLink
++                className="inline-flex items-center gap-1.5 rounded-full bg-(--ui-bg-quaternary) px-2.5 py-1 text-[11px] text-(--ui-text-secondary)"
++                href={source.url}
++                key={source.url}
++                title={source.url}
++              >
++                <Codicon name="globe" size="0.75rem" />
++                {source.title}
++              </ExternalLink>
++            ))}
++          </div>
++        )}
++      </div>
++    </article>
++  )
++}
 +
 +/** Native answer cards: explicit supplied data, never an executable document. */
 +export default function AnswerCards({ code, streaming }: RichFenceProps) {
 +  const { t } = useI18n()
 +  if (streaming)
-+    return (
-+      <p role="status" className="text-xs text-muted-foreground">
++    {return (
++      <p className="text-xs text-muted-foreground" role="status">
 +        {t.preview.loading}
 +      </p>
-+    )
++    )}
 +  const cards = parseAnswerCards(code)
-+  if (!cards.length) throw new Error('cards: no complete presentation data')
++  if (!cards.length) {throw new Error('cards: no complete presentation data')}
 +  return (
 +    <div
 +      className="@container not-prose my-5 grid min-w-0 gap-5 wrap-anywhere text-(--ui-text-primary)"
 +      data-slot="answer-cards"
 +    >
-+      {cards.map((card, index) => (
-+        <article key={index} className="flex min-w-0 flex-col gap-4 @sm:flex-row">
-+          {card.images.length === 1 && (
-+            <div className="h-32 w-32 max-w-full shrink-0 overflow-hidden rounded-xl border border-(--ui-stroke-tertiary) bg-(--ui-bg-quinary)">
-+              <ZoomableImage
-+                loading="lazy"
-+                decoding="async"
-+                src={card.images[0]}
-+                alt={card.title}
-+                className="h-32 w-32 max-w-full object-contain"
-+              />
-+            </div>
-+          )}
-+          <div className="min-w-0 flex-1">
-+            <h3 className="text-sm font-semibold leading-6">{card.title}</h3>
-+            {card.price && <p className="mt-1 text-2xl font-semibold tabular-nums">{card.price}</p>}
-+            {card.description && (
-+              <p className="mt-2 text-sm leading-6 text-(--ui-text-secondary)">{card.description}</p>
-+            )}
-+            {card.facts.length > 0 && <p className="mt-2 text-xs text-muted-foreground">{card.facts.join(' · ')}</p>}
-+            {card.images.length > 1 && (
-+              <div className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(min(130px,100%),1fr))] gap-2">
-+                {card.images.map((image, i) => (
-+                  <ZoomableImage
-+                    key={i}
-+                    loading="lazy"
-+                    decoding="async"
-+                    src={image}
-+                    alt={`${card.title} ${i + 1}`}
-+                    className="h-40 w-full rounded-xl border border-(--ui-stroke-tertiary) bg-(--ui-bg-quinary) object-contain"
-+                  />
-+                ))}
-+              </div>
-+            )}
-+            {card.sources.length > 0 && (
-+              <div className="mt-3 flex flex-wrap gap-2">
-+                {card.sources.map(source => (
-+                  <ExternalLink
-+                    key={source.url}
-+                    href={source.url}
-+                    className="inline-flex items-center gap-1.5 rounded-full bg-(--ui-bg-quaternary) px-2.5 py-1 text-[11px] text-(--ui-text-secondary)"
-+                    title={source.url}
-+                  >
-+                    <Codicon name="globe" size="0.75rem" />
-+                    {source.title}
-+                  </ExternalLink>
-+                ))}
-+              </div>
-+            )}
-+          </div>
-+        </article>
-+      ))}
++      {cards.map((card, index) => {
++        const externalImages = card.images.filter(url => !isEmbeddedImage(url))
++
++        // Consent applies only to these URLs on this card.
++        return (
++          <AnswerCardView card={card} externalImages={externalImages} key={JSON.stringify([index, externalImages])} />
++        )
++      })}
 +    </div>
 +  )
 +}
@@ -52852,10 +53153,10 @@ index 0000000000000000000000000000000000000000..6dd5de7bd1df30dc611f51f2bc5480ac
 +    return result
 diff --git a/gateway/session_bot_file.py b/gateway/session_bot_file.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..f7d394c75096001762f679d4a3821471459af2d1
+index 0000000000000000000000000000000000000000..4750b9a338469ab17938e3a176a807cf276f2318
 --- /dev/null
 +++ b/gateway/session_bot_file.py
-@@ -0,0 +1,205 @@
+@@ -0,0 +1,208 @@
 +"""Bounded, click-only file snapshots for the current Bot Chat workspace."""
 +from base64 import b64encode
 +from contextlib import contextmanager
@@ -53047,15 +53348,18 @@ index 0000000000000000000000000000000000000000..f7d394c75096001762f679d4a3821471
 +    try:
 +        with _workspace_parent(path) as directory:
 +            leaf = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
-+            with os.fdopen(leaf, 'rb') as stream:
-+                info = os.fstat(stream.fileno())
++            try:
++                info = os.fstat(leaf)
 +                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > limit:
 +                    return None
 +                if stamp and _pdf_stamp(info) != stamp:
 +                    return None
-+                data = stream.read(limit + 1)
-+                if stamp and (len(data) != info.st_size or _pdf_stamp(os.fstat(stream.fileno())) != stamp):
++                with os.fdopen(leaf, 'rb', closefd=False) as stream:
++                    data = stream.read(limit + 1)
++                if stamp and (len(data) != info.st_size or _pdf_stamp(os.fstat(leaf)) != stamp):
 +                    return None
++            finally:
++                os.close(leaf)
 +        if len(data) <= limit:
 +            return data
 +    except (OSError, NotImplementedError):
@@ -83240,7 +83544,7 @@ index 7f2323ea35ae9b638fc4a392e01d180c466b7529..bd12d861dc5ec2ee464fce1dae6dc000
 +    monkeypatch.setattr(run, '_load_gateway_config', lambda config_path=None: {'platform_toolsets': {'cli': []}})
      monkeypatch.setattr('hermes_cli.lifecycle.invoke_hook', lambda name, **kwargs: None)
 diff --git a/tests/gateway/test_session_group_controls.py b/tests/gateway/test_session_group_controls.py
-index 91f30aa217762d0aa80a9dccfcf5134050a9d3eb..fc19cca3dce685f4d0131cbf253f87f32d2df7d3 100644
+index 91f30aa217762d0aa80a9dccfcf5134050a9d3eb..c77867fc9142a937f353b5804c3d37f88531d251 100644
 --- a/tests/gateway/test_session_group_controls.py
 +++ b/tests/gateway/test_session_group_controls.py
 @@ -2,4 +2,6 @@
@@ -83265,7 +83569,7 @@ index 91f30aa217762d0aa80a9dccfcf5134050a9d3eb..fc19cca3dce685f4d0131cbf253f87f3
 +
 +
  def test_profiles_list_survives_an_undecodable_sibling_profile_yaml(tmp_path, monkeypatch, caplog):
-@@ -282 +296,298 @@ def test_profiles_list_cache_sees_changes_inside_one_mtime_tick(tmp_path, monkey
+@@ -282 +296,334 @@ def test_profiles_list_cache_sees_changes_inside_one_mtime_tick(tmp_path, monkey
      assert g._discovered_profile_meta('writer', meta) == {}
 +
 +
@@ -83458,6 +83762,42 @@ index 91f30aa217762d0aa80a9dccfcf5134050a9d3eb..fc19cca3dce685f4d0131cbf253f87f3
 +        if os.name != 'posix' or not hasattr(os, 'O_NOFOLLOW'):
 +            pytest.skip('POSIX no-follow preview')
 +        asyncio.run(probe())
++
++
++@pytest.mark.platforms('posix')
++@pytest.mark.parametrize('replaced_after_offer', [False, True])
++def test_bot_output_directory_preview_does_not_leak_descriptors(tmp_path, replaced_after_offer):
++    from gateway.session_bot_file import issue_preview, preview_candidate, read_preview, workspace_delivery
++
++    workspace = tmp_path.resolve()
++    path = workspace / 'report.md'
++    raw = '# Workspace report\n'
++    if replaced_after_offer:
++        path.write_text(raw, encoding='utf-8')
++    else:
++        path.mkdir()
++
++    def snapshot():
++        delivery = workspace_delivery(f'MEDIA:"{path}"', str(workspace), str(workspace / 'profile'))
++        assert delivery == path
++        return None, preview_candidate(delivery, ('fixture',))
++
++    token = issue_preview(snapshot()[1])['token']
++    if replaced_after_offer:
++        assert read_preview(token, snapshot) == {'text': raw}
++        path.unlink()
++        path.mkdir()
++
++    descriptors = Path('/dev/fd')
++    baseline = len(list(descriptors.iterdir()))
++    for _ in range(8):
++        assert read_preview(token, snapshot) is None
++    assert len(list(descriptors.iterdir())) == baseline
++
++    path.rmdir()
++    path.write_text(raw, encoding='utf-8')
++    assert read_preview(issue_preview(snapshot()[1])['token'], snapshot) == {'text': raw}
++    assert len(list(descriptors.iterdir())) == baseline
 +
 +
 +@pytest.mark.skipif(sys.platform != 'darwin', reason='Mac PDF snapshot')
