@@ -1,3 +1,21 @@
+# Drop Mac desktop pets to the floor after dragging
+
+Drag a visible sprite anywhere in the display work area. Releasing it
+above the floor plays a short fall, squash and bounce. The landing
+keeps the release's horizontal placement. Reduce Motion settles the
+pet immediately, and cancelling a drag restores its previous position.
+
+Source tests cover the seam between offset displays, display removal,
+keyboard movement along the floor, and saved positions from earlier
+builds. A new clarification cue waits for the pet to finish falling.
+
+The packaged Mac Local fixture used one display and five pets. The
+first sampled frame after release remained at the release point. The
+pet squashed, bounced and settled on the floor, and reopening the
+preview restored its horizontal placement. The 3.3-second clip shows
+the isolated overlay renderer. The 60-second Local gate recorded zero
+Desktop SSH links. All four product processes stopped. No model ran.
+
 # Flag newly saved worker errors on Mac desktop pets
 
 The **Worker failed** bubble appears after the worker report pet lands
