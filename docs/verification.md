@@ -1,3 +1,19 @@
+# Authorize a Mac Local PDF snapshot
+
+Native Mac Local callers with session control can set `pdf_preview` to
+true when requesting the latest Bot Chat output and again when redeeming
+its file ticket. The workspace rules still require one direct-child
+delivery in the current reply. The offer checks file metadata. The
+single-use read rechecks the exact reply and file revision, verifies
+the opened descriptor before and after reading, and returns at most
+512 KiB of PDF bytes. Expired, replayed, replaced, linked, oversized,
+and invalid-header offers return no snapshot.
+
+An isolated Mac authority read a two-page fixture. The first-page PNG
+from the signed sandboxed helper matched the saved image byte for byte.
+The fixture passed the snapshot to the helper outside Electron. Character
+PDFs still offer **Copy path**. App integration remains open.
+
 # Supervise the Mac PDF raster helper
 
 The private Mac supervisor accepts a PDF byte snapshot and starts the
