@@ -340,6 +340,15 @@ loads. The strip prototype used 28.6 MiB less after the state
 cycle. Product delivery still accepts full packs.
 [Transition proof](verification.md#exercise-row-strip-transitions-in-the-character-overlay).
 
+The signed Local producer prototype derived one-row PNGs at runtime
+from the same five full sheets. Its overlay matched 120 drawn-frame
+hashes. Across the app processes, strips used 4.3 MiB more after the
+state cycle. The sampled capture peak dropped by 2.0 MiB. Producer
+cropping took 20.5–33.1 ms per batch of five rows. The measured overhead
+was 101.6 MiB and 3.98 CPU points. This is an unreleased
+fixture measurement with synthetic PNG art.
+[Runtime cropping proof](verification.md#measure-runtime-row-cropping-in-the-character-producer).
+
 A follow-up Mac run measured 111.6 MiB and 2.81 CPU points of five-pack
 overhead before tracing. About 1.51 CPU points came from the overlay
 renderer and 1.29 from the main process, which hosted Chromium's GPU

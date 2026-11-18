@@ -1,3 +1,23 @@
+# Measure runtime row cropping in the character producer
+
+Three signed isolated Mac Local runs compared no overlay, full PNG
+atlases and crops derived from those same atlases in the producer
+renderer. Five characters went from running to waiting, failed
+and running again. All 120 drawn-frame hashes matched. Canvas
+identity, geometry and cadence passed. Offline controls covered
+discarding superseded work, caching the current row and falling
+back to the full atlas for failed or missing crops.
+
+After the cycle, strips used 4.3 MiB more across the app processes.
+The overlay renderer changed by -27.8 MiB, the producer
+by +10.9 MiB, and the main process including GPU by
++21.5 MiB. The sampled capture peak dropped by 2.0 MiB. Strips added
+101.6 MiB and 3.98 CPU points above no overlay. This trial
+exceeded the 2-point CPU target. Memory was above the 80 MiB ceiling. The capture peak includes diagnostics.
+The experiment leaves product delivery on full sheets. It used synthetic
+PNG art. WebP and owner art remain unverified.
+Each trial recorded zero Desktop SSH after 60 seconds and no survivors.
+
 # Exercise row-strip transitions in the character overlay
 
 A signed, isolated Mac fixture sent five characters through running,
