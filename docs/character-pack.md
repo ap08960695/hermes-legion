@@ -85,6 +85,12 @@ For an assigned Mac desktop character, set `motion_weight` to `light`,
 bounce. Heavy pets walk slower, squash harder on impact and rebound less.
 Omit the field for standard movement or compatibility with older pack installers.
 
+On the Mac desktop, a newly completed worker can play this pack's jumping
+row once after landing, then return to waving. Fill the jumping row to
+give the finished worker a custom celebration. Missing jumping frames
+keep the wave, and Reduce Motion keeps the resting pose. The completed
+pet still opens its saved report.
+
 The manifest is UTF-8 (an optional BOM is accepted), at most 64 KiB. The asset
 must have the exact filename `spritesheet.png` or `spritesheet.webp` beside it,
 be a regular static PNG/WebP and at most 16 MiB. URLs, nested asset paths,

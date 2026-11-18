@@ -1,3 +1,18 @@
+# Celebrate a saved worker completion on Mac desktop
+
+A fresh saved worker completion uses the current pack's jumping row
+once after landing. The character returns to waving and still opens
+the same saved report. Historical and repeated reports stay quiet.
+Reduce Motion and packs with empty jumping rows keep the wave.
+
+The signed Mac Local fixture imported and assigned Moon Jelly to the
+fixture bot. The overlay drew all five jumping frames in order once,
+then resumed the wave. The same report republished and reopened
+without a jump. The popover opened its saved Completed report.
+The 60-second Local gate observed zero Desktop SSH links. The app
+and gateway stopped. Renderer tests cover Reduce Motion and the
+empty-row fallback.
+
 # Use one Settings control in the Desktop main window
 
 Focus and Workspace open Settings from the rail. The titlebar gear and
