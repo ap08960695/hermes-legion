@@ -6,7 +6,9 @@ workspace on a Local POSIX backend. Suffixes are case-insensitive.
 A click rechecks the saved reply and workspace, then
 reads up to 8 KiB of UTF-8 text through no-follow file and directory
 descriptors. The snapshot appears as plain text in the popover, with
-Markdown markup and CSV formulas shown literally.
+Markdown markup and CSV formulas shown literally. Once the preview loads,
+the file starts at the first line. Expand **File path** to select the full
+path. Expanding it uses the path already shown by the reply.
 
 The isolated Mac Local run made zero file reads when the popover opened
 and one when the user selected **Preview file**. It preserved the two

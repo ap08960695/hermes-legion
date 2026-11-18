@@ -454,7 +454,10 @@ current Bot Chat workspace on a Local POSIX backend. The gateway binds the offer
 its saved workspace generation and the exact current reply. It rechecks the
 revision on click and reads through a directory descriptor without following
 symlinks. The overlay shows the snapshot as literal text, including Markdown
-markup and CSV formulas. The five-character resource budget remains open.
+markup and CSV formulas. The contents start at the first line. The **File path**
+disclosure shows the filename and expands to the exact path. Before a preview
+loads, the path appears directly in the popover. The five-character resource
+budget remains open.
 ## Match a running character to its worker
 
 The owning session’s `subagent.list` can include `child_session_id` for a
