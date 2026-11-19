@@ -6,6 +6,9 @@ The rail offers **New chat**, **History** and **Search**. New chat opens a nativ
 
 **Search** first lists recent conversations and commands. Type a phrase and choose **Search in messages** to see the first page of saved-chat matches on the active connection and profile. Use the arrow keys to select a chat and Enter to open it. Matched words are highlighted in each preview. The results announce how many chats are shown. **Search all saved chats** carries your query into History for additional filters. Sending the same query again reapplies it after an edit in History. Going Back to an unfiltered History page clears the search. Forward reapplies the saved-chat query. Press Escape to return to commands with your query intact, then Escape again to close Search. Holding Backspace clears the query while keeping message search open. Press Backspace again on the empty field to return to commands. While an input method is composing text, Backspace stays with text editing.
 
+When you switch devices, History and message search pause until the switch
+settles. Your query stays in place, and results refresh on the active device.
+
 ![Search in messages fixture with three saved chats and the second result selected by keyboard.](images/saved-message-search-fixture.webp)
 
 Open **Settings** from the navigation rail in Focus or Workspace. In a compact window it sits beside **History**. The Settings shortcut (⌘, on Mac, Ctrl+, on Windows and Linux) and the command palette also open Settings. Typing in Settings opens its search with the first character already entered. Standalone chat windows have a Settings gear in their titlebar.

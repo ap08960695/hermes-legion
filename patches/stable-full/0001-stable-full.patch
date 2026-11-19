@@ -21645,6 +21645,113 @@ index 845144445fd8f466496e33277c744e8db375a704..cd6d5eccf69713a92e0c11b1f08fa01b
 +        scope={storedSessionId}
 +      />
      ),
+diff --git a/apps/desktop/src/app/chat/sidebar/chat-sidebar.integration.test.tsx b/apps/desktop/src/app/chat/sidebar/chat-sidebar.integration.test.tsx
+index 0a94d88820a0a51246c742417cb29c447b4bf4b0..25bbb96ed1b61cf8b25526d8269839823e944556 100644
+--- a/apps/desktop/src/app/chat/sidebar/chat-sidebar.integration.test.tsx
++++ b/apps/desktop/src/app/chat/sidebar/chat-sidebar.integration.test.tsx
+@@ -9,2 +9,4 @@ import { SidebarProvider } from '@/components/ui/sidebar'
+ import { registry } from '@/contrib/registry'
++import { searchSessions } from '@/hermes'
++import { $pendingConnectionId } from '@/store/connections'
+ import { $connectionsRegistry } from '@/store/connection-registry-state'
+@@ -15,2 +17,3 @@ import { $projectTree } from '@/store/projects'
+ import {
++  $connection,
+   $currentCwd,
+@@ -34,2 +37,7 @@ import { ChatSidebar } from './index'
+
++vi.mock('@/hermes', async original => ({
++  ...(await original<typeof import('@/hermes')>()),
++  searchSessions: vi.fn()
++}))
++
+ const noop = () => {}
+@@ -43,3 +51,8 @@ const sessionRows = [
+
+-const renderSidebar = (pathname: string, currentView: AppView, onRetrySessions: () => Promise<void> = noopAsync) =>
++const renderSidebar = (
++  pathname: string,
++  currentView: AppView,
++  onRetrySessions: () => Promise<void> = noopAsync,
++  onResumeSession: (id: string) => void = noop
++) =>
+   render(
+@@ -57,3 +70,3 @@ const renderSidebar = (pathname: string, currentView: AppView, onRetrySessions:
+           onNewSessionSplit={noop}
+-          onResumeSession={noop}
++          onResumeSession={onResumeSession}
+           onRetrySessions={onRetrySessions}
+@@ -503 +516,70 @@ describe('ChatSidebar messaging owners', () => {
+ })
++
++it('hides outgoing History search rows while a device switch is pending', async () => {
++  vi.useFakeTimers()
++  const previousConnection = $connection.get()
++  const previousProfile = $activeGatewayProfile.get()
++  const previousSessionsLoading = $sessionsLoading.get()
++  const previousSessions = $sessions.get()
++  const resume = vi.fn()
++  const search = vi.mocked(searchSessions)
++  const hit = {
++    session_id: 'saved-first', title: 'Outgoing saved hit', source: 'cli', profile: 'default',
++    model: null, role: null, session_started: 1, snippet: 'fixture'
++  }
++  search.mockResolvedValueOnce({ results: [hit] }).mockResolvedValueOnce({
++    results: [{ ...hit, session_id: 'saved-other', title: 'Incoming saved hit' }]
++  })
++  const connection = {
++    baseUrl: 'http://127.0.0.1:1', wsUrl: 'ws://127.0.0.1:1',
++    isFullscreen: false, nativeOverlayWidth: 0, token: '', logs: [], windowButtonPosition: null
++  }
++  try {
++    $connection.set({ ...connection, connectionId: 'local' })
++    $activeGatewayProfile.set('default')
++    $sessionsLoading.set(false)
++    $sessions.set([makeSessionInfo({
++      id: 'loaded-first', title: 'Outgoing fixture title', connection_id: 'local', profile: 'default'
++    })])
++    renderSidebar('/history?search=fixture', 'history', noopAsync, resume)
++    const field = screen.getByRole<HTMLInputElement>('textbox', { name: 'Search sessions' })
++    await act(async () => { await vi.advanceTimersByTimeAsync(201) })
++    expect(screen.getByText('Outgoing fixture title')).toBeTruthy()
++    expect(screen.getByText('Outgoing saved hit')).toBeTruthy()
++
++    act(() => $pendingConnectionId.set('fixture-other'))
++    expect(field.value).toBe('fixture')
++    expect(screen.queryByText('Outgoing fixture title')).toBeNull()
++    expect(screen.queryByText('Outgoing saved hit')).toBeNull()
++    fireEvent.keyDown(field, { key: 'Enter' })
++    expect(resume).not.toHaveBeenCalled()
++    await act(async () => { await vi.advanceTimersByTimeAsync(201) })
++    expect(search).toHaveBeenCalledOnce()
++
++    act(() => {
++      $sessions.set([])
++      $connection.set({ ...connection, connectionId: 'fixture-other' })
++    })
++    expect(screen.getByRole('textbox', { name: 'Search sessions' })).toBe(field)
++    await act(async () => { await vi.advanceTimersByTimeAsync(201) })
++    expect(search).toHaveBeenCalledOnce()
++
++    act(() => $pendingConnectionId.set(null))
++    await act(async () => { await vi.advanceTimersByTimeAsync(201) })
++    expect(search.mock.calls).toEqual([
++      ['fixture', 'default', 'local'],
++      ['fixture', 'default', 'fixture-other']
++    ])
++    expect(screen.getByText('Incoming saved hit')).toBeTruthy()
++    expect(screen.queryByText('Outgoing saved hit')).toBeNull()
++  } finally {
++    cleanup()
++    search.mockReset()
++    $pendingConnectionId.set(null)
++    $connection.set(previousConnection)
++    $activeGatewayProfile.set(previousProfile)
++    $sessionsLoading.set(previousSessionsLoading)
++    $sessions.set(previousSessions)
++    vi.useRealTimers()
++  }
++})
 diff --git a/apps/desktop/src/app/chat/sidebar/connection-switcher.test.tsx b/apps/desktop/src/app/chat/sidebar/connection-switcher.test.tsx
 index e0362e004b4ef3eceeaeec411425ff22efaf9dfe..80bc0d81dc90e0cdebfa858f3de1b3131dda30d0 100644
 --- a/apps/desktop/src/app/chat/sidebar/connection-switcher.test.tsx
@@ -21858,7 +21965,7 @@ index d847fc07b0f047bda92096681fd8a77c08681b6b..3c16a3570d4dea42ee3b99e19f16376f
 +      {status}
        <Codicon aria-hidden="true" className="shrink-0 opacity-60" name="chevron-down" size="0.875rem" />
 diff --git a/apps/desktop/src/app/chat/sidebar/index.tsx b/apps/desktop/src/app/chat/sidebar/index.tsx
-index dadfd889c0a65cb953b70396c8e2ca3f30c7fc57..f8e865348578bed7ec839aa7057af525e06eae2c 100644
+index dadfd889c0a65cb953b70396c8e2ca3f30c7fc57..85261be6947f4c99a47ada8fc3a89281867780cc 100644
 --- a/apps/desktop/src/app/chat/sidebar/index.tsx
 +++ b/apps/desktop/src/app/chat/sidebar/index.tsx
 @@ -1 +1,4 @@
@@ -21871,6 +21978,11 @@ index dadfd889c0a65cb953b70396c8e2ca3f30c7fc57..f8e865348578bed7ec839aa7057af525
 +
 +import { contextualSidebarItems, useFocusNavigation } from '@/app/focus/context'
  import type * as React from 'react'
+@@ -32,3 +37,3 @@ import { cn } from '@/lib/utils'
+ import { $connectionsRegistry } from '@/store/connection-registry-state'
+-import { $activeConnectionId } from '@/store/connections'
++import { $activeConnectionId, $pendingConnectionId } from '@/store/connections'
+ import { $cronJobs } from '@/store/cron'
 @@ -146,4 +151,3 @@ import {
    MESSAGING_ROUTE,
 -  SIDEBAR_NAV_AREA,
@@ -21884,7 +21996,7 @@ index dadfd889c0a65cb953b70396c8e2ca3f30c7fc57..f8e865348578bed7ec839aa7057af525
 @@ -194,2 +199,3 @@ import { useEnteredProjectSessions } from './use-entered-project-sessions'
  import { useServerSessionSearch } from './use-server-session-search'
 +import { SessionSearchFeedback, SessionSearchEmptyState } from './session-search-feedback'
- 
+
 @@ -289,36 +295,2 @@ const HEADER_NAV_BTN =
  // stripped or a search for "foo" paints rows titled ">>>foo<<<".
 -// Exported for tests.
@@ -21923,7 +22035,7 @@ index dadfd889c0a65cb953b70396c8e2ca3f30c7fc57..f8e865348578bed7ec839aa7057af525
 -
  export function mergeSearchResults(
 @@ -417,26 +389,5 @@ export function ChatSidebar({
- 
+
 -  const contributedNav = useMemo<SidebarNavItem[]>(
 -    () =>
 -      navContributions.flatMap(c => {
@@ -21948,7 +22060,7 @@ index dadfd889c0a65cb953b70396c8e2ca3f30c7fc57..f8e865348578bed7ec839aa7057af525
 -    [navContributions]
 -  )
 +  const contributedNav = useMemo(() => contributedSidebarItems(navContributions), [navContributions])
- 
+
 +  const focusNavigation = useFocusNavigation()
    const interfaceMode = useStore($interfaceMode)
 @@ -547,3 +498,3 @@ export function ChatSidebar({
@@ -21960,21 +22072,35 @@ index dadfd889c0a65cb953b70396c8e2ca3f30c7fc57..f8e865348578bed7ec839aa7057af525
    const [messagingVisible, setMessagingVisible] = useState<Record<string, number>>({})
 -  const searchInputRef = useRef<HTMLInputElement>(null)
    const trimmedQuery = searchQuery.trim()
-@@ -743,3 +693,3 @@ export function ChatSidebar({
- 
+@@ -743,7 +693,11 @@ export function ChatSidebar({
+
 -  const { searchPending, serverMatches } = useServerSessionSearch(trimmedQuery, profileScope)
-+  const { searchPending, serverMatches, searchError, retrySearch } = useServerSessionSearch(trimmedQuery, profileScope)
- 
-@@ -1579,3 +1529,3 @@ export function ChatSidebar({
++  const { searchPending, serverMatches, searchError, retrySearch, switchingConnection } =
++    useServerSessionSearch(trimmedQuery, profileScope)
+
+   const searchResults = useMemo(
+-    () => mergeSearchResults(sortedSessions, trimmedQuery, serverMatches, sessionByAnyId, searchPending),
+-    [sortedSessions, trimmedQuery, serverMatches, sessionByAnyId, searchPending]
++    () =>
++      switchingConnection
++        ? []
++        : mergeSearchResults(sortedSessions, trimmedQuery, serverMatches, sessionByAnyId, searchPending),
++    [switchingConnection, sortedSessions, trimmedQuery, serverMatches, sessionByAnyId, searchPending]
+   )
+@@ -1517,2 +1471,3 @@ export function ChatSidebar({
+   const showSessionSections =
++    Boolean(trimmedQuery) ||
+     showSessionSkeletons ||
+@@ -1579,3 +1534,3 @@ export function ChatSidebar({
              <SidebarMenu className="gap-px">
 -              {navItems.map(item => {
 +              {contextualSidebarItems(navItems, focusNavigation).map(item => {
                  const isInteractive = Boolean(item.action) || Boolean(item.route)
-@@ -1731,2 +1681,3 @@ export function ChatSidebar({
+@@ -1731,2 +1686,3 @@ export function ChatSidebar({
            >
 +            <SessionSearchFeedback failed={searchError} onRetry={retrySearch} />
              {trimmedQuery && (
-@@ -1735,11 +1686,3 @@ export function ChatSidebar({
+@@ -1735,11 +1691,3 @@ export function ChatSidebar({
                  contentClassName={cn('flex min-h-0 flex-1 flex-col gap-px pb-1.75', SCROLL_Y)}
 -                emptyState={
 -                  searchPending ? (
@@ -21987,7 +22113,20 @@ index dadfd889c0a65cb953b70396c8e2ca3f30c7fc57..f8e865348578bed7ec839aa7057af525
 -                }
 +                emptyState={<SessionSearchEmptyState pending={searchPending} failed={searchError} noMatch={s.noMatch(trimmedQuery)} />}
                  label={s.results}
-@@ -1916,23 +1859,25 @@ export function ChatSidebar({
+@@ -1748,3 +1696,11 @@ export function ChatSidebar({
+                 onDeleteSession={onDeleteSession}
+-                onResumeSession={onResumeSession}
++                onResumeSession={(id, session) => {
++                  if (
++                    $pendingConnectionId.get() === null &&
++                    $activeConnectionId.get() === activeConnectionId &&
++                    $profileScope.get() === profileScope
++                  ) {
++                    onResumeSession(id, session)
++                  }
++                }}
+                 onToggle={() => undefined}
+@@ -1916,23 +1872,25 @@ export function ChatSidebar({
                              the dropped spot. */}
 -                        <SidebarSectionAddButton
 -                          ariaLabel={agentsGrouped ? s.projects.newButton : s.nav['new-session']}
@@ -22247,16 +22386,19 @@ index 98dcd623ac5805f845cb724e9739d35271b92672..7bba66937e9a24b1297cde988777eb99
        <WorkspaceAddButton
 diff --git a/apps/desktop/src/app/chat/sidebar/use-server-session-search.test.tsx b/apps/desktop/src/app/chat/sidebar/use-server-session-search.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..e379891c3f333fa181f2252d0dc5f7f9cf18694d
+index 0000000000000000000000000000000000000000..f4494ea7c820e79120942e648f938380e575a1e0
 --- /dev/null
 +++ b/apps/desktop/src/app/chat/sidebar/use-server-session-search.test.tsx
-@@ -0,0 +1,111 @@
+@@ -0,0 +1,147 @@
 +import { act, cleanup, renderHook } from '@testing-library/react'
 +import { atom } from 'nanostores'
 +import { afterEach, expect, it, vi } from 'vitest'
 +import { useServerSessionSearch } from './use-server-session-search'
-+vi.mock('@/store/connections', () => ({ $activeConnectionId: atom<string | null>(null) }))
-+import { $activeConnectionId } from '@/store/connections'
++vi.mock('@/store/connections', () => ({
++  $activeConnectionId: atom<string | null>(null),
++  $pendingConnectionId: atom<string | null>(null)
++}))
++import { $activeConnectionId, $pendingConnectionId } from '@/store/connections'
 +import type { WritableAtom } from 'nanostores'
 +
 +const connectionId = $activeConnectionId as WritableAtom<string | null>
@@ -22267,6 +22409,7 @@ index 0000000000000000000000000000000000000000..e379891c3f333fa181f2252d0dc5f7f9
 +  vi.useRealTimers()
 +  io.search.mockReset()
 +  connectionId.set(null)
++  $pendingConnectionId.set(null)
 +})
 +const hit = { id: 'old-hit', title: 'Earlier query', source: 'cli' }
 +async function tick() {
@@ -22362,8 +22505,40 @@ index 0000000000000000000000000000000000000000..e379891c3f333fa181f2252d0dc5f7f9
 +  expect(io.search).toHaveBeenLastCalledWith('same query', 'default', 'local')
 +  expect(result.current.searchPending).toBe(false)
 +})
++
++it('discards pre-switch reads and waits through a rollback to the same query and device', async () => {
++  vi.useFakeTimers()
++  connectionId.set('local')
++  let finishOld!: (value: unknown) => void
++  io.search
++    .mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve }))
++    .mockResolvedValueOnce({ results: [] })
++  const { result, rerender } = renderHook(({ query }) => useServerSessionSearch(query, 'default'), {
++    initialProps: { query: 'same query' }
++  })
++  await tick()
++  expect(io.search).toHaveBeenCalledOnce()
++
++  act(() => $pendingConnectionId.set('fixture-other'))
++  rerender({ query: 'edited while switching' })
++  await tick()
++  expect(io.search).toHaveBeenCalledOnce()
++  expect(result.current.searchPending).toBe(true)
++
++  rerender({ query: 'same query' })
++  act(() => $pendingConnectionId.set(null))
++  await act(async () => finishOld({ results: [hit] }))
++  expect(result.current.serverMatches).toEqual([])
++  expect(result.current.searchPending).toBe(true)
++  await tick()
++  expect(io.search.mock.calls).toEqual([
++    ['same query', 'default', 'local'],
++    ['same query', 'default', 'local']
++  ])
++  expect(result.current.searchPending).toBe(false)
++})
 diff --git a/apps/desktop/src/app/chat/sidebar/use-server-session-search.ts b/apps/desktop/src/app/chat/sidebar/use-server-session-search.ts
-index 32fd677b19b6111588d2c0a2bf68486442f13b0a..3e895fcf913eb5ca5d467f70780bef2aecfe2a0a 100644
+index 32fd677b19b6111588d2c0a2bf68486442f13b0a..eae9e2ba5aafcd77aee18dc7408cfabb0ad56a11 100644
 --- a/apps/desktop/src/app/chat/sidebar/use-server-session-search.ts
 +++ b/apps/desktop/src/app/chat/sidebar/use-server-session-search.ts
 @@ -1,4 +1,6 @@
@@ -22372,7 +22547,7 @@ index 32fd677b19b6111588d2c0a2bf68486442f13b0a..3e895fcf913eb5ca5d467f70780bef2a
 +import { useEffect, useMemo, useState } from 'react'
 
  import { searchSessions, type SessionSearchResult } from '@/hermes'
-+import { $activeConnectionId } from '@/store/connections'
++import { $activeConnectionId, $pendingConnectionId } from '@/store/connections'
  import { ALL_PROFILES, normalizeProfileKey } from '@/store/profile'
 @@ -6,3 +8,8 @@ import { ALL_PROFILES, normalizeProfileKey } from '@/store/profile'
  const SEARCH_DEBOUNCE_MS = 200
@@ -22384,9 +22559,10 @@ index 32fd677b19b6111588d2c0a2bf68486442f13b0a..3e895fcf913eb5ca5d467f70780bef2a
 +  failed: boolean
 +}
  export interface ServerSessionSearch {
-@@ -10,42 +17,28 @@ export interface ServerSessionSearch {
+@@ -10,42 +17,34 @@ export interface ServerSessionSearch {
    searchPending: boolean
 +  searchError: boolean
++  switchingConnection: boolean
 +  retrySearch: () => void
  }
 
@@ -22404,9 +22580,13 @@ index 32fd677b19b6111588d2c0a2bf68486442f13b0a..3e895fcf913eb5ca5d467f70780bef2a
 +  const [attempt, setAttempt] = useState(0)
    const profile = profileScope === ALL_PROFILES ? null : normalizeProfileKey(profileScope)
 +  const connectionId = useStore($activeConnectionId)
++  const switchingConnection = useStore($pendingConnectionId) !== null
 
 +  // Identity also distinguishes a return to a previously visited query or connection.
-+  const request = useMemo(() => ({ query, profile, connectionId, attempt }), [query, profile, connectionId, attempt])
++  const request = useMemo(
++    () => ({ query, profile, connectionId, attempt, switchingConnection }),
++    [query, profile, connectionId, attempt, switchingConnection]
++  )
    useEffect(() => {
 -    if (!query) {
 -      setServerMatches([])
@@ -22415,7 +22595,7 @@ index 32fd677b19b6111588d2c0a2bf68486442f13b0a..3e895fcf913eb5ca5d467f70780bef2a
 -      return
 -    }
 -
-+    if (!request.query) return
++    if (!request.query || request.switchingConnection) return
      let cancelled = false
 -
 -    setSearchPending(true)
@@ -22433,6 +22613,7 @@ index 32fd677b19b6111588d2c0a2bf68486442f13b0a..3e895fcf913eb5ca5d467f70780bef2a
 -            setSearchPending(false)
 -          }
 -        })
++      if ($pendingConnectionId.get() !== null || $activeConnectionId.get() !== request.connectionId) return
 +      void searchSessions(request.query, request.profile, request.connectionId).then(
 +        res => {
 +          if (!cancelled) setState({ request, hits: res.results, failed: false })
@@ -22444,18 +22625,18 @@ index 32fd677b19b6111588d2c0a2bf68486442f13b0a..3e895fcf913eb5ca5d467f70780bef2a
      }, SEARCH_DEBOUNCE_MS)
 -
      return () => {
-@@ -54,5 +47,11 @@ export function useServerSessionSearch(query: string, profileScope: string): Ser
+@@ -54,5 +53,12 @@ export function useServerSessionSearch(query: string, profileScope: string): Ser
      }
 -  }, [query, profile])
--
--  return { searchPending, serverMatches }
 +  }, [request])
-+
+
+-  return { searchPending, serverMatches }
 +  const current = query && state?.request === request ? state : undefined
 +  return {
 +    serverMatches: current?.hits ?? [],
 +    searchPending: Boolean(query) && !current,
 +    searchError: current?.failed ?? false,
++    switchingConnection,
 +    retrySearch: () => setAttempt(n => n + 1)
 +  }
  }
@@ -23081,10 +23262,10 @@ index 0000000000000000000000000000000000000000..422f49eeef1699aed7b4384c143afe85
 +})
 diff --git a/apps/desktop/src/app/command-palette/saved-chat-search.tsx b/apps/desktop/src/app/command-palette/saved-chat-search.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..76309fe4a0731e5b8f69ef595583387454ac0fa0
+index 0000000000000000000000000000000000000000..40420d557a8b22942c6da60dc4bf9db141967a77
 --- /dev/null
 +++ b/apps/desktop/src/app/command-palette/saved-chat-search.tsx
-@@ -0,0 +1,176 @@
+@@ -0,0 +1,172 @@
 +import { useStore } from '@nanostores/react'
 +import type { ReactNode } from 'react'
 +import { useNavigate } from 'react-router'
@@ -23146,16 +23327,12 @@ index 0000000000000000000000000000000000000000..76309fe4a0731e5b8f69ef5955833874
 +  const navigate = useNavigate()
 +  const t = useFocusCopy()
 +  const connectionId = useStore($activeConnectionId)
-+  const pendingConnection = useStore($pendingConnectionId)
 +  const profile = normalizeProfileKey(useStore($activeGatewayProfile))
 +  const search = query.trim()
-+  const { serverMatches, searchPending, searchError, retrySearch } = useServerSessionSearch(
-+    pendingConnection ? '' : search,
-+    profile
-+  )
++  const { serverMatches, searchPending, searchError, retrySearch } = useServerSessionSearch(search, profile)
 +  const status = !search
 +    ? t('messageSearchHint')
-+    : searchPending || pendingConnection
++    : searchPending
 +      ? t('messageSearchLoading')
 +      : searchError
 +        ? t('messageSearchFailed')
