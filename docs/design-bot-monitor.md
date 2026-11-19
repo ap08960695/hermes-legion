@@ -52,7 +52,9 @@ evidence and limits are detailed in [verification](verification.md); round182 is
 **Bots → Monitor** opens one dashboard instead of scanning individual cards.
 It lists the visible bots and their bounded, current worker observations, with
 task/step, elapsed time, tokens, model and attention/source status. Search, status
-filters and sorting are local. Search also matches text shown in the latest
+filters and sorting are local. If your filters hide every row, **Clear filters**
+restores the full table, preserves the sort, and returns focus to search.
+Search also matches text shown in the latest
 signal column, including the Bot Chat preview. An explicit Open chat action
 uses the existing source-qualified canonical bot-chat action, including for a
 worker's parent bot.
