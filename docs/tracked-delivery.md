@@ -19,14 +19,18 @@ Acceptance describes recorded evidence at handoff, not a new execution of checks
 ## Compare a revision
 
 In **Track work**, open **Compare with the round that asked for changes**.
-The comparison pairs the handoff before the latest request with the handoff
-after it, when available. It shows artifact changes from recorded hashes and
-labels check evidence with its own run. The text diff reads only the selected
-file. Both versions must be bounded text and match their recorded hashes.
-Keyboard focus stays on the file button while its diff loads. You can
-choose a different file without waiting for the first read.
-The diff panel identifies the selected file while loading and after the read.
-Historical hashes can remain available after the original file bytes are gone.
+Track Work opens the latest request for changes. Use **Revision round** to
+compare an earlier request on the same card. The five most recent requests
+are shown. Each comparison pairs the handoff before that request with the last
+handoff before the next request. The latest round shows a waiting state until
+a revised handoff is available.
+
+The comparison shows recorded artifact changes and labels check evidence by
+run. Earlier rounds use recorded check IDs if the card brief has since changed.
+A text diff reads only the selected file. Both versions must be bounded text
+and match their recorded hashes. Historical hashes can remain available after
+the file bytes are gone. You can switch files without waiting. Focus stays on
+the file button, and the diff panel identifies the selected file.
 
 [Revision comparison in a synthetic browser fixture](images/work-card-revision-fixture.webp)
 
