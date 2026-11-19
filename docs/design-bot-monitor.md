@@ -82,8 +82,10 @@ The same request stays pending if you close and reopen the inbox while
 it sends. Other questions and approvals are still available.
 
 If the inbox cannot load requests from the active gateway, **Refresh inbox**
-retries the list once at a time. The button stays focused while it loads.
-If the inbox recovers while the button still has focus, focus moves to the
+retries the list once at a time. A failed refresh keeps the open rows and
+unsent answers visible and pauses submissions. A successful refresh restores
+the answer for the same request and clears it when the request changes. The
+button stays focused while it loads. If the inbox recovers while the button still has focus, focus moves to the
 inbox heading so you can tab into the list.
 
 The inbox updates when the gateway opens or settles a request. A confirmed
