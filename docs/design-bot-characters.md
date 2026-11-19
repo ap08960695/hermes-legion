@@ -1060,3 +1060,28 @@ walking and waiting crops matched. Shared-reference reuse, restoration,
 hide/wake and backing release on EOF passed. Keep direct ImageIO in the
 fixture. The next compact test should draw into final-sized storage
 without an intermediate full-size bitmap.
+
+### Draw into final-size native atlas backing
+
+Four network-denied Mac launches compared the existing direct ImageIO
+path with two clipped draws into one compact 768×420 bitmap. Both
+arms used the same five sprites, source bytes, path and 6 Hz timer.
+The compact arm allocated only the final bitmap. ImageIO and Quartz
+could still decode or cache the full source internally.
+
+| Native backing | Helper RSS | Helper physical footprint | Added tree RSS | Added combined CPU |
+| --- | ---: | ---: | ---: | ---: |
+| Direct ImageIO | 58.34–60.53 MiB | 30.49–32.67 MiB | 73.66–79.41 MiB | 0.65–2.52 points |
+| Compact clipped draws | 63.88–64.41 MiB | 30.92–32.81 MiB | 83.08–83.36 MiB | 1.65–2.23 points |
+
+In the two reversed pairs, the compact arm added 3.35–6.07 MiB of helper
+RSS, 0.14–0.43 MiB of helper physical footprint and 3.67–9.70 MiB of tree
+RSS. Combined CPU shifts varied from −0.29 to +1.00 points. Synchronous
+construction was 16.96–17.03 ms across five compact atlases and
+1.59–2.12 ms for direct ImageIO, which can defer pixel decoding.
+
+All 6,451,200 retained bytes, including guard scanlines, matched the
+reference. Eight paired crops matched exactly. Backing sharing,
+restoration, hide/wake and release on EOF passed. Keep direct ImageIO
+in the fixture. The next comparison should isolate the cost of
+transferring and parsing encoded atlases at the native helper boundary.
