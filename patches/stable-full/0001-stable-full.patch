@@ -19463,23 +19463,36 @@ index b43a453ce927f76bdc0a7b9b96a463247982aaa1..23f32b4e6b23aa8c862aebee4853d1b7
 +  expect(onSubmit).toHaveBeenCalledTimes(1)
 +})
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.test.tsx b/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.test.tsx
-index d929e041de641a0d5ef8afe59196e3c00467c280..2e1601c2c45513b90262044bef1e1f497a8e63dd 100644
+index d929e041de641a0d5ef8afe59196e3c00467c280..b5eefe3b0fe6d9aff9248fc888a4dbd4e35df6d1 100644
 --- a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.test.tsx
 +++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.test.tsx
-@@ -13,2 +13,4 @@ import {
+@@ -4,5 +4,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
+
++import { GATEWAY_CONNECTION_CLOSED_MESSAGE } from '@/api/client'
+ import * as sessionOwnerUtils from '@/app/session/hooks/use-session-actions/utils'
+ import { PaneVisibleContext } from '@/components/pane-shell/pane-visibility'
+-import { $clarifyRequests } from '@/store/clarify'
++import { $clarifyRequests, setClarifyRequest } from '@/store/clarify'
+ import {
+@@ -13,2 +14,4 @@ import {
  import { $queuedPromptsBySession, clearQueuedPrompts, getQueuedPrompts } from '@/store/composer-queue'
 +import { type ComposerDraftRetry, draftRetry, matchingDraftRetry } from '@/store/composer-draft-retry'
 +import { $confirmRequest, settleConfirm } from '@/store/confirm'
  import { $connectionRequests, type ConnectionRequest } from '@/store/connection-request'
-@@ -38,2 +40,3 @@ interface SubmitHarnessOptions {
+@@ -24,3 +27,3 @@ import {
+ } from '@/store/prompts'
+-import { hasOpenServerRequest, rememberServerRequest, resetServerRequestsForTests } from '@/store/server-requests'
++import { forgetServerRequest, hasOpenServerRequest, rememberServerRequest, resetServerRequestsForTests } from '@/store/server-requests'
+ import { $connection } from '@/store/session'
+@@ -38,2 +41,3 @@ interface SubmitHarnessOptions {
    inputDisabled?: boolean
 +  recovered?: ComposerDraftRetry
    scopeTarget?: ComposerTarget
-@@ -53,2 +56,3 @@ function renderSubmitHook({
+@@ -53,2 +57,3 @@ function renderSubmitHook({
    inputDisabled = false,
 +  recovered,
    scopeTarget = 'main',
-@@ -124,2 +128,8 @@ function renderSubmitHook({
+@@ -124,2 +129,8 @@ function renderSubmitHook({
          focusInput: vi.fn(),
 +        getDraftRetry: () => recovered,
 +        takeDraftRetry: (value, files) => {
@@ -19488,7 +19501,51 @@ index d929e041de641a0d5ef8afe59196e3c00467c280..2e1601c2c45513b90262044bef1e1f49
 +          return matched
 +        },
          inputDisabled,
-@@ -1027 +1037,57 @@ describe('useComposerSubmit with a setup card waiting in the onboarding chat', (
+@@ -681,2 +692,43 @@ describe('useComposerSubmit with a clarify parked on the session', () => {
+
++  it.each(['same', 'replacement', 'settled'] as const)('scopes a disconnected final answer when the prompt is %s', async replay => {
++    parkClarify('runtime-session')
++    const original = $clarifyRequests.get()['runtime-session']
++    let disconnect!: (error: Error) => void
++    const request = vi.fn(() => new Promise((_resolve, reject) => (disconnect = reject)))
++    setGateway(request)
++    const answer = 'the original answer'
++    const { hook, loadIntoComposer, stashAt, onSubmit } = renderSubmitHook({ text: answer })
++
++    act(() => hook.result.current.submitDraft())
++    await waitFor(() => expect(request).toHaveBeenCalledTimes(1))
++    expect(request).toHaveBeenCalledWith('clarify.lock', {
++      answer,
++      question_id: 'q0',
++      request_id: original.requestId
++    })
++
++    if (replay === 'replacement') {
++      setClarifyRequest({ ...original, requestId: 'new-request' })
++    } else if (replay === 'settled') {
++      forgetServerRequest(original.requestId)
++    }
++
++    await act(async () => disconnect(new Error(GATEWAY_CONNECTION_CLOSED_MESSAGE)))
++
++    if (replay === 'same') {
++      setClarifyRequest(original)
++    }
++
++    expect($clarifyRequests.get()['runtime-session']?.retryDraft).toEqual(
++      replay === 'same' ? { q0: { choices: [], draft: answer } } : undefined
++    )
++    if (replay === 'settled') {
++      expect($clarifyRequests.get()['runtime-session']).toBeUndefined()
++    }
++    expect(loadIntoComposer).not.toHaveBeenCalled()
++    expect(stashAt).not.toHaveBeenCalled()
++    expect(onSubmit).not.toHaveBeenCalled()
++    expect(request).toHaveBeenCalledTimes(1)
++  })
++
+   it('answers one question per submit while a busy turn waits, matching a choice label', async () => {
+@@ -1027 +1079,57 @@ describe('useComposerSubmit with a setup card waiting in the onboarding chat', (
  })
 +
 +
@@ -63847,20 +63904,24 @@ index 0000000000000000000000000000000000000000..71b71b92e0fd355937e54fb30d21e8df
 +  dropCharacterSettings(from)
 +}
 diff --git a/apps/desktop/src/store/clarify.ts b/apps/desktop/src/store/clarify.ts
-index f4becc2eb75f2dd4bfb32540b3d4dfca78e24a7d..5b56ff4a01f46ea2fc9712f3d12337247b2b2a5e 100644
+index f4becc2eb75f2dd4bfb32540b3d4dfca78e24a7d..5d9dbce7c1d31da53b4e921cc06b9dfb17d7c788 100644
 --- a/apps/desktop/src/store/clarify.ts
 +++ b/apps/desktop/src/store/clarify.ts
-@@ -18,2 +18,4 @@ export interface ClarifyQuestion {
+@@ -2,2 +2,3 @@ import { atom, computed } from 'nanostores'
+
++import { GATEWAY_CONNECTION_CLOSED_MESSAGE } from '@/api/client'
+ import { translateNow } from '@/i18n'
+@@ -18,2 +19,4 @@ export interface ClarifyQuestion {
 
 +export type ClarifyDraft = Record<string, { choices: string[]; draft: string }>
 +
  export interface ClarifyRequest {
-@@ -24,2 +26,4 @@ export interface ClarifyRequest {
+@@ -24,2 +27,4 @@ export interface ClarifyRequest {
    questions: ClarifyQuestion[]
-+  /** An unconfirmed inline answer retained until this request closes. */
++  /** An unconfirmed answer retained on the question until this request closes. */
 +  retryDraft?: ClarifyDraft
    /** Answers already locked server-side (reconnect replay): qid → answer, null = skipped. */
-@@ -132,3 +136,8 @@ export const sessionClarifyRequest = (sessionId: string | null) =>
+@@ -132,3 +137,8 @@ export const sessionClarifyRequest = (sessionId: string | null) =>
  export function setClarifyRequest(request: ClarifyRequest): void {
 -  $clarifyRequests.set({ ...$clarifyRequests.get(), [keyFor(request.sessionId)]: request })
 +  const requests = $clarifyRequests.get()
@@ -63870,6 +63931,56 @@ index f4becc2eb75f2dd4bfb32540b3d4dfca78e24a7d..5b56ff4a01f46ea2fc9712f3d1233724
 +
 +  $clarifyRequests.set({ ...requests, [key]: retryDraft ? { ...request, retryDraft } : request })
    forgetSettledClarify(request.requestId)
+@@ -279,10 +289,2 @@ registerParkedCardAnswer('clarify', {
+
+-/** The choice typed text names (any case, as the messaging path matches labels), else the words themselves. */
+-function typedAnswer(question: ClarifyQuestion, text: string): string {
+-  const typed = text.toLowerCase()
+-  const answer = question.choices?.map(bareChoice).find(choice => choice.toLowerCase() === typed) ?? text
+-
+-  return question.multiSelect ? JSON.stringify([answer]) : answer
+-}
+-
+ /**
+@@ -301,3 +303,5 @@ function lockTypedAnswer(request: ClarifyRequest, text: string): null | Promise<
+
+-  const answer = typedAnswer(question, text)
++  const choice = question.choices?.find(entry => bareChoice(entry).toLowerCase() === text.toLowerCase())
++  const value = choice === undefined ? text : bareChoice(choice)
++  const answer = question.multiSelect ? JSON.stringify([value]) : value
+   const lockedAnswers = { ...request.lockedAnswers, [question.qid]: answer }
+@@ -323,2 +327,3 @@ function lockTypedAnswer(request: ClarifyRequest, text: string): null | Promise<
+   const previous = lockChains.get(request.requestId) ?? Promise.resolve(true)
++  let handledByClarification = false
+
+@@ -344,2 +349,22 @@ function lockTypedAnswer(request: ClarifyRequest, text: string): null | Promise<
+       } catch (error) {
++        if (last && error instanceof Error && error.message === GATEWAY_CONNECTION_CLOSED_MESSAGE) {
++          forgetSettledClarify(request.requestId)
++          const current = $clarifyRequests.get()[keyFor(request.sessionId)]
++          const live = current ?? (hasOpenServerRequest(request.requestId) ? request : null)
++
++          if (live?.requestId === request.requestId && live.lockedAnswers?.[question.qid] === undefined) {
++            setClarifyRequest({
++              ...live,
++              retryDraft: {
++                ...live.retryDraft,
++                [question.qid]: choice === undefined ? { choices: [], draft: text } : { choices: [choice], draft: '' }
++              }
++            })
++          }
++
++          // These words belong to this question, even if it closed during the disconnect.
++          handledByClarification = true
++          return false
++        }
++
+         notifyError(error, translateNow('assistant.clarify.sendFailed'))
+@@ -362,3 +387,3 @@ function lockTypedAnswer(request: ClarifyRequest, text: string): null | Promise<
+
+-  return sent
++  return sent.then(saved => saved || handledByClarification)
+ }
 diff --git a/apps/desktop/src/store/command-palette.ts b/apps/desktop/src/store/command-palette.ts
 index b6fe80c1e99920fa04983d21bb1527998d72ddb6..0e84d68ccb1a5abcb93c5b56e2dd1d770004efac 100644
 --- a/apps/desktop/src/store/command-palette.ts
