@@ -4,6 +4,19 @@ Desktop now shares compatible SSH transports across profiles and queues startup
 checks. The [release notes](release-notes-v0.9.0.md) describe the memory/latency
 tradeoff and consolidate v0.8.46–.73.
 
+## Connection status in Desktop
+
+The gateway picker shows when a registered SSH backend is waiting in the SSH
+queue, waiting for host memory, starting, connected or disconnected. A
+disconnected row shows the reason and when Desktop will retry. If recovery
+requires an action, select the saved gateway or use **Reconnect gateway** for
+the current one. A transport cooldown shows when another retry is available.
+
+Desktop reads a cached status snapshot and receives updates as admission and
+startup advance. Opening the gateway picker does not start a connection.
+The memory-wait update comes from the existing execution guard and is removed
+from the helper's output before the output reaches its caller.
+
 ## Execution-host memory admission (v0.13.0)
 
 After reading the framed payload, the existing guard observes execution-host
@@ -11,8 +24,9 @@ memory before starting heavy work. Linux accepts explicit `MemAvailable`,
 including zero; Darwin uses a bounded `vm_stat` free-plus-inactive estimate with
 the reported page size. Below 512 MiB or unknown, the command waits while holding
 the existing kernel slot. This threshold is fixed and is not a reservation.
-Waiting shares the existing finite command deadline; expiry has a distinct
-`memory-admission` outcome, without transport cooldown or automatic retry.
+Waiting shares the existing finite command deadline. Expiry has a distinct
+`memory-admission` outcome, and the command executor leaves the next attempt
+to its caller.
 EOF/signals prevent a late spawn. Observer children are reaped before helper
 launch and cannot set the helper-completed signal flag. Cancellation can wait
 for the current observer's bounded 200 ms execution budget.

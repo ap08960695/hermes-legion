@@ -30,6 +30,14 @@ The goal editor searches enabled installed skills locally, shows the selected co
 
 Device, profile for new chats and connection state remain visible above the workspace. The compact row preserves readability on a laptop-height window. Native device/profile selectors and draft ownership remain unchanged.
 
+## Reconnecting to Local
+
+Desktop reopens the Local socket after it drops, including during initial
+sidebar loading. The reconnect uses a fresh ticket from the canonical gateway
+and waits with jittered backoff capped at 15 seconds between attempts. Tabs
+and drafts stay open. If the runtime refuses to start because it needs repair,
+use **Reconnect gateway** after resolving the reported reason.
+
 ## Verification boundaries
 
 Regression tests and real isolated Electron interactions use disposable conversations, files, bot profiles and paused controls. Provider inference is denied and counted. Production source adoption, package preparation, graceful activation and isolated visual acceptance are separate evidence. No remote Screen transport, provider authorization, allowance or production worker execution is certified by these checks.
