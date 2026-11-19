@@ -12,7 +12,8 @@ flowchart LR
 ```
 ````
 
-Open the diagram to enter the zoom and pan viewer. Use the arrow keys to pan
+Open the diagram to enter the zoom and pan viewer. The zoom buttons keep the
+point at the center of the viewer fixed. Use the arrow keys to pan
 toward that edge of the diagram while the viewer or one of its toolbar buttons
 has focus. Select **Reset** to fit and recenter the diagram. Press **Escape** to
 close the viewer. If a toolbar tooltip is open, Escape dismisses the tooltip first.
