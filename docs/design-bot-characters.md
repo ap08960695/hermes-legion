@@ -710,3 +710,41 @@ normally every four seconds, with headroom before the visible lease
 expires. Roster, status, cue, output identity, sprite identity and
 shorter expiry changes publish immediately. Clearing, replacement and
 disposal revoke pending renewal work.
+
+## Cost of the panel, sprite cycling and desktop walking
+
+The Mac fixture used the production overlay renderer and preload,
+the native IPC handlers and five distinct prepared atlases with 96 × 104
+pixel cells.
+Each of four signed, network-isolated launches measured the main renderer
+alone, then the empty transparent panel, then the same five Characters in
+parked, stationary cycling and walking poses. Two launches reversed the
+order of the three populated phases. Each pose had one publisher update.
+The fixture excluded setup and pixel readback from the seven-second
+sampling windows and asserted that no Character snapshots arrived during
+those windows. A pixel and position check verified each Character in
+each pose.
+
+The table reports medians of four within-launch differences. CPU is in
+percentage points of one core. Electron includes main and both renderers
+when the overlay is open. WindowServer is measured system-wide.
+
+| Phase change | Electron CPU | Overlay renderer CPU | WindowServer CPU | Electron RSS (MiB) | Electron footprint (MiB) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Open the empty overlay | +0.01 | +0.01 | +0.14 | +176.45 | +92.62 |
+| Show five parked Characters | +0.21 | +0.18 | -0.15 | +110.59 | +97.93 |
+| Cycle five sprites in place | +3.06 | +1.53 | +4.14 | -21.91 | -22.52 |
+| Enable desktop walking | +1.94 | +1.34 | +1.60 | +18.22 | +12.77 |
+| Five walking Characters over main-only | +5.22 | +3.14 | +5.73 | +282.75 | +179.92 |
+
+The blank panel accounted for about 62% of the walking RSS increase.
+Parking stopped all timed sprite draws. Cycling in place added
+2.71–3.43 Electron CPU points per launch. Walking added another
+1.74–2.19 points with 261–267 draws versus 255–260 while cycling in place.
+Walking RSS and footprint were higher when walking ran first among the
+populated phases. Keep the launch order recorded when comparing memory.
+
+The fixture used software graphics in the Electron main process and one
+1710 × 1009 work area at 2× scale. The five-Character CPU and RSS budgets
+remain open. Compare a Character-only renderer entry and preload at the
+same panel geometry as part of removing the upstream mascot.
