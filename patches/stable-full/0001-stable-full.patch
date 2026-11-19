@@ -9233,10 +9233,10 @@ index 0000000000000000000000000000000000000000..69595a89989d84c3f8e7e0def2559df8
 +}
 diff --git a/apps/desktop/electron/pet-overlay-ipc.test.ts b/apps/desktop/electron/pet-overlay-ipc.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..ede56fc859855f8bdf0a8baa654da64b36e5a7f1
+index 0000000000000000000000000000000000000000..1f9612a61e545fba4d8d5595e0ceed333036865f
 --- /dev/null
 +++ b/apps/desktop/electron/pet-overlay-ipc.test.ts
-@@ -0,0 +1,773 @@
+@@ -0,0 +1,855 @@
 +import { EventEmitter } from 'node:events'
 +
 +import { afterEach, expect, it, vi } from 'vitest'
@@ -10010,8 +10010,90 @@ index 0000000000000000000000000000000000000000..ede56fc859855f8bdf0a8baa654da64b
 +  await expect(handler(sender, { kind: 'characters', bounds, screen: true })).resolves.toMatchObject({ ok: true })
 +  expect(openPetOverlay).toHaveBeenCalledExactlyOnceWith(bounds)
 +})
++
++it.each([
++  { event: 'did-navigate', publish: true },
++  { event: 'did-navigate', publish: false },
++  { event: 'render-process-gone', publish: true },
++  { event: 'render-process-gone', publish: false },
++  { event: 'render-process-gone', publish: false, lostOverlayRenderer: true }
++])('retires the Characters window on owner $event (published=$publish, overlay loss=$lostOverlayRenderer)', async ({ event, publish, lostOverlayRenderer }) => {
++  const frame = {}
++  const owner = Object.assign(new EventEmitter(), { send: vi.fn(), mainFrame: frame })
++  const main = Object.assign(new EventEmitter(), { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, webContents: owner })
++  const makePanel = () => Object.assign(new EventEmitter(), { isDestroyed: () => false, webContents: Object.assign(new EventEmitter(), { send: vi.fn() }) })
++  let panel: ReturnType<typeof makePanel> | null = null
++  const close = vi.fn(() => {
++    const previous = panel
++    panel = null
++    previous?.emit('closed')
++  })
++  let finish!: () => void
++  const renderPdf = vi.fn((_bytes: Buffer, _signal: AbortSignal) => new Promise<undefined>(resolve => {
++    finish = () => resolve(undefined)
++  }))
++  registerPetOverlayIpc({
++    getMainWindow: () => main as never,
++    getPetOverlayWindow: () => panel as never,
++    openPetOverlay: () => {panel ??= makePanel()},
++    closePetOverlay: close, renderPdf
++  })
++  const handler = vi.mocked(ipcMain.handle).mock.calls.findLast(([channel]) => channel === 'hermes:pet-overlay:open')![1]
++  const sender = { sender: owner, senderFrame: frame }
++  const request = { kind: 'characters', screen: true, bounds: { x: 100, y: 100, width: 240, height: 300 } }
++  const state = io.on.get('hermes:pet-overlay:state')!
++  const snapshot = { characterPreview: { characters: [{ outputId: 'fresh' }], expiresAt: Date.now() + 15_000 } }
++  const open = async () => {
++    await expect(handler(sender as never, request)).resolves.toMatchObject({ ok: true })
++
++    return panel!
++  }
++  const old = await open()
++  let pending: Promise<unknown> | undefined
++  if (publish) {
++    state(sender, snapshot)
++    const control = io.on.get('hermes:pet-overlay:control')!
++    const id = 'fresh', request = 1
++    control({ sender: old.webContents }, { type: 'character-output', id, request })
++    state(sender, { ...snapshot, characterOutput: { id, request, text: null, deliveredFile: '/fixture/report.pdf', canPreviewFile: true } })
++    control({ sender: old.webContents }, { type: 'character-output-file', id, request })
++    pending = Promise.resolve(state(sender, { ...snapshot, characterFile: { id, request, text: null, pdf_base64: Buffer.from('%PDF-fixture').toString('base64') } }))
++    expect(renderPdf).toHaveBeenCalledOnce()
++  }
++  const late = owner.listeners(event).at(-1)
++  owner.emit('did-navigate-in-page')
++  owner.emit('did-frame-navigate', {}, 'fixture frame', 0, '', false)
++  expect(close).not.toHaveBeenCalled()
++  if (lostOverlayRenderer) {
++    old.webContents.send.mockImplementationOnce(() => {throw new Error('fixture overlay renderer exited')})
++  }
++  owner.emit(event)
++  expect(close).toHaveBeenCalledOnce()
++  expect(old.webContents.send).toHaveBeenLastCalledWith('hermes:pet-overlay:state', { characterPreview: null })
++  expect(owner.listenerCount('did-navigate')).toBe(0)
++  expect(owner.listenerCount('render-process-gone')).toBe(0)
++  if (pending) {
++    expect(renderPdf.mock.lastCall?.[1].aborted).toBe(true)
++    const writes = old.webContents.send.mock.calls.length
++    finish()
++    await pending
++    expect(old.webContents.send).toHaveBeenCalledTimes(writes)
++  }
++
++  const replacement = await open()
++  old.emit('closed')
++  late?.call(owner)
++  main.emit('show')
++  expect(close).toHaveBeenCalledOnce()
++  expect(replacement.webContents.send).not.toHaveBeenCalled()
++  state(sender, snapshot)
++  expect(replacement.webContents.send).toHaveBeenCalledOnce()
++  close()
++  expect(owner.listenerCount('did-navigate')).toBe(0)
++  expect(owner.listenerCount('render-process-gone')).toBe(0)
++})
 diff --git a/apps/desktop/electron/pet-overlay-ipc.ts b/apps/desktop/electron/pet-overlay-ipc.ts
-index 59d8dd527dae029c695a8520996f6051d75df371..a698e5b835bdb4cacb9f7e6f55df4b0d2a1d4b64 100644
+index 59d8dd527dae029c695a8520996f6051d75df371..a4a8d9b3223aa5375387d40986798682afae2984 100644
 --- a/apps/desktop/electron/pet-overlay-ipc.ts
 +++ b/apps/desktop/electron/pet-overlay-ipc.ts
 @@ -2,5 +2,10 @@
@@ -10100,7 +10182,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a698e5b835bdb4cacb9f7e6f55df4b0d
 +}
 +
  export function registerPetOverlayIpc({
-@@ -34,4 +107,250 @@ export function registerPetOverlayIpc({
+@@ -34,4 +107,286 @@ export function registerPetOverlayIpc({
    openPetOverlay,
 -  closePetOverlay
 +  closePetOverlay,
@@ -10115,6 +10197,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a698e5b835bdb4cacb9f7e6f55df4b0d
 +  let deliveredAtlases: { window: BrowserWindow; versions: Map<string, number> } | null = null
 +  let outputAction: (Pick<PetCharacterOutput, 'id' | 'request' | 'canOpen'> & { window: BrowserWindow; links?: string[]; deliveredFile?: string; fileText?: string; imageReady?: true; pdfPage?: string; pdfRender?: AbortController; file?: 'offered' | 'pending'; stop?: 'offered' | 'pending' }) | null = null
 +  let stopObserving: (() => void) | null = null
++  let stopWatchingOwner: (() => void) | undefined
 +  let locked = false, suspended = false
 +  let desktop: { window: BrowserWindow; mascot: Rectangle; layout: { bounds: Rectangle; areas: Rectangle[] } } | null = null
 +
@@ -10159,6 +10242,52 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a698e5b835bdb4cacb9f7e6f55df4b0d
 +  const discardOutput = () => {
 +    outputAction?.pdfRender?.abort()
 +    outputAction = null
++  }
++
++  const retireCharacterScene = () => {
++    discardOutput()
++    stopObserving?.()
++    stopObserving = null
++    lastCharacterPayload = null
++    lastCharacterFrame = null
++    focusedInput = undefined
++    deliveredAtlases = null
++    restoreMascotBounds()
++  }
++
++  const watchCharacterOwner = (main: BrowserWindow, overlay: BrowserWindow) => {
++    stopWatchingOwner?.()
++    const contents = main.webContents
++    const lost = () => {
++      if (stopWatchingOwner !== unwatch) {return}
++      unwatch()
++      if (getPetOverlayWindow() !== overlay || overlay.isDestroyed()) {return}
++
++      retireCharacterScene()
++      try {
++        if (!overlay.webContents.isDestroyed?.()) {
++          overlay.webContents.send('hermes:pet-overlay:state', { characterPreview: null })
++        }
++      } catch {
++        // The overlay renderer can disappear before its native window closes.
++      }
++      closePetOverlay()
++    }
++
++    const unwatch = () => {
++      if (!contents.isDestroyed?.()) {
++        contents.removeListener('render-process-gone', lost)
++        contents.removeListener('did-navigate', lost)
++      }
++      overlay.removeListener('closed', unwatch)
++      if (stopWatchingOwner === unwatch) {stopWatchingOwner = undefined}
++    }
++
++    stopWatchingOwner = unwatch
++    contents.on('render-process-gone', lost)
++    // This event is a committed main-frame document, excluding in-page navigation.
++    contents.on('did-navigate', lost)
++    overlay.once('closed', unwatch)
 +  }
 +
 +  const charactersPaused = () => {
@@ -10283,24 +10412,13 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a698e5b835bdb4cacb9f7e6f55df4b0d
 +    const overlay = getPetOverlayWindow()
 +    const mainContents = main.webContents, overlayContents = overlay?.webContents
 +
-+    const retire = () => {
-+      stopObserving?.()
-+      stopObserving = null
-+      lastCharacterPayload = null
-+      lastCharacterFrame = null
-+      focusedInput = undefined
-+      deliveredAtlases = null
-+      restoreMascotBounds()
-+      discardOutput()
-+    }
-+
 +    const closed = () => {
 +      locked = true
 +      sendCharacters()
-+      retire()
++      retireCharacterScene()
 +    }
 +
-+    overlay?.once('closed', retire)
++    overlay?.once('closed', retireCharacterScene)
 +
 +    main.on('hide', sendCharacters)
 +    main.on('show', sendCharacters)
@@ -10343,7 +10461,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a698e5b835bdb4cacb9f7e6f55df4b0d
 +        if (overlayContents && !overlayContents.isDestroyed?.()) {overlayContents.removeListener('did-start-loading', discardOutput)}
 +      }
 +
-+      overlay?.removeListener('closed', retire)
++      overlay?.removeListener('closed', retireCharacterScene)
 +      powerMonitor.removeListener('lock-screen', lock)
 +      powerMonitor.removeListener('unlock-screen', unlock)
 +      powerMonitor.removeListener('suspend', suspend)
@@ -10352,7 +10470,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a698e5b835bdb4cacb9f7e6f55df4b0d
 +  }
 +
    // `request` is `{ bounds, screen }`. A fresh pop-out passes viewport-space
-@@ -41,6 +360,10 @@ export function registerPetOverlayIpc({
+@@ -41,6 +396,10 @@ export function registerPetOverlayIpc({
    // resolved screen bounds so the renderer can persist exactly where it opened.
 -  ipcMain.handle('hermes:pet-overlay:open', async (_event, request) => {
 -    const bounds = request && request.bounds ? request.bounds : request
@@ -10366,7 +10484,13 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a698e5b835bdb4cacb9f7e6f55df4b0d
 +    const bounds = request.bounds
 +    const isScreen = request.screen === true
      let screenBounds = bounds
-@@ -72,2 +395,16 @@ export function registerPetOverlayIpc({
+@@ -69,2 +428,5 @@ export function registerPetOverlayIpc({
+     openPetOverlay(screenBounds)
++    const overlay = getPetOverlayWindow()
++
++    if (overlay && !overlay.isDestroyed()) {watchCharacterOwner(mainWindow, overlay)}
+
+@@ -72,2 +434,16 @@ export function registerPetOverlayIpc({
    })
 +  ipcMain.on('hermes:pet-overlay:characters-supported', event => {
 +    const main = getMainWindow()
@@ -10383,16 +10507,16 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a698e5b835bdb4cacb9f7e6f55df4b0d
 +    if (region) {state.input.set(region)}
 +  })
    ipcMain.handle('hermes:pet-overlay:close', async () => {
-@@ -86,3 +423,3 @@ export function registerPetOverlayIpc({
+@@ -86,3 +462,3 @@ export function registerPetOverlayIpc({
 
 -    if (!petOverlayWindow || petOverlayWindow.isDestroyed() || !bounds) {
 +    if (!petOverlayWindow || petOverlayWindow.isDestroyed() || !bounds || desktop?.window === petOverlayWindow) {
        return
-@@ -115,2 +452,3 @@ export function registerPetOverlayIpc({
+@@ -115,2 +491,3 @@ export function registerPetOverlayIpc({
    ipcMain.on('hermes:pet-overlay:ignore-mouse', (_event, ignore) => {
 +    if (linuxInput && linuxInput.phase !== 'idle') {return}
      const petOverlayWindow = getPetOverlayWindow()
-@@ -144,3 +482,155 @@ export function registerPetOverlayIpc({
+@@ -144,3 +521,148 @@ export function registerPetOverlayIpc({
    // Main renderer → overlay: forward the latest pet state for the overlay to render.
 -  ipcMain.on('hermes:pet-overlay:state', (_event, payload) => {
 +  ipcMain.on('hermes:pet-overlay:state', async (event, payload) => {
@@ -10540,21 +10664,14 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a698e5b835bdb4cacb9f7e6f55df4b0d
 +    }
 +
 +    if (payload?.characterOutput || payload?.characterFile) {return}
-+    lastCharacterPayload = null
-+    lastCharacterFrame = null
-+    focusedInput = undefined
-+    deliveredAtlases = null
-+    restoreMascotBounds()
-+    discardOutput()
-+    stopObserving?.()
-+    stopObserving = null
++    retireCharacterScene()
      const petOverlayWindow = getPetOverlayWindow()
-@@ -152,3 +642,3 @@ export function registerPetOverlayIpc({
+@@ -152,3 +674,3 @@ export function registerPetOverlayIpc({
    // Overlay → main renderer: control messages (pop back in, composer submit).
 -  ipcMain.on('hermes:pet-overlay:control', (_event, payload) => {
 +  ipcMain.on('hermes:pet-overlay:control', (event, payload) => {
      const mainWindow = getMainWindow()
-@@ -159,7 +649,80 @@ export function registerPetOverlayIpc({
+@@ -159,7 +681,80 @@ export function registerPetOverlayIpc({
 
 -    // Double-click toggles the app window: hide it away if it's up front, bring it
 -    // back if it's minimized/buried. Pure window control — nothing for the
@@ -10640,7 +10757,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a698e5b835bdb4cacb9f7e6f55df4b0d
 +        }
 +
          mainWindow.show()
-@@ -167,5 +730,8 @@ export function registerPetOverlayIpc({
+@@ -167,5 +762,8 @@ export function registerPetOverlayIpc({
        } else {
 -        mainWindow.minimize()
 +        discardOutput()
@@ -10650,7 +10767,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a698e5b835bdb4cacb9f7e6f55df4b0d
 +      mainWindow.webContents.send('hermes:pet-overlay:control', { type: payload.type, id, request, ...(pdfPage ? { pdfPage } : {}) })
 +
        return
-@@ -173,21 +739,24 @@ export function registerPetOverlayIpc({
+@@ -173,21 +771,24 @@ export function registerPetOverlayIpc({
 
 -    // The mail icon means "take me to the app": raise the main window (it may be
 -    // minimized or buried) before the renderer navigates to the latest thread.
