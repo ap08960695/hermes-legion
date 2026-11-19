@@ -25,6 +25,7 @@ labels check evidence with its own run. The text diff reads only the selected
 file. Both versions must be bounded text and match their recorded hashes.
 Keyboard focus stays on the file button while its diff loads. You can
 choose a different file without waiting for the first read.
+The diff panel identifies the selected file while loading and after the read.
 Historical hashes can remain available after the original file bytes are gone.
 
 [Revision comparison in a synthetic browser fixture](images/work-card-revision-fixture.webp)
