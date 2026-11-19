@@ -182,7 +182,10 @@ If you close the drawer or switch cards while confirmation is pending, a
 successful ACTION still appears on the board without changing your view.
 
 **Proceed** confirms the current preview. **Sequence after conflicting cards**
-adds those cards as native prerequisites. **Re-scope** leaves the step
+adds those cards as native prerequisites. These buttons keep keyboard focus
+while confirmation is pending. If a new preview removes the focused
+**Sequence after conflicting cards** button, focus moves to **Check declared
+writes**. **Re-scope** leaves the step
 uncreated so THINK can submit a new plan. After activating **Re-scope** with
 the keyboard, focus returns to **Check declared writes**. A changed conflict
 set requires a fresh confirmation. A direct `kanban_create` with a confirmed overlap returns
