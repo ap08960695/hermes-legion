@@ -35338,10 +35338,10 @@ index 7d1c2ea4b9ff9f1908bdb750a838cf1f6f1d2e47..2df76c02c22201edfd89371857f2fb7d
    )
 diff --git a/apps/desktop/src/contrib/plugin-characters.test.ts b/apps/desktop/src/contrib/plugin-characters.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..5c004298f3b82d02e5a47f883484f75e0fd21aa3
+index 0000000000000000000000000000000000000000..dfff20d171d50a9ceccabc809c1a0cf6774fb2da
 --- /dev/null
 +++ b/apps/desktop/src/contrib/plugin-characters.test.ts
-@@ -0,0 +1,660 @@
+@@ -0,0 +1,703 @@
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 +
 +import { setPetInfo } from '@/store/pet'
@@ -35600,9 +35600,10 @@ index 0000000000000000000000000000000000000000..5c004298f3b82d02e5a47f883484f75e
 +  expect(close).toHaveBeenCalledTimes(3)
 +})
 +
-+it('ignores a superseded panel open reply after reopening', async () => {
-+  const replies: Array<(result: { bounds: typeof anchor }) => void> = []
-+  const open = vi.fn(() => new Promise<{ bounds: typeof anchor }>(resolve => {replies.push(resolve)}))
++it.each(['success', 'refusal', 'rejection'])('ignores a superseded panel open %s after reopening', async outcome => {
++  type Reply = { bounds?: typeof anchor; ok?: boolean }
++  const replies: Array<{ resolve: (result: Reply) => void; reject: (error: Error) => void }> = []
++  const open = vi.fn(() => new Promise<Reply>((resolve, reject) => {replies.push({ resolve, reject })}))
 +  const close = vi.fn(async () => ({})), pushState = vi.fn()
 +  Object.defineProperty(window, 'hermesDesktop', { configurable: true, value: { petOverlay: { open, close, pushState } } })
 +  setPetInfo({ enabled: true, spritesheetBase64: 'owned-fixture' })
@@ -35617,10 +35618,11 @@ index 0000000000000000000000000000000000000000..5c004298f3b82d02e5a47f883484f75e
 +    expect(open).toHaveBeenCalledTimes(2)
 +
 +    const currentBounds = { ...anchor, x: 35 }
-+    replies[1]({ bounds: currentBounds })
++    replies[1].resolve({ bounds: currentBounds })
 +    await Promise.resolve()
 +    const pushes = pushState.mock.calls.length
-+    replies[0]({ bounds: anchor })
++    if (outcome === 'rejection') {replies[0].reject(new Error('retired fixture open'))}
++    else {replies[0].resolve({ bounds: anchor, ok: outcome === 'success' })}
 +    await Promise.resolve()
 +    expect(pushState).toHaveBeenCalledTimes(pushes)
 +    expect($petOverlayActive.get()).toBe(true)
@@ -36002,8 +36004,49 @@ index 0000000000000000000000000000000000000000..5c004298f3b82d02e5a47f883484f75e
 +    else {storage.setItem(boundsKey, savedBounds)}
 +  }
 +})
++
++it.each(['refused', 'rejected'])('releases a %s open and retries only on a later observation', async outcome => {
++  const anchor = { x: 5, y: 6, width: 40, height: 40 }
++  const bounds = { ...anchor, x: 90 }
++  let finish!: () => void
++  const pending = new Promise<{ ok: boolean }>((resolve, reject) => {
++    finish = () => outcome === 'refused' ? resolve({ ok: false }) : reject(new Error('fixture open failure'))
++  })
++  const open = vi.fn().mockReturnValueOnce(pending).mockResolvedValueOnce({ ok: true, bounds })
++  const close = vi.fn(async () => ({ ok: true })), pushState = vi.fn()
++  Object.defineProperty(window, 'hermesDesktop', { configurable: true, value: { petOverlay: { open, close, pushState } } })
++  const preview = createPluginContext('open-retry').pet.previewCharacters!(anchor, true)!
++
++  try {
++    preview.update([previewActor])
++    preview.update([{ ...previewActor, state: 'waiting' }])
++    expect(open).toHaveBeenCalledOnce()
++
++    finish()
++    await Promise.resolve()
++    expect($petOverlayActive.get()).toBe(false)
++    expect(close).not.toHaveBeenCalled()
++    expect(pushState.mock.lastCall?.[0].characterPreview).toBeNull()
++    const pushes = pushState.mock.calls.length
++    setPetInfo({ enabled: false })
++    expect(pushState).toHaveBeenCalledTimes(pushes)
++    vi.advanceTimersByTime(3_000)
++    expect(open).toHaveBeenCalledOnce()
++
++    preview.update([{ ...previewActor, name: 'Fresh writer' }])
++    await Promise.resolve()
++    expect(open).toHaveBeenCalledTimes(2)
++    expect($petOverlayActive.get()).toBe(true)
++    expect(pushState.mock.lastCall?.[0].characterPreview.characters[0].name).toBe('Fresh writer')
++  } finally {
++    preview.dispose()
++  }
++
++  expect(close).toHaveBeenCalledOnce()
++  expect($petOverlayActive.get()).toBe(false)
++})
 diff --git a/apps/desktop/src/contrib/plugin.ts b/apps/desktop/src/contrib/plugin.ts
-index d487729ac19e2c5d823d0437d4882b3400114822..7b745046279b828ac8667b7da655e7bb327425ff 100644
+index d487729ac19e2c5d823d0437d4882b3400114822..9ee087f1301fd22caaef8f3cd15cd15012a7ebb3 100644
 --- a/apps/desktop/src/contrib/plugin.ts
 +++ b/apps/desktop/src/contrib/plugin.ts
 @@ -25,2 +25,3 @@ import {
@@ -36093,7 +36136,7 @@ index d487729ac19e2c5d823d0437d4882b3400114822..7b745046279b828ac8667b7da655e7bb
 +        mayOpen = false
 +
 +        if ($petOverlayActive.get()) {return}
-+        popOutPet(anchor)
++        popOutPet(anchor, () => {mayOpen = publisher.isCurrent()})
 +
 +        if ($petOverlayActive.get()) {
 +          stopWatchingOverlay = $petOverlayActive.listen(active => {
@@ -53910,7 +53953,7 @@ index 0000000000000000000000000000000000000000..ae97a06df97b3dacf9494d3c2e39c61c
 +  }
 +}
 diff --git a/apps/desktop/src/store/pet-overlay.ts b/apps/desktop/src/store/pet-overlay.ts
-index d47f67023fb8b820d6f6cbd455562a591600413b..7abdc14525687a7db98fb0363a8ab24c57f40dea 100644
+index d47f67023fb8b820d6f6cbd455562a591600413b..533475d208080bf9ccdb7e52addc0690a5a0a914 100644
 --- a/apps/desktop/src/store/pet-overlay.ts
 +++ b/apps/desktop/src/store/pet-overlay.ts
 @@ -2,23 +2,9 @@ import { atom } from 'nanostores'
@@ -53994,11 +54037,11 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..7abdc14525687a7db98fb0363a8ab24c
 
 -export const $petOverlayActive = atom(storedBoolean(OVERLAY_ACTIVE_KEY, false))
 +type OverlayFile = { name: string } & ({ kind: 'image'; src: string } | { kind: 'text'; text: string })
-+
-+export const $petOverlayFile = atom<OverlayFile | null>(null)
 
 -// Persist the in/out choice so a popped-out pet comes back popped out.
 -$petOverlayActive.subscribe(active => persistBoolean(OVERLAY_ACTIVE_KEY, active))
++export const $petOverlayFile = atom<OverlayFile | null>(null)
++
 +export const $petOverlayActive = atom(false)
 
 @@ -132,5 +150,5 @@ const OVERLAY_MIN_H = 300
@@ -54016,10 +54059,11 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..7abdc14525687a7db98fb0363a8ab24c
  let controlUnsub: (() => void) | null = null
 +let activeOutput: { id: string; request: number; canOpen?: true; opened?: true; fileToken?: string; fileName?: string; file?: PetCharacterFileContent; stop?: () => Promise<WorkerStopStatus> } | null = null
  let submitHandler: ((text: string) => void) | null = null
-@@ -146,10 +167,70 @@ let scaleHandler: ((scale: number) => void) | null = null
- function currentPayload(): PetOverlayStatePayload {
+@@ -145,11 +166,70 @@ let scaleHandler: ((scale: number) => void) | null = null
+
+-function currentPayload(): PetOverlayStatePayload {
++function currentPayload(snapshot = $petCharacterPreview.get()): PetOverlayStatePayload {
 +  const legacyInfo = $petInfo.get()
-+  const snapshot = $petCharacterPreview.get()
 +  const { defaultSprite, ...preview } = snapshot ?? {}
 +
    return {
@@ -54094,7 +54138,7 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..7abdc14525687a7db98fb0363a8ab24c
 +    stopped = true
 +    observer?.disconnect()
    }
-@@ -158,3 +239,33 @@ function currentPayload(): PetOverlayStatePayload {
+@@ -158,3 +238,33 @@ function currentPayload(): PetOverlayStatePayload {
  function pushNow(): void {
 -  window.hermesDesktop?.petOverlay?.pushState(currentPayload())
 +  const api = window.hermesDesktop?.petOverlay
@@ -54129,12 +54173,12 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..7abdc14525687a7db98fb0363a8ab24c
 +  api.pushState(payload)
 +  sentAtlases = next
  }
-@@ -166,3 +277,3 @@ function pushNow(): void {
+@@ -166,3 +276,3 @@ function pushNow(): void {
   */
 -function openOverlay(request: PetOverlayOpenRequest): void {
-+function openOverlay(request: Omit<PetOverlayOpenRequest, 'kind'>): void {
++function openOverlay(request: Omit<PetOverlayOpenRequest, 'kind'>, onOpenFailed?: () => void): void {
    const api = window.hermesDesktop?.petOverlay
-@@ -174,9 +285,3 @@ function openOverlay(request: PetOverlayOpenRequest): void {
+@@ -174,9 +284,3 @@ function openOverlay(request: PetOverlayOpenRequest): void {
    $petOverlayActive.set(true)
 -  void api.open(request).then(res => {
 -    if (res?.bounds) {
@@ -54145,7 +54189,7 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..7abdc14525687a7db98fb0363a8ab24c
 -  })
 +  const pendingOpen = api.open({ ...request, kind: 'characters' })
 
-@@ -184,11 +289,29 @@ function openOverlay(request: PetOverlayOpenRequest): void {
+@@ -184,11 +288,44 @@ function openOverlay(request: PetOverlayOpenRequest): void {
    // overlay also gets a first frame the moment it's ready (it asks via 'ready').
 -  stateUnsubs = [
 +  let stopInput: (() => void) | undefined
@@ -54175,21 +54219,61 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..7abdc14525687a7db98fb0363a8ab24c
    ]
 +
 +  stateUnsubs = subscriptions
++  const failed = () => {
++    if (stateUnsubs !== subscriptions) {return}
++
++    clearOverlayState()
++    onOpenFailed?.()
++    // Release any snapshot the main process accepted while opening.
++    api.pushState(currentPayload(null))
++  }
++
 +  void pendingOpen.then(res => {
 +    if (stateUnsubs !== subscriptions) {return}
 +
++    if (res?.ok === false) {
++      failed()
++
++      return
++    }
++
 +    if (res?.bounds) {saveBounds(res.bounds)}
 +    pushNow()
-+  })
++  }, failed)
  }
-@@ -252,3 +375,6 @@ export function popInPet(): void {
+@@ -201,3 +338,3 @@ function openOverlay(request: PetOverlayOpenRequest): void {
+  */
+-export function popOutPet(petRect: PetOverlayBounds): void {
++export function popOutPet(petRect: PetOverlayBounds, onOpenFailed?: () => void): void {
+   if ($petOverlayActive.get() || stateUnsubs.length) {
+@@ -209,3 +346,3 @@ export function popOutPet(petRect: PetOverlayBounds): void {
+   if (saved) {
+-    openOverlay({ bounds: saved, screen: true })
++    openOverlay({ bounds: saved, screen: true }, onOpenFailed)
+
+@@ -221,3 +358,3 @@ export function popOutPet(petRect: PetOverlayBounds): void {
+
+-  openOverlay({ bounds: { height, width, x, y }, screen: false })
++  openOverlay({ bounds: { height, width, x, y }, screen: false }, onOpenFailed)
+ }
+@@ -245,4 +382,3 @@ export function restorePetOverlay(): void {
+
+-/** Pop the pet back into the window (closes the overlay window). */
+-export function popInPet(): void {
++function clearOverlayState(): void {
+   for (const off of stateUnsubs) {
+@@ -252,3 +388,10 @@ export function popInPet(): void {
    stateUnsubs = []
 +  activeOutput = null
 +  sentAtlases.clear()
    $petOverlayActive.set(false)
 +  $petOverlayFile.set(null)
++}
++
++export function popInPet(): void {
++  clearOverlayState()
    void window.hermesDesktop?.petOverlay?.close()
-@@ -283,6 +409,72 @@ export function initPetOverlayBridge(): () => void {
+@@ -283,6 +426,72 @@ export function initPetOverlayBridge(): () => void {
    controlUnsub = api.onControl(payload => {
 -    if (payload?.type === 'pop-in') {
 +    if (payload?.type === 'character-output') {
@@ -54264,7 +54348,7 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..7abdc14525687a7db98fb0363a8ab24c
 +      // The new overlay document needs the current frame and its atlas bytes.
 +      sentAtlases.clear()
        pushNow()
-@@ -307,2 +499,4 @@ export function initPetOverlayBridge(): () => void {
+@@ -307,2 +516,4 @@ export function initPetOverlayBridge(): () => void {
    return () => {
 +    activeOutput = null
 +    $petOverlayFile.set(null)
