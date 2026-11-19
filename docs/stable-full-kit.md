@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1213-path** Legion source, interface and optimization alternative
+This is the complete **1254-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -10,7 +10,16 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
-## Bot character overlay preview (unreleased source step)
+## Desktop Characters controls (unreleased)
+
+The main Desktop title bar has a **Characters** switch and a **Character size**
+selector. macOS also provides a **Characters** menu bar item that works while
+the main window is minimized. Both surfaces share the active connection and
+profile's saved preferences. Size changes apply to visible actors immediately.
+Assigned packs work with the legacy mascot disabled. Unassigned actors use a
+loaded default atlas when available.
+
+## Earlier Monitor-only Character preview
 
 The working Monitor source adds **Show bot characters**. With a loaded pet,
 it projects up to five fresh source-qualified bot/worker observations into the
