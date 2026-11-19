@@ -781,3 +781,44 @@ removal still belongs with the Characters switch and settings migration.
 The next resource test is an app-owned native panel fed by the existing
 publisher. The standalone AppKit result justifies measuring it with the
 same application-side baseline and checking interaction and teardown.
+
+### Native panel through the owned publisher
+
+Four signed, network-denied Mac fixture launches compared the production
+Electron overlay with one AppKit helper in opposite orders. Both arms used
+the owned Character publisher, stock preload, production IPC validation,
+the same five atlases, 1710 × 1009 panel bounds at 2× and a 10 Hz movement
+clock. The native arm took accepted snapshots over a private stdin pipe.
+It used one nonactivating transparent panel, with no overlay renderer.
+
+| Cost above publisher-only baseline | Electron | Native |
+| --- | ---: | ---: |
+| Blank process-tree RSS (MiB) | 176.10 | 41.22 |
+| Walking process-tree RSS (MiB) | 297.56 | 124.85 |
+| Walking process-tree physical footprint (MiB) | 201.87 | 88.88 |
+| Walking process-tree CPU (points of one core) | 5.44 | 0.12 |
+| Walking WindowServer CPU (points of one core) | 5.74 | 3.11 |
+| Walking combined observed CPU (points of one core) | 11.18 | 3.23 |
+
+The native process alone used about 60.65 MiB RSS while walking. The
+publisher and Electron main process still grew by roughly 53.6 and 10.6
+MiB respectively in the two native runs. The combined CPU observation
+includes system-wide WindowServer activity. Both native runs exceeded
+80 MiB incremental RSS and two combined CPU points.
+
+All five native sprites changed cells and moved. Twenty owned layer
+crops matched the selected atlas cells with at least 98.33% silhouette
+overlap. The native panel paused when the main fixture window hid,
+resumed when it returned, survived a replaced deadline, hid on local
+lease expiry, cleared and reopened, and exited when the pipe closed.
+The evidence covers the fixture's walking and parked states. Release
+acceptance also needs per-pixel hit regions, keyboard, drag and output
+actions, full pose parity, hardware graphics and Linux verification.
+
+Two additional native runs deferred preparation of unused parked and
+stationary variants until after walking was timed. Publisher RSS growth
+fell to 40.55–40.78 MiB, while the helper still used 60.66 MiB. Whole-tree
+walking RSS fell to 111.97–112.07 MiB. Combined CPU was 3.28 and 1.61 points
+in the two runs. The memory budget still missed, and CPU fell within the
+budget in one run. Compare publisher preparation and storage separately
+from native compositor updates before adopting this presentation path.
