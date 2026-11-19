@@ -72,6 +72,8 @@ prompt, and its age. A row shows its card or goal when the gateway can
 identify one. Answer inline, approve once, deny, or open the exact chat
 for the full context and any additional approval options. While a chat is
 opening, the inbox shows progress and waits before accepting another open.
+If the connection, profile, or gateway state changes meanwhile, the earlier
+open leaves the current inbox alone when it finishes.
 If you reopen the inbox or switch connection or profile while an answer
 is sending, the old confirmation stays hidden. The row still clears
 when the gateway resolves the request.
