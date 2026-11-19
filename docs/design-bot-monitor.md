@@ -70,13 +70,26 @@ In **Bots**, select **Waiting for owner** to see live questions and
 approvals on the active connection. Each row shows the bot, the actual
 prompt, and its age. A row shows its card or goal when the gateway can
 identify one. Answer inline, approve once, deny, or open the exact chat
-for the full context and any additional approval options.
+for the full context and any additional approval options. While a chat is
+opening, the inbox shows progress and waits before accepting another open.
+If you reopen the inbox or switch connection or profile while an answer
+is sending, the old confirmation stays hidden. The row still clears
+when the gateway resolves the request.
+Sending another answer clears the previous confirmation. If sending fails,
+the row keeps the answer so you can retry.
+The same request stays pending if you close and reopen the inbox while
+it sends. Other questions and approvals are still available.
 
-The inbox updates when the gateway opens or settles a request. An answer
-clears its row after the owner confirms it, and an expired request clears
-without changing the session. Private credential prompts stay in their
-native chat flow. Board-only gates still use the **Needs owner** lane in
-Work.
+If the inbox cannot load requests from the active gateway, **Refresh inbox**
+retries the list once at a time. The button stays focused while it loads.
+If the inbox recovers while the button still has focus, focus moves to the
+inbox heading so you can tab into the list.
+
+The inbox updates when the gateway opens or settles a request. A confirmed
+answer clears its row even if an older inbox read finishes afterward.
+An expired request clears without changing the session. Private credential
+prompts stay in their native chat flow. Board-only gates still use the
+**Needs owner** lane in Work.
 
 ![Two synthetic profile questions in the Bots owner inbox.](images/owner-inbox-two-questions.webp)
 

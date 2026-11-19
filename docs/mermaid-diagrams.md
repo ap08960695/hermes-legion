@@ -12,10 +12,18 @@ flowchart LR
 ```
 ````
 
-Click the diagram to open the zoom and pan viewer. **Copy source** copies the
+Click the diagram to open the zoom and pan viewer. Press **Escape** to close
+it. If a toolbar tooltip is open, Escape dismisses the tooltip first.
+**Copy** keeps focus and runs one copy at a time in the expanded viewer.
+If the clipboard rejects both image and SVG text, the expanded viewer shows
+**Copy failed** and keeps the Copy button available. **Copy source** copies the
 original Mermaid text. **Save SVG** saves a scalable image, and **Save PNG**
-saves a raster image. The diagram uses the app's light or dark appearance at
-render time. A failed diagram shows a short explanation and its source.
+saves a raster image. The button stays focused during export. If saving
+fails, select **Save PNG** again to retry. The diagram uses the app's light or dark appearance at
+render time. A failed diagram shows a short explanation and its source. Choose
+**Retry** after a timeout to render again while keeping the source visible. If
+focus is on **Retry** or **Copy source**, it moves to **Open diagram** when
+the diagram returns.
 
 ## Answer cards
 

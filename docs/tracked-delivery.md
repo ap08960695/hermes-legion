@@ -23,6 +23,8 @@ The comparison pairs the handoff before the latest request with the handoff
 after it, when available. It shows artifact changes from recorded hashes and
 labels check evidence with its own run. The text diff reads only the selected
 file. Both versions must be bounded text and match their recorded hashes.
+Keyboard focus stays on the file button while its diff loads. You can
+choose a different file without waiting for the first read.
 Historical hashes can remain available after the original file bytes are gone.
 
 [Revision comparison in a synthetic browser fixture](images/work-card-revision-fixture.webp)
@@ -33,7 +35,9 @@ The accepted card loads recorded usage for THINK, ACTION, revisions, REVIEW
 and goal judges when opened in **Track work**. Exact owner admission binds a
 worker run to its profile session and compression continuation. Legacy runs
 can contribute a bounded diagnostic sample when its key and run binding
-match. Each row opens its native run evidence on demand.
+match. Each row opens its native run evidence on demand. If a run fails to
+load, close and reopen that row to retry.
+If the usage read fails, **Retry usage** rechecks the same card and review.
 
 Coverage is partial. A shared THINK run can appear on several cards.
 Originating Captain sessions, ambiguous ownership and duplicate samples

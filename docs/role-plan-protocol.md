@@ -170,11 +170,19 @@ Open the completed THINK card and choose **Review an ACTION step**. Select the
 step and checkout, then check its declared writes. The preview identifies open
 cards with overlapping declarations in the same checkout and links to each
 card. It reports different checkouts and missing declarations separately.
+While the check runs, **Check declared writes** keeps focus and the step and
+checkout stay locked. Rechecking clears any previous preview. If the check fails,
+run it again to get a preview you can confirm.
+If the plan changes while the card is open, check its declared writes
+again before confirming. The selected checkout is kept.
+If you close the drawer or switch cards while confirmation is pending, a
+successful ACTION still appears on the board without changing your view.
 
 **Proceed** confirms the current preview. **Sequence after conflicting cards**
 adds those cards as native prerequisites. **Re-scope** leaves the step
-uncreated so THINK can submit a new plan. A changed conflict set requires a
-fresh confirmation. A direct `kanban_create` with a confirmed overlap returns
+uncreated so THINK can submit a new plan. After activating **Re-scope** with
+the keyboard, focus returns to **Check declared writes**. A changed conflict
+set requires a fresh confirmation. A direct `kanban_create` with a confirmed overlap returns
 the conflicting cards and paths before creating an ACTION. An existing native
 dependency can already sequence the work.
 

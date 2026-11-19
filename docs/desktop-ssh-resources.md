@@ -10,7 +10,11 @@ The gateway picker shows when a registered SSH backend is waiting in the SSH
 queue, waiting for host memory, starting, connected or disconnected. A
 disconnected row shows the reason and when Desktop will retry. If recovery
 requires an action, select the saved gateway or use **Reconnect gateway** for
-the current one. A transport cooldown shows when another retry is available.
+the current one. The Reconnect button keeps keyboard focus while one attempt
+runs. A transport cooldown shows when another retry is available. The picker
+clears that time when the cooldown expires, even without a status update.
+Once a fresh attempt starts, the picker shows startup progress. An active
+transport cooldown or a scheduled retry still shows when to expect recovery.
 
 Desktop reads a cached status snapshot and receives updates as admission and
 startup advance. Opening the gateway picker does not start a connection.

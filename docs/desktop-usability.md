@@ -4,11 +4,11 @@
 
 The rail offers **New chat**, **History** and **Search**. New chat opens a native blank tab from a chat, retaining any earlier unsent draft. Choose a chat zone first or drag **New chat** to the zone's tab strip to place the new tab there. Ctrl+T (⌘T on Mac) opens a new tab in the focused chat zone.
 
-**Search** first lists recent conversations and commands. Type a phrase and choose **Search in messages** to see the first page of saved-chat matches on the active connection and profile. Use the arrow keys to select a chat and Enter to open it. The results announce how many chats are shown. **Search all saved chats** carries your query into History for additional filters.
+**Search** first lists recent conversations and commands. Type a phrase and choose **Search in messages** to see the first page of saved-chat matches on the active connection and profile. Use the arrow keys to select a chat and Enter to open it. Matched words are highlighted in each preview. The results announce how many chats are shown. **Search all saved chats** carries your query into History for additional filters. Sending the same query again reapplies it after an edit in History. Press Escape to return to commands with your query intact, then Escape again to close Search. Holding Backspace clears the query while keeping message search open. Press Backspace again on the empty field to return to commands. While an input method is composing text, Backspace stays with text editing.
 
 ![Search in messages fixture with three saved chats and the second result selected by keyboard.](images/saved-message-search-fixture.webp)
 
-Open **Settings** from the navigation rail in Focus or Workspace. In a compact window it sits beside **History**. The Settings shortcut (⌘, on Mac, Ctrl+, on Windows and Linux) and the command palette also open Settings. Standalone chat windows have a Settings gear in their titlebar.
+Open **Settings** from the navigation rail in Focus or Workspace. In a compact window it sits beside **History**. The Settings shortcut (⌘, on Mac, Ctrl+, on Windows and Linux) and the command palette also open Settings. Typing in Settings opens its search with the first character already entered. Standalone chat windows have a Settings gear in their titlebar.
 
 In Hub, **Back** returns through the actual file/folder navigation history. At the starting file it returns to Hub and retains the previous search. Folder browsing and supported previews remain inside Hermes. Missing, inaccessible and unsupported files keep their existing preview gates.
 
@@ -20,13 +20,17 @@ Open the failed-message notice to read the full text and see any original attach
 
 Review the recovered message before you press Send. Sending the original payload uses its original submission ID on a gateway that supports idempotent admission. If you revise the text or replace attachments, confirm **Send as new message**. The earlier message may already have reached the gateway.
 
-When Hermes recovers an unsent draft from a deleted chat, it keeps the original saved copy until the new chat saves its copy. If **Undo** cannot save the draft back, an error appears beside the button and the draft stays in the editor for retry.
+When you discard a saved message with the keyboard, focus returns to the recovery summary while other saved messages remain. After the last discard, you can keep typing in the current draft.
+
+When Hermes recovers an unsent draft from a deleted chat, it keeps the original saved copy until it saves the draft in the new chat. If **Undo** cannot save a restored draft back to its original chat, an error appears beside Undo. The draft stays in the editor and you can retry.
+
+When you select **Restore draft** on an unassigned draft, focus returns to the current composer so you can keep typing.
 
 ![Failed-message recovery fixture before and after parking the current draft.](images/draft-recovery-fixture.webp)
 
 ## Checking the configured provider
 
-**Settings → Accounts** shows the selected profile's configured provider and model on the active connection. A current per-account reading includes its timestamp. A provider without a reading shows that quota is unreported, while a configured local endpoint is labeled separately. Gemini API and AGY subscription reports have separate provider identities. The existing **Refresh** action checks supported quota sources.
+**Settings → Accounts** shows the selected profile's configured provider and model on the active connection. A current per-account reading includes its timestamp. A provider without a reading shows that quota is unreported, while a configured local endpoint is labeled separately. Gemini API and AGY subscription reports have separate provider identities. **Refresh** checks supported quota sources and keeps keyboard focus while the request runs. If you switch devices during a refresh, returning to the same device and profile shows **Refreshing** until its request ends. When a quota window passes its reported reset time, the next display update marks that window stale until Refresh supplies a current reading. The reset time stays available by keyboard when a window becomes stale. Other windows remain visible.
 
 ![Accounts fixture with Gemini API, a separate AGY reading, a NIM reading, and a local model.](images/accounts-provider-fixture.webp)
 
