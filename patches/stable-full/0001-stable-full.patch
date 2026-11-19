@@ -5891,13 +5891,121 @@ index 0000000000000000000000000000000000000000..83e7ed48ef8b3075cf066bb7de83cc3e
 +export type CharacterSettings = { enabled: boolean; size: CharacterSize }
 +export type CharacterMenuState = CharacterSettings & { scope: string }
 +export type CharacterMenuAction = { scope: string; change: Partial<CharacterSettings> }
+diff --git a/apps/desktop/electron/character-menu.test.ts b/apps/desktop/electron/character-menu.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..31e5123b1ddee2f8b20a61aa6aada0c1082c70f8
+--- /dev/null
++++ b/apps/desktop/electron/character-menu.test.ts
+@@ -0,0 +1,102 @@
++import { EventEmitter } from 'node:events'
++
++import { afterEach, beforeEach, expect, it, vi } from 'vitest'
++
++const io = vi.hoisted(() => ({
++  handlers: new Map<string, (event: unknown, value: unknown) => void>(),
++  trays: [] as { destroy: ReturnType<typeof vi.fn>; setContextMenu: ReturnType<typeof vi.fn> }[]
++}))
++
++vi.mock('electron', () => ({
++  ipcMain: { on: (channel: string, listener: (event: unknown, value: unknown) => void) => io.handlers.set(channel, listener) },
++  nativeImage: { createEmpty: () => ({}) },
++  Menu: { buildFromTemplate: (items: unknown[]) => items },
++  Tray: class {
++    destroy = vi.fn()
++    setTitle = vi.fn()
++    setToolTip = vi.fn()
++    setContextMenu = vi.fn()
++
++    constructor() {io.trays.push(this)}
++  }
++}))
++
++import { createCharacterMenu } from './character-menu'
++
++const ownerEvents = ['did-navigate', 'render-process-gone', 'destroyed'] as const
++
++function makeWindow() {
++  const webContents = Object.assign(new EventEmitter(), { mainFrame: {}, send: vi.fn(), isDestroyed: () => false })
++  return { webContents, isDestroyed: () => false, isMinimized: () => true }
++}
++
++function publish(window: ReturnType<typeof makeWindow>, scope: string, enabled = true) {
++  const sender = window.webContents
++  io.handlers.get('hermes:characters:menu-state')!({ sender, senderFrame: sender.mainFrame }, { scope, size: 'medium', enabled })
++}
++
++beforeEach(() => {vi.useFakeTimers()})
++afterEach(() => {
++  vi.restoreAllMocks()
++  vi.clearAllTimers()
++  vi.useRealTimers()
++  io.handlers.clear()
++  io.trays.length = 0
++})
++
++it.each(ownerEvents)('retires the menu and minimized refresh on %s', event => {
++  const schedule = vi.spyOn(globalThis, 'setInterval')
++  const window = makeWindow()
++  const owner = window.webContents
++  const controller = createCharacterMenu(() => window as never)
++  publish(window, 'first')
++  publish(window, 'updated')
++  expect(io.trays).toHaveLength(1)
++  const oldRefresh = schedule.mock.calls[0][0] as () => void
++  const attached = ownerEvents.map(ownerEvent => owner.listenerCount(ownerEvent))
++  const first = io.trays[0]
++  const oldClick = first.setContextMenu.mock.lastCall?.[0][0].click as (item: { checked: boolean }) => void
++
++  owner.emit('did-navigate-in-page')
++  owner.emit('did-frame-navigate', {}, 'fixture frame', 0, '', false)
++  vi.advanceTimersByTime(5_000)
++  expect(owner.send).toHaveBeenCalledExactlyOnceWith('hermes:characters:menu-refresh', 'updated')
++  const late = owner.listeners(event).at(-1)
++  owner.emit(event)
++  expect(first.destroy).toHaveBeenCalledOnce()
++  expect(attached).toEqual([1, 1, 1])
++  expect(vi.getTimerCount()).toBe(0)
++  for (const ownerEvent of ownerEvents) {expect(owner.listenerCount(ownerEvent)).toBe(0)}
++
++  publish(window, 'fresh')
++  const next = io.trays[1]
++  late?.call(owner)
++  oldRefresh()
++  oldClick({ checked: false })
++  expect(next.destroy).not.toHaveBeenCalled()
++  vi.advanceTimersByTime(5_000)
++  expect(owner.send.mock.calls).toEqual([
++    ['hermes:characters:menu-refresh', 'updated'],
++    ['hermes:characters:menu-refresh', 'fresh']
++  ])
++  controller.clear()
++  controller.clear()
++  expect(next.destroy).toHaveBeenCalledOnce()
++  expect(vi.getTimerCount()).toBe(0)
++})
++
++it('does not send a retired refresh scope to a replacement primary window', () => {
++  const first = makeWindow(), second = makeWindow()
++  let current = first
++  const controller = createCharacterMenu(() => current as never)
++  publish(first, 'retired')
++  current = second
++  vi.advanceTimersByTime(5_000)
++  expect(second.webContents.send).not.toHaveBeenCalled()
++
++  publish(second, 'current')
++  expect(io.trays[0].destroy).toHaveBeenCalledOnce()
++  vi.advanceTimersByTime(5_000)
++  expect(second.webContents.send).toHaveBeenCalledExactlyOnceWith('hermes:characters:menu-refresh', 'current')
++  controller.clear()
++})
 diff --git a/apps/desktop/electron/character-menu.ts b/apps/desktop/electron/character-menu.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..f52b968db62fcd62c7d8f776cae4af834a3e2a22
+index 0000000000000000000000000000000000000000..0aa85f372e8ac0572cccfb27a6f58fbd7e2151e6
 --- /dev/null
 +++ b/apps/desktop/electron/character-menu.ts
-@@ -0,0 +1,65 @@
-+import { type BrowserWindow, ipcMain, Menu, nativeImage, Tray } from 'electron'
+@@ -0,0 +1,98 @@
++import { type BrowserWindow, ipcMain, Menu, nativeImage, Tray, type WebContents } from 'electron'
 +
 +import type { CharacterMenuState, CharacterSettings } from './character-menu-types'
 +
@@ -5905,8 +6013,11 @@ index 0000000000000000000000000000000000000000..f52b968db62fcd62c7d8f776cae4af83
 +  let tray: Tray | null = null
 +  let state: CharacterMenuState | null = null
 +  let refresh: ReturnType<typeof setInterval> | undefined
++  let owner: { contents: WebContents; unwatch: () => void } | undefined
 +
 +  const clear = () => {
++    owner?.unwatch()
++    owner = undefined
 +    state = null
 +    clearInterval(refresh)
 +    refresh = undefined
@@ -5917,21 +6028,51 @@ index 0000000000000000000000000000000000000000..f52b968db62fcd62c7d8f776cae4af83
 +  ipcMain.on('hermes:characters:menu-state', (event, value) => {
 +    const window = getPrimary()
 +
-+    if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) {return}
++    if (!window || window.isDestroyed()) {return}
++    const contents = window.webContents
++
++    if (event.sender !== contents || !event.senderFrame || event.senderFrame !== contents.mainFrame) {return}
 +    if (value === null) {clear(); return}
 +
 +    if (!value || typeof value.scope !== 'string' || value.scope.length > 512 || typeof value.enabled !== 'boolean' ||
 +        (value.size !== 'small' && value.size !== 'medium' && value.size !== 'large')) {return}
 +
++    if (owner?.contents !== contents) {
++      clear()
++      const watched = {
++        contents,
++        unwatch: () => {
++          if (!contents.isDestroyed()) {
++            contents.removeListener('did-navigate', lost)
++            contents.removeListener('render-process-gone', lost)
++            contents.removeListener('destroyed', lost)
++          }
++        }
++      }
++      const lost = () => {if (owner === watched) {clear()}}
++
++      owner = watched
++      // did-navigate is a committed main-frame load, excluding hash/history updates.
++      contents.on('did-navigate', lost)
++      contents.on('render-process-gone', lost)
++      contents.on('destroyed', lost)
++    }
++
++    const watched = owner
 +    const next: CharacterMenuState = { scope: value.scope, enabled: value.enabled, size: value.size }
 +    state = next
 +    // A minimized Chromium renderer can throttle timers beyond the preview lease.
 +    if (next.enabled && refresh === undefined) {
 +      refresh = setInterval(() => {
-+        const owner = getPrimary()
++        if (owner !== watched) {return}
 +
-+        if (state?.enabled && owner && !owner.isDestroyed() && owner.isMinimized() && !owner.webContents.isDestroyed()) {
-+          owner.webContents.send('hermes:characters:menu-refresh', state.scope)
++        if (getPrimary() !== window || window.isDestroyed() || contents.isDestroyed()) {
++          clear()
++
++          return
++        }
++        if (state?.enabled && window.isMinimized()) {
++          contents.send('hermes:characters:menu-refresh', state.scope)
 +        }
 +      }, 5_000)
 +    } else if (!next.enabled) {
@@ -5940,8 +6081,8 @@ index 0000000000000000000000000000000000000000..f52b968db62fcd62c7d8f776cae4af83
 +    }
 +
 +    const send = (change: Partial<CharacterSettings>) => {
-+      if (state === next && getPrimary() === window && !window.webContents.isDestroyed()) {
-+        window.webContents.send('hermes:characters:menu-action', { scope: next.scope, change })
++      if (owner === watched && state === next && getPrimary() === window && !contents.isDestroyed()) {
++        contents.send('hermes:characters:menu-action', { scope: next.scope, change })
 +      }
 +    }
 +
