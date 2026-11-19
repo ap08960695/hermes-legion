@@ -44,7 +44,9 @@ match. Each row opens its native run evidence on demand. If a run fails to
 load, close and reopen that row to retry.
 If the usage read fails, **Retry usage** rechecks the same card and review.
 
-Coverage is partial. A shared THINK run can appear on several cards.
+Coverage is partial. When THINK usage is linked, the table explains that
+adding card totals can count the same run twice. Use the run evidence to
+identify planning usage shared by several results.
 Originating Captain sessions, ambiguous ownership and duplicate samples
 are excluded. Input includes cached tokens. The cost column sums only
 recorded actual USD amounts and leaves absent prices unavailable.
