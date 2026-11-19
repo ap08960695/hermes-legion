@@ -906,3 +906,35 @@ establishes pose and path parity. Live motion at the lower rates has
 longer holds, and its perceived smoothness remains open. Keep these
 rates in the fixture. Compare a shared native surface with bounded
 damage at the same cadence to isolate the cost of separate layers.
+
+### Compare a shared native strip with individual layers
+
+Four signed, network-denied Mac launches compared five sprite layers
+with one 2× bitmap strip in the same native panel. Both displayed the
+same five sprites, positions and atlas cells at matched 6 and 10 Hz.
+The strip cleared only the union of each moving sprite's old and new
+bounds, then repainted intersecting sprites in z-order. It submitted
+a new image for the entire strip when pixels changed.
+
+| Mode | Added CPU range | Added RSS range | Median added physical footprint |
+| --- | ---: | ---: | ---: |
+| Five layers, 6 Hz | 1.15–1.77 points | 73.26–97.25 MiB | 43.91 MiB |
+| Shared strip, 6 Hz | 3.97–6.92 points | 88.56–102.89 MiB | 50.49 MiB |
+| Five layers, 10 Hz | 2.35–4.36 points | 83.15–97.41 MiB | 42.56 MiB |
+| Shared strip, 10 Hz | 8.11–11.70 points | 88.41–103.06 MiB | 48.30 MiB |
+
+CPU combines the fixture tree and system-wide WindowServer. The
+counterbalanced pairs put the shared strip 2.82–5.15 CPU points higher
+at 6 Hz and 5.41–7.34 higher at 10 Hz. The helper accounted for most
+of the increase. WindowServer changes varied in sign, and the largest
+6/6 combined CPU control difference was 1.06 points. The strip cleared
+15.6–18.7% of its area per submission on average across runs, so partial
+painting alone left substantial work in this implementation.
+
+All eight fixed-time crop pairs matched exactly, including transparent
+pixels outside the sprites. Hide/resume, publisher clear and helper
+teardown passed. Keep individual layers in the native fixture. At
+6 Hz they met the CPU ceiling across these launches and exceeded
+80 MiB RSS in three of four. The resource gate remains open. Next
+isolate the remaining memory costs of the publisher and native helper
+with the individual-layer path.
