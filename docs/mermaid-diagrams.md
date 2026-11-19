@@ -23,7 +23,8 @@ fails, select **Save PNG** again to retry. The diagram uses the app's light or d
 render time. A failed diagram shows a short explanation and its source. Choose
 **Retry** after a timeout to render again while keeping the source visible. If
 focus is on **Retry** or **Copy source**, it moves to **Open diagram** when
-the diagram returns. Oversized diagrams show a shortened source preview.
+the diagram returns. If a different error removes **Retry**, focus moves
+from that button to **Copy source**. Oversized diagrams show a shortened source preview.
 **Copy source** still copies the complete text.
 
 ## Answer cards
