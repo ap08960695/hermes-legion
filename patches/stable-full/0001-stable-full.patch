@@ -53210,10 +53210,10 @@ index 0000000000000000000000000000000000000000..532f40cf2d3e60bd980a558b12409131
 +}
 diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox-data.ts b/apps/desktop/src/plugins/hermes-bots/owner-inbox-data.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..17fdce276e62c2f1a78fd222a3662497bc05afab
+index 0000000000000000000000000000000000000000..2d1969b43433ddd27361e53531db5b02fc9869b9
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox-data.ts
-@@ -0,0 +1,177 @@
+@@ -0,0 +1,179 @@
 +import { host, type OwnerInboxItem, type OwnerInboxList, type OwnerInboxResponse, useValue } from '@hermes/plugin-sdk'
 +import { atom } from 'nanostores'
 +import { useEffect, useRef, useState } from 'react'
@@ -53240,7 +53240,7 @@ index 0000000000000000000000000000000000000000..17fdce276e62c2f1a78fd222a3662497
 +    prompt.kind === 'clarify' ? prompt.question_id : undefined])
 +}
 +
-+export function useOwnerInbox(beforeReady: () => void) {
++export function useOwnerInbox(beforeReady: () => void, beforeRowsChange: (keepsRow: (key: string) => boolean) => void) {
 +  const connection = useValue(host.state.connectionId)
 +  const profile = useValue(host.state.profile)
 +  const socketState = useValue(host.state.gateway)
@@ -53296,6 +53296,7 @@ index 0000000000000000000000000000000000000000..17fdce276e62c2f1a78fd222a3662497
 +          if (!dirty && !lifetime.signal.aborted && isCurrentScope()) {
 +            readyScope.current = isCurrentScope
 +            beforeReady()
++            beforeRowsChange(key => items.some(item => ownerPromptKey(item) === key))
 +            setSnapshot({ gateway, connection, profile, items, status: 'ready' })
 +          }
 +        } catch {
@@ -53339,7 +53340,7 @@ index 0000000000000000000000000000000000000000..17fdce276e62c2f1a78fd222a3662497
 +        void gateway.request('owner_inbox.unwatch').catch(() => undefined)
 +      }
 +    }
-+  }, [beforeReady, connection, gateway, profile])
++  }, [beforeReady, beforeRowsChange, connection, gateway, profile])
 +
 +  const current = gateway && snapshot?.gateway === gateway &&
 +    snapshot.connection === connection && snapshot.profile === profile ? snapshot : null
@@ -53377,6 +53378,7 @@ index 0000000000000000000000000000000000000000..17fdce276e62c2f1a78fd222a3662497
 +            host.state.profile.get() === profile) {
 +          // A list started before settlement can still contain the answered prompt.
 +          invalidate()
++          beforeRowsChange(focusedKey => focusedKey !== key)
 +          setSnapshot(current => current?.gateway === gateway && current.connection === connection &&
 +            current.profile === profile
 +            ? { ...current, items: current.items.filter(item => ownerPromptKey(item) !== key) }
@@ -53393,10 +53395,10 @@ index 0000000000000000000000000000000000000000..17fdce276e62c2f1a78fd222a3662497
 +}
 diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx b/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..0e094ca08d438e1b3387829d868e2c55c1a65212
+index 0000000000000000000000000000000000000000..7c941fc6ddb33e2ff98942e2e474b6b21212b76d
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx
-@@ -0,0 +1,573 @@
+@@ -0,0 +1,609 @@
 +import { host, type OwnerInboxItem } from '@hermes/plugin-sdk'
 +import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 +import { atom } from 'nanostores'
@@ -53649,8 +53651,11 @@ index 0000000000000000000000000000000000000000..0e094ca08d438e1b3387829d868e2c55
 +    return request(method, params)
 +  })
 +  const input = within(second).getByRole<HTMLInputElement>('textbox')
++  const submit = within(second).getByRole('button', { name: 'Send answer' })
 +  fireEvent.change(input, { target: { value: 'Second answer' } })
-+  fireEvent.click(within(second).getByRole('button', { name: 'Send answer' }))
++  submit.focus()
++  fireEvent.click(submit)
++  expect(document.activeElement).toBe(submit)
 +  expect(within(second).getByText('Sending response…')).toBeTruthy()
 +  expect(screen.queryByText(sent)).toBeNull()
 +
@@ -53658,9 +53663,42 @@ index 0000000000000000000000000000000000000000..0e094ca08d438e1b3387829d868e2c55
 +  expect(within(second).getByRole('alert')).toBeTruthy()
 +  expect(screen.queryByText(sent)).toBeNull()
 +  expect(input.value).toBe('Second answer')
-+  fireEvent.click(within(second).getByRole('button', { name: 'Send answer' }))
++  expect(document.activeElement).toBe(submit)
++  fireEvent.click(submit)
 +  await screen.findByText(sent)
 +  expect(screen.queryByText('Second question?')).toBeNull()
++})
++
++it.each(['response', 'event', 'focus moved'])('moves focus only if the focused Inbox row is removed (%s)', async scenario => {
++  const first = prompt('tester', 'First question?')
++  const second = prompt('writer', 'Second question?')
++  const inbox = fixture([first, second])
++  const request = inbox.request.getMockImplementation()!
++  let finish!: () => void
++  inbox.request.mockImplementation((method, params) => method === 'owner_inbox.respond'
++    ? new Promise(resolve => { finish = () => resolve({ status: 'resolved' }) })
++    : request(method, params))
++  inbox.mount()
++  fireEvent.click(await screen.findByRole('button', { name: 'Waiting for owner 2' }))
++
++  const [firstRow, secondRow] = screen.getAllByRole('listitem')
++  const input = within(secondRow).getByRole<HTMLInputElement>('textbox')
++  const other = within(firstRow).getByRole('button', { name: 'Open chat' })
++  input.focus()
++  fireEvent.change(input, { target: { value: 'Fixture answer' } })
++  fireEvent.submit(input.closest('form')!)
++  expect(document.activeElement).toBe(input)
++  expect(input.readOnly).toBe(true)
++
++  if (scenario === 'focus moved') other.focus()
++  if (scenario === 'event') {
++    await act(async () => inbox.change([first]))
++    expect(screen.queryByText('Second question?')).toBeNull()
++    expect(document.activeElement).toBe(screen.getByRole('heading'))
++  }
++  await act(async () => finish())
++  expect(screen.queryByText('Second question?')).toBeNull()
++  expect(document.activeElement).toBe(scenario === 'focus moved' ? other : screen.getByRole('heading'))
 +})
 +
 +it('keeps the shared receipt blank while the latest answer is still sending', async () => {
@@ -53720,7 +53758,7 @@ index 0000000000000000000000000000000000000000..0e094ca08d438e1b3387829d868e2c55
 +  const approve = screen.getByRole<HTMLButtonElement>('button', { name: 'Approve once' })
 +  fireEvent.click(approve)
 +  expect(approvals()).toHaveLength(1)
-+  expect(approve.disabled).toBe(true)
++  expect(approve.getAttribute('aria-disabled')).toBe('true')
 +  expect(screen.getByText('Sending response…').getAttribute('role')).toBe('status')
 +
 +  const answer = screen.getByRole('textbox')
@@ -53729,7 +53767,7 @@ index 0000000000000000000000000000000000000000..0e094ca08d438e1b3387829d868e2c55
 +  await waitFor(() => expect(screen.queryByText('Second question?')).toBeNull())
 +  expect(approvals()).toHaveLength(1)
 +  await act(async () => fail())
-+  expect(approve.disabled).toBe(false)
++  expect(approve.getAttribute('aria-disabled')).not.toBe('true')
 +  expect(screen.queryByText('Sending response…')).toBeNull()
 +
 +  inbox.request.mockImplementation(request)
@@ -53761,10 +53799,10 @@ index 0000000000000000000000000000000000000000..0e094ca08d438e1b3387829d868e2c55
 +  act(() => inbox.gatewayState.set('open'))
 +
 +  const approve = await screen.findByRole<HTMLButtonElement>('button', { name: 'Approve once' })
-+  expect(approve.disabled).toBe(false)
++  expect(approve.getAttribute('aria-disabled')).not.toBe('true')
 +  fireEvent.click(approve)
 +  await act(async () => fail())
-+  expect(approve.disabled).toBe(true)
++  expect(approve.getAttribute('aria-disabled')).toBe('true')
 +  expect(screen.getByText('Sending response…')).toBeTruthy()
 +  await act(async () => finish())
 +  expect(screen.getByText('Nothing is waiting for your answer.')).toBeTruthy()
@@ -53972,10 +54010,10 @@ index 0000000000000000000000000000000000000000..0e094ca08d438e1b3387829d868e2c55
 +)
 diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx b/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..086bcd25f5c68343d04c0c9fda95d0d564f3363c
+index 0000000000000000000000000000000000000000..f3b02ad30b85754b1fcaf685995939416d56241d
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx
-@@ -0,0 +1,235 @@
+@@ -0,0 +1,249 @@
 +import {
 +  Button, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, host, type OwnerInboxItem, type PluginProfileRoute, relativeTime
 +} from '@hermes/plugin-sdk'
@@ -54004,13 +54042,22 @@ index 0000000000000000000000000000000000000000..086bcd25f5c68343d04c0c9fda95d0d5
 +  const scopeGeneration = useRef(0)
 +  const heading = useRef<HTMLHeadingElement>(null)
 +  const refreshButton = useRef<HTMLButtonElement>(null)
++  const list = useRef<HTMLUListElement>(null)
 +  const focusBeforeReady = useCallback(() => {
 +    const button = refreshButton.current
 +    if (button && button.ownerDocument.activeElement === button) {
 +      heading.current?.focus()
 +    }
 +  }, [])
-+  const inbox = useOwnerInbox(focusBeforeReady)
++  const focusBeforeRowsChange = useCallback((keepsRow: (key: string) => boolean) => {
++    const focused = list.current?.ownerDocument.activeElement
++    const row = focused?.closest<HTMLElement>('[data-owner-prompt-key]')
++    const key = row?.dataset.ownerPromptKey
++    if (key && list.current?.contains(row ?? null) && !keepsRow(key)) {
++      heading.current?.focus()
++    }
++  }, [])
++  const inbox = useOwnerInbox(focusBeforeReady, focusBeforeRowsChange)
 +  const count = inbox.status === 'ready' ? inbox.items.length : 0
 +  const status = openingChat ? text.bot.openingChat : notice
 +
@@ -54075,8 +54122,6 @@ index 0000000000000000000000000000000000000000..086bcd25f5c68343d04c0c9fda95d0d5
 +      scopeGeneration.current === scope && host.getGateway() === gateway
 +
 +    setNotice('')
-+    // Keep focus inside the dialog as confirmation removes the focused row.
-+    heading.current?.focus()
 +
 +    try {
 +      const result = await inbox.respond(prompt, value)
@@ -54108,13 +54153,19 @@ index 0000000000000000000000000000000000000000..086bcd25f5c68343d04c0c9fda95d0d5
 +      </div>}
 +      {inbox.status === 'ready' && inbox.items.length === 0 && <p className="text-sm">{t.empty}</p>}
 +      <p className={status ? "text-sm" : "sr-only"} role="status">{status}</p>
-+      <ul className="grid gap-3">
++      <ul className="grid gap-3" ref={list}>
 +        {inbox.items.map(prompt => <OwnerPromptRow
 +          bot={bots.find(bot => bot.profile === prompt.profile)?.label || prompt.profile} key={ownerPromptKey(prompt)} onOpen={() => void openChat(prompt)} openingChat={openingChat} onRespond={value => respond(prompt, value)}
 +          pending={inbox.isResponding(prompt)} prompt={prompt} stale={inbox.status !== 'ready'} text={text} />)}
 +      </ul>
 +    </DialogContent>
 +  </Dialog>
++}
++
++function revealFocusedError(node: HTMLParagraphElement | null) {
++  if (node?.closest('li')?.contains(node.ownerDocument.activeElement)) {
++    node.scrollIntoView?.({ block: 'nearest' })
++  }
 +}
 +
 +function OwnerPromptRow({ prompt, bot, onOpen, onRespond, openingChat, pending, stale, text }: {
@@ -54150,7 +54201,7 @@ index 0000000000000000000000000000000000000000..086bcd25f5c68343d04c0c9fda95d0d5
 +    }
 +  }
 +
-+  return <li className="min-w-0 space-y-3 rounded-lg border border-(--ui-stroke-tertiary) px-4 py-3">
++  return <li className="min-w-0 space-y-3 rounded-lg border border-(--ui-stroke-tertiary) px-4 py-3" data-owner-prompt-key={ownerPromptKey(prompt)}>
 +    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
 +      <div className="min-w-0 break-words text-sm font-semibold">{bot}
 +        {bot !== prompt.profile && <span className="ml-2 font-normal text-muted-foreground">{prompt.profile}</span>}
@@ -54168,11 +54219,12 @@ index 0000000000000000000000000000000000000000..086bcd25f5c68343d04c0c9fda95d0d5
 +
 +      if (values.length) { void send(prompt.multi_select ? JSON.stringify(values) : values[0]) }
 +    }}>
-+      <fieldset className="grid gap-2" disabled={pending}>
++      <fieldset className="grid gap-2">
 +        <legend className="mb-2 whitespace-pre-wrap break-words text-sm font-medium" id={questionId}>{prompt.question}</legend>
 +        {prompt.choices.map((choice, index) => <label className="flex items-start gap-2 break-words text-sm" key={index}>
-+          <input checked={selected.includes(choice)} className="mt-1" name={questionId}
++          <input aria-disabled={pending || undefined} checked={selected.includes(choice)} className="mt-1" name={questionId}
 +            onChange={event => {
++              if (pending) { return }
 +              setAnswer('')
 +              const checked = event.currentTarget.checked
 +              setSelected(current => prompt.multi_select
@@ -54184,14 +54236,14 @@ index 0000000000000000000000000000000000000000..086bcd25f5c68343d04c0c9fda95d0d5
 +        <label className="grid gap-1 text-xs text-muted-foreground">
 +          {prompt.choices.length ? t.otherAnswer : t.answer}
 +          <input aria-describedby={questionId} className="min-h-9 rounded border border-(--ui-stroke-tertiary) bg-background px-2 text-sm text-foreground"
-+            maxLength={16384} onChange={event => { setSelected([]); setAnswer(event.currentTarget.value) }} value={answer} />
++            maxLength={16384} onChange={event => { setSelected([]); setAnswer(event.currentTarget.value) }} readOnly={pending} value={answer} />
 +        </label>
 +      </fieldset>
 +      <div className="flex flex-wrap gap-2">
 +        <Button
-+          aria-disabled={stale || undefined}
++          aria-disabled={pending || stale || undefined}
 +          className="aria-disabled:opacity-60"
-+          disabled={pending || (!answer.trim() && !selectedChoices.length)}
++          disabled={!answer.trim() && !selectedChoices.length}
 +          size="sm"
 +          type="submit"
 +          variant="secondary"
@@ -54202,13 +54254,13 @@ index 0000000000000000000000000000000000000000..086bcd25f5c68343d04c0c9fda95d0d5
 +      {prompt.description && <p className="whitespace-pre-wrap break-words text-sm">{prompt.description}</p>}
 +      <pre className="whitespace-pre-wrap break-words rounded bg-(--ui-bg-quinary) p-2 text-xs">{prompt.command}</pre>
 +      <div className="flex flex-wrap gap-2">
-+        {!prompt.chat_only && prompt.choices.includes('once') && <Button aria-disabled={stale || undefined} className="aria-disabled:opacity-60" disabled={pending} onClick={() => void send('once')} size="sm" variant="secondary">{t.approve}</Button>}
-+        {!prompt.chat_only && prompt.choices.includes('deny') && <Button aria-disabled={stale || undefined} className="aria-disabled:opacity-60" disabled={pending} onClick={() => void send('deny')} size="sm" variant="ghost">{t.deny}</Button>}
++        {!prompt.chat_only && prompt.choices.includes('once') && <Button aria-disabled={pending || stale || undefined} className="aria-disabled:opacity-60" onClick={() => void send('once')} size="sm" variant="secondary">{t.approve}</Button>}
++        {!prompt.chat_only && prompt.choices.includes('deny') && <Button aria-disabled={pending || stale || undefined} className="aria-disabled:opacity-60" onClick={() => void send('deny')} size="sm" variant="ghost">{t.deny}</Button>}
 +        {openButton}
 +      </div>
 +    </>}
 +    {pending && <p className="text-sm text-muted-foreground" role="status">{t.sending}</p>}
-+    {error && <p className="text-sm text-destructive" role="alert">{t.failed}</p>}
++    {error && <p className="text-sm text-destructive" ref={revealFocusedError} role="alert">{t.failed}</p>}
 +  </li>
 +}
 diff --git a/apps/desktop/src/plugins/hermes-bots/pet.test.tsx b/apps/desktop/src/plugins/hermes-bots/pet.test.tsx
