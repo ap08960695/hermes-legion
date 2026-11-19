@@ -53442,10 +53442,10 @@ index 0000000000000000000000000000000000000000..532f40cf2d3e60bd980a558b12409131
 +}
 diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox-data.ts b/apps/desktop/src/plugins/hermes-bots/owner-inbox-data.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..2d1969b43433ddd27361e53531db5b02fc9869b9
+index 0000000000000000000000000000000000000000..09462de6ef92a8af84f07b51893d9ea562142c22
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox-data.ts
-@@ -0,0 +1,179 @@
+@@ -0,0 +1,181 @@
 +import { host, type OwnerInboxItem, type OwnerInboxList, type OwnerInboxResponse, useValue } from '@hermes/plugin-sdk'
 +import { atom } from 'nanostores'
 +import { useEffect, useRef, useState } from 'react'
@@ -53489,11 +53489,13 @@ index 0000000000000000000000000000000000000000..2d1969b43433ddd27361e53531db5b02
 +
 +
 +  useEffect(() => {
-+    if (!gateway) {
-+      setSnapshot(null)
-+
-+      return
-+    }
++    setSnapshot(current => {
++      if (current?.connection !== connection || current.profile !== profile) return null
++      if (gateway) return current
++      // Keep Local draft rows mounted while their transport reconnects.
++      return connection === 'local' ? { ...current, gateway: null, status: 'unavailable', retrying: false } : null
++    })
++    if (!gateway) return
 +
 +    const lifetime = new AbortController()
 +    const isCurrentScope = () => host.getGateway() === gateway && host.state.gateway.get() === 'open' &&
@@ -53538,9 +53540,8 @@ index 0000000000000000000000000000000000000000..2d1969b43433ddd27361e53531db5b02
 +              gateway,
 +              connection,
 +              profile,
-+              items: current?.gateway === gateway && current.connection === connection && current.profile === profile
-+                ? current.items
-+                : [],
++              items: current?.connection === connection && current.profile === profile &&
++                (current.gateway === gateway || connection === 'local') ? current.items : [],
 +              status: 'unavailable'
 +            }))
 +          }
@@ -53574,11 +53575,12 @@ index 0000000000000000000000000000000000000000..2d1969b43433ddd27361e53531db5b02
 +    }
 +  }, [beforeReady, beforeRowsChange, connection, gateway, profile])
 +
-+  const current = gateway && snapshot?.gateway === gateway &&
-+    snapshot.connection === connection && snapshot.profile === profile ? snapshot : null
++  const scoped = snapshot?.connection === connection && snapshot.profile === profile ? snapshot : null
++  const current = gateway && scoped?.gateway === gateway ? scoped : null
 +
 +  return {
-+    items: current?.items ?? [],
++    connected: Boolean(gateway),
++    items: (connection === 'local' ? scoped : current)?.items ?? [],
 +    status: current?.status ?? (gateway ? 'loading' : 'unavailable'),
 +    retry: () => retryRead.current?.(),
 +    retrying: current?.retrying ?? false,
@@ -53627,10 +53629,10 @@ index 0000000000000000000000000000000000000000..2d1969b43433ddd27361e53531db5b02
 +}
 diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx b/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..7c941fc6ddb33e2ff98942e2e474b6b21212b76d
+index 0000000000000000000000000000000000000000..ad6fbeaf74e00c01f6cf04b1997ab9c937a5f661
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx
-@@ -0,0 +1,609 @@
+@@ -0,0 +1,647 @@
 +import { host, type OwnerInboxItem } from '@hermes/plugin-sdk'
 +import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 +import { atom } from 'nanostores'
@@ -53768,9 +53770,47 @@ index 0000000000000000000000000000000000000000..7c941fc6ddb33e2ff98942e2e474b6b2
 +
 +  act(() => inbox.change([prompt('writer', 'Should I publish?')]))
 +  await screen.findByText('Should I publish?')
-+  act(() => inbox.gatewayState.set('closed'))
++  act(() => inbox.connection.set('different-connection'))
 +  expect(screen.queryByText('Should I publish?')).toBeNull()
-+  expect(screen.getByText('Pending requests are unavailable on this connection.')).toBeTruthy()
++})
++
++it.each([false, true])('keeps a draft during Local reconnect without reusing it for a new generation (%s)', async replaced => {
++  const question = prompt('tester', 'Ready after reconnect?')
++  const inbox = fixture([question])
++  inbox.mount()
++  fireEvent.click(await screen.findByRole('button', { name: 'Waiting for owner 1' }))
++  const answer = screen.getByRole<HTMLInputElement>('textbox', { name: 'Your answer' })
++  const send = screen.getByRole('button', { name: 'Send answer' })
++  const responses = () => inbox.request.mock.calls.filter(([method]) => method === 'owner_inbox.respond')
++  fireEvent.change(answer, { target: { value: 'Keep my draft' } })
++
++  act(() => inbox.gatewayState.set('closed'))
++  expect(screen.getByRole('textbox', { name: 'Your answer' })).toBe(answer)
++  expect(answer.value).toBe('Keep my draft')
++  expect(send.getAttribute('aria-disabled')).toBe('true')
++  fireEvent.submit(answer.closest('form')!)
++  expect(responses()).toHaveLength(0)
++
++  act(() => {
++    inbox.change([replaced ? { ...question, execution_generation: 5 } : question])
++    inbox.gatewayState.set('open')
++  })
++  await waitFor(() => {
++    const active = screen.getByRole('button', { name: 'Send answer' })
++    expect(active.getAttribute('aria-disabled')).not.toBe('true')
++  })
++  const recovered = screen.getByRole<HTMLInputElement>('textbox', { name: 'Your answer' })
++  expect(recovered.value).toBe(replaced ? '' : 'Keep my draft')
++  expect(recovered === answer).toBe(!replaced)
++  expect(responses()).toHaveLength(0)
++
++  if (!replaced) {
++    fireEvent.submit(recovered.closest('form')!)
++    await screen.findByText('The gateway accepted your response.')
++    expect(responses()).toEqual([
++      ['owner_inbox.respond', expect.objectContaining({ prompt_id: question.prompt_id, value: 'Keep my draft' })]
++    ])
++  }
 +})
 +
 +it('opens one chat at a time and keeps focus on the busy action', async () => {
@@ -54242,10 +54282,10 @@ index 0000000000000000000000000000000000000000..7c941fc6ddb33e2ff98942e2e474b6b2
 +)
 diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx b/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..f3b02ad30b85754b1fcaf685995939416d56241d
+index 0000000000000000000000000000000000000000..0373b0ebc1ad2773d4b28c2d68e15af2d7cf0eb2
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx
-@@ -0,0 +1,249 @@
+@@ -0,0 +1,250 @@
 +import {
 +  Button, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, host, type OwnerInboxItem, type PluginProfileRoute, relativeTime
 +} from '@hermes/plugin-sdk'
@@ -54316,7 +54356,8 @@ index 0000000000000000000000000000000000000000..f3b02ad30b85754b1fcaf68599593941
 +  }
 +
 +  async function openChat(prompt: OwnerInboxItem) {
-+    if (opening.current || !connection || host.state.connectionId.get() !== connection) { return }
++    if (opening.current || !connection || host.state.connectionId.get() !== connection ||
++        host.state.gateway.get() !== 'open') { return }
 +
 +    opening.current = true
 +    setOpeningChat(true)
@@ -54379,15 +54420,15 @@ index 0000000000000000000000000000000000000000..f3b02ad30b85754b1fcaf68599593941
 +      </DialogHeader>
 +      {inbox.status === 'loading' && <p className="text-sm" role="status">{t.loading}</p>}
 +      {inbox.status === 'unavailable' && <div className="space-y-2 text-sm">
-+        <p role="status">{inbox.retrying ? t.loading : inbox.items.length ? t.stale : t.unavailable}</p>
-+        <Button aria-disabled={inbox.retrying || undefined} className="aria-disabled:opacity-60"
-+          onClick={inbox.retry} ref={refreshButton} size="sm" variant="secondary">{t.retry}</Button>
++        <p role="status">{inbox.retrying ? t.loading : inbox.connected && inbox.items.length ? t.stale : t.unavailable}</p>
++        {inbox.connected && <Button aria-disabled={inbox.retrying || undefined} className="aria-disabled:opacity-60"
++          onClick={inbox.retry} ref={refreshButton} size="sm" variant="secondary">{t.retry}</Button>}
 +      </div>}
 +      {inbox.status === 'ready' && inbox.items.length === 0 && <p className="text-sm">{t.empty}</p>}
 +      <p className={status ? "text-sm" : "sr-only"} role="status">{status}</p>
 +      <ul className="grid gap-3" ref={list}>
 +        {inbox.items.map(prompt => <OwnerPromptRow
-+          bot={bots.find(bot => bot.profile === prompt.profile)?.label || prompt.profile} key={ownerPromptKey(prompt)} onOpen={() => void openChat(prompt)} openingChat={openingChat} onRespond={value => respond(prompt, value)}
++          bot={bots.find(bot => bot.profile === prompt.profile)?.label || prompt.profile} key={ownerPromptKey(prompt)} onOpen={() => void openChat(prompt)} openingChat={openingChat || !inbox.connected} onRespond={value => respond(prompt, value)}
 +          pending={inbox.isResponding(prompt)} prompt={prompt} stale={inbox.status !== 'ready'} text={text} />)}
 +      </ul>
 +    </DialogContent>
