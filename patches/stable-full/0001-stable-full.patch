@@ -30647,10 +30647,10 @@ index 75a4e608afbc77db7c82d1f02264e62690139620..7a6846bbd4e907cd48f5be2530e74462
            startFreshSessionDraft(true)
 diff --git a/apps/desktop/src/app/settings/account-usage-panel.test.tsx b/apps/desktop/src/app/settings/account-usage-panel.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..b6860dc6c555647a7921fdce81574f69e2b9e549
+index 0000000000000000000000000000000000000000..d219d73de4bc5c0db6bde69a6c895d47d0322461
 --- /dev/null
 +++ b/apps/desktop/src/app/settings/account-usage-panel.test.tsx
-@@ -0,0 +1,159 @@
+@@ -0,0 +1,199 @@
 +import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 +import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
 +import { atom, type WritableAtom } from 'nanostores'
@@ -30703,6 +30703,7 @@ index 0000000000000000000000000000000000000000..b6860dc6c555647a7921fdce81574f69
 +
 +it('reads cached per-account data on entry, exposes all providers and only probes on Refresh', async () => {
 +  request.mockResolvedValue({
++    configured_route: { provider: 'anthropic', label: 'Anthropic', model: 'example-claude', local_endpoint: false },
 +    accounts: [
 +      reading('First'),
 +      reading('Second', 'anthropic', 5),
@@ -30717,6 +30718,7 @@ index 0000000000000000000000000000000000000000..b6860dc6c555647a7921fdce81574f69
 +  })
 +  const f = mount()
 +  await f.findByText('First')
++  expect(f.getByText('example-claude')).toBeTruthy()
 +  expect(request).toHaveBeenCalledExactlyOnceWith(
 +    'local',
 +    'captain',
@@ -30810,12 +30812,50 @@ index 0000000000000000000000000000000000000000..b6860dc6c555647a7921fdce81574f69
 +    clock.mockRestore()
 +  }
 +})
++
++
++it('shows Gemini API separately from AGY and uses unknown quota when Gemini has no reading', async () => {
++  request.mockResolvedValue({
++    configured_route: { provider: 'gemini', model: 'example-gemini', local_endpoint: false },
++    accounts: [reading('Subscription login', 'antigravity-subscription-directsdk', 80)]
++  })
++  const f = mount()
++  const gemini = within(await f.findByRole('region', { name: 'Gemini API' }))
++  expect(gemini.getByText('example-gemini')).toBeTruthy()
++  expect(gemini.getByText('Provider does not report quota')).toBeTruthy()
++  expect(gemini.queryByRole('progressbar')).toBeNull()
++  expect(within(f.getByRole('region', { name: 'AGY' })).getByRole('progressbar')).toBeTruthy()
++})
++
++it('shows a NIM snapshot with a timestamp, then retires that view on a same-profile device switch', async () => {
++  request.mockResolvedValue({
++    configured_route: { provider: 'nim', model: 'example-nim', local_endpoint: false },
++    accounts: [reading('Provider login', 'nvidia', 0)]
++  })
++  const f = mount()
++  const nim = within(await f.findByRole('region', { name: 'NVIDIA NIM' }))
++  expect(nim.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('0')
++  expect(nim.getByText(/Updated/).querySelector('time')?.getAttribute('datetime')).toBeTruthy()
++
++  request.mockResolvedValue({
++    configured_route: { provider: 'custom:studio', label: 'Studio', model: 'example-local', local_endpoint: true },
++    accounts: []
++  })
++  act(() => {
++    ;($activeConnectionId as WritableAtom<string | null>).set('remote')
++  })
++  expect(f.queryByRole('region', { name: 'NVIDIA NIM' })).toBeNull()
++  const local = within(await f.findByRole('region', { name: 'Studio' }))
++  expect(local.getByText('Local endpoint')).toBeTruthy()
++  expect(local.getByText('example-local')).toBeTruthy()
++  expect(local.queryByRole('progressbar')).toBeNull()
++})
 diff --git a/apps/desktop/src/app/settings/account-usage-panel.tsx b/apps/desktop/src/app/settings/account-usage-panel.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..1414effea6c441cf135fc6528fb16f7b31188c9c
+index 0000000000000000000000000000000000000000..65274c7838e86ed459c0c5233991d5100ef6a4c3
 --- /dev/null
 +++ b/apps/desktop/src/app/settings/account-usage-panel.tsx
-@@ -0,0 +1,227 @@
+@@ -0,0 +1,271 @@
 +import type { AccountUsageResult, AccountUsageRow } from '@hermes/shared'
 +import { useStore } from '@nanostores/react'
 +import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -30835,11 +30875,20 @@ index 0000000000000000000000000000000000000000..1414effea6c441cf135fc6528fb16f7b
 +
 +import { Pill } from './primitives'
 +
-+const PROVIDERS = [
++const PROVIDER_NAMES = new Map([
++  ['agy', 'AGY'],
 +  ['anthropic', 'Claude'],
-+  ['openai-codex', 'Codex'],
-+  ['agy', 'AGY']
-+] as const
++  ['gemini', 'Gemini API'],
++  ['nvidia', 'NVIDIA NIM'],
++  ['openai-codex', 'Codex']
++])
++
++function usageProvider(provider: string): string {
++  if (provider === 'antigravity-subscription-directsdk') return 'agy'
++  if (provider === 'nim' || provider === 'nvidia-nim') return 'nvidia'
++
++  return provider
++}
 +
 +const MAX_AGE_MS = 15 * 60 * 1000
 +
@@ -31002,31 +31051,7 @@ index 0000000000000000000000000000000000000000..1414effea6c441cf135fc6528fb16f7b
 +      {query.isPending ? (
 +        <Skeleton className="h-24 w-full" />
 +      ) : (
-+        <div className="grid gap-x-8 gap-y-5 @min-[38rem]:grid-cols-3">
-+          {PROVIDERS.map(([slug, name]) => {
-+            const rows =
-+              query.data?.accounts.filter(
-+                row =>
-+                  row.provider === slug || (slug === 'agy' && row.provider === 'antigravity-subscription-directsdk')
-+              ) ?? []
-+
-+            return (
-+              <section aria-label={name} className="min-w-0" key={slug}>
-+                <div className="flex items-baseline justify-between gap-2">
-+                  <h3 className="text-base font-semibold tracking-tight">{name}</h3>
-+                  <span className="text-[0.6875rem] text-muted-foreground">{copy.remaining}</span>
-+                </div>
-+                <div className="divide-y divide-border">
-+                  {rows.length ? (
-+                    rows.map(row => <AccountReading key={row.id} now={Math.max(now, query.dataUpdatedAt)} row={row} />)
-+                  ) : (
-+                    <p className="py-3 text-xs text-muted-foreground">{copy.noAccounts}</p>
-+                  )}
-+                </div>
-+              </section>
-+            )
-+          })}
-+        </div>
++        <AccountUsageRows result={query.data} now={Math.max(now, query.dataUpdatedAt)} />
 +      )}
 +      <p className="mt-1 border-t border-border pt-3 text-[0.6875rem] leading-relaxed text-muted-foreground">
 +        {copy.description}
@@ -31034,6 +31059,65 @@ index 0000000000000000000000000000000000000000..1414effea6c441cf135fc6528fb16f7b
 +    </section>
 +  )
 +}
++
++function AccountUsageRows({ result, now }: { result?: AccountUsageResult; now: number }) {
++  const { t } = useI18n()
++  const copy = t.settings.providers.usage
++  const route = result?.configured_route
++  const current = route?.provider ? usageProvider(route.provider) : null
++  const reports = new Map<string, AccountUsageRow[]>()
++
++  for (const row of result?.accounts ?? []) {
++    const provider = usageProvider(row.provider)
++    const accounts = reports.get(provider) ?? []
++    accounts.push(row)
++    reports.set(provider, accounts)
++  }
++
++  const currentAccounts = current && !route?.local_endpoint ? reports.get(current) : undefined
++  if (current && currentAccounts) reports.delete(current)
++
++  const title = current === 'auto'
++    ? copy.routeAutomatic
++    : (current && (PROVIDER_NAMES.get(current) ?? route?.label ?? current)) || copy.routeUnknown
++
++  return (
++    <div className="space-y-4">
++      <section aria-label={title} className="min-w-0 rounded-md border border-border p-4">
++        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
++          <h3 className="break-all text-base font-semibold tracking-tight">{title}</h3>
++          {route && <span className="text-xs text-muted-foreground">{copy.configuredRoute}</span>}
++        </div>
++        {route?.model && <p className="mt-1 break-all text-xs text-(--ui-text-secondary)">{route.model}</p>}
++        {route?.local_endpoint ? (
++          <p className="mt-3 text-xs text-muted-foreground">{copy.localEndpoint}</p>
++        ) : currentAccounts?.length ? (
++          <div className="divide-y divide-border">
++            {currentAccounts.map(row => <AccountReading key={row.id} now={now} row={row} />)}
++          </div>
++        ) : (
++          current && current !== 'auto' && <p className="mt-3 text-xs text-muted-foreground">{copy.noQuota}</p>
++        )}
++      </section>
++      {reports.size > 0 && (
++        <div className="grid gap-x-8 gap-y-5 @min-[38rem]:grid-cols-3">
++          {[...reports].map(([provider, rows]) => {
++            const name = PROVIDER_NAMES.get(provider) ?? provider
++            return (
++              <section aria-label={name} className="min-w-0" key={provider}>
++                <h3 className="break-all text-sm font-semibold tracking-tight">{name}</h3>
++                <div className="divide-y divide-border">
++                  {rows.map(row => <AccountReading key={row.id} now={now} row={row} />)}
++                </div>
++              </section>
++            )
++          })}
++        </div>
++      )}
++    </div>
++  )
++}
++
 +
 +export function AccountUsagePanel() {
 +  const profile = useStore($settingsScopeProfile)
@@ -32947,7 +33031,7 @@ index 7528c61ae6516435278f789c3b362c4847f070fb..8cb6ada91f882b1b47d250861513126b
    appearanceGeneral: Settings2,
 diff --git a/apps/desktop/src/app/shell/account-usage-statusbar.test.tsx b/apps/desktop/src/app/shell/account-usage-statusbar.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..fe28c0e6f75cb9008d117c9744de6233f37b44f4
+index 0000000000000000000000000000000000000000..1872df6dc9d15a3306237da4efb7181ddbdeedf8
 --- /dev/null
 +++ b/apps/desktop/src/app/shell/account-usage-statusbar.test.tsx
 @@ -0,0 +1,39 @@
@@ -32985,7 +33069,7 @@ index 0000000000000000000000000000000000000000..fe28c0e6f75cb9008d117c9744de6233
 +    'account.usage',
 +    { profile: 'default', refresh: false }
 +  ])
-+  expect(f.getByRole('region', { name: 'AGY' })).toBeTruthy()
++  expect(f.getByRole('region', { name: 'Provider not reported' })).toBeTruthy()
 +  await waitFor(() => expect(f.getByRole('button', { name: 'Refresh' }).hasAttribute('disabled')).toBe(false))
 +  await act(async () => fireEvent.click(f.getByRole('button', { name: 'Refresh' })))
 +  expect(request.mock.calls[1]?.[3]).toEqual({ profile: 'default', refresh: true })
@@ -38116,13 +38200,13 @@ index 0552e42fccd94a14c3817380fb31618725d18168..6741fd77c637de42b54ac46eb8c74dcd
 +      composer: 'gesendete Nachrichten laufen erst nach `hermes resume`'
      }
 diff --git a/apps/desktop/src/i18n/en.ts b/apps/desktop/src/i18n/en.ts
-index 57a5b0604644dcb4f61155382dda4beeef8224ca..2d9c00ebd57fa6ae65a1a4582dc17facd941ef85 100644
+index 57a5b0604644dcb4f61155382dda4beeef8224ca..7138163efadb3ec6d3b1773db93dab263b410e4a 100644
 --- a/apps/desktop/src/i18n/en.ts
 +++ b/apps/desktop/src/i18n/en.ts
 @@ -1,4 +1,5 @@
 -// health: allow FILE_LINES -- locale data: translated copy for the usage-window plan UI (allowance gauges, Large/Free tags, the limit card), one key per string
  import { FIELD_DESCRIPTIONS, FIELD_LABELS } from '@/app/settings/constants'
-
+ 
 +// health: allow FILE_LINES -- locale data: translated copy for the usage-window plan UI (allowance gauges, Large/Free tags, the limit card), one key per string
 +import { composerDraftCopy } from './composer-draft-copy'
  import { enAppTour } from './en_app_tour'
@@ -38154,7 +38238,7 @@ index 57a5b0604644dcb4f61155382dda4beeef8224ca..2d9c00ebd57fa6ae65a1a4582dc17fac
 -          },
 +          }
          },
-@@ -1849,2 +1853,15 @@ export const en: Translations = {
+@@ -1849,2 +1853,20 @@ export const en: Translations = {
      providers: {
 +      usage: {
 +        title: 'Account usage',
@@ -38166,11 +38250,16 @@ index 57a5b0604644dcb4f61155382dda4beeef8224ca..2d9c00ebd57fa6ae65a1a4582dc17fac
 +        unavailable: 'Unavailable',
 +        stale: 'Stale reading',
 +        noAccounts: 'No account readings available.',
++        configuredRoute: 'Configured for this profile',
++        routeUnknown: 'Provider not reported',
++        routeAutomatic: 'Automatic provider selection',
++        noQuota: 'Provider does not report quota',
++        localEndpoint: 'Local endpoint',
 +        loadFailed: 'Could not load usage. Try Refresh.',
 +        description: 'Readings are per account. Refresh checks quotas without running a model.'
 +      },
        connectAccount: 'Connect an account',
-@@ -3268,2 +3285,7 @@ export const en: Translations = {
+@@ -3268,2 +3290,7 @@ export const en: Translations = {
    composer: {
 +    nextPrompt: 'Next prompt',
 +    autocomplete: 'Autocomplete',
@@ -38178,7 +38267,7 @@ index 57a5b0604644dcb4f61155382dda4beeef8224ca..2d9c00ebd57fa6ae65a1a4582dc17fac
 +    promptSuggestionHint: 'Generate once with a small model. Only runs when you click; never sends.',
 +    noPromptSuggestion: 'No suggestion this time.',
      message: 'Message',
-@@ -3430,4 +3452,3 @@ export const en: Translations = {
+@@ -3430,4 +3457,3 @@ export const en: Translations = {
      editingQueuedInComposer: 'Editing queued turn in composer',
 -    restoredDraftNotice: 'Restored your unsent message',
 -    restoredDraftUndo: 'Undo',
@@ -38562,7 +38651,7 @@ index 2f16980065ad8ca00ead0ebfcb8b1be389fe91ec..ffe3f023381c99c6270ee722b06b6d50
 +      composer: 'отправленные сообщения не выполнятся до `hermes resume`'
      }
 diff --git a/apps/desktop/src/i18n/types.ts b/apps/desktop/src/i18n/types.ts
-index 0f2e489af4f39fa0571f7d4880bc24e501b7707c..e0e67dae3b1055c3d5a807a0d9c1de849776d5c7 100644
+index 0f2e489af4f39fa0571f7d4880bc24e501b7707c..930523eea4583bd953ede4c5d95c76333503d04c 100644
 --- a/apps/desktop/src/i18n/types.ts
 +++ b/apps/desktop/src/i18n/types.ts
 @@ -11,2 +11,3 @@ import type { TipId } from '@/lib/tips/catalog'
@@ -38580,7 +38669,7 @@ index 0f2e489af4f39fa0571f7d4880bc24e501b7707c..e0e67dae3b1055c3d5a807a0d9c1de84
 +      showAll: (count: number) => string
 +      showLess: string
      }
-@@ -1672,2 +1676,15 @@ catalog: CatalogTranslations
+@@ -1672,2 +1676,20 @@ catalog: CatalogTranslations
      providers: {
 +      usage: {
 +        title: string
@@ -38592,11 +38681,16 @@ index 0f2e489af4f39fa0571f7d4880bc24e501b7707c..e0e67dae3b1055c3d5a807a0d9c1de84
 +        unavailable: string
 +        stale: string
 +        noAccounts: string
++        configuredRoute: string
++        routeUnknown: string
++        routeAutomatic: string
++        noQuota: string
++        localEndpoint: string
 +        loadFailed: string
 +        description: string
 +      }
        connectAccount: string
-@@ -2879,3 +2896,8 @@ catalog: CatalogTranslations
+@@ -2879,3 +2901,8 @@ catalog: CatalogTranslations
  
 -  composer: {
 +  composer: ComposerDraftCopy & {
@@ -38606,7 +38700,7 @@ index 0f2e489af4f39fa0571f7d4880bc24e501b7707c..e0e67dae3b1055c3d5a807a0d9c1de84
 +    promptSuggestionHint: string
 +    noPromptSuggestion: string
      message: string
-@@ -2944,4 +2966,2 @@ catalog: CatalogTranslations
+@@ -2944,4 +2971,2 @@ catalog: CatalogTranslations
      editingQueuedInComposer: string
 -    restoredDraftNotice: string
 -    restoredDraftUndo: string
@@ -56585,10 +56679,10 @@ index 0000000000000000000000000000000000000000..48fb2a357fec113ea6d7fb268b1af5b0
 +  return Object.fromEntries(entries)
 +}
 diff --git a/apps/shared/src/gateway-contract.generated.ts b/apps/shared/src/gateway-contract.generated.ts
-index 57a5f6d6774588963334c22dccc5a7101a80b7ed..5776d322c83f5f764eba509772175d502b4f8256 100644
+index 57a5f6d6774588963334c22dccc5a7101a80b7ed..92458ad3b93cd622f04ae3d70078953906098904 100644
 --- a/apps/shared/src/gateway-contract.generated.ts
 +++ b/apps/shared/src/gateway-contract.generated.ts
-@@ -812,2 +812,26 @@ export interface SharedMetricsDesktopDailyResult {
+@@ -812,2 +812,33 @@ export interface SharedMetricsDesktopDailyResult {
  }
 +export interface AccountUsageParams {
 +  profile?: string | null
@@ -56596,6 +56690,7 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..5776d322c83f5f764eba509772175d50
 +}
 +export interface AccountUsageResult {
 +  accounts: AccountUsageRow[]
++  configured_route?: AccountUsageRoute | null
 +}
 +export interface AccountUsageRow {
 +  provider: string
@@ -56614,23 +56709,29 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..5776d322c83f5f764eba509772175d50
 +  resets_at?: string | null
 +  scope: 'account' | 'model'
 +}
++export interface AccountUsageRoute {
++  provider: string | null
++  label: string | null
++  model: string
++  local_endpoint: boolean
++}
  export interface ModelOptionsParams {
-@@ -1004,2 +1028,5 @@ export interface SessionControlArgs {
+@@ -1004,2 +1035,5 @@ export interface SessionControlArgs {
    index?: number | null
 +  title?: string | null
 +  contract?: GoalContractSnapshot | null
 +  expected_revision?: string | null
  }
-@@ -2067,2 +2094,3 @@ export interface ProfileRow {
+@@ -2067,2 +2101,3 @@ export interface ProfileRow {
    worker_session?: ProfileWorkerSession | null
 +  worker_sessions?: ProfileWorkerSession[] | null
    canonical_session?: ProfileCanonicalSession | null
-@@ -2082,3 +2110,3 @@ export interface ProfileSessionPreview {
+@@ -2082,3 +2117,3 @@ export interface ProfileSessionPreview {
  }
 -/** Newest kanban/tool worker row, so rosters can show a profile as working. */
 +/** Observed worker metadata, separate from human-facing conversation previews. */
  export interface ProfileWorkerSession {
-@@ -2088,2 +2116,13 @@ export interface ProfileWorkerSession {
+@@ -2088,2 +2123,13 @@ export interface ProfileWorkerSession {
    last_active?: number
 +  last_activity_description?: string
 +  ended_at?: number | null
@@ -56644,7 +56745,7 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..5776d322c83f5f764eba509772175d50
 +  actual_cost_usd?: number | null
 +  model?: string | null
  }
-@@ -2100,2 +2139,18 @@ export interface ProfileCanonicalSession {
+@@ -2100,2 +2146,18 @@ export interface ProfileCanonicalSession {
    live_message_count?: number | null
 +  input_tokens?: number | null
 +  output_tokens?: number | null
@@ -56663,7 +56764,7 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..5776d322c83f5f764eba509772175d50
 +  summary?: string
 +  error?: string
  }
-@@ -2433,2 +2488,41 @@ export interface SubagentTailResult {
+@@ -2433,2 +2495,41 @@ export interface SubagentTailResult {
  }
 +export interface ProfileWorkflowGetParams {
 +  profile?: string | null
@@ -56705,7 +56806,11 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..5776d322c83f5f764eba509772175d50
 +  effort?: string
 +}
  /** ``methods_projects._projects_payload``: every project (archived included) + the active id. */
-@@ -2729,2 +2823,7 @@ export interface PetGalleryEntry {
+@@ -2680,2 +2781,3 @@ export interface PetInfoResult {
+   stateRows?: string[] | null
++  motionWeight?: 'light' | 'standard' | 'heavy' | null
+   [key: string]: unknown
+@@ -2729,2 +2831,7 @@ export interface PetGalleryEntry {
  }
 +export interface PetSpriteParams {
 +  profile?: string | null
@@ -56713,7 +56818,7 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..5776d322c83f5f764eba509772175d50
 +  variant?: 'half' | null
 +}
  export interface PetSlugParams {
-@@ -4574,2 +4673,26 @@ export interface PluginCatalogLookupEntry {
+@@ -4574,2 +4681,26 @@ export interface PluginCatalogLookupEntry {
  }
 +export interface CanonicalSubagentListResult {
 +  subagents?: CanonicalSubagentSnapshot[]
@@ -56740,11 +56845,11 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..5776d322c83f5f764eba509772175d50
 +  child_session_id?: string | null
 +}
  export interface CanonicalShellExecParams {
-@@ -5288,2 +5411,3 @@ export interface CanonicalProfileRow {
+@@ -5288,2 +5419,3 @@ export interface CanonicalProfileRow {
    worker_session?: ProfileWorkerSession | null
 +  worker_sessions?: ProfileWorkerSession[] | null
    canonical_session?: ProfileCanonicalSession | null
-@@ -5293,2 +5417,27 @@ export interface CanonicalProfileRow {
+@@ -5293,2 +5425,27 @@ export interface CanonicalProfileRow {
  }
 +export interface CanonicalBotOutputParams {
 +  profile?: string | null
@@ -56772,37 +56877,37 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..5776d322c83f5f764eba509772175d50
 +  pdf_base64?: string | null
 +}
  export interface CanonicalAttachedImageResult {
-@@ -6057,2 +6206,4 @@ export type ConnectorErrorReason = 'INVALID_PARAMS' | 'NOT_OWNER' | 'UNSUPPORTED
+@@ -6057,2 +6214,4 @@ export type ConnectorErrorReason = 'INVALID_PARAMS' | 'NOT_OWNER' | 'UNSUPPORTED
  export interface RpcMethods {
 +  /** Read per-account quota snapshots. Only refresh=true queries readonly credential-scoped quota endpoints. */
 +  'account.usage': { params: AccountUsageParams; result: AccountUsageResult }
    /** Registry-wide background process summary for ``/agents``. */
-@@ -6323,2 +6474,4 @@ export interface RpcMethods {
+@@ -6323,2 +6482,4 @@ export interface RpcMethods {
    'pet.select': { params: PetSlugParams; result: PetSlugResult }
 +  /** Read one installed character atlas, optionally at half resolution, without changing selection. */
 +  'pet.sprite': { params: PetSpriteParams; result: PetInfoResult }
    /** Idle-frame PNG data URI for the picker (desktop CSP breaks CDN <img>). */
-@@ -6353,2 +6506,6 @@ export interface RpcMethods {
+@@ -6353,2 +6514,6 @@ export interface RpcMethods {
    'profiles.set_asset': { params: ProfilesSetAssetParams; result: ProfilesSetAssetResult }
 +  /** Role-specific THINK/ACTION configuration; linkage is not dispatch readiness. */
 +  'profiles.workflow.configure': { params: ProfileWorkflowConfigureParams; result: ProfileWorkflowResult }
 +  /** Role-specific THINK/ACTION configuration; linkage is not dispatch readiness. */
 +  'profiles.workflow.get': { params: ProfileWorkflowGetParams; result: ProfileWorkflowResult }
    /** Structured project facts for a cwd so UIs don't re-sniff the workspace. */
-@@ -6576,2 +6733,3 @@ export type RpcMethod = keyof RpcMethods
+@@ -6576,2 +6741,3 @@ export type RpcMethod = keyof RpcMethods
  export const RPC_METHODS = [
 +  'account.usage',
    'agents.list',
-@@ -6709,2 +6867,3 @@ export const RPC_METHODS = [
+@@ -6709,2 +6875,3 @@ export const RPC_METHODS = [
    'pet.select',
 +  'pet.sprite',
    'pet.thumb',
-@@ -6724,2 +6883,4 @@ export const RPC_METHODS = [
+@@ -6724,2 +6891,4 @@ export const RPC_METHODS = [
    'profiles.set_asset',
 +  'profiles.workflow.configure',
 +  'profiles.workflow.get',
    'project.facts',
-@@ -6871,3 +7032,9 @@ export interface CanonicalRpcMethods {
+@@ -6871,3 +7040,9 @@ export interface CanonicalRpcMethods {
    'kanban.run': { params: KanbanRunParams; result: KanbanRunResult }
 +  'profiles.latest_output': { params: CanonicalBotOutputParams; result: CanonicalBotOutputResult }
    'profiles.list': { params: CanonicalProfilesParams; result: CanonicalProfilesResult }
@@ -56812,14 +56917,14 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..5776d322c83f5f764eba509772175d50
 +  /** Profile-scoped bot workflow configuration with an expected-revision fence. */
 +  'profiles.workflow.get': { params: ProfileWorkflowGetParams; result: ProfileWorkflowResult }
    /** Retire a still-queued admission; a started one is unaffected. */
-@@ -6910,2 +7077,6 @@ export interface CanonicalRpcMethods {
+@@ -6910,2 +7085,6 @@ export interface CanonicalRpcMethods {
    'shell.exec': { params: CanonicalShellExecParams; result: ShellExecResult }
 +  /** Interrupt one owned worker, optionally matching its child session ID. */
 +  'subagent.interrupt': { params: CanonicalSubagentInterruptParams; result: SubagentInterruptResult }
 +  /** List the session's live workers, with a child session ID for controllable workers. */
 +  'subagent.list': { params: SessionParams; result: CanonicalSubagentListResult }
    /** Adopt a registered execution after verifying the live producer claim. */
-@@ -6940,3 +7111,7 @@ export const CANONICAL_RPC_METHODS = [
+@@ -6940,3 +7119,7 @@ export const CANONICAL_RPC_METHODS = [
    'kanban.run',
 +  'profiles.latest_output',
    'profiles.list',
@@ -56827,13 +56932,13 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..5776d322c83f5f764eba509772175d50
 +  'profiles.workflow.configure',
 +  'profiles.workflow.get',
    'prompt.cancel',
-@@ -6964,2 +7139,4 @@ export const CANONICAL_RPC_METHODS = [
+@@ -6964,2 +7147,4 @@ export const CANONICAL_RPC_METHODS = [
    'shell.exec',
 +  'subagent.interrupt',
 +  'subagent.list',
    'worker.adopt',
 diff --git a/apps/shared/src/gateway-contract.openrpc.json b/apps/shared/src/gateway-contract.openrpc.json
-index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa15617eb06ae 100644
+index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..e18e4d8c5b571c2cefcf477f1969c5476b7ac2a9 100644
 --- a/apps/shared/src/gateway-contract.openrpc.json
 +++ b/apps/shared/src/gateway-contract.openrpc.json
 @@ -8,2 +8,20 @@
@@ -56917,7 +57022,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +      }
 +    },
      {
-@@ -4787,2 +4859,160 @@
+@@ -4787,2 +4859,214 @@
        },
 +      "AccountQuotaWindow": {
 +        "additionalProperties": false,
@@ -56997,12 +57102,66 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +            },
 +            "title": "Accounts",
 +            "type": "array"
++          },
++          "configured_route": {
++            "anyOf": [
++              {
++                "$ref": "#/components/schemas/AccountUsageRoute"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null
 +          }
 +        },
 +        "required": [
 +          "accounts"
 +        ],
 +        "title": "AccountUsageResult",
++        "type": "object"
++      },
++      "AccountUsageRoute": {
++        "additionalProperties": false,
++        "properties": {
++          "provider": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "title": "Provider"
++          },
++          "label": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "title": "Label"
++          },
++          "model": {
++            "title": "Model",
++            "type": "string"
++          },
++          "local_endpoint": {
++            "title": "Local Endpoint",
++            "type": "boolean"
++          }
++        },
++        "required": [
++          "provider",
++          "label",
++          "model",
++          "local_endpoint"
++        ],
++        "title": "AccountUsageRoute",
 +        "type": "object"
 +      },
 +      "AccountUsageRow": {
@@ -57078,7 +57237,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +        "type": "object"
 +      },
        "ActiveIdResult": {
-@@ -7283,2 +7513,75 @@
+@@ -7283,2 +7567,75 @@
        },
 +      "BotModelSelection": {
 +        "additionalProperties": false,
@@ -57154,7 +57313,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +        "type": "object"
 +      },
        "BotRelayDeliverParams": {
-@@ -7499,2 +7802,42 @@
+@@ -7499,2 +7856,42 @@
        },
 +      "BotWorkflow": {
 +        "additionalProperties": false,
@@ -57197,7 +57356,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +        "type": "object"
 +      },
        "BrowserAction": {
-@@ -8269,2 +8612,177 @@
+@@ -8269,2 +8666,177 @@
        },
 +      "CanonicalBotFileParams": {
 +        "additionalProperties": false,
@@ -57375,7 +57534,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +        "type": "object"
 +      },
        "CanonicalConfigGetResult": {
-@@ -9474,2 +9992,18 @@
+@@ -9474,2 +10046,18 @@
            },
 +          "worker_sessions": {
 +            "anyOf": [
@@ -57394,7 +57553,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +            "title": "Worker Sessions"
 +          },
            "canonical_session": {
-@@ -11289,2 +11823,215 @@
+@@ -11289,2 +11877,215 @@
        },
 +      "CanonicalSubagentInterruptParams": {
 +        "additionalProperties": false,
@@ -57610,7 +57769,27 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +        "type": "object"
 +      },
        "CanonicalSubmitParams": {
-@@ -27035,2 +27782,41 @@
+@@ -26897,2 +27698,19 @@
+             "title": "Staterows"
++          },
++          "motionWeight": {
++            "anyOf": [
++              {
++                "enum": [
++                  "light",
++                  "standard",
++                  "heavy"
++                ],
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Motionweight"
+           }
+@@ -27035,2 +27853,41 @@
        },
 +      "PetSpriteParams": {
 +        "additionalProperties": false,
@@ -57652,7 +57831,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +        "type": "object"
 +      },
        "PetSpritePayload": {
-@@ -29273,2 +30059,81 @@
+@@ -29273,2 +30130,81 @@
              "title": "Live Message Count"
 +          },
 +          "input_tokens": {
@@ -57734,7 +57913,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +            "default": null,
 +            "title": "Delegation Reports"
            }
-@@ -29282,2 +30147,74 @@
+@@ -29282,2 +30218,74 @@
        },
 +      "ProfileDelegationReport": {
 +        "additionalProperties": false,
@@ -57809,7 +57988,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +        "type": "object"
 +      },
        "ProfileMirrored": {
-@@ -29471,2 +30408,18 @@
+@@ -29471,2 +30479,18 @@
            },
 +          "worker_sessions": {
 +            "anyOf": [
@@ -57828,12 +58007,12 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +            "title": "Worker Sessions"
 +          },
            "canonical_session": {
-@@ -29583,3 +30536,3 @@
+@@ -29583,3 +30607,3 @@
          "additionalProperties": false,
 -        "description": "Newest kanban/tool worker row, so rosters can show a profile as working.",
 +        "description": "Observed worker metadata, separate from human-facing conversation previews.",
          "properties": {
-@@ -29610,2 +30563,136 @@
+@@ -29610,2 +30634,136 @@
              "title": "Last Active"
 +          },
 +          "last_activity_description": {
@@ -57970,7 +58149,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +            "default": null,
 +            "title": "Model"
            }
-@@ -29618,2 +30705,145 @@
+@@ -29618,2 +30776,145 @@
        },
 +      "ProfileWorkflowConfigureParams": {
 +        "additionalProperties": false,
@@ -58116,7 +58295,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +        "type": "object"
 +      },
        "ProfilesConfigureApplied": {
-@@ -36096,2 +37326,37 @@
+@@ -36096,2 +37397,37 @@
              "title": "Index"
 +          },
 +          "title": {
@@ -58154,7 +58333,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +            "default": null,
 +            "title": "Expected Revision"
            }
-@@ -48113,2 +49378,20 @@
+@@ -48113,2 +49449,20 @@
      },
 +    {
 +      "name": "profiles.latest_output",
@@ -58175,7 +58354,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +      }
 +    },
      {
-@@ -48131,2 +49414,56 @@
+@@ -48131,2 +49485,56 @@
      },
 +    {
 +      "name": "profiles.output_file",
@@ -58232,7 +58411,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +      }
 +    },
      {
-@@ -48545,2 +49882,38 @@
+@@ -48545,2 +49953,38 @@
      },
 +    {
 +      "name": "subagent.interrupt",
@@ -60842,10 +61021,10 @@ index 0000000000000000000000000000000000000000..43b3dc65a69a049f51ce585991f8dedc
 +        pending.unlink(missing_ok=True)
 diff --git a/hermes_cli/account_usage_report.py b/hermes_cli/account_usage_report.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..c1c235bdc92b3375369336459083f59a86ef1c0d
+index 0000000000000000000000000000000000000000..fe395b16895892ff24d89365f8b9441375fff718
 --- /dev/null
 +++ b/hermes_cli/account_usage_report.py
-@@ -0,0 +1,199 @@
+@@ -0,0 +1,222 @@
 +"""Read-only per-account quota report, plus sanitized external adapter snapshots."""
 +
 +from __future__ import annotations
@@ -60961,6 +61140,29 @@ index 0000000000000000000000000000000000000000..c1c235bdc92b3375369336459083f59a
 +    row["state"] = _state(row["windows"])
 +    row["reason"] = snapshot.unavailable_reason
 +    return row
++
++
++def configured_account_route():
++    """Project the profile's configured model without resolving credentials or probing an endpoint."""
++    from agent.model_metadata import is_local_endpoint
++    from hermes_cli.config import coerce_provider_id, load_config
++    from hermes_cli.models import normalize_provider, provider_label
++    from hermes_cli.providers import LLAMACPP_ALIASES
++    from hermes_cli.runtime_provider_custom import _get_named_custom_provider
++
++    config = load_config()
++    model_config = config.get("model")
++    if not isinstance(model_config, dict):
++        return {"provider": None, "label": None, "model": str(model_config or ""), "local_endpoint": False}
++
++    requested = coerce_provider_id(model_config.get("provider", "")).strip()
++    model = str(model_config.get("default", model_config.get("name", "")) or "")
++    named = _get_named_custom_provider(requested, config=config, resolve_credentials=False) if requested else None
++    base_url = str(model_config.get("base_url") or (named or {}).get("base_url") or "")
++    local = requested.lower() in LLAMACPP_ALIASES or is_local_endpoint(base_url)
++    provider = normalize_provider(requested) if requested else ("custom" if local else None)
++    label = (named or {}).get("name") or (provider_label(provider) if provider else None)
++    return {"provider": provider, "label": label, "model": model, "local_endpoint": local}
 +
 +
 +def collect_accounts(provider=None, *, refresh=True, refresh_external=True):
@@ -115790,10 +115992,10 @@ index 0000000000000000000000000000000000000000..d81dbf5291eca4e17e4b94a3c8e14f78
 +    assert params["args"] == args
 diff --git a/tests/tui_gateway/test_account_usage_profile.py b/tests/tui_gateway/test_account_usage_profile.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..76d43a0b278a60e441350ab09b46e9a75cfb8163
+index 0000000000000000000000000000000000000000..22f5ff40dcd633634949d39f7552dfee5868230f
 --- /dev/null
 +++ b/tests/tui_gateway/test_account_usage_profile.py
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,72 @@
 +"""Actual profile RPC dispatch must not leak launch-profile usage or mutate auth."""
 +
 +from datetime import datetime, UTC
@@ -115809,6 +116011,8 @@ index 0000000000000000000000000000000000000000..76d43a0b278a60e441350ab09b46e9a7
 +    launch, worker = tmp_path / "launch", tmp_path / "worker"
 +    for home, label in [(launch, "launch-only"), (worker, "worker-only")]:
 +        home.mkdir()
++        provider, model = ("antigravity-subscription-directsdk", "demo-pro") if home == launch else ("gemini", "demo-flash")
++        (home / "config.yaml").write_text(f"model:\n  provider: {provider}\n  default: {model}\n")
 +        (home / "auth.json").write_text('{"version":1,"credential_pool":{}}')
 +        target = home / "state/account-usage/external.json"
 +        target.parent.mkdir(parents=True)
@@ -115843,9 +116047,27 @@ index 0000000000000000000000000000000000000000..76d43a0b278a60e441350ab09b46e9a7
 +    )
 +    assert result.get("error") is None, result
 +    assert [r["label"] for r in result["result"]["accounts"]] == ["worker-only"]
++    route = result["result"]["configured_route"]
++    assert (route["provider"], route["model"], route["local_endpoint"]) == ("gemini", "demo-flash", False)
 +    assert all(
 +        (home / "auth.json").read_bytes() == data for home, data in before.items()
 +    )
++
++
++def test_configured_route_labels_named_local_without_returning_endpoint_details(tmp_path, monkeypatch):
++    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
++    fixture_host = tmp_path.name.replace("_", "-")
++    (tmp_path / "config.yaml").write_text(
++        "model:\n  provider: 'custom:workbench'\n  default: demo-local\n"
++        f"providers:\n  workbench:\n    name: Workbench\n    base_url: http://{fixture_host}/v1\n"
++    )
++
++    assert report.configured_account_route() == {
++        "provider": "custom:workbench",
++        "label": "Workbench",
++        "model": "demo-local",
++        "local_endpoint": True,
++    }
 diff --git a/tests/tui_gateway/test_config_location_profile_scope.py b/tests/tui_gateway/test_config_location_profile_scope.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..e6de764c5dfcf879bc66fd671b0b690385934a10
@@ -122918,10 +123140,10 @@ index 7b8931440e4299f155949b0e5943f89093dbeeaa..dd905a05ef172c02b73a6ad1d78ace72
 +    ('profiles.output_file', CanonicalBotFileParams, CanonicalBotFileResult),
      ('image.attach_bytes', ImageAttachBytesParams, CanonicalAttachedImageResult),
 diff --git a/tui_gateway/contracts/config_free_tier_control.py b/tui_gateway/contracts/config_free_tier_control.py
-index a7346e3f0a6d57a6ea1eeb0a05517eb943b737d0..da2738697b6257c235c147bd6f5b3662e61439e3 100644
+index a7346e3f0a6d57a6ea1eeb0a05517eb943b737d0..ed1169926bebccad1c301c04f7f37efe2109d478 100644
 --- a/tui_gateway/contracts/config_free_tier_control.py
 +++ b/tui_gateway/contracts/config_free_tier_control.py
-@@ -445,2 +445,40 @@ method("shared_metrics.desktop_daily", params=SharedMetricsDesktopDailyParams,
+@@ -445,2 +445,48 @@ method("shared_metrics.desktop_daily", params=SharedMetricsDesktopDailyParams,
  
 +# ── account.usage ────────────────────────────────────────────────────────────
 +
@@ -122949,8 +123171,16 @@ index a7346e3f0a6d57a6ea1eeb0a05517eb943b737d0..da2738697b6257c235c147bd6f5b3662
 +    reason: str | None = None
 +
 +
++class AccountUsageRoute(Result):
++    provider: str | None
++    label: str | None
++    model: str
++    local_endpoint: bool
++
++
 +class AccountUsageResult(Result):
 +    accounts: list[AccountUsageRow]
++    configured_route: AccountUsageRoute | None = None
 +
 +
 +method(
@@ -122962,11 +123192,11 @@ index a7346e3f0a6d57a6ea1eeb0a05517eb943b737d0..da2738697b6257c235c147bd6f5b3662
 +
 +
  # ── model.options ─────────────────────────────────────────────────────────────────────────────
-@@ -707,2 +745,3 @@ method("session.control.read", params=SessionControlReadParams, result=SessionCo
+@@ -707,2 +753,3 @@ method("session.control.read", params=SessionControlReadParams, result=SessionCo
  class SessionControlAction(WireEnum):
 +    goal_configure = "goal.configure"
      goal_pause = "goal.pause"
-@@ -727,2 +766,5 @@ class SessionControlArgs(Params):
+@@ -727,2 +774,5 @@ class SessionControlArgs(Params):
      index: int | None = None
 +    title: str | None = None
 +    contract: GoalContractSnapshot | None = None
@@ -123194,19 +123424,22 @@ index 2d14741a5d897f0d740ac610ab901f8c4ff48f62..0ea5b1ecae3fe50f2ead4f42b3faafa8
 +            room_thread = spawn_context_thread(
                  target=self._run_room_once, args=(binding,),
 diff --git a/tui_gateway/methods_complete.py b/tui_gateway/methods_complete.py
-index ea2b069c6eec82d36e1a30f0e524faf1c98e0b6b..fb6d824e249e73e2845eff9712f060674abcc893 100644
+index ea2b069c6eec82d36e1a30f0e524faf1c98e0b6b..23391cd6202f5da50e910bf124cb8636bf4d6877 100644
 --- a/tui_gateway/methods_complete.py
 +++ b/tui_gateway/methods_complete.py
-@@ -318,2 +318,12 @@ def _model_skew_err(rid) -> dict | None:
+@@ -318,2 +318,15 @@ def _model_skew_err(rid) -> dict | None:
  
 +@method("account.usage")
 +@_profile_scoped
 +@_catch(5038)
 +def _(rid, params: dict) -> dict:
 +    """Read owning-profile account snapshots; query quotas only on manual refresh."""
-+    from hermes_cli.account_usage_report import collect_accounts
++    from hermes_cli.account_usage_report import collect_accounts, configured_account_route
 +
-+    return _ok(rid, {"accounts": collect_accounts(refresh=params.get("refresh") is True)})
++    return _ok(rid, {
++        "configured_route": configured_account_route(),
++        "accounts": collect_accounts(refresh=params.get("refresh") is True),
++    })
 +
 +
  @method("model.options")

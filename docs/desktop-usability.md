@@ -10,6 +10,12 @@ In Hub, **Back** returns through the actual file/folder navigation history. At t
 
 A collection search names its scope. No matches are distinct from an empty collection. Use **Clear search and filters** to recover the collection or **Search all Hub** to keep the query and expand its scope. Searching does not grant bot membership or share a private chat file.
 
+## Checking the configured provider
+
+**Settings → Accounts** shows the selected profile's configured provider and model on the active connection. A current per-account reading includes its timestamp. A provider without a reading shows that quota is unreported, while a configured local endpoint is labeled separately. Gemini API and AGY subscription reports have separate provider identities. The existing **Refresh** action checks supported quota sources.
+
+![Accounts fixture with Gemini API, a separate AGY reading, a NIM reading, and a local model.](images/accounts-provider-fixture.webp)
+
 ## Reading Workflow
 
 **Fit graph** fits both dimensions. Large graphs may need small overview text; select a destination to highlight its recorded ancestry and use **Focus selected card** to return that task to readable size. Focusing scrolls after the scaled layout is committed. Bot journeys remain based on recorded runs and dependencies. No animation fabricates progress or dispatches work.
