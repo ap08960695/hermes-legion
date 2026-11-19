@@ -1002,3 +1002,32 @@ had zero such samples. Hide, resume, clear and helper EOF passed.
 Keep explicit position updates in the fixture. Neither mode met the
 CPU ceiling. Next measure a mixed workload and stop updates for
 settled sprites while preserving the cadence of moving sprites.
+
+### Skip scheduled writes to settled sprites
+
+Four network-denied Mac launches showed two moving and three static
+waiting sprites in the same native panel. Both arms used the same
+path and 6 Hz timer. One wrote all five layers per pulse. The other
+wrote only the moving layers. Snapshot updates reached every layer
+in both arms. The paired order reversed, with adjacent baseline
+repeats to estimate short-term CPU drift.
+
+| Mode | Added combined CPU | Added RSS | Median added physical footprint |
+| --- | ---: | ---: | ---: |
+| Write every layer | 2.10–2.35 points | 73.03–94.97 MiB | 46.72 MiB |
+| Write moving layers | 2.16–2.58 points | 72.57–94.69 MiB | 46.33 MiB |
+| All settled, timer stopped | −0.30 to +0.47 points | 79.46–86.18 MiB | 37.36 MiB |
+
+Skipping waiting layers cut position/atlas write pairs from 195 to 78
+in each sample. Paired combined CPU changed by −0.19 to +0.47 points.
+The largest control drift was 0.49 points and RSS varied by launch.
+Keep the existing mixed-state writes in the fixture.
+
+All eight fixed-time crop pairs matched exactly. A waiting sprite
+replaced its atlas immediately after a snapshot and stayed still.
+Changing the moving cohort kept one timer and settled the outgoing
+sprite on its final static pose. All-settled stopped the timer with
+zero late writes, and wake started one timer. Hide, resume, clear and
+pipe EOF also passed. The all-settled CPU sample is near baseline.
+Visible sprites still retain memory. Next isolate the native atlas
+backing while keeping the displayed pixels and five-sprite path.
