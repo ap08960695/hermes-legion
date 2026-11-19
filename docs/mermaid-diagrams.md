@@ -4,6 +4,9 @@ Use a Mermaid fence in an assistant reply or a Markdown file. Chat, the
 Markdown preview pane, and the Hub Markdown preview share the same renderer.
 Hub also offers the original file in its Source tab.
 
+In **Work → Track work**, diagrams in a delivered result appear on the card.
+Open **Task brief** to render the diagrams in the brief.
+
 ````markdown
 ```mermaid
 flowchart LR
