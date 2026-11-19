@@ -4,6 +4,8 @@ Open **Work → Track work** on an enabled Kanban board to follow an objective, 
 
 When cards in the current list share a title, Track work shows their
 status, assignee and card ID so you can choose the right one.
+Use **All work** to clear the selected card and return keyboard focus to its
+picker entry, or to the picker if that entry is hidden.
 
 If the first read fails, use **Retry** to load the same card. If a refresh
 fails, Track work keeps the last loaded card and its open revision comparison

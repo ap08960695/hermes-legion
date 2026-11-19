@@ -58902,10 +58902,10 @@ index 94cee91d6f22d0f635d302f68a2e30f71a2e8716..b9dc2c470950f4355ef22874cdcb33b4
 +  name === 'needs_owner' ? k.needsOwner : (k.col[name as keyof KanbanText['col']]?.label ?? name)
  export const columnHelp = (k: KanbanText, name: string) => k.col[name as keyof KanbanText['col']]?.help ?? ''
 diff --git a/apps/desktop/src/plugins/kanban/kanban.css b/apps/desktop/src/plugins/kanban/kanban.css
-index f5ca28e2fc9587027ba8cda4db52fef6473d34b5..7dc9791a0f5290cb774d4de9a1a6bb39f984f8d1 100644
+index f5ca28e2fc9587027ba8cda4db52fef6473d34b5..6a6d6721b695cc6f1fb6673722e56a0b721347d9 100644
 --- a/apps/desktop/src/plugins/kanban/kanban.css
 +++ b/apps/desktop/src/plugins/kanban/kanban.css
-@@ -46 +46,655 @@
+@@ -46 +46,657 @@
  }
 +
 +/* The native work surface owns its hierarchy in both Focus and split tiles. */
@@ -59474,6 +59474,8 @@ index f5ca28e2fc9587027ba8cda4db52fef6473d34b5..7dc9791a0f5290cb774d4de9a1a6bb39
 +  cursor: pointer;
 +}
 +
++.kanban-delivery-list:focus,
++.kanban-delivery-list button[aria-pressed]:focus,
 +.kanban-revision button:focus-visible,
 +.kanban-revision-diff:focus-visible,
 +.kanban-action-preflight button:focus-visible,
@@ -60615,10 +60617,10 @@ index 0000000000000000000000000000000000000000..3841dac7cf4c76f26a46909ea17b8558
 +}
 diff --git a/apps/desktop/src/plugins/kanban/work-view.test.tsx b/apps/desktop/src/plugins/kanban/work-view.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..021c7706652871d6d53c76dcdd5afa1cd05c6188
+index 0000000000000000000000000000000000000000..f371547130356b52c2781510bf2121430c41320b
 --- /dev/null
 +++ b/apps/desktop/src/plugins/kanban/work-view.test.tsx
-@@ -0,0 +1,866 @@
+@@ -0,0 +1,907 @@
 +import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 +import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 +import { afterEach, expect, it, vi } from 'vitest'
@@ -60704,6 +60706,47 @@ index 0000000000000000000000000000000000000000..021c7706652871d6d53c76dcdd5afa1c
 +  expect(io.write).not.toHaveBeenCalled()
 +  client.clear()
 +  dispose()
++})
++
++it.each(['visible', 'filtered', 'focus moved'])('restores focus when All work removes the active button (%s)', async scenario => {
++  const dispose = registerPluginLocales('kanban', KANBAN_LOCALES)
++  const client = new QueryClient()
++  const task = { id: 'focus-card', title: 'Navigation case', status: 'done' }
++  const other = { id: 'other-card', title: 'Other case', status: 'done' }
++  const show = (tasks: typeof task[]) => (
++    <QueryClientProvider client={client}>
++      <WorkView
++        board={{ columns: [{ name: 'done', tasks }], tenants: [], assignees: [], now: 1, latest_event_id: 1 }}
++        onOpen={vi.fn()}
++      />
++    </QueryClientProvider>
++  )
++  io.read.mockResolvedValue({ task, runs: [] })
++
++  try {
++    const view = render(show([task, other]))
++    const card = screen.getByRole('button', { name: task.title })
++    fireEvent.click(card)
++    await screen.findByRole('article', { name: task.title })
++    if (scenario === 'filtered') view.rerender(show([other]))
++
++    const allCards = screen.getByRole('button', { name: 'All work' })
++    const focused = scenario === 'focus moved' ? screen.getByRole('button', { name: other.title }) : allCards
++    focused.focus()
++    fireEvent.click(allCards)
++
++    expect(screen.queryByRole('article', { name: task.title })).toBeNull()
++    expect(screen.queryByRole('button', { name: 'All work' })).toBeNull()
++    expect(document.activeElement).toBe(
++      scenario === 'visible' ? card : scenario === 'filtered' ? screen.getByRole('navigation') : focused
++    )
++    expect(io.read).toHaveBeenCalledTimes(1)
++    expect(io.write).not.toHaveBeenCalled()
++  } finally {
++    cleanup()
++    client.clear()
++    dispose()
++  }
 +})
 +
 +it('distinguishes same-title cards even when one is beyond the initial page', async () => {
@@ -61487,10 +61530,10 @@ index 0000000000000000000000000000000000000000..021c7706652871d6d53c76dcdd5afa1c
 +})
 diff --git a/apps/desktop/src/plugins/kanban/work-view.tsx b/apps/desktop/src/plugins/kanban/work-view.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..840a2e36dbd1beb341fcc2db2b179186e7c8a63f
+index 0000000000000000000000000000000000000000..4593f60b4d06bd58a59b5bbb6af0d95ce2500414
 --- /dev/null
 +++ b/apps/desktop/src/plugins/kanban/work-view.tsx
-@@ -0,0 +1,313 @@
+@@ -0,0 +1,320 @@
 +import { Button, Codicon, ErrorState, Loader, useI18n, useQuery, useValue } from '@hermes/plugin-sdk'
 +import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 +
@@ -61762,6 +61805,7 @@ index 0000000000000000000000000000000000000000..840a2e36dbd1beb341fcc2db2b179186
 +  const k = useKanban()
 +  const { taskId: selected, select, board: selectedBoard } = useWorkSelection()
 +  const [limit, setLimit] = useState(50)
++  const picker = useRef<HTMLElement>(null)
 +  const tasks = board.columns.flatMap(column => column.tasks)
 +  const titleCounts = new Map<string, number>()
 +  for (const { title } of tasks) {
@@ -61770,9 +61814,15 @@ index 0000000000000000000000000000000000000000..840a2e36dbd1beb341fcc2db2b179186
 +
 +  return (
 +    <section aria-label={k.work.title} className="kanban-delivery-layout">
-+      <nav aria-label={k.work.choose} className="kanban-delivery-list">
++      <nav aria-label={k.work.choose} className="kanban-delivery-list" ref={picker} tabIndex={-1}>
 +        {selected && (
-+          <Button onClick={() => select(null)} size="sm" variant="ghost">
++          <Button onClick={event => {
++            if (event.currentTarget === event.currentTarget.ownerDocument.activeElement) {
++              const target = picker.current?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]') ?? picker.current
++              target?.focus()
++            }
++            select(null)
++          }} size="sm" variant="ghost">
 +            <Codicon name="arrow-left" />
 +            {k.work.all}
 +          </Button>
