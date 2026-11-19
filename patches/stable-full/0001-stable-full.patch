@@ -2375,7 +2375,7 @@ index 006a17e914acbe92d01a9bdaed3be3066b5994f8..3aa23ded64a962cd1ba3b1f8421e4ccc
 +                overrides.setdefault(key, value)
      if "speed" in overrides and getattr(agent, "model", None) in (getattr(agent, "_fast_mode_unavailable_models", None) or ()):
 diff --git a/agent/file_safety.py b/agent/file_safety.py
-index 31bd2c8f0f944d101da2ac62adfd6888d2d5a878..16b8ada8c513c2d68fdff4de7b8edaa681d3d99b 100644
+index 31bd2c8f0f944d101da2ac62adfd6888d2d5a878..865d74d96b015c74e4399c28057b136143701c42 100644
 --- a/agent/file_safety.py
 +++ b/agent/file_safety.py
 @@ -15,2 +15,49 @@ from typing import Optional
@@ -2402,10 +2402,10 @@ index 31bd2c8f0f944d101da2ac62adfd6888d2d5a878..16b8ada8c513c2d68fdff4de7b8edaa6
 +_SENSITIVE_MANAGED_DIR_NAMES = frozenset({"mcp-tokens", "pairing"})
 +
 +
-+def _is_sensitive_filename(name: str) -> bool:
++def is_sensitive_filename(name: str) -> bool:
 +    """Basename denylist: ``.env`` / ``.env.<suffix>`` / ``.envrc`` plus the
 +    credential-store basenames. Case-insensitive so ``.ENV`` / ``Auth.JSON``
-+    on case-insensitive mounts can't slip past. Basename-only — call sites use
++    on case-insensitive mounts can't slip past. For full paths use
 +    :func:`is_sensitive_managed_path`, which adds the credential-directory check."""
 +    lowered = name.lower()
 +    if lowered == ".env" or lowered.startswith(".env.") or lowered == ".envrc":
@@ -2422,7 +2422,7 @@ index 31bd2c8f0f944d101da2ac62adfd6888d2d5a878..16b8ada8c513c2d68fdff4de7b8edaa6
 +    (upload/mkdir/delete) are a separate threat class handled by the write-path checks; extending this guard
 +    to them is out of scope for this fix.
 +    """
-+    if _is_sensitive_filename(path.name):
++    if is_sensitive_filename(path.name):
 +        return True
 +    return any(part.lower() in _SENSITIVE_MANAGED_DIR_NAMES for part in path.parts)
 +
@@ -82814,10 +82814,10 @@ index d6a5cb947a14855c260754307bcf7698fe520da2..ba13eca6a0560c4c295cead3bbe4ba0e
              return {"results": list(seen.values())}
 diff --git a/hermes_cli/web_routers/spaces.py b/hermes_cli/web_routers/spaces.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..e0fbe72e7de5bfc0705e68385915c53e21080015
+index 0000000000000000000000000000000000000000..bff419f64d5b910523c45fc8364ce0bf36ff0afa
 --- /dev/null
 +++ b/hermes_cli/web_routers/spaces.py
-@@ -0,0 +1,106 @@
+@@ -0,0 +1,107 @@
 +"""Authenticated Desktop owner operations for local shared Spaces."""
 +import asyncio
 +import base64
@@ -82889,9 +82889,10 @@ index 0000000000000000000000000000000000000000..e0fbe72e7de5bfc0705e68385915c53e
 +
 +
 +def _upload(sid,payload):
-+    from hermes_cli.web_routers.files import _is_sensitive_filename,_fs_mime_type
-+    if _is_sensitive_filename(payload.filename):raise ValueError('Credential files cannot be shared')
++    from agent.file_safety import is_sensitive_filename
++    from hermes_cli.web_routers.files import _fs_mime_type
 +    if '/' in payload.filename or '\\' in payload.filename:raise ValueError('Use a filename, not a path')
++    if is_sensitive_filename(payload.filename):raise ValueError('Credential files cannot be shared')
 +    header,sep,content=payload.data_url.partition(',')
 +    if not sep or not header.startswith('data:') or not header.endswith(';base64'):raise ValueError('Invalid file upload')
 +    try:data=base64.b64decode(content,validate=True)
@@ -112724,10 +112725,10 @@ index 1f30ad5ac0015b725abdb797d1c16e9d96ede429..7c5f855870e48ec960404798eac72d99
  
 diff --git a/tests/hermes_cli/test_spaces.py b/tests/hermes_cli/test_spaces.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..075c18dc7caf226347b12e317e913fba4a9e2dd1
+index 0000000000000000000000000000000000000000..eeeff1a6f7de6efb9cf4c3b24653136028296535
 --- /dev/null
 +++ b/tests/hermes_cli/test_spaces.py
-@@ -0,0 +1,105 @@
+@@ -0,0 +1,118 @@
 +from pathlib import Path
 +import pytest
 +from hermes_cli.spaces import Spaces,SpaceDenied,SpaceConflict
@@ -112773,7 +112774,20 @@ index 0000000000000000000000000000000000000000..075c18dc7caf226347b12e317e913fba
 +    space=client.post('/api/spaces',json={'title':'Shared','members':['writer','reviewer']}).json()
 +    sid=space['id']
 +    page=client.post(f'/api/spaces/{sid}/pages',json={'title':'Plan','text':'Shared plan'}).json()
-+    file=client.post(f'/api/spaces/{sid}/files',json={'filename':'example.txt','data_url':'data:text/plain;base64,'+base64.b64encode(b'Shared file bytes').decode()}).json()
++    upload_url = f'/api/spaces/{sid}/files'
++    data_url = 'data:text/plain;base64,' + base64.b64encode(b'Shared file bytes').decode()
++    uploaded = client.post(upload_url, json={'filename': 'example.txt', 'data_url': data_url})
++    assert uploaded.status_code == 200
++    file = uploaded.json()
++    for name, detail in (
++        ('.EnV.local', 'Credential files cannot be shared'),
++        ('Auth.JSON', 'Credential files cannot be shared'),
++        ('folder/notes.txt', 'Use a filename, not a path'),
++    ):
++        refused = client.post(upload_url, json={'filename': name, 'data_url': data_url})
++        assert refused.status_code == 400
++        assert refused.json()['detail'] == detail
++    assert {item['id'] for item in store.items(sid)} == {page['id'], file['id']}
 +    assert client.get(f'/api/spaces/{sid}/items/{file["id"]}').json()['preview']['text']=='Shared file bytes'
 +    assert store.read(sid,page['id'],'writer')['data']==store.read(sid,page['id'],'reviewer')['data']
 +    change=client.patch(f'/api/spaces/{sid}/items/{file["id"]}',json={'revision':1,'deleted':True})
