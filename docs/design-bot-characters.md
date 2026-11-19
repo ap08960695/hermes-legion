@@ -938,3 +938,37 @@ teardown passed. Keep individual layers in the native fixture. At
 80 MiB RSS in three of four. The resource gate remains open. Next
 isolate the remaining memory costs of the publisher and native helper
 with the individual-layer path.
+
+### Measure native panel and sprite memory separately
+
+Four network-denied Mac launches compared the full work-area panel
+with a 100-point-high bottom band. Both used the same five sprite
+layers and walked at 6 Hz. The two adjacent pairs reversed launch
+order. The panel height changed from 1,009 to 100 points while bottom
+alignment, sprite positions and atlas cells matched. Four fixed-time
+crop pairs matched pixel for pixel.
+
+| Phase | Native helper RSS across both heights |
+| --- | ---: |
+| Started before panel creation | 34.89–34.91 MiB |
+| Empty visible panel | 39.33–39.42 MiB |
+| Five still sprites | 60.78–60.88 MiB |
+| Five walking sprites | 60.77–60.86 MiB |
+
+Showing the empty panel added about 4.5 MiB to the helper. The first
+sprite frame added another 21.44–21.46 MiB, including layer and image
+work. Walking left helper RSS near the still level. During walking,
+the publisher renderer added 5.34–5.47 MiB and Electron main added
+7.15–10.82 MiB over the publisher-only baseline.
+
+The shorter panel saved 0.03 and 0.09 MiB of helper RSS. Fixture-tree
+savings were 3.78 and 0.05 MiB, with the larger difference in Electron
+main. System-wide WindowServer RSS moved by at most 0.03 MiB between
+the matched overheads. Keep the full-height panel in the fixture.
+
+Across both heights, walking added 73.38–77.16 MiB RSS and 2.49–2.81
+combined CPU points over publisher-only. All four launches met the
+80 MiB ceiling and exceeded the 2-point CPU ceiling. WindowServer
+accounted for most added CPU. The next comparison should hold sprite
+art and viewport constant while reducing position submissions from the
+helper. This fixture covers one 2× display and a mouse-ignored panel.
