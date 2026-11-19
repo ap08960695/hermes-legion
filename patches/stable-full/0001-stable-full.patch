@@ -36245,14 +36245,14 @@ index 7528c61ae6516435278f789c3b362c4847f070fb..8cb6ada91f882b1b47d250861513126b
    appearanceGeneral: Settings2,
 diff --git a/apps/desktop/src/app/shell/account-usage-statusbar.test.tsx b/apps/desktop/src/app/shell/account-usage-statusbar.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..1872df6dc9d15a3306237da4efb7181ddbdeedf8
+index 0000000000000000000000000000000000000000..6c0bb564de0d629c9d050e4d0bba60c0186d8169
 --- /dev/null
 +++ b/apps/desktop/src/app/shell/account-usage-statusbar.test.tsx
-@@ -0,0 +1,39 @@
+@@ -0,0 +1,91 @@
 +import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 +import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
-+import { atom } from 'nanostores'
-+import { afterEach, expect, it, vi } from 'vitest'
++import { atom, type WritableAtom } from 'nanostores'
++import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 +
 +import { I18nProvider } from '@/i18n'
 +const request = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => ({ accounts: [] })))
@@ -36262,10 +36262,22 @@ index 0000000000000000000000000000000000000000..1872df6dc9d15a3306237da4efb7181d
 +  $activeGatewayProfile: atom('captain'), $profiles: atom([]),
 +  normalizeProfileKey: (p: string | null) => p || 'default'
 +}))
++import { $activeConnectionId } from '@/store/connections'
++import { $activeGatewayProfile } from '@/store/profile'
 +import { AccountUsageStatusbar } from './account-usage-statusbar'
++
++const connection = $activeConnectionId as WritableAtom<string | null>
++
++beforeEach(() => {
++  request.mockClear()
++  connection.set('local')
++  $activeGatewayProfile.set('captain')
++  Element.prototype.scrollIntoView = vi.fn()
++})
 +afterEach(cleanup)
-+it('opens the quota viewer from the bottom bar, loads cached shared accounts, and refreshes only explicitly', async () => {
-+  const f = render(
++
++function mount() {
++  return render(
 +    <QueryClientProvider client={new QueryClient()}>
 +      <I18nProvider configClient={null} initialLocale="en">
 +        <footer>
@@ -36274,6 +36286,10 @@ index 0000000000000000000000000000000000000000..1872df6dc9d15a3306237da4efb7181d
 +      </I18nProvider>
 +    </QueryClientProvider>
 +  )
++}
++
++it('opens the quota viewer from the bottom bar, loads cached shared accounts, and refreshes only explicitly', async () => {
++  const f = mount()
 +  expect(request).not.toHaveBeenCalled()
 +  await act(async () => fireEvent.click(f.getByRole('button', { name: 'Account usage' })))
 +  await waitFor(() => expect(request).toHaveBeenCalledTimes(1))
@@ -36288,12 +36304,48 @@ index 0000000000000000000000000000000000000000..1872df6dc9d15a3306237da4efb7181d
 +  await act(async () => fireEvent.click(f.getByRole('button', { name: 'Refresh' })))
 +  expect(request.mock.calls[1]?.[3]).toEqual({ profile: 'default', refresh: true })
 +})
++
++
++it.each(['profile', 'device'] as const)('resets the selected profile when the active %s changes', async change => {
++  const f = mount()
++  await act(async () => fireEvent.click(f.getByRole('button', { name: 'Account usage' })))
++  await f.findByRole('region', { name: 'Provider not reported' })
++
++  const picker = () => f.getByRole('combobox', { name: 'Applies to' })
++  fireEvent.keyDown(picker(), { key: 'Enter' })
++  fireEvent.keyDown(await f.findByRole('option', { name: 'captain' }), { key: 'Enter' })
++  await waitFor(() => expect(request.mock.calls.at(-1)?.slice(0, 2)).toEqual(['local', 'captain']))
++  expect(picker().textContent).toBe('captain')
++
++  request.mockClear()
++  act(() => {
++    if (change === 'profile') $activeGatewayProfile.set('writer')
++    else connection.set('second')
++  })
++  const nextConnection = change === 'profile' ? 'local' : 'second'
++  expect(picker().textContent).toBe('default')
++  await waitFor(() => expect(request.mock.calls.at(-1)?.slice(0, 4)).toEqual([
++    nextConnection, 'default', 'account.usage', { profile: 'default', refresh: false }
++  ]))
++  await waitFor(() => expect(f.getByRole('button', { name: 'Refresh' }).getAttribute('aria-disabled')).toBe('false'))
++  await act(async () => fireEvent.click(f.getByRole('button', { name: 'Refresh' })))
++  expect(request.mock.calls.at(-1)?.slice(0, 4)).toEqual([
++    nextConnection, 'default', 'account.usage', { profile: 'default', refresh: true }
++  ])
++  expect(request.mock.calls.every(([, profile]) => profile === 'default')).toBe(true)
++
++  act(() => {
++    connection.set('local')
++    $activeGatewayProfile.set('captain')
++  })
++  expect(picker().textContent).toBe('default')
++})
 diff --git a/apps/desktop/src/app/shell/account-usage-statusbar.tsx b/apps/desktop/src/app/shell/account-usage-statusbar.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..73e394c9ff3cad099aa98ac6a9dd105688e5bbe9
+index 0000000000000000000000000000000000000000..054099fd0652125f90241d1f471bcc25cd1f353a
 --- /dev/null
 +++ b/apps/desktop/src/app/shell/account-usage-statusbar.tsx
-@@ -0,0 +1,62 @@
+@@ -0,0 +1,68 @@
 +import { useStore } from '@nanostores/react'
 +import { useState } from 'react'
 +
@@ -36308,10 +36360,16 @@ index 0000000000000000000000000000000000000000..73e394c9ff3cad099aa98ac6a9dd1056
 +export function AccountUsageStatusbar() {
 +  const { t } = useI18n()
 +  const activeProfile = normalizeProfileKey(useStore($activeGatewayProfile))
-+  const [profile, setProfile] = useState('default')
 +  const connectionId = useStore($activeConnectionId)
++  const [selectedScope, setSelectedScope] = useState<string | null>(null)
 +  const [open, setOpen] = useState(false)
 +  const label = t.settings.providers.usage.title
++  const activeScope = JSON.stringify([connectionId, activeProfile])
++  const profile = selectedScope === activeScope ? activeProfile : 'default'
++
++  if (selectedScope !== null && selectedScope !== activeScope) {
++    setSelectedScope(null)
++  }
 +
 +  return (
 +    <Popover onOpenChange={setOpen} open={open}>
@@ -36336,7 +36394,7 @@ index 0000000000000000000000000000000000000000..73e394c9ff3cad099aa98ac6a9dd1056
 +            key={JSON.stringify([connectionId, profile])}
 +            profile={profile}
 +            profileControl={
-+              <Select onValueChange={setProfile} value={profile}>
++              <Select onValueChange={value => setSelectedScope(value === 'default' ? null : activeScope)} value={profile}>
 +                <SelectTrigger aria-label={t.settings.profileScope.appliesTo} className="w-32" size="sm">
 +                  <SelectValue />
 +                </SelectTrigger>
