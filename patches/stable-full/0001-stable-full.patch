@@ -55900,8 +55900,55 @@ index 0000000000000000000000000000000000000000..fdd01140f31e7d4e9d7276c0ae45704f
 +      })
 +  }
 +}
+diff --git a/apps/desktop/src/plugins/kanban/api.events-cursor.test.ts b/apps/desktop/src/plugins/kanban/api.events-cursor.test.ts
+index 520ed894c44d337259c473d6220c0214f1d053de..452359860e00006548b7ab610df453dd237c97e3 100644
+--- a/apps/desktop/src/plugins/kanban/api.events-cursor.test.ts
++++ b/apps/desktop/src/plugins/kanban/api.events-cursor.test.ts
+@@ -7,3 +7,3 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
+
+-const { $boardSlug, bindApi, boardKey } = await import('./api')
++const { $boardSlug, bindApi, boardKey, taskKey } = await import('./api')
+ const { setConnection } = await import('@/store/session')
+@@ -113,2 +113,37 @@ describe('kanban event cursor', () => {
+
++  it('refreshes a board and task for new edits when a reconnect replays earlier events', () => {
++    queryClient.setQueryData(boardKey('local', 'ops', false), BOARD(10))
++    let receive: (data: unknown) => void = () => undefined
++
++    const dispose = bindApi(
++      async () => { throw new Error('unexpected REST read') },
++      storage('ops'),
++      (_path, onMessage) => {
++        receive = onMessage
++
++        return vi.fn()
++      }
++    )
++    const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
++
++    try {
++      const old = { id: 12, kind: 'edited', task_id: 't_old' }
++      const fresh = { id: 14, kind: 'edited', task_id: 't_fresh' }
++      receive({ cursor: 12, events: [old] })
++      expect(invalidate).toHaveBeenCalledWith({ queryKey: taskKey('local', 'ops', 't_old') })
++      invalidate.mockClear()
++
++      receive({ cursor: 12, events: [old] })
++      receive({ cursor: 11, events: [{ ...old, id: 11 }] })
++      expect(invalidate).not.toHaveBeenCalled()
++
++      receive({ cursor: 14, events: [old, fresh] })
++      expect(invalidate).toHaveBeenCalledWith({ queryKey: taskKey('local', 'ops', 't_fresh') })
++      expect(invalidate).not.toHaveBeenCalledWith({ queryKey: taskKey('local', 'ops', 't_old') })
++    } finally {
++      invalidate.mockRestore()
++      dispose()
++    }
++  })
++
+   it('resumes this connection from the last frame, and does not lend that cursor to another gateway', async () => {
 diff --git a/apps/desktop/src/plugins/kanban/api.ts b/apps/desktop/src/plugins/kanban/api.ts
-index fdab9c789571716d5c0ea31ddac050bd896e7281..7c1774339ec5ca87007a4fc64b2f7c18ae6606e7 100644
+index fdab9c789571716d5c0ea31ddac050bd896e7281..c70770045fddc8035d259ee1a8e4f25b9b9884aa 100644
 --- a/apps/desktop/src/plugins/kanban/api.ts
 +++ b/apps/desktop/src/plugins/kanban/api.ts
 @@ -29,3 +29,2 @@ import {
@@ -55924,19 +55971,42 @@ index fdab9c789571716d5c0ea31ddac050bd896e7281..7c1774339ec5ca87007a4fc64b2f7c18
 +// Native completion notification.
 +import { bindWorkStorage } from './work-selection'
 
-@@ -213,3 +219,3 @@ export function bindApi(
+@@ -165,7 +171,19 @@ function onEventsFrame(scope: string, slug: string, data: unknown, selectedSlug
+
++  let events = frame?.events
++
+   if (typeof frame?.cursor === 'number') {
+-    eventCursorByBoard.set(cursorKey(scope, slug), frame.cursor)
+-  }
++    const key = cursorKey(scope, slug)
++    const seen = eventCursorByBoard.get(key)
+
+-  const events = frame?.events
++    // A reconnect can replay from the socket's original since= cursor.
++    if (seen !== undefined) {
++      if (frame.cursor <= seen) {
++        return
++      }
++
++      events = events?.filter(event => typeof event.id !== 'number' || event.id > seen)
++    }
++
++    eventCursorByBoard.set(key, frame.cursor)
++  }
+
+@@ -213,3 +231,3 @@ export function bindApi(
    bindCompletionNotify(r, notifyDoors?.t, notifyDoors?.os)
 -  const unsubs: Array<() => void> = []
 +  const unsubs: Array<() => void> = [bindWorkStorage(storage)]
 
-@@ -376,4 +382,4 @@ function withBoard(path: string, params: Record<string, string> = {}): string {
+@@ -376,4 +394,4 @@ function withBoard(path: string, params: Record<string, string> = {}): string {
  export const boardKeyPrefix = (scope: string) => ['kanban', 'board', scope] as const
 -export const boardKey = (scope: string, slug: string, archived: boolean) =>
 -  [...boardKeyPrefix(scope), slug, archived] as const
 +export const boardKey = (scope: string, slug: string, archived: boolean, links = false) =>
 +  [...boardKeyPrefix(scope), slug, archived, ...(links ? ['links'] : [])] as const
  export const taskKey = (scope: string, slug: string, id: string) => ['kanban', 'task', scope, slug, id] as const
-@@ -387,8 +393,16 @@ export const orchestrationKey = (scope: string) => ['kanban', 'orchestration', s
+@@ -387,8 +405,16 @@ export const orchestrationKey = (scope: string) => ['kanban', 'orchestration', s
 
 -export const fetchBoard = (archived: boolean) =>
 -  call<KanbanBoard>(withBoard('/board', archived ? { include_archived: 'true' } : {}))
@@ -55957,7 +56027,7 @@ index fdab9c789571716d5c0ea31ddac050bd896e7281..7c1774339ec5ca87007a4fc64b2f7c18
 +    board ? `/tasks/${encodeURIComponent(id)}?board=${encodeURIComponent(board)}` : withBoard(`/tasks/${id}`)
 +  )
 
-@@ -397,2 +411,25 @@ export const fetchTask = async (id: string) => {
+@@ -397,2 +423,25 @@ export const fetchTask = async (id: string) => {
 
 +export const fetchRevisionDiff = (id: string, board: string, name: string, before: number, after: number) => {
 +  const params = new URLSearchParams({ name, before: String(before), after: String(after) })
@@ -55983,7 +56053,7 @@ index fdab9c789571716d5c0ea31ddac050bd896e7281..7c1774339ec5ca87007a4fc64b2f7c18
 +  call<{ run: KanbanRun & { task_id: string } }>(`/runs/${id}${board ? `?board=${encodeURIComponent(board)}` : ''}`)
 +
  /** Worker stdout/stderr tail (last 16 KiB — plenty for the drawer). */
-@@ -438,2 +475,18 @@ function nudged<T>(write: Promise<T>): Promise<T> {
+@@ -438,2 +487,18 @@ function nudged<T>(write: Promise<T>): Promise<T> {
 
 +export async function reviewPlannedAction(id: string, input: PlannedActionInput) {
 +  const scope = routedScope()

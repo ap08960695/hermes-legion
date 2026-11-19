@@ -177,6 +177,7 @@ checkout stay locked. Rechecking clears any previous preview. If the check fails
 run it again to get a preview you can confirm.
 If the plan changes while the card is open, check its declared writes
 again before confirming. The selected checkout is kept.
+After Local reconnect, new board edits refresh the open card.
 If you close the drawer or switch cards while confirmation is pending, a
 successful ACTION still appears on the board without changing your view.
 
