@@ -34,7 +34,8 @@ run. Earlier rounds use recorded check IDs if the card brief has since changed.
 A text diff reads only the selected file. Both versions must be bounded text
 and match their recorded hashes. Historical hashes can remain available after
 the file bytes are gone. You can switch files without waiting. Focus stays on
-the file button, and the diff panel identifies the selected file.
+the file button when the diff loads. Tab to the diff named for the selected
+file, use the arrow keys or Page Down to scroll, then Tab to leave.
 
 [Revision comparison in a synthetic browser fixture](images/work-card-revision-fixture.webp)
 
