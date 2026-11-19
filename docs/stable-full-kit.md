@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1254-path** Legion source, interface and optimization alternative
+This is the complete **1267-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -16,8 +16,12 @@ The main Desktop title bar has a **Characters** switch and a **Character size**
 selector. macOS also provides a **Characters** menu bar item that works while
 the main window is minimized. Both surfaces share the active connection and
 profile's saved preferences. Size changes apply to visible actors immediately.
-Assigned packs work with the legacy mascot disabled. Unassigned actors use a
-loaded default atlas when available.
+The standalone Desktop mascot, its Appearance section, command palette entries,
+and background refresh are retired. On the first successful config read for
+each profile, Desktop uses the old enabled flag and maps its scale to Small,
+Medium, or Large. An existing Characters preference takes precedence. Existing
+packs stay available in Edit Profile. Unassigned live Characters can use the
+profile's selected installed pack, or its first installed pack.
 
 ## Earlier Monitor-only Character preview
 

@@ -9233,10 +9233,10 @@ index 0000000000000000000000000000000000000000..69595a89989d84c3f8e7e0def2559df8
 +}
 diff --git a/apps/desktop/electron/pet-overlay-ipc.test.ts b/apps/desktop/electron/pet-overlay-ipc.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..b02d4c563d0c066e5eb97e89efc0c5ebd34c5f3b
+index 0000000000000000000000000000000000000000..ede56fc859855f8bdf0a8baa654da64b36e5a7f1
 --- /dev/null
 +++ b/apps/desktop/electron/pet-overlay-ipc.test.ts
-@@ -0,0 +1,756 @@
+@@ -0,0 +1,773 @@
 +import { EventEmitter } from 'node:events'
 +
 +import { afterEach, expect, it, vi } from 'vitest'
@@ -9250,7 +9250,7 @@ index 0000000000000000000000000000000000000000..b02d4c563d0c066e5eb97e89efc0c5eb
 +  return { clipboard: { writeText: io.writeText }, ipcMain: { on: (name: string, fn: (...args: any[]) => void) => io.on.set(name, fn), handle: vi.fn() },
 +    screen: { getAllDisplays: () => io.displays, getPrimaryDisplay: () => io.displays[0] }, powerMonitor: Object.assign(new EventEmitter(), { getSystemIdleState: () => 'active' }) }
 +})
-+import { powerMonitor } from 'electron'
++import { ipcMain, powerMonitor } from 'electron'
 +
 +import { shouldPopInOnOverlayClosed } from './pet-overlay'
 +import { registerPetOverlayIpc } from './pet-overlay-ipc'
@@ -9993,8 +9993,25 @@ index 0000000000000000000000000000000000000000..b02d4c563d0c066e5eb97e89efc0c5eb
 +  expect(bounds).toEqual(base)
 +  expect(set).toHaveBeenLastCalledWith('-1\n')
 +})
++
++it('opens only a Characters request from the primary main frame', async () => {
++  const mainFrame = {}
++  const webContents = { mainFrame }
++  const main = { webContents, isDestroyed: () => false }
++  const openPetOverlay = vi.fn()
++  registerPetOverlayIpc({ getMainWindow: () => main as never, getPetOverlayWindow: () => null, openPetOverlay, closePetOverlay: vi.fn() })
++  const handler = vi.mocked(ipcMain.handle).mock.calls.findLast(([channel]) => channel === 'hermes:pet-overlay:open')![1]
++  const sender = { sender: webContents, senderFrame: mainFrame } as never
++  const bounds = { x: 100, y: 100, width: 240, height: 300 }
++
++  await expect(handler(sender, { bounds, screen: true })).resolves.toEqual({ ok: false })
++  await expect(handler({ sender: webContents, senderFrame: {} } as never, { kind: 'characters', bounds, screen: true })).resolves.toEqual({ ok: false })
++  expect(openPetOverlay).not.toHaveBeenCalled()
++  await expect(handler(sender, { kind: 'characters', bounds, screen: true })).resolves.toMatchObject({ ok: true })
++  expect(openPetOverlay).toHaveBeenCalledExactlyOnceWith(bounds)
++})
 diff --git a/apps/desktop/electron/pet-overlay-ipc.ts b/apps/desktop/electron/pet-overlay-ipc.ts
-index 59d8dd527dae029c695a8520996f6051d75df371..3a8cf1a80963ffd587484953551ea0a0fa08a6f4 100644
+index 59d8dd527dae029c695a8520996f6051d75df371..a698e5b835bdb4cacb9f7e6f55df4b0d2a1d4b64 100644
 --- a/apps/desktop/electron/pet-overlay-ipc.ts
 +++ b/apps/desktop/electron/pet-overlay-ipc.ts
 @@ -2,5 +2,10 @@
@@ -10335,7 +10352,21 @@ index 59d8dd527dae029c695a8520996f6051d75df371..3a8cf1a80963ffd587484953551ea0a0
 +  }
 +
    // `request` is `{ bounds, screen }`. A fresh pop-out passes viewport-space
-@@ -72,2 +391,16 @@ export function registerPetOverlayIpc({
+@@ -41,6 +360,10 @@ export function registerPetOverlayIpc({
+   // resolved screen bounds so the renderer can persist exactly where it opened.
+-  ipcMain.handle('hermes:pet-overlay:open', async (_event, request) => {
+-    const bounds = request && request.bounds ? request.bounds : request
+-    const isScreen = Boolean(request && request.screen)
++  ipcMain.handle('hermes:pet-overlay:open', async (event, request) => {
+     const mainWindow = getMainWindow()
++
++    if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents ||
++        event.senderFrame !== mainWindow.webContents.mainFrame || request?.kind !== 'characters') {return { ok: false }}
++
++    const bounds = request.bounds
++    const isScreen = request.screen === true
+     let screenBounds = bounds
+@@ -72,2 +395,16 @@ export function registerPetOverlayIpc({
    })
 +  ipcMain.on('hermes:pet-overlay:characters-supported', event => {
 +    const main = getMainWindow()
@@ -10352,16 +10383,16 @@ index 59d8dd527dae029c695a8520996f6051d75df371..3a8cf1a80963ffd587484953551ea0a0
 +    if (region) {state.input.set(region)}
 +  })
    ipcMain.handle('hermes:pet-overlay:close', async () => {
-@@ -86,3 +419,3 @@ export function registerPetOverlayIpc({
+@@ -86,3 +423,3 @@ export function registerPetOverlayIpc({
 
 -    if (!petOverlayWindow || petOverlayWindow.isDestroyed() || !bounds) {
 +    if (!petOverlayWindow || petOverlayWindow.isDestroyed() || !bounds || desktop?.window === petOverlayWindow) {
        return
-@@ -115,2 +448,3 @@ export function registerPetOverlayIpc({
+@@ -115,2 +452,3 @@ export function registerPetOverlayIpc({
    ipcMain.on('hermes:pet-overlay:ignore-mouse', (_event, ignore) => {
 +    if (linuxInput && linuxInput.phase !== 'idle') {return}
      const petOverlayWindow = getPetOverlayWindow()
-@@ -144,3 +478,155 @@ export function registerPetOverlayIpc({
+@@ -144,3 +482,155 @@ export function registerPetOverlayIpc({
    // Main renderer → overlay: forward the latest pet state for the overlay to render.
 -  ipcMain.on('hermes:pet-overlay:state', (_event, payload) => {
 +  ipcMain.on('hermes:pet-overlay:state', async (event, payload) => {
@@ -10518,13 +10549,18 @@ index 59d8dd527dae029c695a8520996f6051d75df371..3a8cf1a80963ffd587484953551ea0a0
 +    stopObserving?.()
 +    stopObserving = null
      const petOverlayWindow = getPetOverlayWindow()
-@@ -152,3 +638,3 @@ export function registerPetOverlayIpc({
+@@ -152,3 +642,3 @@ export function registerPetOverlayIpc({
    // Overlay → main renderer: control messages (pop back in, composer submit).
 -  ipcMain.on('hermes:pet-overlay:control', (_event, payload) => {
 +  ipcMain.on('hermes:pet-overlay:control', (event, payload) => {
      const mainWindow = getMainWindow()
-@@ -159,2 +645,100 @@ export function registerPetOverlayIpc({
+@@ -159,7 +649,80 @@ export function registerPetOverlayIpc({
 
+-    // Double-click toggles the app window: hide it away if it's up front, bring it
+-    // back if it's minimized/buried. Pure window control — nothing for the
+-    // renderer to do, so don't forward it.
+-    if (payload && payload.type === 'toggle-app') {
+-      if (mainWindow.isMinimized() || !mainWindow.isVisible()) {
 +    if (payload?.type === 'character-output' || payload?.type === 'character-output-close' ||
 +        payload?.type === 'character-output-open' || payload?.type === 'character-stop' || payload?.type === 'character-output-link' ||
 +        payload?.type === 'character-output-file' || payload?.type === 'character-output-view-file' ||
@@ -10603,34 +10639,49 @@ index 59d8dd527dae029c695a8520996f6051d75df371..3a8cf1a80963ffd587484953551ea0a0
 +          discardOutput()
 +        }
 +
-+        mainWindow.show()
-+        mainWindow.focus()
-+      } else {
+         mainWindow.show()
+@@ -167,5 +730,8 @@ export function registerPetOverlayIpc({
+       } else {
+-        mainWindow.minimize()
 +        discardOutput()
 +        outputAction = { id, request, window: overlay }
-+      }
-+
+       }
+
 +      mainWindow.webContents.send('hermes:pet-overlay:control', { type: payload.type, id, request, ...(pdfPage ? { pdfPage } : {}) })
 +
-+      return
-+    }
-+
+       return
+@@ -173,21 +739,24 @@ export function registerPetOverlayIpc({
+
+-    // The mail icon means "take me to the app": raise the main window (it may be
+-    // minimized or buried) before the renderer navigates to the latest thread.
+-    if (payload && payload.type === 'open-app') {
+-      if (mainWindow.isMinimized()) {
+-        mainWindow.restore()
+-      }
 +    if (payload?.type === 'ready') {
 +      const overlay = getPetOverlayWindow()
-+
-+      if (!overlay || overlay.isDestroyed() || event.sender !== overlay.webContents) {return}
+
+-      mainWindow.show()
+-      mainWindow.focus()
++      if (!overlay || overlay.isDestroyed() || event.sender !== overlay.webContents ||
++          event.senderFrame !== overlay.webContents.mainFrame) {return}
 +      // A new overlay document cannot resolve the previous document's references.
 +      deliveredAtlases = null
-+    }
-+
-     // Double-click toggles the app window: hide it away if it's up front, bring it
-@@ -192,2 +776,14 @@ export function registerPetOverlayIpc({
-   })
-+
++      mainWindow.webContents.send('hermes:pet-overlay:control', { type: 'ready' })
+     }
++  })
+
+-    // A drag/resize end reports the rect the overlay asked for; persist where
+-    // set-bounds actually put it (clamped on-screen), not the raw request.
+-    if (payload && payload.type === 'bounds') {
+-      payload = { ...payload, bounds: placePetOverlay(payload.bounds, mainWindow) ?? payload.bounds }
+-    }
 +  return {
 +    rehomeCharacterDesktop: () => {
 +      const overlay = getPetOverlayWindow()
-+
+
+-    mainWindow.webContents.send('hermes:pet-overlay:control', payload)
+-  })
 +      if (!desktop || overlay !== desktop.window || overlay.isDestroyed()) {return false}
 +      fitCharacterDesktop(overlay)
 +      sendCharacters()
@@ -19341,21 +19392,46 @@ index 0000000000000000000000000000000000000000..affa842e363c58ae64103f1ec57a8911
 +  )
 +}
 diff --git a/apps/desktop/src/app/chat/index.tsx b/apps/desktop/src/app/chat/index.tsx
-index 89ac18e3541800f7cefaaa975756bb49681d9aef..1f96e3d6587be6f796fbfff6b2f2da8c56f43642 100644
+index 89ac18e3541800f7cefaaa975756bb49681d9aef..458770ebbbe6e6933f92394988719a7bfe754793 100644
 --- a/apps/desktop/src/app/chat/index.tsx
 +++ b/apps/desktop/src/app/chat/index.tsx
-@@ -51,2 +51,3 @@ import {
+@@ -32,4 +32,2 @@ import { $pinnedSessionIds } from '@/store/layout'
+ import { $introView } from '@/store/onboarding-intro'
+-import { $petActive } from '@/store/pet'
+-import { $petOverlayActive } from '@/store/pet-overlay'
+ import { $activeGatewayProfile, $gatewaySwapTarget, $hydrationSyncProfile, $profiles } from '@/store/profile'
+@@ -51,2 +49,3 @@ import {
  } from '@/store/session'
 +import { sessionDraftOwner } from '@/store/session-draft-owner'
  import { $focusedStoredSessionId } from '@/store/session-focus'
-@@ -605,5 +606,5 @@ const ChatViewContent = memo(function ChatViewContent({
- 
+@@ -555,5 +554,2 @@ const ChatViewContent = memo(function ChatViewContent({
+   // A pet anywhere (in-window or popped out) owns the hearts; composer only when none.
+-  const petActive = useStore($petActive)
+-  const petOverlayActive = useStore($petOverlayActive)
+-  const petPresent = petActive || petOverlayActive
+   const freshDraftReady = useStore($freshDraftReady)
+@@ -605,5 +601,5 @@ const ChatViewContent = memo(function ChatViewContent({
+
 -    migrateSessionDraft(selectedSessionId, queueSessionKey)
 +    migrateSessionDraft(selectedSessionId, queueSessionKey, sessionDraftOwner(activeSessionId || selectedSessionId))
      migrateQueuedPrompts(selectedSessionId, queueSessionKey)
 -  }, [queueSessionKey, selectedSessionId, sessions])
 +  }, [activeSessionId, queueSessionKey, selectedSessionId, sessions])
- 
+
+@@ -810,6 +806,3 @@ const ChatViewContent = memo(function ChatViewContent({
+           {showChatBar && <ScrollToBottomButton sessionId={activeSessionId} />}
+-          {/* Vibe hearts rise from the composer only when no pet is out (else
+-              they play on the pet). Fired by the core `reaction` event. */}
+-          {!petPresent && (
+-            <HeartField
++          <HeartField
+               className="absolute inset-x-0 z-30"
+@@ -820,4 +813,3 @@ const ChatViewContent = memo(function ChatViewContent({
+               }}
+-            />
+-          )}
++          />
+           {/* A session drag hovering an EDGE hands the visual to the zone
 diff --git a/apps/desktop/src/app/chat/right-rail/preview-file-save-scope.test.tsx b/apps/desktop/src/app/chat/right-rail/preview-file-save-scope.test.tsx
 index b2283546257bfef46374c5b88ac857faddec0f27..610e86559e4dfe31ae45d61fa1da0339d8b35d07 100644
 --- a/apps/desktop/src/app/chat/right-rail/preview-file-save-scope.test.tsx
@@ -20173,7 +20249,7 @@ index 6dd640fdb343634e5b12418fca2ede6080d0aa8f..299896ab1a40ce68194752c8eb41aa35
 +      <CacheUsageStats totals={totals} />
        <section>
 diff --git a/apps/desktop/src/app/command-palette/index.tsx b/apps/desktop/src/app/command-palette/index.tsx
-index 1c62d1c8548212752ac7b28b9dd844b8bca2e838..3715a57eaa281ef42dd8f8fd417e31bf58affb78 100644
+index 1c62d1c8548212752ac7b28b9dd844b8bca2e838..c46fb411b65f0f8a78a9e37dfd10b2d31772efab 100644
 --- a/apps/desktop/src/app/command-palette/index.tsx
 +++ b/apps/desktop/src/app/command-palette/index.tsx
 @@ -16,5 +16,6 @@ import {
@@ -20184,25 +20260,39 @@ index 1c62d1c8548212752ac7b28b9dd844b8bca2e838..3715a57eaa281ef42dd8f8fd417e31bf
 -import { Command, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 +import { Command, CommandGroup, CommandInput, CommandItem } from '@/components/ui/command'
  import { HighlightMatches } from '@/components/ui/highlight-matches'
-@@ -79,3 +80,4 @@ import { openPetGenerate } from '@/store/pet-generate'
+@@ -36,3 +37,2 @@ import {
+   Download,
+-  Egg,
+   GitBranch,
+@@ -48,3 +48,2 @@ import {
+   Palette,
+-  PawPrint,
+   Pin,
+@@ -77,5 +76,5 @@ import { $bindings, bindingsFor } from '@/store/keybinds'
+ import { $dismissedAutoProjectIds, $pinnedSessionIds, filterVisibleProjects } from '@/store/layout'
+-import { openPetGenerate } from '@/store/pet-generate'
  import { toggleBrowserTab } from '@/store/preview'
 -import { $projectTree, goToProject, openFolderAsProject, requestStartWorkSession } from '@/store/projects'
 +import { openProjectTarget } from '../session-manager/project-target'
 +import { $projectTree, openFolderAsProject, requestStartWorkSession } from '@/store/projects'
  import { $connection, $cronSessions, $messagingSessions, $sessions } from '@/store/session'
-@@ -239,3 +241,3 @@ const scoreItem = (item: PaletteItem, needle: string): number => {
+@@ -119,3 +118,2 @@ import { HighlightWatcher } from './highlight-watcher'
+ import { MarketplaceThemePage } from './marketplace-theme-page'
+-import { PetInlineToggle, PetPalettePage } from './pet-palette-page'
+
+@@ -239,3 +237,3 @@ const scoreItem = (item: PaletteItem, needle: string): number => {
  // sort), so curated group/item ordering still breaks even scores.
 -const rankGroups = (groups: PaletteGroup[], search: string): PaletteGroup[] => {
 +export const rankGroups = (groups: PaletteGroup[], search: string): PaletteGroup[] => {
    const needle = normalize(search)
-@@ -243,3 +245,4 @@ const rankGroups = (groups: PaletteGroup[], search: string): PaletteGroup[] => {
+@@ -243,3 +241,4 @@ const rankGroups = (groups: PaletteGroup[], search: string): PaletteGroup[] => {
    if (!needle) {
 -    return groups
 +    // Never paint a bare heading over nothing.
 +    return groups.filter(group => group.items.length > 0)
    }
-@@ -395,2 +398,12 @@ type SessionRow = Awaited<ReturnType<typeof listAllProfileSessions>>['sessions']
- 
+@@ -395,2 +394,12 @@ type SessionRow = Awaited<ReturnType<typeof listAllProfileSessions>>['sessions']
+
 +// A chat started since the palette's last fetch (or while it is in flight)
 +// lives only in the sidebar store; list it too, so its title matches as you
 +// type instead of falling through to "Search all saved chats".
@@ -20214,22 +20304,64 @@ index 1c62d1c8548212752ac7b28b9dd844b8bca2e838..3715a57eaa281ef42dd8f8fd417e31bf
 +}
 +
  const toSessionEntry = (session: SessionRow): SessionEntry => ({
-@@ -704,3 +717,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
- 
+@@ -704,3 +713,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+
 -    return (sessionsQuery.data?.sessions ?? [])
 +    return withFreshLiveSessions(sessionsQuery.data?.sessions ?? [], liveSessions)
        .filter(session => !removedSessionIds.has(session.id))
-@@ -846,3 +859,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+@@ -846,3 +855,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
            runWithEvent: (event?: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) =>
 -            goToProject(project.id, { newSession: Boolean(event?.metaKey || event?.ctrlKey) })
 +            openProjectTarget(project.id, event, navigate)
          }))
-@@ -1675,3 +1688,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+@@ -1032,17 +1041,4 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+             to: 'color-mode'
+-          },
+-          {
+-            icon: PawPrint,
+-            id: 'appearance-pets',
+-            keywords: ['pet', 'petdex', 'mascot', 'pets', '/pet', 'paw'],
+-            label: cc.pets.title,
+-            to: 'pets'
+-          },
+-          {
+-            icon: Egg,
+-            id: 'appearance-generate-pet',
+-            keywords: ['pet', 'generate', 'create', 'make', 'new pet', 'mascot', 'hatch', 'ai'],
+-            label: cc.generatePet.title,
+-            run: () => openPetGenerate()
+           }
++
+         ]
+@@ -1490,8 +1486,2 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+       },
+-      // Server-driven page: browse petdex gallery, adopt/switch, toggle off.
+-      pets: {
+-        title: t.commandCenter.pets.title,
+-        placeholder: t.commandCenter.pets.placeholder,
+-        groups: []
+-      },
+       // Server-driven page: items come from the Marketplace, rendered by
+@@ -1672,16 +1662,7 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+             ref={inputRef}
+-            right={page === 'pets' ? <PetInlineToggle /> : undefined}
+             value={search}
            />
 -          <CommandList className="dt-portal-scrollbar max-h-[min(20rem,56vh)]">
 +          <SavedChatList query={page ? '' : search}>
              {/* Server-driven pages render their own list; the rest show groups. */}
-@@ -1698,3 +1711,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+-            {page === 'pets' ? (
+-              <PetPalettePage
+-                onGenerate={() => {
+-                  closeCommandPalette()
+-                  openPetGenerate()
+-                }}
+-                search={search}
+-              />
+-            ) : page === 'install-theme' ? (
++            {page === 'install-theme' ? (
+               <MarketplaceThemePage onPickTheme={setTheme} search={search} />
+@@ -1698,3 +1679,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
              )}
 -          </CommandList>
 +          </SavedChatList>
@@ -21037,18 +21169,34 @@ index 0000000000000000000000000000000000000000..66eee9125738f1da77a328b76a877e57
 +  return { actions, chatRoutes, sidebar, statusbar, terminal }
 +}
 diff --git a/apps/desktop/src/app/contrib/wiring.tsx b/apps/desktop/src/app/contrib/wiring.tsx
-index 954975fa63a045fb74a685beb98239821a922959..01d7e8147b3acd5ce38b7c3188b3c7b0b40b3e32 100644
+index 954975fa63a045fb74a685beb98239821a922959..4c28e653241f95f531ce67a1539e765fa42b7493 100644
 --- a/apps/desktop/src/app/contrib/wiring.tsx
 +++ b/apps/desktop/src/app/contrib/wiring.tsx
-@@ -157,2 +157,3 @@ import {
+@@ -34,3 +34,2 @@ import {
+ } from '@/components/pane-shell/workspace-scope'
+-import { FloatingPet } from '@/components/pet/floating-pet'
+ import { RemoteDisplayBanner } from '@/components/remote-display-banner'
+@@ -116,3 +115,2 @@ import { ModelVisibilityOverlay } from '../model-visibility-overlay'
+ import { mainChatOccupied, openSession, openSessionFromPicker } from '../open-session'
+-import { PetGenerateOverlay } from '../pet-generate/pet-generate-overlay'
+ import { FileActionDialogs } from '../right-sidebar/file-actions'
+@@ -157,2 +155,3 @@ import {
  } from '../shell/titlebar'
 +import { CharacterController, CharacterControls } from '../shell/character-controls'
  import { TitlebarControls } from '../shell/titlebar-controls'
-@@ -162,2 +163,3 @@ import { UpdatesOverlay } from '../updates-overlay'
+@@ -162,2 +161,3 @@ import { UpdatesOverlay } from '../updates-overlay'
  import { ContribWiringContext } from './context'
 +import { wiringApi } from './wiring-api'
  import {
-@@ -1201,9 +1203,4 @@ export function ContribWiring({ children }: { children: ReactNode }) {
+@@ -171,3 +171,2 @@ import { useDesktopIntegrations } from './hooks/use-desktop-integrations'
+ import { useDesktopMetrics } from './hooks/use-desktop-metrics'
+-import { usePetBridge } from './hooks/use-pet-bridge'
+ import { useQuickEntryBridge } from './hooks/use-quick-entry-bridge'
+@@ -735,3 +734,2 @@ export function ContribWiring({ children }: { children: ReactNode }) {
+   // The popped-out pet overlay's bridge back into the app.
+-  usePetBridge({ requestGateway, resumeSession, submitText })
+
+@@ -1201,9 +1199,4 @@ export function ContribWiring({ children }: { children: ReactNode }) {
    const api = useMemo<WiringApi>(
 -    () => ({
 -      chatRoutes: chatRoutesNode,
@@ -21060,19 +21208,27 @@ index 954975fa63a045fb74a685beb98239821a922959..01d7e8147b3acd5ce38b7c3188b3c7b0
 +    () => wiringApi(actions, chatRoutesNode, sidebarNode, statusbarNode, terminalNode),
 +    [actions, chatRoutesNode, sidebarNode, statusbarNode, terminalNode]
    )
-@@ -1272,2 +1269,3 @@ export function ContribWiring({ children }: { children: ReactNode }) {
+@@ -1272,2 +1265,3 @@ export function ContribWiring({ children }: { children: ReactNode }) {
            <TitlebarControls
 +            characterControls={isMainWindow() ? <CharacterControls /> : undefined}
              leftTools={leftTitlebarTools}
-@@ -1287,2 +1285,3 @@ export function ContribWiring({ children }: { children: ReactNode }) {
+@@ -1287,2 +1281,3 @@ export function ContribWiring({ children }: { children: ReactNode }) {
        {/* The full real overlay set (mirrors DesktopController's `overlays`). */}
 +      {isMainWindow() && <CharacterController />}
        <RemoteDisplayBanner />
-@@ -1320,3 +1319,3 @@ export function ContribWiring({ children }: { children: ReactNode }) {
+@@ -1320,3 +1315,3 @@ export function ContribWiring({ children }: { children: ReactNode }) {
        />
 -      <SessionPickerOverlay onResume={sessionId => openSessionFromPicker(sessionId, navigate)} />
 +      <SessionPickerOverlay onResume={(id, owner) => openSessionFromPicker(id, navigate, undefined, owner)} />
        <ModelVisibilityOverlay
+@@ -1333,3 +1328,2 @@ export function ContribWiring({ children }: { children: ReactNode }) {
+       <PluginInstallModal />
+-      <PetGenerateOverlay />
+       <SessionSwitcher />
+@@ -1430,3 +1424,2 @@ export function ContribWiring({ children }: { children: ReactNode }) {
+           Never in the HUD: that window is the chat bar and nothing else. */}
+-      {!isHudWindow() && !isBrowserWindow() && <FloatingPet />}
+
 diff --git a/apps/desktop/src/app/contrib/workspace-routes.tsx b/apps/desktop/src/app/contrib/workspace-routes.tsx
 new file mode 100644
 index 0000000000000000000000000000000000000000..49c319fe54968e8bc78badd2dd2ec8664bf97eb3
@@ -26813,36 +26969,101 @@ index 0000000000000000000000000000000000000000..add32371b0e84abff2ef86540838a314
 +  </div>
 +}
 diff --git a/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx b/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
-index 82319976a166e658f80e794b0033fed81a48d456..c2ef8a3eccfcffe2c859a3e5f2b58df5a9226008 100644
+index 82319976a166e658f80e794b0033fed81a48d456..d05530936953089b51783d61ed9d0ec0d714fc3c 100644
 --- a/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
 +++ b/apps/desktop/src/app/pet-overlay/pet-overlay-app.tsx
-@@ -10,2 +10,4 @@ import { isSubmitEnter } from '@/lib/ime'
- import { $petActivity, $petInfo, setPetInfo } from '@/store/pet'
+@@ -1,83 +1,29 @@
+-import { useStore } from '@nanostores/react'
+ import { useCallback, useEffect, useRef, useState } from 'react'
+
+-import { PetHeartField, playVibeHearts } from '@/components/chat/vibe-hearts'
+-import { PetBubble } from '@/components/pet/pet-bubble'
+-import { PetSprite } from '@/components/pet/pet-sprite'
+-import { type PetZoomAnchor, usePetZoomGesture } from '@/components/pet/use-pet-zoom-gesture'
+-import { Mail } from '@/lib/icons'
+-import { isSubmitEnter } from '@/lib/ime'
+-import { $petActivity, $petInfo, setPetInfo } from '@/store/pet'
+-import { overlayWindowSize } from '@/store/pet-overlay'
+-import { mirrorPetPluginMessages } from '@/store/pet-plugin-messages'
+-import { setAwaitingResponse, setBusy } from '@/store/session'
+-
+-// Fallbacks mirror pet-sprite's defaults; the gateway normally sends real values.
+-const DEFAULT_FRAME_W = 192
+-const DEFAULT_FRAME_H = 208
+-const DEFAULT_SCALE = 0.33
+-
+-// Must match the root's paddingBottom — the sprite renders bottom-centered, this
+-// many px above the window's bottom edge. Used to anchor the resize.
+-const PET_PADDING_BOTTOM = 24
+-
+-// A sprite pixel counts as "solid" (interactive) at/above this alpha (0-255).
+-// Low enough to catch anti-aliased edges, high enough that the faint halo around
+-// the art still clicks through.
+-const ALPHA_HIT_THRESHOLD = 16
+-
+-/**
+- * The pop-out overlay's only view: a transparent, draggable mascot with a mini
+- * composer.
+- *
+- * This runs in a separate, gateway-less BrowserWindow (`?win=overlay`). It is a
+- * pure puppet — the main renderer pushes the live pet state over IPC and we
+- * mirror it into the same atoms the in-window pet reads, so `PetSprite` /
+- * `PetBubble` render identically with zero extra logic.
+- *
+- * The window is a full rectangle but mostly transparent; we toggle OS-level
+- * mouse click-through so only the sprite (or the open composer) is interactive
+- * and the empty margins pass clicks through to whatever is behind.
+- *
+- * Gestures on the pet: drag to move it anywhere on screen (even outside the
+- * app), shift-click to pop it back into the window, single-click to open a small
+- * composer, double-click to toggle the app window (minimize ↔ restore). A mail
+- * icon (shown only when a turn finished while you were away) raises the app on
+- * the most recent thread.
+- */
+-
+-// Below this much pointer travel, a press counts as a click, not a drag.
+-const CLICK_SLOP_PX = 3
+-// A second click within this window is a double-click (raise app) and cancels
+-// the deferred single-click (open composer), so a double never flashes it open.
+-const DOUBLE_CLICK_MS = 250
+-
+-interface DragState {
+-  startX: number
+-  startY: number
+-  offX: number
+-  offY: number
+-  width: number
+-  height: number
+-  moved: boolean
+-}
++import type { PetInfo } from '@/store/pet'
 +import type { PetCharacterFileContent, PetCharacterOutput } from '@/store/pet-characters'
 +import type { PetCharacterCopy, PetCharacterDesktop, PetOverlayCharacterPreview } from '@/store/pet-overlay'
- import { overlayWindowSize } from '@/store/pet-overlay'
-@@ -14,2 +16,5 @@ import { setAwaitingResponse, setBusy } from '@/store/session'
-
++
 +import { observeLinuxPetInput } from './linux-input-region'
 +import { hasSolidSpritePixel, PetCharacters } from './pet-characters'
 +
- // Fallbacks mirror pet-sprite's defaults; the gateway normally sends real values.
-@@ -27,2 +32,3 @@ const PET_PADDING_BOTTOM = 24
- const ALPHA_HIT_THRESHOLD = 16
 +let nextOutputRequest = 0
 
-@@ -57,2 +63,4 @@ interface DragState {
-   startY: number
-+  pointerId: number
-+  target: Element
-   offX: number
-@@ -67,2 +75,15 @@ export function PetOverlayApp() {
-   const [composerOpen, setComposerOpen] = useState(false)
-+  const [characters, setCharacters] = useState<{ preview: PetOverlayCharacterPreview; paused: boolean; desktop?: PetCharacterDesktop } | null>(null)
++/** The gateway-less window renders the Characters scene sent by the primary Desktop. */
+ export function PetOverlayApp() {
+-  const info = useStore($petInfo)
+-  const [composerOpen, setComposerOpen] = useState(false)
+-  const [draft, setDraft] = useState('')
+-  // Mirrored from the main renderer: a finish landed while you were away.
+-  const [unread, setUnread] = useState(false)
+-
+-  const dragRef = useRef<DragState | null>(null)
+-  // Last Alt+wheel anchor, consumed by the resize effect to zoom toward the
+-  // cursor; null means a non-wheel scale change (slider) → anchor bottom-center.
+-  const zoomAnchorRef = useRef<PetZoomAnchor | null>(null)
+-  const petRef = useRef<HTMLDivElement | null>(null)
+-  const inputRef = useRef<HTMLInputElement | null>(null)
+-  // Last mirrored reaction id — a bump means the main window fired a reaction.
+-  const lastReactionRef = useRef<number | null>(null)
++  const [characters, setCharacters] = useState<{ preview: PetOverlayCharacterPreview; info: PetInfo; paused: boolean; desktop?: PetCharacterDesktop } | null>(null)
 +  const [output, setOutput] = useState<(PetCharacterOutput & { loading?: true; fileLoading?: true; file?: PetCharacterFileContent; copy?: PetCharacterCopy; stopPending?: true }) | null>(null)
 +  const [actionsRequest, setActionsRequest] = useState<number | null>(null)
-+  const characterMode = Boolean(characters)
-+  const canRenderPet = info.enabled && (characterMode || Boolean(info.spritesheetBase64))
 +  const desktopMode = Boolean(characters?.desktop)
 +  const linuxInputActive = desktopMode && !characters?.paused && Boolean(characters?.preview.characters.length)
 +
@@ -26851,18 +27072,36 @@ index 82319976a166e658f80e794b0033fed81a48d456..c2ef8a3eccfcffe2c859a3e5f2b58df5
 +
 +    if (linuxInputActive && send) {return observeLinuxPetInput(send)}
 +  }, [linuxInputActive])
-   const [draft, setDraft] = useState('')
-@@ -72,2 +93,3 @@ export function PetOverlayApp() {
-   const dragRef = useRef<DragState | null>(null)
 +  const beforeCharacters = useRef<{ width: number; height: number; x: number; y: number } | null>(null)
-   // Last Alt+wheel anchor, consumed by the resize effect to zoom toward the
-@@ -80,2 +102,4 @@ export function PetOverlayApp() {
    const ignoreRef = useRef(true)
+-  const composerOpenRef = useRef(false)
+-  const clickTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 +  const refreshHitRef = useRef<(() => void) | null>(null)
 +  const refreshHit = useCallback(() => refreshHitRef.current?.(), [])
-   const composerOpenRef = useRef(false)
-@@ -94,2 +118,47 @@ export function PetOverlayApp() {
+
+@@ -90,3 +36,2 @@ export function PetOverlayApp() {
+
+-  // Mirror pushed state into the shared atoms so PetSprite/PetBubble just work.
+   // eslint-disable-next-line no-restricted-syntax -- legitimate non-atom ref write (see eslint rule comment)
+@@ -94,21 +39,47 @@ export function PetOverlayApp() {
      const off = window.hermesDesktop?.petOverlay?.onState(payload => {
+-      setPetInfo(payload.info)
+-      $petActivity.set(payload.activity ?? {})
+-      setBusy(Boolean(payload.busy))
+-      setAwaitingResponse(Boolean(payload.awaiting))
+-      setUnread(Boolean(payload.unread))
+-      mirrorPetPluginMessages(payload.pluginMessages)
+-
+-      // Play a reaction on a new id (ignore the first sync, which just primes it).
+-      const reaction = payload.reaction ?? null
+-
+-      if (lastReactionRef.current === null) {
+-        lastReactionRef.current = reaction?.id ?? 0
+-      } else if (reaction && reaction.id > lastReactionRef.current) {
+-        lastReactionRef.current = reaction.id
+-
+-        if (reaction.kind === 'vibe') {
+-          playVibeHearts()
 +      const preview = payload.characterPreview ?? null
 +      setCharacters(current => {
 +        if (!preview) {return null}
@@ -26872,9 +27111,11 @@ index 82319976a166e658f80e794b0033fed81a48d456..c2ef8a3eccfcffe2c859a3e5f2b58df5
 +          const bytes = actor?.sprite?.spritesheetBase64
 +
 +          if (bytes && actor.spriteRef !== undefined) {atlases.set(actor.spriteRef, bytes)}
-+        }
+         }
+-      }
 +
 +        return {
++          info: payload.info,
 +          preview: { ...preview, characters: preview.characters.flatMap(actor => {
 +            if (actor?.spriteRef === undefined || actor.sprite?.spritesheetBase64) {return [actor]}
 +            const bytes = atlases.get(actor.spriteRef)
@@ -26907,245 +27148,468 @@ index 82319976a166e658f80e794b0033fed81a48d456..c2ef8a3eccfcffe2c859a3e5f2b58df5
 +        return reply?.id === current.id && reply.request === current.request ? reply : current
 +      })
 +
-+      if (preview) {setComposerOpen(false)}
-       setPetInfo(payload.info)
-@@ -104,3 +173,3 @@ export function PetOverlayApp() {
-
--      if (lastReactionRef.current === null) {
-+      if (preview || lastReactionRef.current === null) {
-         lastReactionRef.current = reaction?.id ?? 0
-@@ -127,2 +196,3 @@ export function PetOverlayApp() {
+     })
+@@ -127,2 +98,3 @@ export function PetOverlayApp() {
    // returns to a solid pixel.
 +  // eslint-disable-next-line no-restricted-syntax -- clear a detached gesture from the native move listener.
    useEffect(() => {
-@@ -138,2 +208,8 @@ export function PetOverlayApp() {
+@@ -130,43 +102,23 @@ export function PetOverlayApp() {
 
+-    // True when the point sits on a solid sprite pixel or on the pet's other
+-    // interactive chrome (bubble, mail button). Over the canvas we sample the
+-    // rendered alpha; elsewhere inside the pet (bubble/button) we trust DOM
+-    // hit-testing. Anything else is transparent backdrop.
+     const isInteractiveAt = (x: number, y: number): boolean => {
+-      const pet = petRef.current
+       const target = document.elementFromPoint(x, y)
+
+-      if (!pet || !target || !pet.contains(target)) {
+-        return false
+-      }
+-
+-      if (!(target instanceof HTMLCanvasElement)) {
+-        return true
+-      }
+-
+-      const rect = target.getBoundingClientRect()
 +      if (target?.closest('[data-pet-output-target]')) {return true}
-+
-+      if (target instanceof HTMLCanvasElement && target.closest('[data-pet-caption]')) {
-+        return hasSolidSpritePixel(target, x, y)
-+      }
-+
-       if (!pet || !target || !pet.contains(target)) {
-@@ -169,4 +245,18 @@ export function PetOverlayApp() {
 
--    const onMove = (ev: MouseEvent) => {
--      if (dragRef.current || composerOpenRef.current) {
+-      if (rect.width === 0 || rect.height === 0) {
+-        return true
+-      }
++      return target instanceof HTMLCanvasElement && Boolean(target.closest('[data-pet-caption]')) &&
++        hasSolidSpritePixel(target, x, y)
++    }
+
+-      const ctx = target.getContext('2d')
 +    let releaseCheck = 0
 +    let pointer: Pick<MouseEvent, 'clientX' | 'clientY'> | undefined
-+
+
+-      if (!ctx) {
+-        return true
+-      }
 +    const onMove = (ev: Pick<MouseEvent, 'clientX' | 'clientY'>) => {
 +      pointer = { clientX: ev.clientX, clientY: ev.clientY }
-+
+
+-      const px = Math.floor((x - rect.left) * (target.width / rect.width))
+-      const py = Math.floor((y - rect.top) * (target.height / rect.height))
+-
+-      try {
+-        return ctx.getImageData(px, py, 1, 1).data[3] >= ALPHA_HIT_THRESHOLD
+-      } catch {
+-        // Tainted/zero-size read — fail open so the pet stays grabbable.
+-        return true
 +      if (releaseCheck) {
 +        cancelAnimationFrame(releaseCheck)
 +        releaseCheck = 0
-+      }
-+
-+      if (dragRef.current && !dragRef.current.target.isConnected) {
-+        dragRef.current = null
-+      }
-+
-+      if (dragRef.current || composerOpenRef.current || document.querySelector('[data-pet-dragging]')) {
-         setIgnore(false)
-@@ -179,6 +269,30 @@ export function PetOverlayApp() {
+       }
+-    }
 
+-    const onMove = (ev: MouseEvent) => {
+-      if (dragRef.current || composerOpenRef.current) {
++      if (document.querySelector('[data-pet-dragging]')) {
+         setIgnore(false)
+@@ -179,102 +131,62 @@ export function PetOverlayApp() {
+
+-    window.addEventListener('mousemove', onMove)
+-
+-    return () => {
+-      window.removeEventListener('mousemove', onMove)
+-      clearTimeout(clickTimerRef.current)
+-    }
+-  }, [])
+-
+-  // The whole window must stay interactive while the composer is open (so the
+-  // input keeps focus); focus it on open. The overlay is a non-activating panel
+-  // (so it never steals the app's cmd/alt-tab anchor) — flip it focusable while
+-  // the composer needs the keyboard, then back to non-activating when it closes.
+-  // eslint-disable-next-line no-restricted-syntax -- legitimate non-atom ref write (see eslint rule comment)
+-  useEffect(() => {
+-    composerOpenRef.current = composerOpen
+-
+-    window.hermesDesktop?.petOverlay?.setFocusable(composerOpen)
+-
+-    if (composerOpen) {
+-      setIgnore(false)
+-      // The OS window has to become key first (setFocusable + focus happen in
+-      // the main process), so focus the input on the next frame.
+-      requestAnimationFrame(() => inputRef.current?.focus())
+-    }
+-  }, [composerOpen])
 +    const recheck = () => {
 +      cancelAnimationFrame(releaseCheck)
 +      // Hit targets and gesture flags settle when React commits.
 +      releaseCheck = requestAnimationFrame(() => {
 +        releaseCheck = 0
-+
+
+-  const onPetPointerDown = (e: React.PointerEvent) => {
+-    if (e.button !== 0) {
+-      return
 +        if (pointer) {onMove(pointer)}
 +        else {setIgnore(true)}
 +      })
-+    }
-+
+     }
+
+-    ;(e.target as Element).setPointerCapture?.(e.pointerId)
+-    dragRef.current = {
+-      height: window.outerHeight,
+-      moved: false,
+-      offX: e.screenX - window.screenX,
+-      offY: e.screenY - window.screenY,
+-      startX: e.screenX,
+-      startY: e.screenY,
+-      width: window.outerWidth
 +    const onRelease = (event: PointerEvent) => {
 +      if (!(event.target instanceof Element) || !event.target.closest('[data-pet-caption]')) {return}
 +      pointer = { clientX: event.clientX, clientY: event.clientY }
 +      recheck()
-+    }
-+
+     }
+-  }
+-
+-  const onPetPointerMove = (e: React.PointerEvent) => {
+-    const drag = dragRef.current
+
+-    if (!drag) {
+-      return
+-    }
 +    refreshHitRef.current = recheck
-     window.addEventListener('mousemove', onMove)
++    window.addEventListener('mousemove', onMove)
 +    window.addEventListener('pointerup', onRelease)
 +    window.addEventListener('pointercancel', onRelease)
 
-     return () => {
+-    if (Math.hypot(e.screenX - drag.startX, e.screenY - drag.startY) > CLICK_SLOP_PX) {
+-      drag.moved = true
++    return () => {
 +      refreshHitRef.current = null
-       window.removeEventListener('mousemove', onMove)
++      window.removeEventListener('mousemove', onMove)
 +      window.removeEventListener('pointerup', onRelease)
 +      window.removeEventListener('pointercancel', onRelease)
 +      cancelAnimationFrame(releaseCheck)
-       clearTimeout(clickTimerRef.current)
-@@ -206,3 +320,3 @@ export function PetOverlayApp() {
-   const onPetPointerDown = (e: React.PointerEvent) => {
--    if (e.button !== 0) {
-+    if (e.button !== 0 || dragRef.current) {
-       return
-@@ -210,4 +324,8 @@ export function PetOverlayApp() {
+     }
++  }, [])
 
--    ;(e.target as Element).setPointerCapture?.(e.pointerId)
-+    const target = e.currentTarget
-+
-+    target.setPointerCapture?.(e.pointerId)
-     dragRef.current = {
-+      target,
-+      pointerId: e.pointerId,
-       height: window.outerHeight,
-@@ -225,3 +343,3 @@ export function PetOverlayApp() {
-
--    if (!drag) {
-+    if (!drag || drag.pointerId !== e.pointerId) {
-       return
-@@ -243,6 +361,4 @@ export function PetOverlayApp() {
-     const drag = dragRef.current
+-    window.hermesDesktop?.petOverlay?.setBounds({
+-      height: drag.height,
+-      width: drag.width,
+-      x: e.screenX - drag.offX,
+-      y: e.screenY - drag.offY
+-    })
+-  }
+-
+-  const onPetPointerUp = (e: React.PointerEvent) => {
+-    const drag = dragRef.current
 -    dragRef.current = null
 -    ;(e.target as Element).releasePointerCapture?.(e.pointerId)
++  const characterMode = Boolean(characters?.preview.characters.length)
 
 -    if (!drag) {
-+    if (!drag || drag.pointerId !== e.pointerId) {
-       return
-@@ -250,2 +366,5 @@ export function PetOverlayApp() {
+-      return
+-    }
++  // The non-desktop fallback fits Characters along the display's bottom edge.
++  // eslint-disable-next-line no-restricted-syntax -- preserve the window bounds across fallback updates.
++  useEffect(() => {
++    const overlay = window.hermesDesktop?.petOverlay
 
-+    dragRef.current = null
-+    drag.target.releasePointerCapture?.(e.pointerId)
-+
-     if (drag.moved) {
-@@ -316,3 +435,3 @@ export function PetOverlayApp() {
-
--  usePetZoomGesture(petRef, onScale, Boolean(info.enabled && info.spritesheetBase64))
-+  usePetZoomGesture(petRef, onScale, canRenderPet && !characterMode)
-
-@@ -326,3 +445,31 @@ export function PetOverlayApp() {
-   useEffect(() => {
--    if (!info.enabled || !info.spritesheetBase64) {
-+    if (!canRenderPet) {
-+      return
-+    }
-+
+-    if (drag.moved) {
+-      // A drag cancels any deferred single-click so the composer can't pop open
+-      // after you reposition the pet.
+-      clearTimeout(clickTimerRef.current)
+-      clickTimerRef.current = undefined
+-
+-      // Remember the spot on the desktop (screen coords) so the pet reopens here
+-      // next time / after a restart.
+-      window.hermesDesktop?.petOverlay?.control({
+-        bounds: { height: drag.height, width: drag.width, x: e.screenX - drag.offX, y: e.screenY - drag.offY },
+-        type: 'bounds'
+-      })
 +    if (desktopMode) {
 +      beforeCharacters.current = null
-+
-+      return
-+    }
-+
-+    if (characterMode) {
-+      if (!beforeCharacters.current) {
-+        beforeCharacters.current = { width: window.outerWidth, height: window.outerHeight, x: window.screenX, y: window.screenY }
-+
-+        const display = window.screen as Screen & { availLeft?: number; availTop?: number }
-+        const height = Math.min(300, display.availHeight || window.outerHeight)
-+        const width = display.availWidth || window.outerWidth
-+
-+        window.hermesDesktop?.petOverlay?.setBounds({ width, height, x: display.availLeft ?? window.screenX,
-+          y: (display.availTop ?? 0) + (display.availHeight || window.outerHeight) - height })
-+      }
-+
-+      return
-+    }
-+
-+    if (beforeCharacters.current) {
-+      window.hermesDesktop?.petOverlay?.setBounds(beforeCharacters.current)
++    } else if (characterMode && !beforeCharacters.current) {
++      beforeCharacters.current = { width: window.outerWidth, height: window.outerHeight, x: window.screenX, y: window.screenY }
++      const display = window.screen as Screen & { availLeft?: number; availTop?: number }
++      const height = Math.min(300, display.availHeight || window.outerHeight)
+
+-      return
++      overlay?.setBounds({ width: display.availWidth || window.outerWidth, height, x: display.availLeft ?? window.screenX,
++        y: (display.availTop ?? 0) + (display.availHeight || window.outerHeight) - height })
++    } else if (!characterMode && beforeCharacters.current) {
++      overlay?.setBounds(beforeCharacters.current)
 +      beforeCharacters.current = null
-+
-       return
-@@ -330,7 +477,4 @@ export function PetOverlayApp() {
+     }
++  }, [characterMode, desktopMode])
 
--    const { width, height } = overlayWindowSize(
--      info.frameW ?? DEFAULT_FRAME_W,
--      info.frameH ?? DEFAULT_FRAME_H,
--      info.scale ?? DEFAULT_SCALE
--    )
-+    const { width, height } = overlayWindowSize(info.frameW ?? DEFAULT_FRAME_W, info.frameH ?? DEFAULT_FRAME_H,
-+      info.scale ?? DEFAULT_SCALE)
-
-@@ -364,5 +508,69 @@ export function PetOverlayApp() {
-     window.hermesDesktop?.petOverlay?.control({ bounds, type: 'bounds' })
--  }, [info.enabled, info.spritesheetBase64, info.scale, info.frameW, info.frameH])
-+  }, [canRenderPet, info.scale, info.frameW, info.frameH, characterMode, desktopMode])
-+
+-    // Shift-click always pops the pet back in (no double-click ambiguity).
+-    if (e.shiftKey) {
+-      window.hermesDesktop?.petOverlay?.control({ type: 'pop-in' })
+-
+-      return
+-    }
 +  const showOutput = (id: string | null, showActions = false) => {
 +    const api = window.hermesDesktop?.petOverlay
-+
+
+-    // Double-click toggles the app window (minimize ↔ restore); defer the
+-    // single-click composer toggle so a double never flashes the composer open.
+-    if (clickTimerRef.current) {
+-      clearTimeout(clickTimerRef.current)
+-      clickTimerRef.current = undefined
+-      window.hermesDesktop?.petOverlay?.control({ type: 'toggle-app' })
 +    if (id === null) {
 +      setOutput(null)
 +      setIgnore(true)
 +      api?.control({ type: 'character-output-close' })
 
--  if (!info.enabled || !info.spritesheetBase64) {
-+      return
-+    }
-+
+@@ -283,201 +195,58 @@ export function PetOverlayApp() {
+
+-    clickTimerRef.current = setTimeout(() => {
+-      clickTimerRef.current = undefined
+-      setComposerOpen(open => !open)
+-    }, DOUBLE_CLICK_MS)
 +    const request = ++nextOutputRequest
 +    setActionsRequest(showActions ? request : null)
 +    setOutput({ id, request, text: null, loading: true })
 +    api?.control({ type: 'character-output', id, request })
-+  }
-+
+   }
+
+-  const send = () => {
+-    const text = draft.trim()
+-
+-    if (text) {
+-      window.hermesDesktop?.petOverlay?.control({ text, type: 'submit' })
+-    }
+-
+-    setDraft('')
+-    setComposerOpen(false)
 +  const openOutput = () => {
 +    if (!output?.canOpen) {return}
 +    const { id, request } = output
 +    setOutput({ ...output, canOpen: undefined })
 +    window.hermesDesktop?.petOverlay?.control({ type: 'character-output-open', id, request })
-+  }
-+
+   }
+
+-  const openApp = () => {
+-    // Hide the icon immediately; the main renderer also clears the source flag.
+-    setUnread(false)
+-    window.hermesDesktop?.petOverlay?.control({ type: 'open-app' })
 +  const stopWorker = () => {
 +    if (!output?.canStop || output.request !== actionsRequest) {return}
 +    const { id, request } = output
 +    setOutput({ ...output, canStop: undefined, stopPending: true })
 +    window.hermesDesktop?.petOverlay?.control({ type: 'character-stop', id, request })
-+  }
-+
+   }
+
+-  // Alt+wheel over the popped-out pet resizes it. The overlay has no gateway,
+-  // so paint the new scale locally for instant feedback, then ask the main
+-  // renderer to persist it (it pushes the reconciled scale back). Stash the
+-  // cursor anchor for the resize effect; the window itself is grown to fit there.
+-  const onScale = useCallback((next: number, anchor: PetZoomAnchor) => {
+-    zoomAnchorRef.current = anchor
+-    setPetInfo({ ...$petInfo.get(), scale: next })
+-    window.hermesDesktop?.petOverlay?.control({ scale: next, type: 'scale' })
+-  }, [])
+-
+-  usePetZoomGesture(petRef, onScale, Boolean(info.enabled && info.spritesheetBase64))
+-
+-  // Grow/shrink the OS overlay window to fit the pet at its current scale so the
+-  // sprite is never cropped — covers both the wheel gesture here and a scale
+-  // changed from the app's settings slider (pushed in as a state update). With a
+-  // wheel anchor we zoom toward the cursor (keep the pixel under it fixed);
+-  // otherwise we anchor the bottom-center (the pet's feet stay planted). New
+-  // bounds are persisted so the pet reopens at the right size.
+-  // eslint-disable-next-line no-restricted-syntax -- legitimate non-atom ref write (see eslint rule comment)
+-  useEffect(() => {
+-    if (!info.enabled || !info.spritesheetBase64) {
+-      return
+-    }
+-
+-    const { width, height } = overlayWindowSize(
+-      info.frameW ?? DEFAULT_FRAME_W,
+-      info.frameH ?? DEFAULT_FRAME_H,
+-      info.scale ?? DEFAULT_SCALE
+-    )
+-
+-    const curW = window.outerWidth
+-    const curH = window.outerHeight
+-
+-    if (width === curW && height === curH) {
+-      zoomAnchorRef.current = null
 +  const openOutputLink = (index: number) => {
 +    if (!output?.links?.[index]) {return}
 +    const { id, request } = output
 +    setOutput({ ...output, links: [] })
 +    window.hermesDesktop?.petOverlay?.control({ type: 'character-output-link', id, request, index })
 +  }
-+
+
+-      return
+-    }
 +  const copyOutput = (kind: PetCharacterCopy['kind']) => {
 +    if (!output || !(kind === 'path' ? output.deliveredFile : output.file?.text)) {return}
 +    const { id, request } = output
 +    setOutput({ ...output, copy: undefined })
 +    window.hermesDesktop?.petOverlay?.control({ type: kind === 'path' ? 'character-output-copy-path' : 'character-output-copy-text', id, request })
 +  }
-+
+
+-    const anchor = zoomAnchorRef.current
+-    zoomAnchorRef.current = null
+-
+-    // The sprite scales about its bottom-center, at window-local (curW/2,
+-    // curH - paddingBottom). Hold the anchor pixel fixed on screen as it scales;
+-    // with no wheel anchor we pin the bottom-center itself (ratio 1 ⇒ no shift).
+-    const ratio = anchor?.ratio ?? 1
+-    const ax = anchor?.clientX ?? curW / 2
+-    const ay = anchor?.clientY ?? curH - PET_PADDING_BOTTOM
+-
+-    const bounds = {
+-      height,
+-      width,
+-      x: Math.round(window.screenX + ax - (ax - curW / 2) * ratio - width / 2),
+-      y: Math.round(window.screenY + ay - (ay - (curH - PET_PADDING_BOTTOM)) * ratio - (height - PET_PADDING_BOTTOM))
+-    }
 +  const previewOutputFile = () => {
 +    if (!output?.canPreviewFile) {return}
 +    const { id, request } = output
 +    setOutput({ ...output, canPreviewFile: undefined, fileLoading: true })
 +    window.hermesDesktop?.petOverlay?.control({ type: 'character-output-file', id, request })
 +  }
-+
+
+-    window.hermesDesktop?.petOverlay?.setBounds(bounds)
+-    window.hermesDesktop?.petOverlay?.control({ bounds, type: 'bounds' })
+-  }, [info.enabled, info.spritesheetBase64, info.scale, info.frameW, info.frameH])
 +  const viewFile = () => {
 +    if (!output?.file || (!output.file.png_base64 && !output.file.text)) {return}
 +    const { id, request } = output
 +    window.hermesDesktop?.petOverlay?.control({ type: 'character-output-view-file', id, request })
 +  }
-+
+
+-  if (!info.enabled || !info.spritesheetBase64) {
+-    return null
 +  const clearBrokenImage = () => {
 +    setOutput(current => current?.request === output?.request && current?.file?.png_base64
 +      ? { ...current, file: { text: null } }
 +      : current)
-+  }
-+
-+  if (!canRenderPet) {
-     return null
-@@ -370,2 +578,6 @@ export function PetOverlayApp() {
+   }
 
-+  if (characters) {
-+    return <PetCharacters desktop={characters.desktop} info={info} onBrokenImage={clearBrokenImage} onCopy={copyOutput} onHitTargetsChanged={refreshHit} onOpen={openOutput} onOpenLink={openOutputLink} onOutput={showOutput} onPreview={() => setActionsRequest(null)} onPreviewFile={previewOutputFile} onStop={stopWorker} onViewFile={viewFile} output={output} paused={characters.paused} preview={characters.preview} showActions={output?.request === actionsRequest} />
-+  }
+-  return (
+-    <div
+-      onPointerDown={e => {
+-        // Click on the transparent backdrop (not the pet/composer) dismisses
+-        // the composer.
+-        if (composerOpen && e.target === e.currentTarget) {
+-          setComposerOpen(false)
+-        }
+-      }}
+-      style={{
+-        alignItems: 'center',
+-        background: 'transparent',
+-        display: 'flex',
+-        flexDirection: 'column',
+-        height: '100vh',
+-        justifyContent: 'flex-end',
+-        paddingBottom: PET_PADDING_BOTTOM,
+-        userSelect: 'none',
+-        width: '100vw'
+-      }}
+-    >
+-      {composerOpen && (
+-        <input
+-          onChange={e => setDraft(e.target.value)}
+-          onKeyDown={e => {
+-            if (isSubmitEnter(e) && !e.shiftKey) {
+-              e.preventDefault()
+-              send()
+-            } else if (e.key === 'Escape') {
+-              setComposerOpen(false)
+-            }
+-          }}
+-          placeholder="Message…"
+-          ref={inputRef}
+-          style={{
+-            background: 'var(--ui-bg-elevated)',
+-            border: '1px solid var(--ui-stroke-secondary)',
+-            borderRadius: 2,
+-            boxShadow: '0 6px 18px rgba(0,0,0,0.28)',
+-            color: 'var(--foreground)',
+-            fontSize: 12,
+-            marginBottom: 8,
+-            outline: 'none',
+-            padding: '4px 8px',
+-            width: 184
+-          }}
+-          value={draft}
+-        />
+-      )}
+-
+-      <div
+-        onPointerDown={onPetPointerDown}
+-        onPointerMove={onPetPointerMove}
+-        onPointerUp={onPetPointerUp}
+-        ref={petRef}
+-        style={{
+-          alignItems: 'center',
+-          cursor: 'grab',
+-          display: 'flex',
+-          flexDirection: 'column',
+-          position: 'relative',
+-          touchAction: 'none'
+-        }}
+-      >
+-        <div style={{ marginBottom: 4 }}>
+-          <PetBubble />
+-        </div>
+-        <div style={{ lineHeight: 0, position: 'relative' }}>
+-          <PetSprite info={info} pauseWhenUnfocused={false} />
+-
+-          {/* Hearts on the popped-out pet — identical to in-window. */}
+-          <PetHeartField
+-            petH={(info.frameH ?? DEFAULT_FRAME_H) * (info.scale ?? DEFAULT_SCALE)}
+-            petW={(info.frameW ?? DEFAULT_FRAME_W) * (info.scale ?? DEFAULT_SCALE)}
+-          />
+-
+-          {/* Mail icon: only when a finish landed while you were away. Jumps to
+-              the app's most recent thread. Anchored to the sprite (kept inside
+-              its box so the overlay's click-through hit-test still catches it);
+-              stopPropagation keeps a click from starting a window drag. */}
+-          {unread && (
+-            <button
+-              aria-label="Open in Hermes"
+-              onClick={openApp}
+-              onPointerDown={e => e.stopPropagation()}
+-              onPointerUp={e => e.stopPropagation()}
+-              style={{
+-                alignItems: 'center',
+-                background: 'var(--ui-bg-elevated)',
+-                border: '1px solid var(--ui-stroke-secondary)',
+-                borderRadius: 999,
+-                boxShadow: '0 4px 14px rgba(0,0,0,0.22)',
+-                color: 'var(--foreground)',
+-                cursor: 'pointer',
+-                display: 'inline-flex',
+-                height: 24,
+-                justifyContent: 'center',
+-                padding: 0,
+-                position: 'absolute',
+-                right: 0,
+-                top: 0,
+-                width: 24
+-              }}
+-              type="button"
+-            >
+-              <Mail style={{ height: 13, width: 13 }} />
+-            </button>
+-          )}
+-        </div>
+-      </div>
+-    </div>
+-  )
++  if (!characters) {return null}
 +
-   return (
++  return <PetCharacters desktop={characters.desktop} info={characters.info} onBrokenImage={clearBrokenImage} onCopy={copyOutput} onHitTargetsChanged={refreshHit} onOpen={openOutput} onOpenLink={openOutputLink} onOutput={showOutput} onPreview={() => setActionsRequest(null)} onPreviewFile={previewOutputFile} onStop={stopWorker} onViewFile={viewFile} output={output} paused={characters.paused} preview={characters.preview} showActions={output?.request === actionsRequest} />
+ }
 diff --git a/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..5e75a9633b4e4ce84f579aa20dfe30b39621620c
+index 0000000000000000000000000000000000000000..66937f85af7e4bb0259e4304e82b6c43fd59ecac
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
-@@ -0,0 +1,1475 @@
+@@ -0,0 +1,1465 @@
 +import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 +import type * as Motion from 'motion/react'
 +import type { ComponentProps } from 'react'
@@ -27230,22 +27694,12 @@ index 0000000000000000000000000000000000000000..5e75a9633b4e4ce84f579aa20dfe30b3
 +  const view = render(<PetOverlayApp />)
 +  act(() => emit(normal))
 +
-+  const getImageData = vi.fn()
-+    .mockReturnValueOnce({ data: [0, 0, 0, 255] })
-+    .mockReturnValueOnce({ data: [0, 0, 0, 0] })
-+    .mockReturnValue({ data: [0, 0, 0, 255] })
-+
-+  const context = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ getImageData } as unknown as CanvasRenderingContext2D)
-+  Object.defineProperty(window.document, 'elementFromPoint', { configurable: true, value: () => screen.getAllByTestId('sprite')[0] })
++  expect(screen.queryByTestId('sprite')).toBeNull()
++  const context = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
++    getImageData: vi.fn(() => ({ data: [0, 0, 0, 255] }))
++  } as unknown as CanvasRenderingContext2D)
++  Object.defineProperty(window.document, 'elementFromPoint', { configurable: true, value: () => screen.queryAllByTestId('sprite')[0] ?? null })
 +  vi.spyOn(HTMLCanvasElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 16, 16))
-+  fireEvent.mouseMove(window, { clientX: 5, clientY: 5 })
-+  expect(ignore).toHaveBeenLastCalledWith(false)
-+  fireEvent.mouseMove(window, { clientX: 5, clientY: 5 })
-+  expect(ignore).toHaveBeenLastCalledWith(true)
-+  fireEvent.mouseMove(window, { clientX: 5, clientY: 5 })
-+  expect(ignore).toHaveBeenLastCalledWith(false)
-+  expect(getImageData).toHaveBeenCalledTimes(3)
-+  context.mockClear()
 +  const payload = preview()
 +  act(() => emit(payload))
 +  expect(screen.getAllByRole('figure')).toHaveLength(2)
@@ -27268,7 +27722,7 @@ index 0000000000000000000000000000000000000000..5e75a9633b4e4ce84f579aa20dfe30b3
 +  act(() => emit(payload))
 +  expect(screen.queryAllByTestId('sprite')).toHaveLength(0)
 +  act(() => emit({ ...normal, characterPreview: null }))
-+  expect(screen.getAllByTestId('sprite')).toHaveLength(1)
++  expect(screen.queryAllByTestId('sprite')).toHaveLength(0)
 +  expect(screen.queryAllByRole('figure')).toHaveLength(0)
 +  view.unmount(); expect(off).toHaveBeenCalledTimes(1)
 +})
@@ -27310,7 +27764,7 @@ index 0000000000000000000000000000000000000000..5e75a9633b4e4ce84f579aa20dfe30b3
 +  expect(screen.getAllByTestId('sprite').map(canvas => canvas.dataset.slug)).toEqual(['Writer own atlas', 'Owned fixture'])
 +})
 +
-+it('paints and fits assigned Characters without mascot bytes, then restores the mascot', () => {
++it('paints assigned Characters without mascot bytes and leaves the old mascot retired', () => {
 +  io.reduced = true
 +  render(<PetOverlayApp />)
 +  const payload = preview()
@@ -27319,11 +27773,11 @@ index 0000000000000000000000000000000000000000..5e75a9633b4e4ce84f579aa20dfe30b3
 +  const setBounds = vi.mocked(window.hermesDesktop!.petOverlay!.setBounds)
 +  const originalBounds = { x: window.screenX, y: window.screenY, width: window.outerWidth, height: window.outerHeight }
 +
-+  const lean = { ...payload, info: { ...info, spritesheetBase64: undefined } }
++  const lean = { ...payload, info: { enabled: false } }
 +
 +  act(() => emit({ ...lean, characterPreview: { ...lean.characterPreview, characters: [] } }))
 +  expect(screen.queryByTestId('sprite')).toBeNull()
-+  expect(setBounds).toHaveBeenCalledOnce()
++  expect(setBounds).not.toHaveBeenCalled()
 +  act(() => emit({ ...lean, characterPreview: { ...lean.characterPreview, characters: [assigned] } }))
 +  expect(screen.getByTestId('sprite').dataset.atlas).toBe('assigned')
 +  expect(setBounds).toHaveBeenCalledOnce()
@@ -27332,7 +27786,7 @@ index 0000000000000000000000000000000000000000..5e75a9633b4e4ce84f579aa20dfe30b3
 +  expect(screen.getAllByTestId('sprite').map(canvas => canvas.dataset.atlas)).toEqual(['assigned', 'synthetic'])
 +  act(() => emit({ ...normal, characterPreview: null }))
 +  expect(setBounds).toHaveBeenLastCalledWith(originalBounds)
-+  expect(screen.getByTestId('sprite').dataset.atlas).toBe('synthetic')
++  expect(screen.queryByTestId('sprite')).toBeNull()
 +  expect(screen.queryByRole('figure')).toBeNull()
 +})
 +
@@ -28978,10 +29432,14 @@ index 64988f0096c5d1cc8b1ce68528b550ec5b9a400e..21109a790407cd11a960bd30ba35f411
 +  expect(reads).toBe(0)
 +})
 diff --git a/apps/desktop/src/app/session/hooks/use-message-stream/gateway-event/message-stream.ts b/apps/desktop/src/app/session/hooks/use-message-stream/gateway-event/message-stream.ts
-index 92392b292c9b9ca7aa73122aa4207a43581e9bab..8b40df1cd3cd008bab79186417c625b6a39fd7d0 100644
+index 92392b292c9b9ca7aa73122aa4207a43581e9bab..a9b3b009427be5aa5d734d71ea0d26f92c98ee33 100644
 --- a/apps/desktop/src/app/session/hooks/use-message-stream/gateway-event/message-stream.ts
 +++ b/apps/desktop/src/app/session/hooks/use-message-stream/gateway-event/message-stream.ts
-@@ -196,2 +196,7 @@ export function handleMessageStreamEvent(ctx: GatewayEventContext): boolean {
+@@ -14,3 +14,2 @@ import { noteFreeTierTurnComplete } from '@/store/free-tier-sign-in'
+ import { notify } from '@/store/notifications'
+-import { flashPetActivity, markPetUnread, setPetActivity } from '@/store/pet'
+ import { clearAllPrompts } from '@/store/prompts'
+@@ -196,2 +195,7 @@ export function handleMessageStreamEvent(ctx: GatewayEventContext): boolean {
          ...state,
 +        // Backend result turns need their stored notice even when the reply streamed here.
 +        adoptedRunningTurn:
@@ -28989,6 +29447,122 @@ index 92392b292c9b9ca7aa73122aa4207a43581e9bab..8b40df1cd3cd008bab79186417c625b6
 +          payload?.display_kind === 'async_delegation_complete' ||
 +          payload?.display_kind === 'process_complete',
          busy: true,
+@@ -279,6 +283,2 @@ export function handleMessageStreamEvent(ctx: GatewayEventContext): boolean {
+
+-    if (isActiveEvent) {
+-      setPetActivity({ reasoning: true })
+-    }
+-
+     return true
+@@ -291,6 +291,2 @@ export function handleMessageStreamEvent(ctx: GatewayEventContext): boolean {
+
+-    if (isActiveEvent) {
+-      setPetActivity({ reasoning: true })
+-    }
+-
+     return true
+@@ -307,6 +303,2 @@ export function handleMessageStreamEvent(ctx: GatewayEventContext): boolean {
+
+-    if (isActiveEvent) {
+-      setPetActivity({ reasoning: true })
+-    }
+-
+     return true
+@@ -317,6 +309,2 @@ export function handleMessageStreamEvent(ctx: GatewayEventContext): boolean {
+     // message stream. No reasoning/transcript mutation here.
+-    if (isActiveEvent) {
+-      setPetActivity({ reasoning: true })
+-    }
+-
+     return true
+@@ -341,6 +329,2 @@ export function handleMessageStreamEvent(ctx: GatewayEventContext): boolean {
+
+-    if (isActiveEvent) {
+-      setPetActivity({ reasoning: true })
+-    }
+-
+     return true
+@@ -357,6 +341,2 @@ export function handleMessageStreamEvent(ctx: GatewayEventContext): boolean {
+
+-    if (isActiveEvent) {
+-      setPetActivity({ reasoning: true })
+-    }
+-
+     return true
+@@ -422,16 +402,2 @@ export function handleMessageStreamEvent(ctx: GatewayEventContext): boolean {
+       setTurnStartedAt(null)
+-
+-      // Pet beat: a finished turn always celebrates — go straight to the
+-      // jump, never linger on the run/reason pose. One atom update (clears
+-      // toolRunning/reasoning AND sets celebrate together) so no stray "run"
+-      // frame leaks to the sprite — including the popped-out overlay, which
+-      // mirrors each activity change. The jump runs ~2 loops, then settles.
+-      flashPetActivity({ celebrate: true, reasoning: false, toolRunning: false }, 2200)
+-
+-      // Light up the pet's mail icon if the user wasn't looking when the turn
+-      // finished — a glanceable "new message" hint on the popped-out overlay.
+-      // Cleared when they open the app via the mail icon or refocus the window.
+-      if (typeof document !== 'undefined' && !document.hasFocus()) {
+-        markPetUnread()
+-      }
+     }
+diff --git a/apps/desktop/src/app/session/hooks/use-message-stream/gateway-event/status.ts b/apps/desktop/src/app/session/hooks/use-message-stream/gateway-event/status.ts
+index 994389b8ee5d33e1d14a2b6c3e33312deaaacb0f..c82e1a9bb500f08e45fa616034ea3d5a3e705407 100644
+--- a/apps/desktop/src/app/session/hooks/use-message-stream/gateway-event/status.ts
++++ b/apps/desktop/src/app/session/hooks/use-message-stream/gateway-event/status.ts
+@@ -15,3 +15,2 @@ import { isDiskFullErrorMessage, notify, notifyError } from '@/store/notificatio
+ import { requestDesktopOnboarding } from '@/store/onboarding'
+-import { flashPetActivity, setPetActivity } from '@/store/pet'
+ import { clearAllPrompts } from '@/store/prompts'
+@@ -319,7 +318,2 @@ export function handleStatusEvent(ctx: GatewayEventContext): boolean {
+
+-    if (isActiveEvent) {
+-      setPetActivity({ reasoning: false, toolRunning: false })
+-      flashPetActivity({ error: true })
+-    }
+-
+     dispatchNativeNotification({
+diff --git a/apps/desktop/src/app/session/hooks/use-message-stream/gateway-event/tools.ts b/apps/desktop/src/app/session/hooks/use-message-stream/gateway-event/tools.ts
+index 1498670c86a84b39d6bcd2375a030aaeba442911..5c7e2a81f1fa9000aa77bef97c5dee5d475a5cb3 100644
+--- a/apps/desktop/src/app/session/hooks/use-message-stream/gateway-event/tools.ts
++++ b/apps/desktop/src/app/session/hooks/use-message-stream/gateway-event/tools.ts
+@@ -8,3 +8,2 @@ import { invalidateSlashCompletions } from '@/lib/slash-completion-cache'
+ import { refreshBackgroundProcesses } from '@/store/composer-status'
+-import { flashPetActivity, setPetActivity } from '@/store/pet'
+ import { recordPreviewArtifact, reofferPreviewArtifact } from '@/store/preview-status'
+@@ -110,3 +109,3 @@ export function retireTurnToolProgress(eventType: string, sessionId: string): vo
+ export function handleToolEvent(ctx: GatewayEventContext): boolean {
+-  const { deps, event, payload, sessionId, isActiveEvent, occurredAt } = ctx
++  const { deps, event, payload, sessionId, occurredAt } = ctx
+   const { flushQueuedDeltas, nativeSubagentSessionsRef, sessionInterrupted, updateSessionState, upsertToolCall } = deps
+@@ -137,6 +136,2 @@ export function handleToolEvent(ctx: GatewayEventContext): boolean {
+
+-    if (isActiveEvent) {
+-      setPetActivity({ reasoning: false, toolRunning: true })
+-    }
+-
+     return true
+@@ -152,6 +147,2 @@ export function handleToolEvent(ctx: GatewayEventContext): boolean {
+
+-    if (isActiveEvent) {
+-      setPetActivity({ reasoning: false, toolRunning: true })
+-    }
+-
+     return true
+@@ -173,13 +164,2 @@ export function handleToolEvent(ctx: GatewayEventContext): boolean {
+
+-      if (isActiveEvent) {
+-        setPetActivity({ toolRunning: false })
+-
+-        // A tool can fail without ending the turn when the agent recovers
+-        // and continues. Surface that failure as a short pet beat too;
+-        // otherwise only turn-level errors ever reach the failed state.
+-        if (payload?.error) {
+-          flashPetActivity({ error: true })
+-        }
+-      }
+-
+       // A pending clarify blocks the turn, so the first tool.complete after
 diff --git a/apps/desktop/src/app/session/hooks/use-message-stream/index.ts b/apps/desktop/src/app/session/hooks/use-message-stream/index.ts
 index 4035aaaa1eba32d0a48ab5303d32b737e7eff832..9b02e28e2f8458b6ac78083fb9f0b84bae6ed74a 100644
 --- a/apps/desktop/src/app/session/hooks/use-message-stream/index.ts
@@ -28997,6 +29571,84 @@ index 4035aaaa1eba32d0a48ab5303d32b737e7eff832..9b02e28e2f8458b6ac78083fb9f0b84b
                status === 'interrupted' ? extendInterruptedReply(state.messages, text, occurredAt) : state.messages,
 +            adoptedRunningTurn: false,
              awaitingResponse: false,
+diff --git a/apps/desktop/src/app/session/hooks/use-message-stream/pet-tool-failure-event.test.tsx b/apps/desktop/src/app/session/hooks/use-message-stream/pet-tool-failure-event.test.tsx
+index 855c61c0db0ec157b7ae32b165f6b0bef7b2701b..b50377ee902db3b3c068dcc3449b4ad560387ee7 100644
+--- a/apps/desktop/src/app/session/hooks/use-message-stream/pet-tool-failure-event.test.tsx
++++ b/apps/desktop/src/app/session/hooks/use-message-stream/pet-tool-failure-event.test.tsx
+@@ -21,3 +21,3 @@ function emit(type: GatewayEvent['type'], payload: GatewayEvent['payload'] = {},
+
+-describe('pet tool-failure reaction', () => {
++describe('retired mascot tool reactions', () => {
+   beforeEach(() => {
+@@ -40,3 +40,3 @@ describe('pet tool-failure reaction', () => {
+
+-  it('briefly shows failed when the active session has an isolated tool error', () => {
++  it('leaves mascot state idle after an active tool error', () => {
+     mountStream()
+@@ -46,4 +46,4 @@ describe('pet tool-failure reaction', () => {
+
+-    expect($petActivity.get().error).toBe(true)
+-    expect($petState.get()).toBe('failed')
++    expect($petActivity.get().error).toBe(false)
++    expect($petState.get()).toBe('idle')
+   })
+diff --git a/apps/desktop/src/app/session/hooks/use-prompt-actions/slash.ts b/apps/desktop/src/app/session/hooks/use-prompt-actions/slash.ts
+index fb12b3dd1300e72a331b8b30657e30d425842ce0..7ee8435c0fdb6feb237b9a48682a0ebd3eda27dc 100644
+--- a/apps/desktop/src/app/session/hooks/use-prompt-actions/slash.ts
++++ b/apps/desktop/src/app/session/hooks/use-prompt-actions/slash.ts
+@@ -25,3 +25,2 @@ import { applyReasoningSlashResult, reasoningSlashParams } from '@/lib/reasoning
+ import { setSessionYolo } from '@/lib/yolo-session'
+-import { openCommandPalettePage } from '@/store/command-palette'
+ import { markCompressDeferred } from '@/store/compaction'
+@@ -30,4 +29,2 @@ import { applyGoalStatusText } from '@/store/goals'
+ import { dismissNotification, notify, notifyError } from '@/store/notifications'
+-import { setPetScale } from '@/store/pet-gallery'
+-import { $petGenInput, openPetGenerate } from '@/store/pet-generate'
+ import {
+@@ -1271,43 +1268,2 @@ export function useSlashCommand(deps: SlashCommandDeps) {
+         },
+-        // /hatch opens the pet generator overlay (the desktop's rich, multi-step
+-        // generate→pick→hatch→adopt flow). A typed description seeds the prompt
+-        // so `/hatch a cyber fox` lands on the composer step prefilled.
+-        hatch: async ({ arg }) => {
+-          const concept = arg.trim()
+-
+-          if (concept) {
+-            $petGenInput.set(concept)
+-          }
+-
+-          openPetGenerate()
+-        },
+-        pet: async ctx => {
+-          const [sub = '', rawValue = ''] = ctx.arg.trim().split(/\s+/)
+-          const lower = sub.toLowerCase()
+-
+-          if (lower === 'list' || lower === 'gallery' || lower === 'browse' || lower === 'all') {
+-            openCommandPalettePage('pets')
+-
+-            return
+-          }
+-
+-          // `/pet scale <n>` resizes the floating pet locally (instant) and
+-          // persists via the store — no round-trip to the slash worker.
+-          if (lower === 'scale') {
+-            const value = Number(rawValue)
+-
+-            if (!rawValue || Number.isNaN(value)) {
+-              const resolved = await withSlashOutput(ctx)
+-              resolved?.render('usage: /pet scale <factor>  (e.g. /pet scale 0.5)')
+-
+-              return
+-            }
+-
+-            setPetScale(requestGateway, value)
+-
+-            return
+-          }
+-
+-          await runExec(ctx)
+-        },
+         // /browser connect|disconnect manages the live CDP connection on the
 diff --git a/apps/desktop/src/app/session/hooks/use-session-actions/index.ts b/apps/desktop/src/app/session/hooks/use-session-actions/index.ts
 index 75a4e608afbc77db7c82d1f02264e62690139620..7a6846bbd4e907cd48f5be2530e7446238285c70 100644
 --- a/apps/desktop/src/app/session/hooks/use-session-actions/index.ts
@@ -29424,6 +30076,33 @@ index 0000000000000000000000000000000000000000..1414effea6c441cf135fc6528fb16f7b
 +    <ScopedAccountUsage connectionId={connectionId} key={JSON.stringify([connectionId, profile])} profile={profile} />
 +  )
 +}
+diff --git a/apps/desktop/src/app/settings/appearance-settings.tsx b/apps/desktop/src/app/settings/appearance-settings.tsx
+index 42fb93cf5fb261219c028821f39daf246e492542..fdb538061c13e0e093a05587189ccee84a23d790 100644
+--- a/apps/desktop/src/app/settings/appearance-settings.tsx
++++ b/apps/desktop/src/app/settings/appearance-settings.tsx
+@@ -84,3 +84,2 @@ import { setNested } from './helpers'
+ import { MinimizeToTraySetting } from './minimize-to-tray-setting'
+-import { PetSettings } from './pet-settings'
+ import { ListRow, RowFootnoteAction, SectionHeading, SettingsContent, ToggleRow } from './primitives'
+@@ -1089,8 +1088,2 @@ export function AppearanceSettings({ subpage }: AppearanceSettingsProps = {}) {
+
+-      {show('pet') && (
+-        <div className={subpage === undefined ? 'mt-6' : undefined} id={settingElementId(ids.pet)}>
+-          <PetSettings />
+-        </div>
+-      )}
+-
+       {/* Plugin-provided appearance controls — the sanctioned seam for a
+diff --git a/apps/desktop/src/app/settings/appearance-subpages.ts b/apps/desktop/src/app/settings/appearance-subpages.ts
+index 6d8c1b48b904db3639ab9476149531503e8839a3..0ea6f360d937903d81de570f1a410abbaf3d4442 100644
+--- a/apps/desktop/src/app/settings/appearance-subpages.ts
++++ b/apps/desktop/src/app/settings/appearance-subpages.ts
+@@ -5,4 +5,3 @@ export const APPEARANCE_SUBPAGES = [
+   { id: 'window-layout', labelKey: 'appearanceWindowLayout' },
+-  { id: 'chat-display', labelKey: 'appearanceChatDisplay' },
+-  { id: 'pet', labelKey: 'appearancePet' }
++  { id: 'chat-display', labelKey: 'appearanceChatDisplay' }
+ ] as const
 diff --git a/apps/desktop/src/app/settings/config-field-accessibility.test.tsx b/apps/desktop/src/app/settings/config-field-accessibility.test.tsx
 new file mode 100644
 index 0000000000000000000000000000000000000000..0ac15b54e1aa57f655797b5a5414861e33d4b77f
@@ -31275,6 +31954,30 @@ index 0000000000000000000000000000000000000000..8010f95595924fca93a588ce7ebdcf28
 +  await waitFor(() => expect(notifyError).toHaveBeenCalled())
 +  expect(onConfigSaved).not.toHaveBeenCalled()
 +})
+diff --git a/apps/desktop/src/app/settings/settings-manifest.ts b/apps/desktop/src/app/settings/settings-manifest.ts
+index 9a0ad4909fadf99f2e86a7f8e970203972c3e585..edbd0f0dccd1d2b8c1ec06ef0d9533805da27ce1 100644
+--- a/apps/desktop/src/app/settings/settings-manifest.ts
++++ b/apps/desktop/src/app/settings/settings-manifest.ts
+@@ -140,7 +140,2 @@ export const SETTINGS_MANIFEST = {
+     embeds: appearanceSetting('chat-display', ['external content', 'privacy'], 'embeds'),
+-    pet: {
+-      subpage: 'pet',
+-      keywords: ['pet', 'mascot', 'petdex', 'companion', 'buddy'],
+-      copy: t => ({ label: t.settings.appearance.pet.chooseTitle, description: t.settings.appearance.pet.chooseDesc })
+-    }
+   },
+diff --git a/apps/desktop/src/app/settings/subpages.ts b/apps/desktop/src/app/settings/subpages.ts
+index 7528c61ae6516435278f789c3b362c4847f070fb..8cb6ada91f882b1b47d250861513126b550ce178 100644
+--- a/apps/desktop/src/app/settings/subpages.ts
++++ b/apps/desktop/src/app/settings/subpages.ts
+@@ -22,3 +22,2 @@ import {
+   Palette,
+-  PawPrint,
+   Settings2,
+@@ -48,3 +47,2 @@ const SUBPAGE_ICONS: Record<string, IconComponent> = {
+   appearanceChatDisplay: MessageCircle,
+-  appearancePet: PawPrint,
+   appearanceGeneral: Settings2,
 diff --git a/apps/desktop/src/app/shell/account-usage-statusbar.test.tsx b/apps/desktop/src/app/shell/account-usage-statusbar.test.tsx
 new file mode 100644
 index 0000000000000000000000000000000000000000..fe28c0e6f75cb9008d117c9744de6233f37b44f4
@@ -31390,10 +32093,10 @@ index 0000000000000000000000000000000000000000..73e394c9ff3cad099aa98ac6a9dd1056
 +}
 diff --git a/apps/desktop/src/app/shell/character-controls.test.tsx b/apps/desktop/src/app/shell/character-controls.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..c0f2df363dbbfa2f70191ccc77a06c1359390e17
+index 0000000000000000000000000000000000000000..4e71feaa0537aaf2851027a487013274868b81a4
 --- /dev/null
 +++ b/apps/desktop/src/app/shell/character-controls.test.tsx
-@@ -0,0 +1,109 @@
+@@ -0,0 +1,158 @@
 +import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 +import { atom } from 'nanostores'
 +import { afterEach, expect, it, vi } from 'vitest'
@@ -31401,9 +32104,10 @@ index 0000000000000000000000000000000000000000..c0f2df363dbbfa2f70191ccc77a06c13
 +import type { CharacterMenuAction } from '../../../electron/character-menu-types'
 +
 +import { $botPluginCtx } from '@/plugins/hermes-bots/shared'
-+import { $characterSettings } from '@/store/character-settings'
++import { $characterSettings, characterScope, getCharacterSettings } from '@/store/character-settings'
 +import { $activeGatewayProfile } from '@/store/profile'
-+import { $connection } from '@/store/session'
++import * as gatewayStore from '@/store/gateway'
++import { $connection, $gatewayState } from '@/store/session'
 +
 +import { CharacterController, CharacterControls } from './character-controls'
 +
@@ -31415,6 +32119,8 @@ index 0000000000000000000000000000000000000000..c0f2df363dbbfa2f70191ccc77a06c13
 +  cleanup()
 +  $botPluginCtx.set(null)
 +  $connection.set(null)
++  $gatewayState.set('idle')
++  vi.restoreAllMocks()
 +  $activeGatewayProfile.set('default')
 +  $characterSettings.set({})
 +  localStorage.clear()
@@ -31425,7 +32131,7 @@ index 0000000000000000000000000000000000000000..c0f2df363dbbfa2f70191ccc77a06c13
 +  let menuAction: ((action: CharacterMenuAction) => void) | undefined
 +  const setState = vi.fn()
 +  Object.defineProperty(window, 'hermesDesktop', { configurable: true, value: {
-+    petOverlay: {},
++    petOverlay: { onControl: () => () => {} },
 +    characterMenu: { setState, onAction: (listener: typeof menuAction) => {
 +      menuAction = listener
 +
@@ -31503,20 +32209,69 @@ index 0000000000000000000000000000000000000000..c0f2df363dbbfa2f70191ccc77a06c13
 +    union.mockRestore()
 +  }
 +})
++
++it('migrates legacy config once through the open scope and ignores the retired response', async () => {
++  const pending: ((value: unknown) => void)[] = []
++  const request = vi.fn(() => new Promise(resolve => pending.push(resolve)))
++  vi.spyOn(gatewayStore, 'activeGateway').mockReturnValue({ request } as unknown as NonNullable<ReturnType<typeof gatewayStore.activeGateway>>)
++  const open = vi.fn()
++  const onControl = vi.fn(() => () => {})
++  Object.defineProperty(window, 'hermesDesktop', { configurable: true, value: { petOverlay: { open, onControl } } })
++  localStorage.setItem('hermes.desktop.pet-overlay-active.v1', 'true')
++  $botPluginCtx.set({ pet: { visible: atom(false), previewCharacters: vi.fn() } } as unknown as NonNullable<ReturnType<typeof $botPluginCtx.get>>)
++  $connection.set({ connectionId: 'local' } as NonNullable<ReturnType<typeof $connection.get>>)
++  $activeGatewayProfile.set('retired')
++  $gatewayState.set('open')
++  const view = render(<><CharacterController /><CharacterControls /></>)
++  expect(request).toHaveBeenCalledExactlyOnceWith('config.get', { key: 'full' }, 8_000)
++  expect(open).not.toHaveBeenCalled()
++  expect(onControl).toHaveBeenCalledOnce()
++
++  act(() => $activeGatewayProfile.set('current'))
++  await act(async () => pending[0]({ config: { display: { pet: { enabled: true, scale: 1 } } } }))
++  expect(getCharacterSettings(characterScope('local', 'retired')).enabled).toBe(false)
++  await act(async () => pending[1]({ config: { display: { pet: { enabled: true, scale: 0.6 } } } }))
++  expect(screen.queryByLabelText('Fixture Characters')?.textContent).toBe('large')
++  view.unmount()
++  $characterSettings.set({})
++  render(<CharacterController />)
++  expect(request).toHaveBeenCalledTimes(2)
++  expect(localStorage.getItem('hermes.desktop.pet-overlay-active.v1')).toBe('true')
++})
++
++it('opens only the selected installed default via the current gateway', async () => {
++  const { host } = await import('@hermes/plugin-sdk')
++  const { readDefaultCharacterSprite } = await vi.importActual<typeof import('@/plugins/hermes-bots/desktop-characters')>(
++    '@/plugins/hermes-bots/desktop-characters'
++  )
++  const request = vi.fn()
++    .mockResolvedValueOnce({ active: 'owned', pets: [{ slug: 'remote-ad', installed: false },
++      { slug: 'first', installed: true }, { slug: 'owned', installed: true }] })
++    .mockResolvedValueOnce({ enabled: false, slug: 'owned' })
++  vi.spyOn(host, 'getGateway').mockReturnValue({ request } as unknown as NonNullable<ReturnType<typeof host.getGateway>>)
++  $connection.set({ connectionId: 'local' } as NonNullable<ReturnType<typeof $connection.get>>)
++  $activeGatewayProfile.set('writer')
++  await expect(readDefaultCharacterSprite('local', 'writer')).resolves.toBeNull()
++  expect(request).toHaveBeenNthCalledWith(1, 'pet.gallery', { localOnly: true }, 8_000)
++  expect(request).toHaveBeenNthCalledWith(2, 'pet.sprite', expect.objectContaining({ slug: 'owned' }), 8_000)
++})
 diff --git a/apps/desktop/src/app/shell/character-controls.tsx b/apps/desktop/src/app/shell/character-controls.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..48561e7d0bea1bf70146a0d441cd6d8ceb47a2e3
+index 0000000000000000000000000000000000000000..35a30f2ff88cce004edd3aa473f07263ffa5b9b4
 --- /dev/null
 +++ b/apps/desktop/src/app/shell/character-controls.tsx
-@@ -0,0 +1,70 @@
+@@ -0,0 +1,94 @@
 +import { useStore } from '@nanostores/react'
 +import { useEffect, useMemo } from 'react'
 +
 +import { DesktopCharacters } from '@/plugins/hermes-bots/desktop-characters'
 +import { $botPluginCtx } from '@/plugins/hermes-bots/shared'
-+import { $characterSettings, characterScope, characterSizes, getCharacterSettings, isCharacterSize, setCharacterSettings } from '@/store/character-settings'
++import { $characterSettings, characterScope, characterSizes, getCharacterSettings, hasCharacterSettings, isCharacterSize, migrateLegacyCharacterSettings, setCharacterSettings } from '@/store/character-settings'
 +import { $activeConnectionId } from '@/store/connections'
++import { activeGateway } from '@/store/gateway'
++import { initPetOverlayBridge } from '@/store/pet-overlay'
 +import { $activeGatewayProfile } from '@/store/profile'
++import { $gatewayState } from '@/store/session'
 +
 +const currentScope = () => characterScope($activeConnectionId.get(), $activeGatewayProfile.get())
 +
@@ -31537,6 +32292,27 @@ index 0000000000000000000000000000000000000000..48561e7d0bea1bf70146a0d441cd6d8c
 +export function CharacterController() {
 +  const { available, connectionId, enabled, profile, scope, size } = useCharacterControls()
 +  const menu = window.hermesDesktop?.characterMenu
++  const gatewayState = useStore($gatewayState)
++
++  useEffect(initPetOverlayBridge, [])
++
++  useEffect(() => {
++    if (!available || gatewayState !== 'open' || hasCharacterSettings(scope)) {return}
++    const gateway = activeGateway()
++
++    if (!gateway) {return}
++    let retired = false
++
++    void gateway.request<{ config?: { display?: { pet?: { enabled?: unknown; scale?: unknown } } } }>(
++      'config.get', { key: 'full' }, 8_000
++    ).then(reply => {
++      if (!retired && reply?.config && scope === currentScope() && activeGateway() === gateway) {
++        migrateLegacyCharacterSettings(scope, reply.config.display?.pet)
++      }
++    }, () => { /* Retry on the next connection or profile activation. */ })
++
++    return () => {retired = true}
++  }, [available, gatewayState, scope])
 +
 +  useEffect(() => {
 +    if (!menu) {return}
@@ -32970,6 +33746,66 @@ index 75efbfd7e0a8b37f91b8e531d76c9ff1cbc1bc13..3d287cb58fb03014b4a720b28532c539
 -        <Wordmark className="mb-1" text={WORDMARK} />
 +        {compact ? <h1>{t.sidebar.nav['new-session']}</h1> : <Wordmark className="mb-1" text={WORDMARK} />}
  
+diff --git a/apps/desktop/src/components/chat/vibe-hearts.test.ts b/apps/desktop/src/components/chat/vibe-hearts.test.ts
+index 7c42eed99595e2423e4b42517f5fa398bd4b1425..6be211024590d9cbcc66a1c816a9895e942a5085 100644
+--- a/apps/desktop/src/components/chat/vibe-hearts.test.ts
++++ b/apps/desktop/src/components/chat/vibe-hearts.test.ts
+@@ -49,13 +49,11 @@ describe('burstVibeHearts', () => {
+
+-  it('forwards to the popped-out overlay when on', () => {
++  it('plays in the chat while the Characters overlay is open', () => {
+     overlay.active = true
+     burstVibeHearts()
+-    expect(forwardPetReaction).toHaveBeenCalledWith('vibe')
+-    expect(flashPetActivity).toHaveBeenCalledOnce()
+-    expect(burst).not.toHaveBeenCalled()
++    expect(forwardPetReaction).not.toHaveBeenCalled()
++    expect(flashPetActivity).not.toHaveBeenCalled()
++    expect(burst).toHaveBeenCalledOnce()
+   })
+
+-  it('off also silences the popped-out overlay path (vibe reactions only originate here)', () => {
+-    // The overlay window's playVibeHearts() only fires on a reaction forwarded
+-    // by this router, so gating the forward IS the overlay's off switch.
++  it('honors the disabled preference while the Characters overlay is open', () => {
+     overlay.active = true
+diff --git a/apps/desktop/src/components/chat/vibe-hearts.tsx b/apps/desktop/src/components/chat/vibe-hearts.tsx
+index 9f39a1aa72bbceac83375390077486c572d8d41e..2455196509cf97e106c79c555ca65a82a554292a 100644
+--- a/apps/desktop/src/components/chat/vibe-hearts.tsx
++++ b/apps/desktop/src/components/chat/vibe-hearts.tsx
+@@ -3,4 +3,2 @@ import { type CSSProperties } from 'react'
+ import { createParticleEmitter, ParticleField, type ParticleFieldConfig } from '@/components/particles/particle-field'
+-import { $petActive, flashPetActivity } from '@/store/pet'
+-import { $petOverlayActive, forwardPetReaction } from '@/store/pet-overlay'
+ import { $vibeHeartsEnabled } from '@/store/vibe-hearts-enabled'
+@@ -54,25 +52,5 @@ export const playVibeHearts = (count?: number) => emitter.burst(count)
+
+-/**
+- * Fire a vibe burst (from the core `reaction` event). Routes to where the
+- * affection should land:
+- *  - pet popped out  → forward to the overlay window + celebrate (mirrored)
+- *  - pet in-window   → play here (on the pet) + celebrate
+- *  - no pet          → play here (composer)
+- */
++/** Reactions rise from the chat composer. */
+ export const burstVibeHearts = (count?: number) => {
+-  if (!$vibeHeartsEnabled.get()) {
+-    return
+-  }
+-
+-  const overlay = $petOverlayActive.get()
+-
+-  if (overlay || $petActive.get()) {
+-    flashPetActivity({ celebrate: true })
+-  }
+-
+-  if (overlay) {
+-    forwardPetReaction('vibe')
+-  } else {
+-    playVibeHearts(count)
+-  }
++  if ($vibeHeartsEnabled.get()) {playVibeHearts(count)}
+ }
 diff --git a/apps/desktop/src/components/chat/zoomable-image.tsx b/apps/desktop/src/components/chat/zoomable-image.tsx
 index a748e68e223d3ae088a3cc49c5fe308ee72dc8a6..f17f5db1c60b734b0dd2a0c2918b0554ad4daab6 100644
 --- a/apps/desktop/src/components/chat/zoomable-image.tsx
@@ -34502,10 +35338,10 @@ index 7d1c2ea4b9ff9f1908bdb750a838cf1f6f1d2e47..2df76c02c22201edfd89371857f2fb7d
    )
 diff --git a/apps/desktop/src/contrib/plugin-characters.test.ts b/apps/desktop/src/contrib/plugin-characters.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..7ea6cf8d74b1a6940053d2ce47bba85b6fe8e9bc
+index 0000000000000000000000000000000000000000..5c004298f3b82d02e5a47f883484f75e0fd21aa3
 --- /dev/null
 +++ b/apps/desktop/src/contrib/plugin-characters.test.ts
-@@ -0,0 +1,656 @@
+@@ -0,0 +1,660 @@
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 +
 +import { setPetInfo } from '@/store/pet'
@@ -35111,6 +35947,8 @@ index 0000000000000000000000000000000000000000..7ea6cf8d74b1a6940053d2ce47bba85b
 +  const boundsKey = 'hermes.desktop.pet-overlay-bounds.v1'
 +  const storage = window.localStorage
 +  const savedBounds = storage.getItem(boundsKey)
++  const savedActive = storage.getItem(activeKey)
++  storage.setItem(activeKey, 'true')
 +  const open = vi.fn(async () => ({}))
 +  let send: ((payload: { type: 'bounds'; bounds: typeof moved }) => void) | undefined
 +  Object.defineProperty(window, 'hermesDesktop', { configurable: true, value: { petOverlay: {
@@ -35129,7 +35967,7 @@ index 0000000000000000000000000000000000000000..7ea6cf8d74b1a6940053d2ce47bba85b
 +    preview.update([previewActor])
 +    expect($petOverlayActive.get()).toBe(true)
 +    send?.({ type: 'bounds', bounds: moved })
-+    expect(storage.getItem(activeKey)).toBe('false')
++    expect(storage.getItem(activeKey)).toBe('true')
 +    expect(JSON.parse(storage.getItem(boundsKey)!)).toEqual(moved)
 +
 +    vi.resetModules()
@@ -35140,7 +35978,7 @@ index 0000000000000000000000000000000000000000..7ea6cf8d74b1a6940053d2ce47bba85b
 +      reloaded.restorePetOverlay()
 +      expect(open).not.toHaveBeenCalled()
 +      reloaded.popOutPet(anchor)
-+      expect(open).toHaveBeenCalledExactlyOnceWith({ bounds: moved, screen: true })
++      expect(open).toHaveBeenCalledExactlyOnceWith({ bounds: moved, screen: true, kind: 'characters' })
 +      expect(storage.getItem(activeKey)).toBe('true')
 +      const regularPreview = (await import('./plugin')).createPluginContext('popped-out-pet').pet
 +
@@ -35158,12 +35996,14 @@ index 0000000000000000000000000000000000000000..7ea6cf8d74b1a6940053d2ce47bba85b
 +  } finally {
 +    preview.dispose()
 +
++    if (savedActive === null) {storage.removeItem(activeKey)}
++    else {storage.setItem(activeKey, savedActive)}
 +    if (savedBounds === null) {storage.removeItem(boundsKey)}
 +    else {storage.setItem(boundsKey, savedBounds)}
 +  }
 +})
 diff --git a/apps/desktop/src/contrib/plugin.ts b/apps/desktop/src/contrib/plugin.ts
-index d487729ac19e2c5d823d0437d4882b3400114822..80fdb5adfe13c0769598b4dc1700649995b5820d 100644
+index d487729ac19e2c5d823d0437d4882b3400114822..7b745046279b828ac8667b7da655e7bb327425ff 100644
 --- a/apps/desktop/src/contrib/plugin.ts
 +++ b/apps/desktop/src/contrib/plugin.ts
 @@ -25,2 +25,3 @@ import {
@@ -35182,8 +36022,8 @@ index d487729ac19e2c5d823d0437d4882b3400114822..80fdb5adfe13c0769598b4dc17006499
 @@ -91,2 +95,6 @@ export interface PluginOs {
  export interface PluginPet {
 +  /** Explicit user action only: preview up to five display-only characters in
-+   * the existing overlay. Updates replace the list; dispose restores the
-+   * previous mascot mode. Returns null without a loaded pet/native bridge. */
++   * the existing overlay. Updates replace the list; dispose retires the
++   * scene. Returns null when the native Characters overlay is unavailable. */
 +  previewCharacters?: (anchor: PetOverlayBounds, independent?: boolean) => PetCharacterPublisher | null
    /** Show one plain-text line (no HTML; control characters stripped, capped
 @@ -275,4 +283,92 @@ function createPluginPet(pluginId: string, track: (dispose: () => void) => () =>
@@ -35253,7 +36093,7 @@ index d487729ac19e2c5d823d0437d4882b3400114822..80fdb5adfe13c0769598b4dc17006499
 +        mayOpen = false
 +
 +        if ($petOverlayActive.get()) {return}
-+        popOutPet(anchor, { restoreOnLaunch: false })
++        popOutPet(anchor)
 +
 +        if ($petOverlayActive.get()) {
 +          stopWatchingOverlay = $petOverlayActive.listen(active => {
@@ -37327,6 +38167,76 @@ index 0000000000000000000000000000000000000000..465285e375c0fd730e8a45cd9ea6238e
 +  expect(retainedRejectedDrafts('durable-root', owner).map(row => row.text)).toEqual(['Earlier message'])
 +  expect(ownedDraftScopes().filter(row => row.ownerKey === draftOwnerKey(owner)).length).toBeLessThanOrEqual(50)
 +})
+diff --git a/apps/desktop/src/lib/desktop-slash-commands.test.ts b/apps/desktop/src/lib/desktop-slash-commands.test.ts
+index c432e2f6988d95a2d0926989ec2dc720aec55d1c..366220c0595800f524f79464b2f9ac41c1717d63 100644
+--- a/apps/desktop/src/lib/desktop-slash-commands.test.ts
++++ b/apps/desktop/src/lib/desktop-slash-commands.test.ts
+@@ -462 +462,11 @@ describe('registry-derived block-list (contract with hermes_cli/commands.py)', (
+ })
++
++it('retires the Desktop mascot commands even when the gateway catalog still offers them', () => {
++  rememberDesktopCommandsCatalog(registryCatalog({ '/pet': null, '/hatch': null }, { '/generate-pet': '/hatch' }))
++
++  for (const command of ['/pet', '/pets', '/hatch', '/generate-pet']) {
++    expect(isDesktopSlashSuggestion(command)).toBe(false)
++    expect(isDesktopSlashCommand(command)).toBe(false)
++    expect(desktopSlashUnavailableMessage(command)).toContain('Characters switch')
++  }
++})
+diff --git a/apps/desktop/src/lib/desktop-slash-commands.ts b/apps/desktop/src/lib/desktop-slash-commands.ts
+index 96193a991e60955edd15e4baf7926f69477ea63a..72b148374b28b6a007d469b225ec35896bc4a7a7 100644
+--- a/apps/desktop/src/lib/desktop-slash-commands.ts
++++ b/apps/desktop/src/lib/desktop-slash-commands.ts
+@@ -69,3 +69,2 @@ export type DesktopActionId =
+   | 'handoff'
+-  | 'hatch'
+   | 'help'
+@@ -76,3 +75,2 @@ export type DesktopActionId =
+   | 'palette'
+-  | 'pet'
+   | 'profile'
+@@ -96,3 +94,3 @@ export type DesktopPickerId = 'model' | 'session'
+ /** Why a known Hermes command has no desktop UI surface. */
+-export type DesktopUnavailableReason = 'advanced' | 'composer-voice' | 'messaging' | 'settings' | 'terminal'
++export type DesktopUnavailableReason = 'advanced' | 'composer-voice' | 'messaging' | 'settings' | 'terminal' | 'legacy-pets'
+
+@@ -325,5 +323,4 @@ const DESKTOP_COMMAND_SPECS: readonly DesktopCommandSpec[] = [
+     name: '/pet',
+-    description: 'Toggle or adopt a petdex mascot (/pet, /pet list, /pet boba)',
+-    surface: action('pet'),
+-    argumentMode: 'options'
++    aliases: ['/pets'],
++    surface: unavailable('legacy-pets')
+   },
+@@ -331,5 +328,4 @@ const DESKTOP_COMMAND_SPECS: readonly DesktopCommandSpec[] = [
+     name: '/hatch',
+-    description: 'Generate a new pet (opens the pet generator)',
+     aliases: ['/generate-pet'],
+-    surface: action('hatch')
++    surface: unavailable('legacy-pets')
+   },
+@@ -407,5 +403,3 @@ const REGISTRY_DESKTOP_SURFACE: Readonly<Record<string, string | null>> = deskto
+  * display toggles handled inside `ui-tui/src/app/slash/commands/core.ts`
+- * (three are advertised through `tui_gateway/server.py::_TUI_EXTRA`); `/pets`
+- * is the plural typo of the desktop's own `/pet` action and points at the
+- * sidebar instead of falling through as an unknown skill.
++ * (three are advertised through `tui_gateway/server.py::_TUI_EXTRA`).
+  */
+@@ -415,3 +409,4 @@ export const TS_ONLY_NO_DESKTOP_SURFACE: Record<DesktopUnavailableReason, readon
+   messaging: [],
+-  settings: ['/pets'],
++  settings: [],
++  'legacy-pets': [],
+   terminal: ['/density', '/details', '/logs', '/mouse']
+@@ -575,2 +570,3 @@ const UNAVAILABLE_MESSAGE: Record<DesktopUnavailableReason, (command: string) =>
+     'Voice chat lives in the composer here: click the microphone button and choose "Start voice chat", or use the voice shortcut from Settings → Keyboard Shortcuts.',
++  'legacy-pets': () => 'Use the Characters switch in the Desktop title bar. Installed packs are available in Edit Profile.',
+   messaging: command => `${command} is only used from messaging platforms.`,
+@@ -604,2 +600,4 @@ export function resolveDesktopCommand(command: string): DesktopCommandSpec | nul
+
++  if (local?.surface.kind === 'unavailable' && local.surface.reason === 'legacy-pets') {return local}
++
+   if (local && catalog?.desktopSubcommands !== undefined) {
 diff --git a/apps/desktop/src/lib/keybinds/builtin-app-action.test.ts b/apps/desktop/src/lib/keybinds/builtin-app-action.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..6558f842b19d4b1087b5476c172afed0f8861003
@@ -40306,13 +41216,17 @@ index 46c90a0a39c3ce9f35181ef3b0d04d3f88ffe159..c45b85e0733162ac84a411da98282ce6
        staleTime: 5000
 diff --git a/apps/desktop/src/plugins/hermes-bots/desktop-characters.tsx b/apps/desktop/src/plugins/hermes-bots/desktop-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..b3ed6e3e650ff5dcb62c2e9a94baf40f8a7b1e2a
+index 0000000000000000000000000000000000000000..519f6bb0091a857cf5eb0ab97572859831d597d3
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/desktop-characters.tsx
-@@ -0,0 +1,68 @@
+@@ -0,0 +1,117 @@
 +import { host, useQuery, useValue } from '@hermes/plugin-sdk'
 +import { useEffect } from 'react'
 +
++// eslint-disable-next-line no-restricted-imports -- the built-in publisher reads the shell setting.
++import { boundedCharacterSprite } from '@/lib/pet-character-sprite'
++// eslint-disable-next-line no-restricted-imports -- reuse the platform atlas variant.
++import { isMacPlatform } from '@/lib/platform'
 +// eslint-disable-next-line no-restricted-imports -- the built-in publisher reads the shell setting.
 +import { $characterExtraActor, characterScope, type CharacterSize } from '@/store/character-settings'
 +
@@ -40326,18 +41240,48 @@ index 0000000000000000000000000000000000000000..b3ed6e3e650ff5dcb62c2e9a94baf40f
 +
 +const characterAnchor = () => document.querySelector('[data-characters-switch]')?.getBoundingClientRect() ?? new DOMRect()
 +
-+export async function readCharacterRoster(connectionId: string, profile: string, signal?: AbortSignal) {
++function characterGateway(connectionId: string, profile: string, signal?: AbortSignal) {
 +  const gateway = host.getGateway()
 +  const current = () => !signal?.aborted && host.state.connectionId.get() === connectionId &&
 +    host.state.profile.get() === profile && host.getGateway() === gateway
 +
 +  if (!gateway || !current()) {throw new Error('Characters gateway changed')}
++
++  return { gateway, current }
++}
++
++export async function readCharacterRoster(connectionId: string, profile: string, signal?: AbortSignal) {
++  const { gateway, current } = characterGateway(connectionId, profile, signal)
 +  const now = Date.now()
 +  const { profiles } = await gateway.request<{ profiles?: RosterRow[] }>('profiles.list', {}, 8_000)
 +
 +  if (!current()) {throw new Error('Characters gateway changed')}
 +
 +  return { profiles: Array.isArray(profiles) ? profiles : [], now }
++}
++
++export async function readDefaultCharacterSprite(connectionId: string, profile: string, signal?: AbortSignal) {
++  const { gateway, current } = characterGateway(connectionId, profile, signal)
++  const gallery = await gateway.request<{ active?: string; pets?: { slug?: string; installed?: boolean }[] }>(
++    'pet.gallery', { localOnly: true }, 8_000
++  )
++
++  if (!current()) {throw new Error('Characters gateway changed')}
++  const installed = (Array.isArray(gallery?.pets) ? gallery.pets : [])
++    .filter(pet => pet?.installed === true && typeof pet.slug === 'string' && pet.slug.length > 0 && pet.slug.length <= 128)
++  const slug = (installed.find(pet => pet.slug === gallery.active) ?? installed[0])?.slug
++
++  if (!slug) {return null}
++  const request = (params: { slug: string; variant?: 'half' }) => gateway.request<{ slug?: string }>('pet.sprite', params, 8_000)
++  const sprite = await (isMacPlatform() ? request({ slug, variant: 'half' }).catch((error: unknown) => {
++    if (!current() || !String((error as Error | null)?.message).startsWith('invalid params for pet.sprite: variant:')) {throw error}
++
++    return request({ slug })
++  }) : request({ slug }))
++
++  if (!current()) {throw new Error('Characters gateway changed')}
++
++  return sprite?.slug === slug ? boundedCharacterSprite(sprite) : null
 +}
 +
 +export function DesktopCharacters({ connectionId, profile, size }: { connectionId: string; profile: string; size: CharacterSize }) {
@@ -40362,6 +41306,7 @@ index 0000000000000000000000000000000000000000..b3ed6e3e650ff5dcb62c2e9a94baf40f
 +  }), [connectionId, profile, refetch])
 +
 +  const now = roster.data?.now ?? 0
++  let needsDefault = false
 +  const rows = (roster.data?.profiles ?? []).flatMap(row => {
 +    if (!row?.name || row.ghost || row.remoteSource || (row.connectionId && row.connectionId !== connectionId)) {return []}
 +    const bot = { ...row, connectionId, connectionKind: connectionId === 'local' ? 'local' : 'remote',
@@ -40369,6 +41314,9 @@ index 0000000000000000000000000000000000000000..b3ed6e3e650ff5dcb62c2e9a94baf40f
 +    const info = botRosterMeta(bot, meta) || bot.ui_meta?.['hermes-bots']
 +
 +    if (info?.hidden) {return []}
++    const assigned = info && Object.prototype.hasOwnProperty.call(info, 'character') ? info.character : bot.ui_meta?.['hermes-bots']?.character
++
++    needsDefault ||= assigned == null
 +    const issue = attention[botSelectionKey(bot)] || attention[botRosterKey(bot)]
 +
 +    return [{ bot, name: displayName(bot, info), source: botSourceStatus(bot),
@@ -40376,7 +41324,18 @@ index 0000000000000000000000000000000000000000..b3ed6e3e650ff5dcb62c2e9a94baf40f
 +      attentionHint: issue ? botAttentionHint(issue.reason) : '' }]
 +  })
 +
-+  return <MonitorCharacters active anchor={characterAnchor} includeSixth={includeSixth} independent now={now} rows={rows} size={size} stale={!roster.data || roster.isError} />
++  const fallback = useQuery({
++    queryKey: ['desktop-character-default', connectionId, profile],
++    queryFn: ({ signal }) => readDefaultCharacterSprite(connectionId, profile, signal),
++    enabled: needsDefault && !roster.isError,
++    staleTime: Infinity,
++    gcTime: 0,
++    refetchOnWindowFocus: false,
++    refetchOnReconnect: false,
++    retry: false
++  })
++
++  return <MonitorCharacters active anchor={characterAnchor} defaultSprite={fallback.data ?? undefined} includeSixth={includeSixth} independent now={now} rows={rows} size={size} stale={!roster.data || roster.isError} />
 +}
 diff --git a/apps/desktop/src/plugins/hermes-bots/dialog-parts.tsx b/apps/desktop/src/plugins/hermes-bots/dialog-parts.tsx
 index 05bd1586895a3d8cd23007d811dc0e8139cacdf7..96018b336f4cf28c672d830872635765e244e3b0 100644
@@ -41573,10 +42532,10 @@ index abe8afb7e670b207a192ac15fb797fb8dfed168e..2b2824a97bb7cfd9d21057f4efdfd811
              <SelectContent>
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..3650ff265024b6ae622a602dc68c14f974c6bcc0
+index 0000000000000000000000000000000000000000..062ec394352db92a06c7653e8ea018bdb96bc341
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx
-@@ -0,0 +1,694 @@
+@@ -0,0 +1,705 @@
 +import { atom, host, type PluginProfileRoute, useValue } from '@hermes/plugin-sdk'
 +import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 +import { useState } from 'react'
@@ -42271,12 +43230,23 @@ index 0000000000000000000000000000000000000000..3650ff265024b6ae622a602dc68c14f9
 +  view.unmount()
 +  expect($petCharacterPreview.get()).toBeNull()
 +})
++
++it('shares the bounded default pack across unassigned Characters without installing the mascot', () => {
++  setPetInfo({ enabled: false })
++  const rows = [row('writer'), row('builder')]
++  const fallback = ownedSprite(1)
++  render(<MonitorCharacters active anchor={anchor} defaultSprite={fallback} independent now={2_000_000} rows={rows} size="medium" />)
++  const payload = vi.mocked(window.hermesDesktop!.petOverlay.pushState).mock.lastCall?.[0]
++  expect(payload?.info.spritesheetBase64).toBe(fallback.spritesheetBase64)
++  expect(payload?.characterPreview?.characters).toHaveLength(2)
++  expect(payload?.characterPreview?.characters.every(actor => !actor.sprite)).toBe(true)
++})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..1f18ab0f1b194269ecacb3e469deba9374d38d93
+index 0000000000000000000000000000000000000000..e7d2306b5a01150ef01a4637e92044c584bbb8c9
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx
-@@ -0,0 +1,286 @@
+@@ -0,0 +1,288 @@
 +import { atom, Dialog, host, MAX_PREVIEW_CHARACTERS, type PetCharacterPublisher, useValue } from '@hermes/plugin-sdk'
 +import { useEffect, useMemo, useRef, useState } from 'react'
 +
@@ -42288,7 +43258,7 @@ index 0000000000000000000000000000000000000000..1f18ab0f1b194269ecacb3e469deba93
 +// eslint-disable-next-line no-restricted-imports -- bundled Characters controller shares the shell setting.
 +import type { CharacterSize } from '@/store/character-settings'
 +// eslint-disable-next-line no-restricted-imports -- share the loaded default atlas with the desktop overlay.
-+import { $petInfo } from '@/store/pet'
++import { $petInfo, type PetInfo } from '@/store/pet'
 +
 +import type { BotMonitorProps } from './monitor'
 +import { BotMonitorReportContent, type ReportSnapshot } from './monitor-reports'
@@ -42328,17 +43298,19 @@ index 0000000000000000000000000000000000000000..1f18ab0f1b194269ecacb3e469deba93
 +    reports.filter(other => other?.delegation_id === report.delegation_id && other.task_index === report.task_index).length === 1)
 +}
 +
-+export function MonitorCharacters({ rows, now, stale, active, independent, includeSixth, size, anchor }: Pick<BotMonitorProps, 'rows' | 'now' | 'stale'> & {
++export function MonitorCharacters({ rows, now, stale, active, independent, includeSixth, size, anchor, defaultSprite }: Pick<BotMonitorProps, 'rows' | 'now' | 'stale'> & {
 +  active: boolean
 +  independent?: boolean
 +  includeSixth?: boolean
 +  size?: CharacterSize
++  defaultSprite?: PetInfo
 +  anchor: () => DOMRect
 +}) {
 +  const b = useBots(), pet = useValue($botPluginCtx)?.pet
 +  const mascotVisible = useValue(pet?.visible || unavailable), metadata = useValue($botMeta)
 +  const visible = independent || mascotVisible
-+  const hasDefaultAtlas = Boolean(useValue($petInfo).spritesheetBase64)
++  const legacyAtlas = useValue($petInfo).spritesheetBase64
++  const hasDefaultAtlas = Boolean(defaultSprite || legacyAtlas)
 +  const clarification = useValue(host.state.focusedClarification || noClarification)
 +  const preview = useRef<PetCharacterPublisher | null>(null)
 +  const loader = useRef<ReturnType<typeof createCharacterSpriteLoader> | null>(null)
@@ -42554,8 +43526,8 @@ index 0000000000000000000000000000000000000000..1f18ab0f1b194269ecacb3e469deba93
 +      const sprite = loader.current?.get(target.key)
 +
 +      return sprite ? [{ ...character, sprite }] : []
-+    }), now, size)
-+  }, [active, actors, now, pet, size, spriteVersion])
++    }), now, size, defaultSprite)
++  }, [active, actors, defaultSprite, now, pet, size, spriteVersion])
 +
 +  return (
 +    <Dialog onOpenChange={open => !open && setReportSnapshot(null)} open={reportSnapshot !== null}>
@@ -50960,12 +51932,45 @@ index 1b24565de7a5173919d7b7a5362b6e2b63f07dc2..5090366b249535dbd25c17aeda68bdc4
    connectionId: string
 +  connectOnDemand?: true
    mode: 'local' | 'remote'
+diff --git a/apps/desktop/src/store/character-settings.test.ts b/apps/desktop/src/store/character-settings.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..bff061a7c8362589eacb13fa3d7098c7106e5dfa
+--- /dev/null
++++ b/apps/desktop/src/store/character-settings.test.ts
+@@ -0,0 +1,27 @@
++import { beforeEach, expect, it } from 'vitest'
++
++import { $characterSettings, characterScope, getCharacterSettings, migrateLegacyCharacterSettings, setCharacterSettings } from './character-settings'
++
++const local = characterScope('local', 'default')
++const second = characterScope('local', 'second')
++beforeEach(() => {
++  localStorage.clear()
++  $characterSettings.set({})
++})
++
++it('translates each legacy preference once and preserves the result across reload', () => {
++  expect(migrateLegacyCharacterSettings(local, { enabled: true, scale: 0.6 })).toBe(true)
++  expect(migrateLegacyCharacterSettings(second, { enabled: false, scale: '0.18' })).toBe(true)
++  $characterSettings.set({})
++  expect(getCharacterSettings(local)).toEqual({ enabled: true, size: 'large' })
++  expect(getCharacterSettings(second)).toEqual({ enabled: false, size: 'small' })
++  expect(migrateLegacyCharacterSettings(second, { enabled: true })).toBe(false)
++})
++
++it('preserves explicit settings and falls back for missing or invalid legacy values', () => {
++  setCharacterSettings(local, { enabled: false, size: 'large' })
++  expect(migrateLegacyCharacterSettings(local, { enabled: true, scale: 0.13 })).toBe(false)
++  expect(getCharacterSettings(local)).toEqual({ enabled: false, size: 'large' })
++  expect(migrateLegacyCharacterSettings(second, { scale: -2 })).toBe(true)
++  expect(getCharacterSettings(second)).toEqual({ enabled: false, size: 'medium' })
++})
 diff --git a/apps/desktop/src/store/character-settings.ts b/apps/desktop/src/store/character-settings.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..2fff21f429491f4a698151714794b5986f3cd734
+index 0000000000000000000000000000000000000000..71b71b92e0fd355937e54fb30d21e8df0f472367
 --- /dev/null
 +++ b/apps/desktop/src/store/character-settings.ts
-@@ -0,0 +1,53 @@
+@@ -0,0 +1,74 @@
 +import { atom } from 'nanostores'
 +
 +import type { CharacterSettings, CharacterSize } from '../../electron/character-menu-types'
@@ -50985,6 +51990,27 @@ index 0000000000000000000000000000000000000000..2fff21f429491f4a698151714794b598
 +
 +function readSettings(scope: string) {
 +  return $characterSettings.get()[scope] ?? readJson<Partial<CharacterSettings>>(key(scope))
++}
++
++// An existing Characters record also marks this scope as migrated.
++export function hasCharacterSettings(scope: string): boolean {
++  return Boolean(readSettings(scope))
++}
++
++export function migrateLegacyCharacterSettings(scope: string, legacy?: { enabled?: unknown; scale?: unknown }): boolean {
++  if (hasCharacterSettings(scope)) {return false}
++  const raw = legacy?.scale
++  const scale = typeof raw === 'number' || typeof raw === 'string' ? Number(raw) : NaN
++  const enabled = legacy?.enabled
++
++  setCharacterSettings(scope, {
++    enabled: enabled === true || enabled === 1 ||
++      (typeof enabled === 'string' && ['true', 'on', 'yes', '1'].includes(enabled.trim().toLowerCase())),
++    // Map the former 0.33 default to medium and keep out-of-range values at medium.
++    size: scale < 0.1 || scale > 3 || !Number.isFinite(scale) ? 'medium' : scale < 0.29 ? 'small' : scale > 0.41 ? 'large' : 'medium'
++  })
++
++  return true
 +}
 +
 +export function getCharacterSettings(scope: string): CharacterSettings {
@@ -52561,10 +53587,10 @@ index b0eb473252b6e6e149f1f0711a6d8de535e87d8e..ad1ef8e2c1e29ef4fed05dc9d0fac09d
  
 diff --git a/apps/desktop/src/store/pet-characters.ts b/apps/desktop/src/store/pet-characters.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..524ab15be6d5704ec5efeb07654f6d62fea1e855
+index 0000000000000000000000000000000000000000..ae97a06df97b3dacf9494d3c2e39c61c2e593df6
 --- /dev/null
 +++ b/apps/desktop/src/store/pet-characters.ts
-@@ -0,0 +1,315 @@
+@@ -0,0 +1,318 @@
 +import { atom } from 'nanostores'
 +
 +import { mediaTagValues } from '@/lib/chat-messages/parts'
@@ -52631,7 +53657,7 @@ index 0000000000000000000000000000000000000000..524ab15be6d5704ec5efeb07654f6d62
 +  atlasVariant?: 'half'
 +  /** Prepare an immutable bounded atlas snapshot before caching; absent on older shells. */
 +  prepareSprite?: (input: unknown) => PetInfo | null
-+  update: (characters: (PetCharacter & { output?: OutputSource })[], observedAt?: number, size?: CharacterSize) => void
++  update: (characters: (PetCharacter & { output?: OutputSource })[], observedAt?: number, size?: CharacterSize, defaultSprite?: PetInfo) => void
 +  dispose: () => void
 +}
 +
@@ -52639,6 +53665,7 @@ index 0000000000000000000000000000000000000000..524ab15be6d5704ec5efeb07654f6d62
 +  characters: PetCharacter[]
 +  expiresAt: number
 +  size?: CharacterSize
++  defaultSprite?: PetInfo
 +}
 +
 +export const $petCharacterPreview = atom<PetCharacterPreview | null>(null)
@@ -52799,7 +53826,7 @@ index 0000000000000000000000000000000000000000..524ab15be6d5704ec5efeb07654f6d62
 +  return {
 +    prepareSprite: boundedCharacterSprite,
 +    isCurrent: () => owner === token,
-+    update: (input: (PetCharacter & { output?: OutputSource })[], observedAt = Date.now(), size?: CharacterSize) => {
++    update: (input: (PetCharacter & { output?: OutputSource })[], observedAt = Date.now(), size?: CharacterSize, defaultSprite?: PetInfo) => {
 +      if (owner !== token) {return}
 +      const now = Date.now()
 +      const expiresAt = Number.isFinite(observedAt) ? Math.min(now, observedAt) + 15_000 : 0
@@ -52856,9 +53883,11 @@ index 0000000000000000000000000000000000000000..524ab15be6d5704ec5efeb07654f6d62
 +      clearTimeout(timer)
 +      outputBindings = bindings
 +      const previous = $petCharacterPreview.get()
-+      const snapshot = { characters, expiresAt: characters.length ? expiresAt : 0, ...(isCharacterSize(size) ? { size } : {}) }
++      const fallback = characters.some(actor => !actor.sprite) ? boundedCharacterSprite(defaultSprite) : null
++      const snapshot = { characters, expiresAt: characters.length ? expiresAt : 0,
++        ...(isCharacterSize(size) ? { size } : {}), ...(fallback ? { defaultSprite: fallback } : {}) }
 +
-+      if (previous && previous.size === snapshot.size && characters.length && expiresAt >= previous.expiresAt) {
++      if (previous && previous.size === snapshot.size && previous.defaultSprite === snapshot.defaultSprite && characters.length && expiresAt >= previous.expiresAt) {
 +        // Keep a fixed trailing deadline, with headroom before the currently displayed lease expires.
 +        const renewAt = Math.min(publishedAt + CHARACTER_RENEWAL_INTERVAL_MS, previous.expiresAt - CHARACTER_RENEWAL_INTERVAL_MS)
 +
@@ -52881,17 +53910,44 @@ index 0000000000000000000000000000000000000000..524ab15be6d5704ec5efeb07654f6d62
 +  }
 +}
 diff --git a/apps/desktop/src/store/pet-overlay.ts b/apps/desktop/src/store/pet-overlay.ts
-index d47f67023fb8b820d6f6cbd455562a591600413b..7031a445368ed40a1297aeae0ef8218650306a35 100644
+index d47f67023fb8b820d6f6cbd455562a591600413b..7abdc14525687a7db98fb0363a8ab24c57f40dea 100644
 --- a/apps/desktop/src/store/pet-overlay.ts
 +++ b/apps/desktop/src/store/pet-overlay.ts
-@@ -3,4 +3,6 @@ import { atom } from 'nanostores'
- import { PRIMARY_SESSION_VIEW } from '@/app/chat/session-view'
+@@ -2,23 +2,9 @@ import { atom } from 'nanostores'
+
+-import { PRIMARY_SESSION_VIEW } from '@/app/chat/session-view'
+-import { persistBoolean, persistString, storedBoolean, storedString } from '@/lib/storage'
+-import { $petActivity, $petInfo, $petUnread, clearPetUnread, type PetActivity, type PetInfo } from '@/store/pet'
+-import { $petPluginMessages, type PetPluginMessage } from '@/store/pet-plugin-messages'
+-
+-/**
+- * Controller for the pop-out pet overlay (main-renderer side).
+- *
+- * Shift-clicking the in-window pet "pops it out" into a transparent,
+- * always-on-top OS window (created in electron/main.ts) that can leave the
+- * app's bounds and stays visible while Hermes is minimized. That window carries
+- * NO gateway connection — this renderer remains the single source of truth and
+- * pushes the live pet state to it over IPC. Control flows back (pop the pet back
+- * in, submit a composer message) via `onControl`.
+- *
+- * The overlay renders the same `PetSprite` / `PetBubble` as the in-window pet by
+- * mirroring the reactive inputs of `$petState` (`$petInfo`, `$petActivity`, the
+- * primary view's turn-busy and awaiting-response) into its own copies of those atoms — so the
+- * popped-out mascot is pixel-identical and needs zero bespoke render logic.
+- */
 +import { isMacPlatform } from '@/lib/platform'
- import { persistBoolean, persistString, storedBoolean, storedString } from '@/lib/storage'
- import { $petActivity, $petInfo, $petUnread, clearPetUnread, type PetActivity, type PetInfo } from '@/store/pet'
++import { persistString, storedString } from '@/lib/storage'
++import { $petInfo, clearPetUnread, type PetActivity, type PetInfo } from '@/store/pet'
 +import { $petCharacterPreview, openPetCharacterOutput, type PetCharacter, type PetCharacterFile, type PetCharacterFileContent, type PetCharacterFileSnapshot, type PetCharacterOutput, type PetCharacterPreview, readPetCharacterFile, readPetCharacterOutput, type WorkerStopStatus } from '@/store/pet-characters'
- import { $petPluginMessages, type PetPluginMessage } from '@/store/pet-plugin-messages'
-@@ -41,2 +43,19 @@ export interface PetOverlayOpenRequest {
++import type { PetPluginMessage } from '@/store/pet-plugin-messages'
+
++/** Primary-renderer controller for the gateway-less Characters window. */
+ export interface PetOverlayBounds {
+@@ -37,2 +23,3 @@ export interface PetOverlayBounds {
+ export interface PetOverlayOpenRequest {
++  kind: 'characters'
+   bounds: PetOverlayBounds
+@@ -41,2 +28,19 @@ export interface PetOverlayOpenRequest {
 
 +export interface PetCharacterCopy {
 +  id: string
@@ -52911,7 +53967,7 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..7031a445368ed40a1297aeae0ef82186
 +}
 +
  /** Everything the overlay needs to reproduce the live mascot. */
-@@ -53,2 +72,8 @@ export interface PetOverlayStatePayload {
+@@ -53,2 +57,8 @@ export interface PetOverlayStatePayload {
    pluginMessages?: PetPluginMessage[]
 +  characterPreview?: PetOverlayCharacterPreview | null
 +  charactersPaused?: boolean
@@ -52920,7 +53976,7 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..7031a445368ed40a1297aeae0ef82186
 +  characterFile?: PetCharacterFile & PetCharacterFileSnapshot
 +  characterCopy?: PetCharacterCopy
  }
-@@ -58,2 +83,10 @@ export type PetOverlayControl =
+@@ -58,2 +68,10 @@ export type PetOverlayControl =
    | { type: 'ready' }
 +  | { type: 'character-output'; id: string; request: number }
 +  | { type: 'character-output-close' }
@@ -52931,7 +53987,10 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..7031a445368ed40a1297aeae0ef82186
 +  | { type: 'character-output-copy-path' | 'character-output-copy-text'; id: string; request: number }
 +  | { type: 'character-output-link'; id: string; request: number; index: number }
    | { type: 'submit'; text: string }
-@@ -69,6 +102,7 @@ const OVERLAY_BOUNDS_KEY = 'hermes.desktop.pet-overlay-bounds.v1'
+@@ -66,9 +84,9 @@ export type PetOverlayControl =
+ // did the user leave it. Keyed v1; bump if the bounds shape ever changes.
+-const OVERLAY_ACTIVE_KEY = 'hermes.desktop.pet-overlay-active.v1'
+ const OVERLAY_BOUNDS_KEY = 'hermes.desktop.pet-overlay-bounds.v1'
 
 -export const $petOverlayActive = atom(storedBoolean(OVERLAY_ACTIVE_KEY, false))
 +type OverlayFile = { name: string } & ({ kind: 'image'; src: string } | { kind: 'text'; text: string })
@@ -52940,9 +53999,9 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..7031a445368ed40a1297aeae0ef82186
 
 -// Persist the in/out choice so a popped-out pet comes back popped out.
 -$petOverlayActive.subscribe(active => persistBoolean(OVERLAY_ACTIVE_KEY, active))
-+export const $petOverlayActive = atom(storedBoolean(OVERLAY_ACTIVE_KEY, false))
++export const $petOverlayActive = atom(false)
 
-@@ -132,5 +166,5 @@ const OVERLAY_MIN_H = 300
+@@ -132,5 +150,5 @@ const OVERLAY_MIN_H = 300
   */
 -export function overlayWindowSize(frameW: number, frameH: number, scale: number): { width: number; height: number } {
 +export function overlayWindowSize(frameW: number, frameH: number, scale: number, characterCount = 0): { width: number; height: number } {
@@ -52950,29 +54009,36 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..7031a445368ed40a1297aeae0ef82186
 -    width: Math.max(OVERLAY_MIN_W, Math.round(frameW * scale + OVERLAY_PAD_X)),
 +    width: Math.max(OVERLAY_MIN_W, Math.round(frameW * scale + OVERLAY_PAD_X), Math.min(5, characterCount) * 120 + 32),
      height: Math.max(OVERLAY_MIN_H, Math.round(frameH * scale + OVERLAY_PAD_Y))
-@@ -140,3 +174,6 @@ export function overlayWindowSize(frameW: number, frameH: number, scale: number)
+@@ -140,3 +158,6 @@ export function overlayWindowSize(frameW: number, frameH: number, scale: number)
  let stateUnsubs: Array<() => void> = []
 +let sentAtlases = new Map<string, { sprite: PetInfo; ref: number }>()
 +let nextAtlasRef = 0
  let controlUnsub: (() => void) | null = null
 +let activeOutput: { id: string; request: number; canOpen?: true; opened?: true; fileToken?: string; fileName?: string; file?: PetCharacterFileContent; stop?: () => Promise<WorkerStopStatus> } | null = null
  let submitHandler: ((text: string) => void) | null = null
-@@ -146,4 +183,9 @@ let scaleHandler: ((scale: number) => void) | null = null
+@@ -146,10 +167,70 @@ let scaleHandler: ((scale: number) => void) | null = null
  function currentPayload(): PetOverlayStatePayload {
-+  const info = $petInfo.get()
-+  const characterPreview = $petCharacterPreview.get()
++  const legacyInfo = $petInfo.get()
++  const snapshot = $petCharacterPreview.get()
++  const { defaultSprite, ...preview } = snapshot ?? {}
 +
    return {
 -    info: $petInfo.get(),
-+    info: characterPreview?.characters.every(actor => actor.sprite?.spritesheetBase64)
-+      ? { ...info, spritesheetBase64: undefined }
-+      : info,
-     activity: $petActivity.get(),
-@@ -153,3 +195,58 @@ function currentPayload(): PetOverlayStatePayload {
-     reaction: $petReaction.get(),
+-    activity: $petActivity.get(),
+-    busy: PRIMARY_SESSION_VIEW.$busy.get(),
+-    awaiting: PRIMARY_SESSION_VIEW.$awaitingResponse.get(),
+-    unread: $petUnread.get(),
+-    reaction: $petReaction.get(),
 -    pluginMessages: $petPluginMessages.get()
-+    pluginMessages: $petPluginMessages.get(),
-+    characterPreview
++    info: defaultSprite ?? (snapshot?.characters.every(actor => actor.sprite?.spritesheetBase64)
++      ? { ...legacyInfo, spritesheetBase64: undefined }
++      : legacyInfo),
++    activity: {},
++    busy: false,
++    awaiting: false,
++    unread: false,
++    reaction: null,
++    characterPreview: snapshot ? preview as PetOverlayCharacterPreview : null
 +  }
 +}
 +
@@ -53028,7 +54094,7 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..7031a445368ed40a1297aeae0ef82186
 +    stopped = true
 +    observer?.disconnect()
    }
-@@ -158,3 +255,33 @@ function currentPayload(): PetOverlayStatePayload {
+@@ -158,3 +239,33 @@ function currentPayload(): PetOverlayStatePayload {
  function pushNow(): void {
 -  window.hermesDesktop?.petOverlay?.pushState(currentPayload())
 +  const api = window.hermesDesktop?.petOverlay
@@ -53063,14 +54129,12 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..7031a445368ed40a1297aeae0ef82186
 +  api.pushState(payload)
 +  sentAtlases = next
  }
-@@ -166,3 +293,3 @@ function pushNow(): void {
+@@ -166,3 +277,3 @@ function pushNow(): void {
   */
 -function openOverlay(request: PetOverlayOpenRequest): void {
-+function openOverlay(request: PetOverlayOpenRequest, restoreOnLaunch = true): void {
++function openOverlay(request: Omit<PetOverlayOpenRequest, 'kind'>): void {
    const api = window.hermesDesktop?.petOverlay
-@@ -173,10 +300,5 @@ function openOverlay(request: PetOverlayOpenRequest): void {
-
-+  persistBoolean(OVERLAY_ACTIVE_KEY, restoreOnLaunch)
+@@ -174,9 +285,3 @@ function openOverlay(request: PetOverlayOpenRequest): void {
    $petOverlayActive.set(true)
 -  void api.open(request).then(res => {
 -    if (res?.bounds) {
@@ -53079,9 +54143,9 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..7031a445368ed40a1297aeae0ef82186
 -
 -    pushNow()
 -  })
-+  const pendingOpen = api.open(request)
++  const pendingOpen = api.open({ ...request, kind: 'characters' })
 
-@@ -184,3 +306,6 @@ function openOverlay(request: PetOverlayOpenRequest): void {
+@@ -184,11 +289,29 @@ function openOverlay(request: PetOverlayOpenRequest): void {
    // overlay also gets a first frame the moment it's ready (it asks via 'ready').
 -  stateUnsubs = [
 +  let stopInput: (() => void) | undefined
@@ -53089,10 +54153,12 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..7031a445368ed40a1297aeae0ef82186
 +
 +  const subscriptions = [
      $petInfo.subscribe(pushNow),
-@@ -191,4 +316,25 @@ function openOverlay(request: PetOverlayOpenRequest): void {
-     $petReaction.subscribe(pushNow),
+-    $petActivity.subscribe(pushNow),
+-    PRIMARY_SESSION_VIEW.$busy.subscribe(pushNow),
+-    PRIMARY_SESSION_VIEW.$awaitingResponse.subscribe(pushNow),
+-    $petUnread.subscribe(pushNow),
+-    $petReaction.subscribe(pushNow),
 -    $petPluginMessages.subscribe(pushNow)
-+    $petPluginMessages.subscribe(pushNow),
 +    $petCharacterPreview.subscribe(preview => {
 +      pushNow()
 +
@@ -53116,34 +54182,14 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..7031a445368ed40a1297aeae0ef82186
 +    pushNow()
 +  })
  }
-@@ -201,3 +347,3 @@ function openOverlay(request: PetOverlayOpenRequest): void {
-  */
--export function popOutPet(petRect: PetOverlayBounds): void {
-+export function popOutPet(petRect: PetOverlayBounds, { restoreOnLaunch = true } = {}): void {
-   if ($petOverlayActive.get() || stateUnsubs.length) {
-@@ -209,3 +355,3 @@ export function popOutPet(petRect: PetOverlayBounds): void {
-   if (saved) {
--    openOverlay({ bounds: saved, screen: true })
-+    openOverlay({ bounds: saved, screen: true }, restoreOnLaunch)
-
-@@ -221,3 +367,3 @@ export function popOutPet(petRect: PetOverlayBounds): void {
-
--  openOverlay({ bounds: { height, width, x, y }, screen: false })
-+  openOverlay({ bounds: { height, width, x, y }, screen: false }, restoreOnLaunch)
- }
-@@ -237,2 +383,3 @@ export function restorePetOverlay(): void {
-   if (!saved) {
-+    persistBoolean(OVERLAY_ACTIVE_KEY, false)
-     $petOverlayActive.set(false)
-@@ -252,3 +399,7 @@ export function popInPet(): void {
+@@ -252,3 +375,6 @@ export function popInPet(): void {
    stateUnsubs = []
 +  activeOutput = null
 +  sentAtlases.clear()
-+  persistBoolean(OVERLAY_ACTIVE_KEY, false)
    $petOverlayActive.set(false)
 +  $petOverlayFile.set(null)
    void window.hermesDesktop?.petOverlay?.close()
-@@ -283,6 +434,72 @@ export function initPetOverlayBridge(): () => void {
+@@ -283,6 +409,72 @@ export function initPetOverlayBridge(): () => void {
    controlUnsub = api.onControl(payload => {
 -    if (payload?.type === 'pop-in') {
 +    if (payload?.type === 'character-output') {
@@ -53218,7 +54264,7 @@ index d47f67023fb8b820d6f6cbd455562a591600413b..7031a445368ed40a1297aeae0ef82186
 +      // The new overlay document needs the current frame and its atlas bytes.
 +      sentAtlases.clear()
        pushNow()
-@@ -307,2 +524,4 @@ export function initPetOverlayBridge(): () => void {
+@@ -307,2 +499,4 @@ export function initPetOverlayBridge(): () => void {
    return () => {
 +    activeOutput = null
 +    $petOverlayFile.set(null)
