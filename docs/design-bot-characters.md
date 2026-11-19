@@ -1085,3 +1085,32 @@ reference. Eight paired crops matched exactly. Backing sharing,
 restoration, hide/wake and release on EOF passed. Keep direct ImageIO
 in the fixture. The next comparison should isolate the cost of
 transferring and parsing encoded atlases at the native helper boundary.
+
+### Transfer encoded atlases as bounded binary frames
+
+Four network-denied Mac launches paired base64-in-JSON with a bounded
+JSON header followed by raw encoded atlas bytes on the same pipe. Both
+arms used the same direct ImageIO path, five sprites and 6 Hz timer.
+The first atlas-carrying acknowledgment was matched to its sender by
+sequence number. Reference-only renewals were measured separately.
+
+| Measure | JSON with base64 | Header with raw bodies |
+| --- | ---: | ---: |
+| First transfer | 2,598,902 bytes | 1,949,333 bytes |
+| Reference-only renewal | 428 bytes | 428 bytes |
+| Initial receiver intake | 92.46–102.98 ms | 1.04–1.07 ms |
+| Warm added tree RSS | 80.00–80.06 MiB | 73.64–73.73 MiB |
+| Warm added tree physical footprint | 47.81–47.83 MiB | 41.36–41.45 MiB |
+| Warm added combined CPU | 1.67–2.25 points | 1.88–2.09 points |
+
+The binary fixture cut initial wire bytes by 25%, paired warm process
+tree RSS by 6.27–6.42 MiB, and helper RSS by 3.13–3.14 MiB. CPU moved
+in both directions. Receiver intake starts at the first pipe read and
+includes scanning for the frame boundary. The JSON parser rescans the
+accumulated prefix across reads. Sender work and ImageIO construction
+were timed separately, and input-to-first-pixel latency remains open.
+
+All eight paired crops matched. Fragmented bodies, coalesced renewals,
+clear and pipe EOF passed. Ten malformed frame cases were rejected.
+Binary remains a fixture candidate. Next compare incremental JSON
+scanning and test sender backpressure under bursty updates.
