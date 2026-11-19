@@ -50085,31 +50085,53 @@ index 0000000000000000000000000000000000000000..fdd01140f31e7d4e9d7276c0ae45704f
 +  }
 +}
 diff --git a/apps/desktop/src/plugins/kanban/api.ts b/apps/desktop/src/plugins/kanban/api.ts
-index fdab9c789571716d5c0ea31ddac050bd896e7281..67aba2dfc8c22e6279520a9938c89234e5dede01 100644
+index fdab9c789571716d5c0ea31ddac050bd896e7281..ffd26a358985f9e130e92938dde49e7170691649 100644
 --- a/apps/desktop/src/plugins/kanban/api.ts
 +++ b/apps/desktop/src/plugins/kanban/api.ts
-@@ -29,3 +29,2 @@ import {
+@@ -27,7 +27,6 @@ import {
+   useValue
+ } from '@hermes/plugin-sdk'
  
 -// Native completion notification.
  import { bindCompletionNotify, type CompletionEvent, onKanbanEventsFrame } from './completion-notify'
-@@ -45,2 +44,4 @@ import type {
+ import type {
+   BoardExportResult,
+@@ -40,9 +39,12 @@ import type {
+   KanbanTask,
+   KanbanTaskDetail,
+   OrchestrationSettings,
++  RevisionDiff,
+   TaskEstimate,
+   WorkerLog
  } from './types'
 +// Native completion notification.
 +import { bindWorkStorage } from './work-selection'
  
-@@ -213,3 +214,3 @@ export function bindApi(
+ type Rest = <T>(path: string, opts?: PluginRestOptions) => Promise<T>
+ type Socket = (path: string, onMessage: (data: unknown) => void) => () => void
+@@ -211,7 +213,7 @@ export function bindApi(
+   rest = r
+   os = notifyDoors?.os ?? null
    bindCompletionNotify(r, notifyDoors?.t, notifyDoors?.os)
 -  const unsubs: Array<() => void> = []
 +  const unsubs: Array<() => void> = [bindWorkStorage(storage)]
  
-@@ -376,4 +377,4 @@ function withBoard(path: string, params: Record<string, string> = {}): string {
+   queryClient.setQueryDefaults(KANBAN_KEY_ROOT, { enabled: routedToScope })
+   unsubs.push(() => queryClient.setQueryDefaults(KANBAN_KEY_ROOT, {}))
+@@ -374,8 +376,8 @@ function withBoard(path: string, params: Record<string, string> = {}): string {
+ /** Prefix matching every board query on one connection (all slugs, both
+  *  archived views) — the mutation-settled invalidation target. */
  export const boardKeyPrefix = (scope: string) => ['kanban', 'board', scope] as const
 -export const boardKey = (scope: string, slug: string, archived: boolean) =>
 -  [...boardKeyPrefix(scope), slug, archived] as const
 +export const boardKey = (scope: string, slug: string, archived: boolean, links = false) =>
 +  [...boardKeyPrefix(scope), slug, archived, ...(links ? ['links'] : [])] as const
  export const taskKey = (scope: string, slug: string, id: string) => ['kanban', 'task', scope, slug, id] as const
-@@ -387,8 +388,16 @@ export const orchestrationKey = (scope: string) => ['kanban', 'orchestration', s
+ export const logKey = (scope: string, slug: string, id: string) => ['kanban', 'log', scope, slug, id] as const
+ export const boardsKey = (scope: string) => ['kanban', 'boards', scope] as const
+@@ -385,16 +387,33 @@ export const orchestrationKey = (scope: string) => ['kanban', 'orchestration', s
+ 
+ // ── reads ─────────────────────────────────────────────────────────────────────
  
 -export const fetchBoard = (archived: boolean) =>
 -  call<KanbanBoard>(withBoard('/board', archived ? { include_archived: 'true' } : {}))
@@ -50129,6 +50151,21 @@ index fdab9c789571716d5c0ea31ddac050bd896e7281..67aba2dfc8c22e6279520a9938c89234
 +  const detail = await call<KanbanTaskDetail>(
 +    board ? `/tasks/${encodeURIComponent(id)}?board=${encodeURIComponent(board)}` : withBoard(`/tasks/${id}`)
 +  )
+ 
+   return { ...detail, downloadAttachment }
+ }
+ 
++export const fetchRevisionDiff = (id: string, board: string, name: string, before: number, after: number) => {
++  const params = new URLSearchParams({ name, before: String(before), after: String(after) })
++  if (board) {
++    params.set('board', board)
++  }
++
++  return call<RevisionDiff>(`/tasks/${encodeURIComponent(id)}/revision-diff?${params}`)
++}
++
+ /** Worker stdout/stderr tail (last 16 KiB — plenty for the drawer). */
+ export const fetchLog = (id: string) => call<WorkerLog>(withBoard(`/tasks/${id}/log`, { tail: '16384' }))
  
 diff --git a/apps/desktop/src/plugins/kanban/assignee-picker.test.tsx b/apps/desktop/src/plugins/kanban/assignee-picker.test.tsx
 new file mode 100644
@@ -51344,10 +51381,12 @@ index 94cee91d6f22d0f635d302f68a2e30f71a2e8716..b9dc2c470950f4355ef22874cdcb33b4
 +  name === 'needs_owner' ? k.needsOwner : (k.col[name as keyof KanbanText['col']]?.label ?? name)
  export const columnHelp = (k: KanbanText, name: string) => k.col[name as keyof KanbanText['col']]?.help ?? ''
 diff --git a/apps/desktop/src/plugins/kanban/kanban.css b/apps/desktop/src/plugins/kanban/kanban.css
-index f5ca28e2fc9587027ba8cda4db52fef6473d34b5..2e1fcce5b14981c5634448fc4e944aac069ec92d 100644
+index f5ca28e2fc9587027ba8cda4db52fef6473d34b5..fb83d62a6ef6583d9ffed0f441e7b779db8abf82 100644
 --- a/apps/desktop/src/plugins/kanban/kanban.css
 +++ b/apps/desktop/src/plugins/kanban/kanban.css
-@@ -46 +46,563 @@
+@@ -44,3 +44,576 @@
+     --kanban-arc-angle: 360deg;
+   }
  }
 +
 +/* The native work surface owns its hierarchy in both Focus and split tiles. */
@@ -51911,6 +51950,17 @@ index f5ca28e2fc9587027ba8cda4db52fef6473d34b5..2e1fcce5b14981c5634448fc4e944aac
 +  width: 100%;
 +  min-width: 0;
 +}
++
++.kanban-revision > summary {
++  cursor: pointer;
++}
++
++.kanban-revision-diff {
++  max-height: 20rem;
++  overflow: auto;
++  white-space: pre-wrap;
++  overflow-wrap: anywhere;
++}
 diff --git a/apps/desktop/src/plugins/kanban/model-override.tsx b/apps/desktop/src/plugins/kanban/model-override.tsx
 index 430a9f19392bb998f1bd27745714a35fd5f0adcc..a05a54a492f682a97946ba5fdd7c18c76d231187 100644
 --- a/apps/desktop/src/plugins/kanban/model-override.tsx
@@ -51986,10 +52036,12 @@ index 0000000000000000000000000000000000000000..df165f4852c5aa85ec2fc04064705f27
 +  )
 +}
 diff --git a/apps/desktop/src/plugins/kanban/types.ts b/apps/desktop/src/plugins/kanban/types.ts
-index 0b8735d4b5ca7dba0a9c97600c513d1f5ad36d56..2073d8f756d19660679292db4838a1597488afa1 100644
+index 0b8735d4b5ca7dba0a9c97600c513d1f5ad36d56..69577ce602b18de89f2b1c62fe3c3f2f3d002447 100644
 --- a/apps/desktop/src/plugins/kanban/types.ts
 +++ b/apps/desktop/src/plugins/kanban/types.ts
-@@ -43,3 +43,12 @@ export interface KanbanColumn {
+@@ -41,7 +41,16 @@ export interface KanbanColumn {
+   tasks: KanbanTask[]
+ }
  
 +export interface KanbanLink {
 +  parent_id: string
@@ -52002,15 +52054,36 @@ index 0b8735d4b5ca7dba0a9c97600c513d1f5ad36d56..2073d8f756d19660679292db4838a159
 +  links_truncated?: boolean
 +  links_external?: number
    columns: KanbanColumn[]
-@@ -137,2 +146,3 @@ export interface KanbanTaskFull extends KanbanTask {
+   tenants: string[]
+   assignees: string[]
+@@ -135,6 +144,7 @@ export interface KanbanTaskFull extends KanbanTask {
+ /** GET /tasks/:id — the task plus its related collections, which are SIBLINGS
+  *  of `task`, not nested inside it. */
  export interface KanbanTaskDetail {
 +  delivery?: DeliverySummary | null
    task: KanbanTaskFull
-@@ -258 +268,31 @@ export const SEVERITY_TONE: Record<Diagnostic['severity'], string> = {
+   comments: KanbanComment[]
+   events: KanbanEvent[]
+@@ -256,3 +266,46 @@ export const SEVERITY_TONE: Record<Diagnostic['severity'], string> = {
+   error: 'var(--destructive, #f87171)',
+   warning: '#fbbf24'
  }
++
++export interface DeliveryRevision {
++  after_run_id: number | null
++  before_run_id: number
++  request_run_id: number
++  reason: string
++  brief_changed: boolean
++  files: { name: string; status: 'added' | 'changed' | 'removed' | 'unchanged' | 'unknown' }[]
++  criteria: { id: string; description: string; before: boolean; after: boolean }[]
++}
++
++export type RevisionDiff = { status: 'available'; diff: string } | { status: 'stale' | 'unavailable' }
 +
 +/** Native delivery projection. Acceptance describes the handoff, not fresh disk reads. */
 +export interface DeliverySummary {
++  revision?: DeliveryRevision | null
 +  native_status?: string
 +  result?: string
 +  outputs?: { name: string; stored_path?: string | null; run_id?: number | null }[]
@@ -52159,10 +52232,10 @@ index 0000000000000000000000000000000000000000..5ba5f2822ff2cfe06bbf576919d9af08
 +}
 diff --git a/apps/desktop/src/plugins/kanban/work-text.ts b/apps/desktop/src/plugins/kanban/work-text.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..82d3dc7e62eaaae7d3962ed2fe6d66e01ba2bdd6
+index 0000000000000000000000000000000000000000..ee755351520596a1830a859695b59469cec9a9b5
 --- /dev/null
 +++ b/apps/desktop/src/plugins/kanban/work-text.ts
-@@ -0,0 +1,98 @@
+@@ -0,0 +1,140 @@
 +export const workEnglish = {
 +  title: 'Work',
 +  tab: 'Track work',
@@ -52187,6 +52260,27 @@ index 0000000000000000000000000000000000000000..82d3dc7e62eaaae7d3962ed2fe6d66e0
 +  invalid: 'Recorded evidence does not match the current requirements',
 +  unavailable: 'Delivery details are unavailable from this backend',
 +  unknown: 'Not recorded',
++  revision: {
++    open: 'Compare with the round that asked for changes',
++    old: (run: number) => `Original handoff · Run ${run}`,
++    request: (run: number) => `Changes requested · Run ${run}`,
++    current: (run: number) => `Revised handoff · Run ${run}`,
++    pending: 'Waiting for a revised handoff',
++    briefChanged: 'The brief changed between handoffs. Compare each record against its own round.',
++    fileStatus: {
++      added: 'Added',
++      changed: 'Changed',
++      removed: 'Removed',
++      unchanged: 'Unchanged',
++      unknown: 'Hash comparison unavailable'
++    },
++    view: (name: string) => `View text diff for ${name}`,
++    loading: 'Loading text diff…',
++    unavailable: 'Text diff unavailable. Both versions must have readable text matching the recorded hashes.',
++    stale: 'The revision pair changed. Reopen the card to compare the current rounds.',
++    recorded: 'Check recorded',
++    missing: 'No check evidence'
++  },
 +  states: {
 +    ready: 'Ready',
 +    working: 'Working',
@@ -52236,6 +52330,27 @@ index 0000000000000000000000000000000000000000..82d3dc7e62eaaae7d3962ed2fe6d66e0
 +  invalid: 'หลักฐานที่บันทึกไม่ตรงกับข้อกำหนดปัจจุบัน',
 +  unavailable: 'ระบบนี้ยังไม่มีข้อมูลการส่งมอบ',
 +  unknown: 'ยังไม่มีบันทึก',
++  revision: {
++    open: 'เทียบกับรอบที่ขอแก้',
++    old: run => `ส่งมอบครั้งแรก · รอบ ${run}`,
++    request: run => `ขอแก้ · รอบ ${run}`,
++    current: run => `ส่งมอบหลังแก้ · รอบ ${run}`,
++    pending: 'รอส่งงานหลังแก้ไข',
++    briefChanged: 'โจทย์เปลี่ยนระหว่างรอบส่งมอบ โปรดดูหลักฐานตามโจทย์ของแต่ละรอบ',
++    fileStatus: {
++      added: 'เพิ่ม',
++      changed: 'เปลี่ยน',
++      removed: 'นำออก',
++      unchanged: 'เหมือนเดิม',
++      unknown: 'ไม่มีแฮชสำหรับเทียบ'
++    },
++    view: name => `ดูความต่างของข้อความใน ${name}`,
++    loading: 'กำลังโหลดความต่างของข้อความ…',
++    unavailable: 'เปิดเทียบข้อความไม่ได้ ต้องอ่านทั้งสองฉบับและยืนยันว่าตรงกับแฮชที่บันทึกไว้',
++    stale: 'รอบที่เทียบเปลี่ยนไปแล้ว เปิดการ์ดใหม่เพื่อดูรอบปัจจุบัน',
++    recorded: 'มีผลตรวจในรอบนี้',
++    missing: 'ไม่มีหลักฐานการตรวจ'
++  },
 +  states: {
 +    ready: 'พร้อมทำ',
 +    working: 'กำลังทำ',
@@ -52263,10 +52378,10 @@ index 0000000000000000000000000000000000000000..82d3dc7e62eaaae7d3962ed2fe6d66e0
 +}
 diff --git a/apps/desktop/src/plugins/kanban/work-view.test.tsx b/apps/desktop/src/plugins/kanban/work-view.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..231c5b18dc09bb1f4f52d9ab94e22f200f71c5b4
+index 0000000000000000000000000000000000000000..7c32d400dab97bd803d040701c11dfcb86d89fd9
 --- /dev/null
 +++ b/apps/desktop/src/plugins/kanban/work-view.test.tsx
-@@ -0,0 +1,126 @@
+@@ -0,0 +1,159 @@
 +import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 +import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 +import { afterEach, expect, it, vi } from 'vitest'
@@ -52277,11 +52392,12 @@ index 0000000000000000000000000000000000000000..231c5b18dc09bb1f4f52d9ab94e22f20
 +import type * as Api from './api'
 +import { KANBAN_LOCALES } from './i18n'
 +import { WorkView } from './work-view'
-+const io = vi.hoisted(() => ({ read: vi.fn(), write: vi.fn(), download: vi.fn(async () => {}) }))
++const io = vi.hoisted(() => ({ read: vi.fn(), diff: vi.fn(), write: vi.fn(), download: vi.fn(async () => {}) }))
 +vi.mock('./api', async original => ({
 +  ...(await original<typeof Api>()),
 +  routedToScope: () => true,
 +  fetchTask: io.read,
++  fetchRevisionDiff: io.diff,
 +  patchTask: io.write,
 +  createTask: io.write
 +}))
@@ -52393,17 +52509,50 @@ index 0000000000000000000000000000000000000000..231c5b18dc09bb1f4f52d9ab94e22f20
 +  dispose()
 +  $boardSlug.set('')
 +})
++
++it('shows round-labelled evidence and requests only the selected text diff', async () => {
++  const { DeliveryRevisionView } = await import('./delivery-revision-view')
++  const dispose = registerPluginLocales('kanban', KANBAN_LOCALES)
++  io.diff.mockResolvedValue({ status: 'unavailable' })
++  render(
++    <DeliveryRevisionView
++      board="sample-board"
++      id="card"
++      revision={{
++        before_run_id: 3,
++        request_run_id: 4,
++        after_run_id: 7,
++        reason: 'Explain the answer',
++        brief_changed: false,
++        files: [
++          { name: 'answer.txt', status: 'changed' },
++          { name: 'checks.txt', status: 'unchanged' }
++        ],
++        criteria: [{ id: 'sum', description: 'Show the calculation', before: true, after: false }]
++      }}
++    />
++  )
++  fireEvent.click(screen.getByText('Compare with the round that asked for changes'))
++  expect(screen.getByText('Original handoff · Run 3 · Check recorded')).toBeTruthy()
++  expect(screen.getByText('Revised handoff · Run 7 · No check evidence')).toBeTruthy()
++  expect(io.diff).not.toHaveBeenCalled()
++  fireEvent.click(screen.getByRole('button', { name: 'View text diff for answer.txt' }))
++  expect(await screen.findByText(/Text diff unavailable/)).toBeTruthy()
++  expect(io.diff).toHaveBeenCalledExactlyOnceWith('card', 'sample-board', 'answer.txt', 3, 7)
++  dispose()
++})
 diff --git a/apps/desktop/src/plugins/kanban/work-view.tsx b/apps/desktop/src/plugins/kanban/work-view.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..66a3f1f593350a37f68b0f987d78561062d77f21
+index 0000000000000000000000000000000000000000..a84ad40c59708929bd797af4b321f23a28c47a4a
 --- /dev/null
 +++ b/apps/desktop/src/plugins/kanban/work-view.tsx
-@@ -0,0 +1,229 @@
+@@ -0,0 +1,238 @@
 +import { Button, Codicon, ErrorState, Loader, useQuery, useValue } from '@hermes/plugin-sdk'
 +import { useState } from 'react'
 +
 +import { $boardSlug, fetchTask, routedToScope, taskKey, useKanbanScope } from './api'
 +import { BotJourney } from './bot-journey'
++import { DeliveryRevisionView } from './delivery-revision-view'
 +import { AttachmentDownload, TaskMarkdown } from './task-content'
 +import type { DeliverySummary, KanbanBoard } from './types'
 +import { columnLabel, useKanban } from './ui'
@@ -52569,6 +52718,14 @@ index 0000000000000000000000000000000000000000..66a3f1f593350a37f68b0f987d785610
 +          <h2>{data.task.title}</h2>
 +          <p>{k.work.unavailable}</p>
 +        </>
++      )}
++      {data.delivery?.revision && (
++        <DeliveryRevisionView
++          board={board || slug}
++          id={id}
++          key={`${scope}/${board || slug}/${id}/${data.delivery.revision.request_run_id}/${data.delivery.revision.after_run_id}`}
++          revision={data.delivery.revision}
++        />
 +      )}
 +      {(data.delivery?.result || data.task.result) && (
 +        <section className="kanban-delivery-result">
@@ -65602,10 +65759,10 @@ index 0000000000000000000000000000000000000000..83c583112bf34c87fa979d365d043669
 +        raise ValueError('delivery requires a named independent review profile')
 diff --git a/hermes_cli/kanban_delivery_view.py b/hermes_cli/kanban_delivery_view.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..7898228179456c4c87a5ff7d26a74b4f07597d08
+index 0000000000000000000000000000000000000000..c5c88f3990c5c7dab914c37b3390cf953e91afb4
 --- /dev/null
 +++ b/hermes_cli/kanban_delivery_view.py
-@@ -0,0 +1,159 @@
+@@ -0,0 +1,161 @@
 +"""Bounded, board-scoped delivery projection. Reading never starts work.
 +
 +Acceptance describes evidence at handoff, not a fresh filesystem verification.
@@ -65615,6 +65772,7 @@ index 0000000000000000000000000000000000000000..7898228179456c4c87a5ff7d26a74b4f
 +import json
 +
 +from hermes_cli import kanban_db as kb
++from hermes_cli.kanban_delivery_revision import revision_summary
 +from hermes_cli.kanban_run_inputs import brief_pin
 +from hermes_cli.kanban_task_contract import task_contract
 +
@@ -65764,7 +65922,8 @@ index 0000000000000000000000000000000000000000..7898228179456c4c87a5ff7d26a74b4f
 +            'latest_summary': (kb.latest_summary(conn, task_id) or '')[:8000],
 +            'result': (task.result or '')[:8000], 'blocked_reason': reason,
 +            'dependencies': dependencies, 'dependencies_truncated': len(rows) > 64,
-+            'verification': verification, 'next_action': state}
++            'verification': verification, 'next_action': state,
++            'revision': revision_summary(conn, task_id, contract)}
 diff --git a/hermes_cli/kanban_dispatch_evidence.py b/hermes_cli/kanban_dispatch_evidence.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..74bb3246a0abe4dcead3c5b6c0ebd4ef42543513
@@ -67456,10 +67615,10 @@ index eefb92046754534a19a9221f8a3f99272c41af7c..749e0baded464730bdcd939b1f475dc2
 +    return [t.id for t in tasks if t.block_recurrences < kb.BLOCK_RECURRENCE_LIMIT]
 diff --git a/hermes_cli/kanban_task_contract.py b/hermes_cli/kanban_task_contract.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..868f5f2c023431566d0f0add704c609974e7a2c4
+index 0000000000000000000000000000000000000000..f1c669d1c7dc8381df3406342d5e33bf5326812b
 --- /dev/null
 +++ b/hermes_cli/kanban_task_contract.py
-@@ -0,0 +1,309 @@
+@@ -0,0 +1,313 @@
 +"""Opt-in task requirements and bounded, deterministic handoff evidence checks.
 +
 +This checks declared bytes and recorded outcomes, never grants approval, executes
@@ -67547,7 +67706,7 @@ index 0000000000000000000000000000000000000000..868f5f2c023431566d0f0add704c6099
 +            raise ValueError('check definition must be an explicitly hashed input')
 +
 +
-+def _file_hash(root, name, budget):
++def _file_bytes(root, name, budget):
 +    path = (root / name).resolve(strict=True)
 +    if not path.is_relative_to(root):
 +        raise ValueError('evidence path escapes task workspace')
@@ -67564,7 +67723,11 @@ index 0000000000000000000000000000000000000000..868f5f2c023431566d0f0add704c6099
 +    budget[0] -= len(data)
 +    if budget[0] < 0:
 +        raise ValueError('evidence byte budget exceeded')
-+    return hashlib.sha256(data).hexdigest()
++    return data
++
++
++def _file_hash(root, name, budget):
++    return hashlib.sha256(_file_bytes(root, name, budget)).hexdigest()
 +
 +
 +def _verify_files(root, files, budget):
@@ -76573,15 +76736,21 @@ index 658ae11c5b9df1bb6c903055177c8bc27e1a24b4..566df6b1480724e4b6a22e36b478edd8
 +          h(RunActivity, { run: r }),
            r.summary
 diff --git a/plugins/kanban/dashboard/plugin_api.py b/plugins/kanban/dashboard/plugin_api.py
-index c38f8e399bdca0d8cf7f5cb1c9ed8e383302e1c8..81e8745fad2c18278fef281fe4de50db833a3787 100644
+index c38f8e399bdca0d8cf7f5cb1c9ed8e383302e1c8..930f1d2bff019e5ca52aced755d2280c9433a9f8 100644
 --- a/plugins/kanban/dashboard/plugin_api.py
 +++ b/plugins/kanban/dashboard/plugin_api.py
-@@ -18,2 +18,4 @@ import sqlite3
+@@ -16,6 +16,8 @@ import logging
+ import re
+ import sqlite3
  import time
 +from hermes_cli.kanban_run_activity import run_payloads
 +
  from concurrent.futures import ThreadPoolExecutor
-@@ -180,2 +182,14 @@ _CARD_SUMMARY_PREVIEW_CHARS = 200
+ from contextlib import closing, contextmanager
+ from dataclasses import asdict
+@@ -178,6 +180,18 @@ BOARD_COLUMNS: list[str] = list(kanban_workflow.DEFAULT_WORKFLOW.keys())
+ _CARD_SUMMARY_PREVIEW_CHARS = 200
+ 
  
 +NEEDS_OWNER_COLUMN = "needs_owner"
 +
@@ -76596,13 +76765,19 @@ index c38f8e399bdca0d8cf7f5cb1c9ed8e383302e1c8..81e8745fad2c18278fef281fe4de50db
 +
 +
  def _task_dict(task: kanban_db.Task, *, latest_summary: Optional[str] = None,
-@@ -209,3 +223,4 @@ def _compute_task_diagnostics(conn: sqlite3.Connection, task_ids: Optional[list[
+                current_run_started_at: Optional[int] = None) -> dict[str, Any]:
+     d = asdict(task)
+@@ -207,29 +221,36 @@ def _placeholders(ids: list) -> str:
+ 
+ def _compute_task_diagnostics(conn: sqlite3.Connection, task_ids: Optional[list[str]] = None) -> dict[str, list[dict]]:
      """``{task_id: [diagnostic_dict, ...]}`` (tasks with none omitted) via three aggregate
 -    queries (tasks, events, runs) — slurps the board; paginate if profiling shows a hotspot."""
 +    queries (tasks, events, runs). Heavy task text and run evidence stay in SQLite;
 +    the diagnostic rules only consume the projected state and event payloads."""
      from hermes_cli.config import load_config
-@@ -215,6 +230,12 @@ def _compute_task_diagnostics(conn: sqlite3.Connection, task_ids: Optional[list[
+ 
+     if task_ids is not None and not task_ids:
+         return {}
      diag_config = kd.config_from_runtime_config(load_config())
 +    fields = ("id,assignee,status,created_at,started_at,claim_lock,claim_expires,"
 +              "consecutive_failures,last_failure_error,last_heartbeat_at,current_run_id,"
@@ -76617,7 +76792,8 @@ index c38f8e399bdca0d8cf7f5cb1c9ed8e383302e1c8..81e8745fad2c18278fef281fe4de50db
 -        rows = conn.execute("SELECT * FROM tasks WHERE status != 'archived'").fetchall()
 +        rows = conn.execute(f"SELECT {fields} FROM tasks WHERE status != 'archived'").fetchall()
      if not rows:
-@@ -223,6 +244,6 @@ def _compute_task_diagnostics(conn: sqlite3.Connection, task_ids: Optional[list[
+         return {}
+     row_ids = [r["id"] for r in rows]
  
 -    def _rows_by_task(table: str) -> dict[str, list]:
 +    def _rows_by_task(table: str, fields: str = "*") -> dict[str, list]:
@@ -76626,12 +76802,17 @@ index c38f8e399bdca0d8cf7f5cb1c9ed8e383302e1c8..81e8745fad2c18278fef281fe4de50db
 -            f"SELECT * FROM {table} WHERE task_id IN ({_placeholders(row_ids)}) ORDER BY id", tuple(row_ids)):
 +            f"SELECT {fields} FROM {table} WHERE task_id IN ({_placeholders(row_ids)}) ORDER BY id", tuple(row_ids)):
              by_task.setdefault(row["task_id"], []).append(row)
-@@ -231,3 +252,3 @@ def _compute_task_diagnostics(conn: sqlite3.Connection, task_ids: Optional[list[
+         return by_task
+ 
      events_by_task = _rows_by_task("task_events")
 -    runs_by_task = _rows_by_task("task_runs")
 +    runs_by_task = _rows_by_task("task_runs", "id,task_id,outcome,error")
      graph_by_task = kanban_db.task_graph_contexts(conn, row_ids)
-@@ -289,2 +310,27 @@ def _link_tasks(conn: sqlite3.Connection, links: dict[str, list[str]]) -> list[d
+     out: dict[str, list[dict]] = {}
+     for r in rows:
+@@ -287,12 +308,39 @@ def _link_tasks(conn: sqlite3.Connection, links: dict[str, list[str]]) -> list[d
+ 
+ # --- GET /board -------------------------------------------------------------
  
 +_WORKFLOW_LINK_LIMIT = 5000
 +
@@ -76659,14 +76840,20 @@ index c38f8e399bdca0d8cf7f5cb1c9ed8e383302e1c8..81e8745fad2c18278fef281fe4de50db
 +
 +
  def get_board(
-@@ -294,3 +340,5 @@ def get_board(
+     tenant: Optional[str] = Query(None, description="Filter to a single tenant"),
+     include_archived: bool = Query(False),
+     board: Optional[str] = _BOARD_Q,
      workflow_template_id: Optional[str] = Query(None, description="Restrict to tasks using this workflow template id"),
 -    current_step_key: Optional[str] = Query(None, description="Restrict to tasks at this workflow step key")):
 +    current_step_key: Optional[str] = Query(None, description="Restrict to tasks at this workflow step key"),
 +    include_links: bool = False,
 +):
      """Full board grouped by status column; omitting ``board`` uses the active board
-@@ -302,6 +350,3 @@ def get_board(
+     (``HERMES_KANBAN_BOARD`` env → on-disk ``current`` pointer → ``default``)."""
+     with _board_conn(board) as (board, conn):
+@@ -300,10 +348,7 @@ def get_board(
+             conn, tenant=tenant, include_archived=include_archived,
+             workflow_template_id=workflow_template_id, current_step_key=current_step_key)
          # Link / comment / progress rollups are each one aggregate query rather than N per-task lookups.
 -        link_counts: dict[str, dict[str, int]] = {}
 -        for row in conn.execute("SELECT parent_id, child_id FROM task_links").fetchall():
@@ -76674,7 +76861,11 @@ index c38f8e399bdca0d8cf7f5cb1c9ed8e383302e1c8..81e8745fad2c18278fef281fe4de50db
 -            link_counts.setdefault(row["child_id"], {"parents": 0, "children": 0})["parents"] += 1
 +        link_counts, workflow_links = _board_link_data(conn, {task.id for task in tasks}, include_links)
          comment_counts: dict[str, int] = {
-@@ -316,3 +361,9 @@ def get_board(
+             r["task_id"]: r["n"] for r in conn.execute("SELECT task_id, COUNT(*) AS n FROM task_comments GROUP BY task_id")}
+         progress: dict[str, dict[str, int]] = {}  # per parent: children done / total, rendered as "N/M"
+@@ -314,7 +359,13 @@ def get_board(
+             p["done"] += row["cstatus"] == "done"
+         diagnostics_per_task = _compute_task_diagnostics(conn, task_ids=None)
          latest_event_id = conn.execute("SELECT COALESCE(MAX(id), 0) AS m FROM task_events").fetchone()["m"]
 -        columns: dict[str, list[dict]] = {c: [] for c in BOARD_COLUMNS}
 +        # local patch 11: a display-only "needs_owner" lane before "blocked" for cards waiting on a human
@@ -76685,36 +76876,74 @@ index c38f8e399bdca0d8cf7f5cb1c9ed8e383302e1c8..81e8745fad2c18278fef281fe4de50db
 +                columns[NEEDS_OWNER_COLUMN] = []
 +            columns[c] = []
          if include_archived:
-@@ -333,3 +384,3 @@ def get_board(
+             columns["archived"] = []
+         # One window-function query for latest summaries (avoids N+1); cards get a
+@@ -331,7 +382,7 @@ def get_board(
+             d["comment_count"] = comment_counts.get(t.id, 0)
+             d["progress"] = progress.get(t.id)  # None when the task has no children
              _attach_diagnostics(d, diagnostics_per_task.get(t.id))
 -            columns[t.status if t.status in columns else "todo"].append(d)
 +            columns[_board_column(t, columns)].append(d)
  
-@@ -352,3 +403,3 @@ def get_board(
+         # Queue lanes keep the list_tasks dispatch order; the done column is
+         # history, so order it newest-completed-first. Two stable sorts compose
+@@ -350,7 +401,7 @@ def get_board(
+         assignees = [entry["name"] for entry in kanban_db.known_assignees(conn)]
+         return {
              "columns": [{"name": name, "tasks": columns[name]} for name in columns], "tenants": tenants,
 -            "assignees": assignees, "latest_event_id": int(latest_event_id), "now": int(time.time())}
 +            "assignees": assignees, "latest_event_id": int(latest_event_id), "now": int(time.time()), **workflow_links}
  
-@@ -365,2 +416,3 @@ async def get_board_endpoint(
+ 
+ _read_board = coalesced_read(get_board)
+@@ -363,9 +414,11 @@ async def get_board_endpoint(
+     board: Optional[str] = _BOARD_Q,
+     workflow_template_id: Optional[str] = Query(None, description="Restrict to tasks using this workflow template id"),
      current_step_key: Optional[str] = Query(None, description="Restrict to tasks at this workflow step key"),
 +    include_links: bool = False,
  ):
-@@ -368,2 +420,3 @@ async def get_board_endpoint(
+     # Resolve selection before keying so a board switch cannot join an older read.
      return await _read_board(
 +        include_links=include_links,
          tenant=tenant,
-@@ -398,3 +451,5 @@ def get_task(
+         include_archived=include_archived,
+         board=board or kanban_db.get_current_board(),
+@@ -396,7 +449,9 @@ def get_task(
+         child_summaries = kanban_db.latest_summaries(conn, links["children"])
+         children = filter(None, (kanban_db.get_task(conn, cid) for cid in links["children"]))
          _attach_diagnostics(task_d, _compute_task_diagnostics(conn, task_ids=[task_id]).get(task_id) or [])
 +        from hermes_cli.kanban_delivery_view import delivery_summary
          return {
 +            "delivery": delivery_summary(conn, task_id),
              "task": task_d,
-@@ -408,3 +463,3 @@ def get_task(
+             "comments": [asdict(c) for c in kanban_db.list_comments(conn, task_id)],
+             "events": [asdict(e) for e in kanban_db.list_events(conn, task_id)],
+@@ -406,7 +461,21 @@ def get_task(
+             "child_results": [
+                 {"id": c.id, "title": c.title, "status": c.status, "latest_summary": child_summaries.get(c.id), "result": c.result}
                  for c in children],
 -            "runs": [asdict(r) for r in kanban_db.list_runs(conn, task_id, state_type=run_state_type, state_name=run_state_name)]}
 +            "runs": run_payloads(kanban_db.list_runs(conn, task_id, state_type=run_state_type, state_name=run_state_name), board)}
++
++
++@router.get("/tasks/{task_id}/revision-diff")
++def get_revision_diff(
++    task_id: str, name: str = Query(..., min_length=1, max_length=1024),
++    before: int = Query(..., gt=0), after: int = Query(..., gt=0),
++    board: Optional[str] = _BOARD_Q,
++):
++    from hermes_cli.kanban_delivery_revision import revision_diff
++    from hermes_cli.kanban_task_contract import task_contract
++
++    with _board_conn(board) as (board, conn), _value_error_400():
++        task = _require_task(conn, task_id)
++        return revision_diff(conn, task, board, task_contract(task.body) or {}, name, before, after)
  
-@@ -1271,4 +1326,31 @@ def dispatch(dry_run: bool = Query(False), max_n: int = Query(8, alias="max"), b
+ 
+ # --- POST /tasks ------------------------------------------------------------
+@@ -1269,8 +1338,35 @@ def get_task_log(task_id: str, tail: Optional[int] = Query(None, ge=1, le=2_000_
+ @router.post("/dispatch")
+ def dispatch(dry_run: bool = Query(False), max_n: int = Query(8, alias="max"), board: Optional[str] = Query(None)):
      """Dispatch nudge so the UI doesn't wait out the 60 s dispatcher tick."""
 +    from agent.estop import is_engaged
 +    if is_engaged():
@@ -76747,6 +76976,8 @@ index c38f8e399bdca0d8cf7f5cb1c9ed8e383302e1c8..81e8745fad2c18278fef281fe4de50db
 +                raise HTTPException(status_code=503, detail=f"Shared capacity lock is unavailable. {outcome}")
 +            raise HTTPException(status_code=409, detail=f"Another dispatch is reserving capacity; wait for the next dispatch. {outcome}")
          try:
+             return asdict(result)  # DispatchResult is a dataclass
+         except TypeError:
 diff --git a/pm/runtime.py b/pm/runtime.py
 index db3455efa0e21590ab94f447fa4883e98a36e039..0b8807a39ac01e0fa2686c3e41932b96de5df13b 100644
 --- a/pm/runtime.py
@@ -95523,10 +95754,10 @@ index 0000000000000000000000000000000000000000..f4939136ab3b9ae163772e179607cc8d
 +    assert delivery.claim([a,b],home=delivery.owner_home(),session_key=KEY)[0]==[]
 diff --git a/tests/hermes_cli/test_kanban_delivery_review.py b/tests/hermes_cli/test_kanban_delivery_review.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..5852a9c3aac420d7a08214e55b2f3b24a46c5a90
+index 0000000000000000000000000000000000000000..e54920ec735576f4838dae0c4b691120c073a155
 --- /dev/null
 +++ b/tests/hermes_cli/test_kanban_delivery_review.py
-@@ -0,0 +1,238 @@
+@@ -0,0 +1,296 @@
 +"""Delivery requires current evidence and an independent native review attempt."""
 +import copy
 +import hashlib
@@ -95765,6 +95996,64 @@ index 0000000000000000000000000000000000000000..5852a9c3aac420d7a08214e55b2f3b24
 +    # A manual status toggle back to done must not resurrect the older receipt.
 +    conn.execute("UPDATE tasks SET status='done' WHERE id=?", (tid,)); conn.commit()
 +    assert delivery_summary(conn, tid)['verification']['status'] != 'accepted'
++
++
++def test_revision_compares_native_handoffs_and_reads_only_matching_bytes(delivery):
++    from hermes_cli.kanban_delivery_revision import revision_diff
++    from hermes_cli.kanban_delivery_view import delivery_summary
++
++    conn, tid, _, _, root = delivery
++    # Use native retention so both versions survive the next worktree write.
++    workspace = kb.workspaces_root() / tid
++    workspace.mkdir(parents=True)
++    for name in ('check.py', 'lock', 'answer.txt', 'check.log'):
++        (workspace / name).write_bytes((root / name).read_bytes())
++    with kb.write_txn(conn):
++        conn.execute("UPDATE tasks SET workspace_kind='scratch', workspace_path=? WHERE id=?", (str(workspace), tid))
++
++    first, reviewer = review(delivery)
++    assert kb.request_changes(conn, tid, reason='Explain the answer', expected_run_id=reviewer.current_run_id)[0]
++    pending = delivery_summary(conn, tid)['revision']
++    assert pending['after_run_id'] is None
++    assert pending['criteria'][0] == {
++        'id': 'sum', 'description': 'The sum is five', 'before': True, 'after': False,
++    }
++    (workspace / 'answer.txt').write_text('5\n2 + 3 = 5\n')
++    second, _ = review(delivery)
++    changes = conn.total_changes
++    revision = delivery_summary(conn, tid)['revision']
++    assert (revision['before_run_id'], revision['request_run_id'], revision['after_run_id']) == (
++        first, reviewer.current_run_id, second)
++    assert revision['files'] == [{'name': 'answer.txt', 'status': 'changed'}]
++    assert revision['criteria'][0]['after'] is True
++
++    task = kb.get_task(conn, tid)
++    contract = task_contract(task.body)
++    diff = revision_diff(conn, task, None, contract, 'answer.txt', first, second)
++    assert diff['status'] == 'available'
++    assert '+2 + 3 = 5' in diff['diff']
++    assert revision_diff(conn, task, None, contract, 'answer.txt', first, first)['status'] == 'stale'
++    assert revision_diff(conn, task, None, contract, '../lock', first, second)['status'] == 'unavailable'
++    first_copy = Path(kb.get_run(conn, first).metadata['artifacts'][0])
++    first_copy.write_text('unexpected content')
++    assert revision_diff(conn, task, None, contract, 'answer.txt', first, second)['status'] == 'unavailable'
++    assert delivery_summary(conn, tid)['revision']['files'] == revision['files']
++    assert conn.total_changes == changes
++
++
++def test_revision_does_not_mistake_equal_criterion_ids_for_an_unchanged_brief(delivery):
++    from hermes_cli.kanban_delivery_view import delivery_summary
++
++    conn, tid, contract, _, _ = delivery
++    _, reviewer = review(delivery)
++    assert kb.request_changes(conn, tid, reason='Revise the check', expected_run_id=reviewer.current_run_id)[0]
++    contract['acceptance_criteria']['sum'] = 'The revised requirement'
++    with kb.write_txn(conn):
++        conn.execute('UPDATE tasks SET body=? WHERE id=?', (brief(contract), tid))
++    review(delivery)
++    revision = delivery_summary(conn, tid)['revision']
++    assert revision['brief_changed'] is True
++    assert revision['files'] == [{'name': 'answer.txt', 'status': 'unchanged'}]
 diff --git a/tests/hermes_cli/test_kanban_delivery_view.py b/tests/hermes_cli/test_kanban_delivery_view.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..a5328cde5351cc9dc00fdce5e7db55c5d972865c
@@ -124964,3 +125253,260 @@ index b8a03dc55f5a437b296fada6e6fe38bc8b05602d..a85d019b671460dc5ccc34e795b9a577
 +identity are borrowed from another profile by this policy.
 +
  ### Dynamic Tool Discovery
+diff --git a/apps/desktop/src/plugins/kanban/delivery-revision-view.tsx b/apps/desktop/src/plugins/kanban/delivery-revision-view.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..ec2d9bc7409ea601160c956c8ecf1cc73fc17ca6
+--- /dev/null
++++ b/apps/desktop/src/plugins/kanban/delivery-revision-view.tsx
+@@ -0,0 +1,98 @@
++import { Button, host } from '@hermes/plugin-sdk'
++import { useState } from 'react'
++
++import { fetchRevisionDiff } from './api'
++import type { DeliveryRevision, RevisionDiff } from './types'
++import { useKanban } from './ui'
++
++export function DeliveryRevisionView({
++  board,
++  id,
++  revision
++}: {
++  board: string
++  id: string
++  revision: DeliveryRevision
++}) {
++  const w = useKanban().work
++  const r = w.revision
++  const [selection, setSelection] = useState<{ name: string; result?: RevisionDiff } | null>(null)
++  const after = revision.after_run_id
++
++  const openDiff = async (name: string) => {
++    if (after === null) {
++      return
++    }
++
++    const connection = host.activeConnectionId()
++    const pending = { name }
++    setSelection(pending)
++    const result = await fetchRevisionDiff(id, board, name, revision.before_run_id, after).catch((): RevisionDiff => ({
++      status: 'unavailable'
++    }))
++
++    setSelection(current =>
++      current === pending && connection === host.activeConnectionId() ? { name, result } : current
++    )
++  }
++
++  return (
++    <details className="kanban-revision">
++      <summary>{r.open}</summary>
++      <p>
++        {r.request(revision.request_run_id)}
++        {revision.reason && ` · ${revision.reason}`}
++      </p>
++      <p>
++        {r.old(revision.before_run_id)} · {after === null ? r.pending : r.current(after)}
++      </p>
++      {revision.brief_changed && <p>{r.briefChanged}</p>}
++      <h3>{w.outputs}</h3>
++      <ul>
++        {revision.files.map(file => (
++          <li key={file.name}>
++            <code>{file.name}</code> · {r.fileStatus[file.status]}
++            {after !== null && ['added', 'changed', 'removed'].includes(file.status) && (
++              <Button
++                loading={selection?.name === file.name && !selection.result}
++                onClick={() => void openDiff(file.name)}
++                size="sm"
++                variant="ghost"
++              >
++                {r.view(file.name)}
++              </Button>
++            )}
++          </li>
++        ))}
++      </ul>
++      {selection && (
++        <div aria-live="polite">
++          {!selection.result && <p>{r.loading}</p>}
++          {selection.result?.status === 'available' && (
++            <pre className="kanban-revision-diff">{selection.result.diff}</pre>
++          )}
++          {selection.result?.status === 'unavailable' && <p>{r.unavailable}</p>}
++          {selection.result?.status === 'stale' && <p>{r.stale}</p>}
++        </div>
++      )}
++      <h3>{w.criteria}</h3>
++      <ul>
++        {revision.criteria.map(check => (
++          <li key={check.id}>
++            {check.description}
++            <ul>
++              <li>
++                {r.old(revision.before_run_id)} · {check.before ? r.recorded : r.missing}
++              </li>
++              {after !== null && (
++                <li>
++                  {r.current(after)} · {check.after ? r.recorded : r.missing}
++                </li>
++              )}
++            </ul>
++          </li>
++        ))}
++      </ul>
++    </details>
++  )
++}
+diff --git a/hermes_cli/kanban_delivery_revision.py b/hermes_cli/kanban_delivery_revision.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..a6c51bb9d9a2585ff715dae8ba541a9405137240
+--- /dev/null
++++ b/hermes_cli/kanban_delivery_revision.py
+@@ -0,0 +1,147 @@
++"""Compare the native handoffs immediately around a request for changes."""
++from __future__ import annotations
++
++from difflib import unified_diff
++from pathlib import Path
++import re
++
++from hermes_cli import kanban_db as kb
++from hermes_cli.kanban_delivery import validate_run_verification
++from hermes_cli.kanban_task_contract import _file_bytes
++
++_TEXT_LIMIT = 64 * 1024
++_MAX_LINES = 1200
++
++
++def _event(conn, task_id, kind, window, cutoff):
++    return conn.execute(
++        f"SELECT id, run_id FROM task_events WHERE task_id=? AND kind=? AND id {window} ? ORDER BY id DESC LIMIT 1",
++        (task_id, kind, cutoff),
++    ).fetchone()
++
++
++def _run(conn, task_id, event, outcome):
++    run = kb.get_run(conn, event['run_id']) if event and event['run_id'] is not None else None
++    if run and run.task_id == task_id and run.outcome == outcome and run.ended_at is not None:
++        return run
++    return None
++
++
++def _handoff(run):
++    metadata = run.metadata if run and isinstance(run.metadata, dict) else {}
++    stamp = metadata.get('handoff_check')
++    if not isinstance(stamp, dict) or stamp.get('status') != 'declared_evidence_matches':
++        return {}, {}, set()
++    try:
++        validate_run_verification(run, metadata)
++    except ValueError:
++        return {}, {}, set()
++    hashes, names, paths = stamp.get('artifact_hashes'), stamp.get('artifact_names'), metadata.get('artifacts')
++    hashes = {k: v for k, v in hashes.items()
++              if isinstance(k, str) and isinstance(v, str) and re.fullmatch('[0-9a-f]{64}', v)
++              } if isinstance(hashes, dict) else {}
++    locations = dict(zip(names, paths)) if (
++        isinstance(names, list) and isinstance(paths, list) and len(names) == len(paths)
++        and all(isinstance(name, str) for name in names)
++    ) else {}
++    checks = stamp.get('checks')
++    return stamp, {name: (digest, locations.get(name)) for name, digest in hashes.items()}, (
++        {value for value in checks if isinstance(value, str)} if isinstance(checks, list) else set())
++
++
++def _rounds(conn, task_id):
++    change = conn.execute(
++        "SELECT id, run_id FROM task_events WHERE task_id=? AND kind='changes_requested' ORDER BY id DESC LIMIT 1",
++        (task_id,),
++    ).fetchone()
++    rejection = _run(conn, task_id, change, 'changes_requested')
++    if not rejection:
++        return None
++    before = _run(conn, task_id, _event(conn, task_id, 'review_requested', '<', change['id']), 'review_requested')
++    if before is None or before.id >= rejection.id:
++        return None
++    after = _run(conn, task_id, _event(conn, task_id, 'review_requested', '>', change['id']), 'review_requested')
++    if after and after.id <= rejection.id:
++        after = None
++    return before, rejection, after
++
++
++def revision_summary(conn, task_id, contract):
++    if not contract.get('require_review'):
++        return None
++    rounds = _rounds(conn, task_id)
++    if not rounds:
++        return None
++    before, rejection, after = rounds
++    old_stamp, old, old_checks = _handoff(before)
++    new_stamp, new, new_checks = _handoff(after)
++    same_brief = bool(old_stamp and new_stamp and old_stamp.get('brief_sha256') == new_stamp.get('brief_sha256'))
++    files = []
++    for name in sorted(set(contract['required_artifacts']) | old.keys() | new.keys()):
++        old_hash, new_hash = old.get(name, (None, None))[0], new.get(name, (None, None))[0]
++        if old_hash and new_hash:
++            status = 'unchanged' if old_hash == new_hash else 'changed'
++        elif old_stamp and new_stamp and (old_hash or new_hash):
++            status = 'added' if new_hash else 'removed'
++        else:
++            status = 'unknown'
++        files.append({'name': name, 'status': status})
++    return {
++        'before_run_id': before.id, 'request_run_id': rejection.id, 'after_run_id': after.id if after else None,
++        'reason': (rejection.summary or '')[:2000], 'brief_changed': bool(old_stamp and new_stamp and not same_brief),
++        'files': files,
++        'criteria': [{'id': name, 'description': description,
++                      'before': name in old_checks, 'after': name in new_checks}
++                     for name, description in contract['acceptance_criteria'].items()],
++    }
++
++
++def _text(conn, task, board, name, artifact):
++    from hashlib import sha256
++
++    digest, stored = artifact
++    if not isinstance(stored, str):
++        return None
++    path = Path(stored)
++    if not path.is_absolute():
++        return None
++    try:
++        attachments = kb.task_attachments_dir(task.id, board=board).resolve()
++        root = Path(task.workspace_path).resolve(strict=True) if task.workspace_path else None
++        if path.parent == attachments and conn.execute(
++            'SELECT 1 FROM task_attachments WHERE task_id=? AND stored_path=?',
++            (task.id, stored),
++        ).fetchone():
++            root, relative = attachments, path.name
++        elif root and (root / name).resolve(strict=True) == path:
++            relative = name
++        else:
++            return None
++        data = _file_bytes(root, relative, [_TEXT_LIMIT])
++        if sha256(data).hexdigest() != digest:
++            return None
++        value = data.decode('utf-8')
++    except (OSError, ValueError, RuntimeError):
++        return None
++    if any(ord(char) < 32 and char not in '\n\r\t' or ord(char) == 127 for char in value):
++        return None
++    return value.splitlines(keepends=True)
++
++
++def revision_diff(conn, task, board, contract, name, before_id, after_id):
++    """Read only requested, hash-matched text from this card's current revision pair."""
++    if not contract.get('require_review'):
++        return {'status': 'unavailable'}
++    rounds = _rounds(conn, task.id)
++    if not rounds or not rounds[2] or (rounds[0].id, rounds[2].id) != (before_id, after_id):
++        return {'status': 'stale'}
++    old_stamp, old, _ = _handoff(rounds[0])
++    new_stamp, new, _ = _handoff(rounds[2])
++    if not old_stamp or not new_stamp or (name not in old and name not in new):
++        return {'status': 'unavailable'}
++    left = _text(conn, task, board, name, old[name]) if name in old else []
++    right = _text(conn, task, board, name, new[name]) if name in new else []
++    if left is None or right is None or len(left) + len(right) > _MAX_LINES:
++        return {'status': 'unavailable'}
++    lines = list(unified_diff(left, right, fromfile=f'Run {before_id}', tofile=f'Run {after_id}', lineterm=''))
++    return {'status': 'available', 'diff': '\n'.join(line.rstrip('\r\n') for line in lines)}
