@@ -16761,35 +16761,153 @@ index bdfb55234e407eb4301b832cceba7f149ae67118..fe1e1c8680c247e9b39cca554e572073
 +    await client.request('owner_inbox.respond', inbox)
 +    expect(sent.map(frame => [frame.method, frame.params])).toEqual([['owner_inbox.respond', inbox]])
    } finally {
+diff --git a/apps/desktop/src/api/canonical-clarify-prompt.test.ts b/apps/desktop/src/api/canonical-clarify-prompt.test.ts
+index 5361d657a47e7a883569c838b0ed9bf3d29439e7..c60eccff2189c7e71d65f4845717c31ded8f4022 100644
+--- a/apps/desktop/src/api/canonical-clarify-prompt.test.ts
++++ b/apps/desktop/src/api/canonical-clarify-prompt.test.ts
+@@ -12,3 +12,10 @@ test('a reopened sibling chat delivers retained questions before returning and r
+
+-  const snapshot = { session_id: 's', revision: 2, execution_generation: 7, prompts: [
++  const settled = {
++    type: 'clarify.settled', session_id: 's', seq: 11, replay_epoch: 'epoch-sibling',
++    payload: { prompt_id: 'c1', execution_generation: 7 }
++  }
++  const replay = { replay_epoch: 'epoch-sibling', truncated: false, snapshot_required: false, events: [settled] }
++  let replayReply = replay
++  const snapshot = { session_id: 's', revision: 2, execution_generation: 7, replay_epoch: 'epoch-sibling',
++    last_sequence: 10, prompts: [
+     { kind: 'clarify', prompt_id: 'c1', execution_generation: 7, question: 'Which target?', choices: [] },
+@@ -22,3 +29,4 @@ test('a reopened sibling chat delivers retained questions before returning and r
+     socket.send(JSON.stringify({ jsonrpc: '2.0', id: frame.id,
+-      result: frame.method === 'session.resume' ? snapshot : { status: 'resolved' } }))
++      result: frame.method === 'session.resume' ? snapshot :
++        frame.method === 'session.events.since' ? replayReply : { status: 'resolved' } }))
+   }))
+@@ -41,2 +49,23 @@ test('a reopened sibling chat delivers retained questions before returning and r
+     expect(sent.slice(1).map(frame => frame.params.profile)).toEqual(['sibling', 'sibling'])
++
++    for (const wrong of [
++      { ...replay, truncated: true },
++      { ...replay, snapshot_required: true },
++      { ...replay, replay_epoch: 'restarted' },
++      { ...replay, events: [{ ...settled, session_id: 'other-session' }] },
++      { ...replay, events: [{ ...settled, profile: 'default' }] },
++      { ...replay, events: [{ ...settled, seq: 10 }] },
++      { ...replay, events: [{ ...settled, payload: { ...settled.payload, prompt_id: 'other' } }] },
++      { ...replay, events: [{ ...settled, payload: { ...settled.payload, execution_generation: 8 } }] }
++    ]) {
++      replayReply = wrong
++      expect(await delivered[0].checkClarifySettlement()).toBe(false)
++    }
++    replayReply = replay
++    expect(await delivered[0].checkClarifySettlement()).toBe(true)
++    expect(sent.slice(3).map(frame => [frame.method, frame.params])).toEqual(
++      Array.from({ length: 9 }, () => ['session.events.since', {
++        session_id: 's', profile: 'sibling', replay_epoch: 'epoch-sibling', last_sequence: 10
++      }])
++    )
+   } finally {
 diff --git a/apps/desktop/src/api/client.ts b/apps/desktop/src/api/client.ts
-index 68c5a3e1b74856ec19591084e20c681d92984ba5..acede858bfebec6f4abeb7f880de67940a59ad29 100644
+index 68c5a3e1b74856ec19591084e20c681d92984ba5..753c26aa85fd8bb7b51bd55cab91deb05fdfc022 100644
 --- a/apps/desktop/src/api/client.ts
 +++ b/apps/desktop/src/api/client.ts
-@@ -7,5 +7,4 @@ import {
+@@ -4,8 +4,8 @@ import {
+   JsonRpcGatewayClient,
+-  type ServerRequest,
+   type ServerRequestHandler
  } from '@hermes/shared'
 -import { map, type MapStore } from 'nanostores'
--
--import type { HermesApiRequest } from '@/global'
 +import type { HermesApiRequest } from '@hermes/shared'
 +import { atom, map, type MapStore } from 'nanostores'
 
-@@ -36,2 +35,3 @@ export const PROMPT_SUBMIT_REQUEST_TIMEOUT_MS = 1_800_000
+-import type { HermesApiRequest } from '@/global'
++import type { DesktopServerRequest } from '@/store/server-requests'
+
+@@ -36,2 +36,3 @@ export const PROMPT_SUBMIT_REQUEST_TIMEOUT_MS = 1_800_000
 
 +export const GATEWAY_CONNECTION_CLOSED_MESSAGE = 'Hermes gateway connection closed'
  export const GATEWAY_NOT_CONNECTED_MESSAGE = 'Hermes gateway is not connected'
-@@ -354,2 +354,6 @@ export class HermesGateway extends JsonRpcGatewayClient {
+@@ -125,3 +126,5 @@ export class HermesGateway extends JsonRpcGatewayClient {
+
+-  private deliverCanonicalPrompt(event: { type: string; session_id?: string; profile?: string; payload?: unknown }, replayed: boolean) {
++  private deliverCanonicalPrompt(event: {
++    type: string; session_id?: string; profile?: string; payload?: unknown; replay_epoch?: string; seq?: number
++  }, replayed: boolean) {
+     const kind = CANONICAL_PROMPT_EVENTS[event.type]
+@@ -141,3 +144,3 @@ export class HermesGateway extends JsonRpcGatewayClient {
+
+-    const request: ServerRequest = {
++    const request: DesktopServerRequest = {
+       id,
+@@ -169,2 +172,37 @@ export class HermesGateway extends JsonRpcGatewayClient {
+
++    const { replay_epoch: epoch, seq } = event
++    const executionGeneration = p.execution_generation
++
++    if (kind === 'clarify' && epoch && typeof seq === 'number' && Number.isSafeInteger(seq) && seq >= 0 &&
++        typeof executionGeneration === 'number' && Number.isSafeInteger(executionGeneration)) {
++      request.checkClarifySettlement = async () => {
++        if (generation !== this.connectionGeneration) { return false }
++
++        try {
++          // Read the owner's replay window without re-dispatching its events or resending the answer.
++          const replay = await super.request<{
++            events?: GatewayEvent[]; replay_epoch?: string; truncated?: boolean; snapshot_required?: boolean
++          }>('session.events.since', {
++            session_id: sid, profile, replay_epoch: epoch, last_sequence: seq
++          }, 2500)
++
++          return generation === this.connectionGeneration && replay?.replay_epoch === epoch &&
++            replay.truncated === false && replay.snapshot_required === false && Array.isArray(replay.events) &&
++            replay.events.some(frame => {
++              if (frame?.type !== 'clarify.settled' || frame.session_id !== sid || frame.replay_epoch !== epoch ||
++                  typeof frame.seq !== 'number' || frame.seq <= seq ||
++                  (frame.profile !== undefined && canonicalProfile(frame.profile) !== profile)) {
++                return false
++              }
++
++              const settled = frame.payload as { prompt_id?: unknown; execution_generation?: unknown } | undefined
++
++              return settled?.prompt_id === id && settled.execution_generation === executionGeneration
++            })
++        } catch {
++          return false
++        }
++      }
++    }
++
+     recordCanonicalOwner(request, this.displayProfiles.get(canonicalSessionKey(sid, profile)) ?? profile)
+@@ -354,2 +392,6 @@ export class HermesGateway extends JsonRpcGatewayClient {
    private routeCanonicalParams(method: string, params: Record<string, unknown>): Record<string, unknown> {
 +    // An inbox row already carries the serving profile. A chat attach can have
 +    // learned an alias for the same stored ID under a different profile.
 +    if (method === 'owner_inbox.respond') { return params }
 +
      if (method === 'session.events.since' && params.profile === undefined && typeof params.replay_epoch === 'string') {
-@@ -519,3 +523,3 @@ export class HermesGateway extends JsonRpcGatewayClient {
+@@ -460,3 +502,3 @@ export class HermesGateway extends JsonRpcGatewayClient {
+       if (method === 'session.resume' || method === 'session.create' || method === 'session.activate') {
+-        this.adoptAttachedSnapshot(settled as { session_id?: string; prompts?: Array<Record<string, unknown>> }, prepared.profile)
++        this.adoptAttachedSnapshot(settled as { session_id?: string; replay_epoch?: string; last_sequence?: number; prompts?: Array<Record<string, unknown>> }, prepared.profile)
+       }
+@@ -495,3 +537,3 @@ export class HermesGateway extends JsonRpcGatewayClient {
+
+-  private adoptAttachedSnapshot(settled: { session_id?: string; replay_epoch?: string; info?: { profile_name?: string }; prompts?: Array<Record<string, unknown>> }, profile?: unknown): void {
++  private adoptAttachedSnapshot(settled: { session_id?: string; replay_epoch?: string; last_sequence?: number; info?: { profile_name?: string }; prompts?: Array<Record<string, unknown>> }, profile?: unknown): void {
+     // Prompts still open on the authority re-deliver like `open_requests` after a reconnect.
+@@ -513,3 +555,6 @@ export class HermesGateway extends JsonRpcGatewayClient {
+     for (const prompt of (settled.prompts ?? [])) {
+-      this.deliverCanonicalPrompt({ type: `${prompt.kind}.request`, session_id: sid, profile: canonicalProfile(profile), payload: prompt }, true)
++      this.deliverCanonicalPrompt({
++        type: `${prompt.kind}.request`, session_id: sid, profile: canonicalProfile(profile), payload: prompt,
++        replay_epoch: settled.replay_epoch, seq: settled.last_sequence
++      }, true)
+     }
+@@ -519,3 +564,3 @@ export class HermesGateway extends JsonRpcGatewayClient {
      super({
 -      closedErrorMessage: 'Hermes gateway connection closed',
 +      closedErrorMessage: GATEWAY_CONNECTION_CLOSED_MESSAGE,
        connectErrorMessage: 'Could not connect to Hermes gateway',
-@@ -676,6 +680,6 @@ export function connectionScoped(): { connectionId?: string } {
+@@ -676,6 +721,6 @@ export function connectionScoped(): { connectionId?: string } {
  // through @/hermes.
 -let _apiLocalMode = false
 +export const $apiLocalMode = atom(false)
@@ -16798,7 +16916,7 @@ index 68c5a3e1b74856ec19591084e20c681d92984ba5..acede858bfebec6f4abeb7f880de6794
 -  _apiLocalMode = local
 +  $apiLocalMode.set(local)
  }
-@@ -687,3 +691,3 @@ export function setApiRequestLocalMode(local: boolean): void {
+@@ -687,3 +732,3 @@ export function setApiRequestLocalMode(local: boolean): void {
  export function ambientOwnerConnectionId(): string | undefined {
 -  return $apiRequestScope.get().connectionId ?? (_apiLocalMode ? 'local' : undefined)
 +  return $apiRequestScope.get().connectionId ?? ($apiLocalMode.get() ? 'local' : undefined)
@@ -19463,7 +19581,7 @@ index b43a453ce927f76bdc0a7b9b96a463247982aaa1..23f32b4e6b23aa8c862aebee4853d1b7
 +  expect(onSubmit).toHaveBeenCalledTimes(1)
 +})
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.test.tsx b/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.test.tsx
-index d929e041de641a0d5ef8afe59196e3c00467c280..f33f0505db5ada8d08d16f8a102cd3fb7401a718 100644
+index d929e041de641a0d5ef8afe59196e3c00467c280..60aa80ca5ec46b69e6f33fc47ef66b1dff936b02 100644
 --- a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.test.tsx
 +++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.test.tsx
 @@ -4,5 +4,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -19510,7 +19628,16 @@ index d929e041de641a0d5ef8afe59196e3c00467c280..f33f0505db5ada8d08d16f8a102cd3fb
 +          return matched
 +        },
          inputDisabled,
-@@ -681,2 +698,150 @@ describe('useComposerSubmit with a clarify parked on the session', () => {
+@@ -599,6 +616,6 @@ describe('useComposerSubmit with a clarify parked on the session', () => {
+
+-  const parkClarify = (sessionId: string) => {
++  const parkClarify = (sessionId: string, checkClarifySettlement?: () => Promise<boolean>) => {
+     const requestId = `req-${sessionId}`
+
+-    rememberServerRequest({ fail: vi.fn(), id: requestId, method: 'clarify', params: {}, respond })
++    rememberServerRequest({ fail: vi.fn(), id: requestId, method: 'clarify', params: {}, respond, checkClarifySettlement })
+     $clarifyRequests.set({
+@@ -681,2 +698,177 @@ describe('useComposerSubmit with a clarify parked on the session', () => {
 
 +  it.each(['same', 'replacement', 'settled'] as const)('scopes a disconnected final answer when the prompt is %s', async replay => {
 +    parkClarify('runtime-session')
@@ -19660,8 +19787,35 @@ index d929e041de641a0d5ef8afe59196e3c00467c280..f33f0505db5ada8d08d16f8a102cd3fb
 +    }
 +  })
 +
++  it.each([true, false])('checks the typed answer timeout once with replay proof=%s', async found => {
++    const sessionId = 'runtime-session'
++    const requestId = 'req-runtime-session'
++    const check = vi.fn(async () => found)
++    parkClarify(sessionId, check)
++    const timeout = new Error('request timed out after 30s: clarify.respond')
++    const request = vi.fn(async () => { throw timeout })
++    setGateway(request)
++    const toast = vi.spyOn(notifications, 'notifyError')
++    const answer = 'the typed answer'
++    const { hook, loadIntoComposer, onSubmit } = renderSubmitHook({ text: answer })
++
++    await act(async () => hook.result.current.submitDraft())
++
++    expect(check).toHaveBeenCalledTimes(1)
++    expect(request).toHaveBeenCalledTimes(1)
++    expect(onSubmit).not.toHaveBeenCalled()
++    expect(hasOpenServerRequest(requestId)).toBe(!found)
++    if (found) {
++      expect(toast).not.toHaveBeenCalled()
++      expect(loadIntoComposer).not.toHaveBeenCalled()
++    } else {
++      expect(toast).toHaveBeenCalledWith(timeout, expect.any(String))
++      expect(loadIntoComposer).toHaveBeenCalledWith(answer, [])
++    }
++  })
++
    it('answers one question per submit while a busy turn waits, matching a choice label', async () => {
-@@ -1027 +1192,57 @@ describe('useComposerSubmit with a setup card waiting in the onboarding chat', (
+@@ -1027 +1219,57 @@ describe('useComposerSubmit with a setup card waiting in the onboarding chat', (
  })
 +
 +
@@ -64093,24 +64247,34 @@ index 0000000000000000000000000000000000000000..71b71b92e0fd355937e54fb30d21e8df
 +  dropCharacterSettings(from)
 +}
 diff --git a/apps/desktop/src/store/clarify.ts b/apps/desktop/src/store/clarify.ts
-index f4becc2eb75f2dd4bfb32540b3d4dfca78e24a7d..c9d7afcc950acc1d2cc3393126fedcca2aae5b01 100644
+index f4becc2eb75f2dd4bfb32540b3d4dfca78e24a7d..a2b82f798811fb0ba6322ff3fb157113ed24b6a2 100644
 --- a/apps/desktop/src/store/clarify.ts
 +++ b/apps/desktop/src/store/clarify.ts
 @@ -2,2 +2,3 @@ import { atom, computed } from 'nanostores'
 
 +import { GATEWAY_CONNECTION_CLOSED_MESSAGE } from '@/api/client'
  import { translateNow } from '@/i18n'
-@@ -18,2 +19,4 @@ export interface ClarifyQuestion {
+@@ -7,3 +8,8 @@ import { notifyError } from './notifications'
+ import { registerParkedCardAnswer } from './parked-card-answers'
+-import { forgetServerRequest, hasOpenServerRequest, respondToServerRequest } from './server-requests'
++import {
++  clarifySettlementCheck,
++  forgetServerRequest,
++  hasOpenServerRequest,
++  respondToServerRequest
++} from './server-requests'
+ import { $activeSessionId } from './session'
+@@ -18,2 +24,4 @@ export interface ClarifyQuestion {
 
 +export type ClarifyDraft = Record<string, { choices: string[]; draft: string }>
 +
  export interface ClarifyRequest {
-@@ -24,2 +27,4 @@ export interface ClarifyRequest {
+@@ -24,2 +32,4 @@ export interface ClarifyRequest {
    questions: ClarifyQuestion[]
 +  /** An unconfirmed answer retained on the question until this request closes. */
 +  retryDraft?: ClarifyDraft
    /** Answers already locked server-side (reconnect replay): qid → answer, null = skipped. */
-@@ -132,3 +137,8 @@ export const sessionClarifyRequest = (sessionId: string | null) =>
+@@ -132,3 +142,8 @@ export const sessionClarifyRequest = (sessionId: string | null) =>
  export function setClarifyRequest(request: ClarifyRequest): void {
 -  $clarifyRequests.set({ ...$clarifyRequests.get(), [keyFor(request.sessionId)]: request })
 +  const requests = $clarifyRequests.get()
@@ -64120,7 +64284,7 @@ index f4becc2eb75f2dd4bfb32540b3d4dfca78e24a7d..c9d7afcc950acc1d2cc3393126fedcca
 +
 +  $clarifyRequests.set({ ...requests, [key]: retryDraft ? { ...request, retryDraft } : request })
    forgetSettledClarify(request.requestId)
-@@ -279,10 +289,2 @@ registerParkedCardAnswer('clarify', {
+@@ -279,10 +294,2 @@ registerParkedCardAnswer('clarify', {
 
 -/** The choice typed text names (any case, as the messaging path matches labels), else the words themselves. */
 -function typedAnswer(question: ClarifyQuestion, text: string): string {
@@ -64131,7 +64295,7 @@ index f4becc2eb75f2dd4bfb32540b3d4dfca78e24a7d..c9d7afcc950acc1d2cc3393126fedcca
 -}
 -
  /**
-@@ -291,3 +293,11 @@ function typedAnswer(question: ClarifyQuestion, text: string): string {
+@@ -291,3 +298,11 @@ function typedAnswer(question: ClarifyQuestion, text: string): string {
   */
 -const lockChains = new Map<string, Promise<boolean>>()
 +const lockChains = new Map<string, { saved: Promise<boolean>; toolCompleted?: boolean }>()
@@ -64144,7 +64308,7 @@ index f4becc2eb75f2dd4bfb32540b3d4dfca78e24a7d..c9d7afcc950acc1d2cc3393126fedcca
 +  }
 +}
 
-@@ -301,5 +311,8 @@ function lockTypedAnswer(request: ClarifyRequest, text: string): null | Promise<
+@@ -301,5 +316,9 @@ function lockTypedAnswer(request: ClarifyRequest, text: string): null | Promise<
 
 -  const answer = typedAnswer(question, text)
 +  const choice = question.choices?.find(entry => bareChoice(entry).toLowerCase() === text.toLowerCase())
@@ -64153,19 +64317,23 @@ index f4becc2eb75f2dd4bfb32540b3d4dfca78e24a7d..c9d7afcc950acc1d2cc3393126fedcca
    const lockedAnswers = { ...request.lockedAnswers, [question.qid]: answer }
    const last = request.questions.every(entry => lockedAnswers[entry.qid] !== undefined)
 +  const trackedFinal = last && hasOpenServerRequest(request.requestId)
++  const checkSettlement = trackedFinal ? clarifySettlementCheck(request.requestId) : undefined
 
-@@ -322,3 +335,4 @@ function lockTypedAnswer(request: ClarifyRequest, text: string): null | Promise<
+@@ -322,3 +341,4 @@ function lockTypedAnswer(request: ClarifyRequest, text: string): null | Promise<
 
 -  const previous = lockChains.get(request.requestId) ?? Promise.resolve(true)
 +  const previous = lockChains.get(request.requestId)?.saved ?? Promise.resolve(true)
 +  let handledByClarification = false
 
-@@ -344,2 +358,32 @@ function lockTypedAnswer(request: ClarifyRequest, text: string): null | Promise<
+@@ -344,2 +364,35 @@ function lockTypedAnswer(request: ClarifyRequest, text: string): null | Promise<
        } catch (error) {
++        const replaySettled =
++          checkSettlement && hasOpenServerRequest(request.requestId) && !chain.toolCompleted &&
++          error instanceof Error && /^request timed out after \d+s: clarify\.respond$/.test(error.message) &&
++          await checkSettlement()
 +        const stillOpen = hasOpenServerRequest(request.requestId)
 +
-+        // The turn can report the result even if the prompt's settlement event and RPC receipt were lost.
-+        if (trackedFinal && (!stillOpen || chain.toolCompleted)) {
++        if (trackedFinal && (!stillOpen || chain.toolCompleted || replaySettled)) {
 +          forgetServerRequest(request.requestId)
 +          forgetSettledClarify(request.requestId)
 +          handledByClarification = true
@@ -64193,7 +64361,7 @@ index f4becc2eb75f2dd4bfb32540b3d4dfca78e24a7d..c9d7afcc950acc1d2cc3393126fedcca
 +        }
 +
          notifyError(error, translateNow('assistant.clarify.sendFailed'))
-@@ -354,6 +398,7 @@ function lockTypedAnswer(request: ClarifyRequest, text: string): null | Promise<
+@@ -354,6 +407,7 @@ function lockTypedAnswer(request: ClarifyRequest, text: string): null | Promise<
 
 -  lockChains.set(request.requestId, sent)
 +  const chain: { saved: Promise<boolean>; toolCompleted?: boolean } = { saved: sent }
@@ -64203,7 +64371,7 @@ index f4becc2eb75f2dd4bfb32540b3d4dfca78e24a7d..c9d7afcc950acc1d2cc3393126fedcca
 -    if (lockChains.get(request.requestId) === sent) {
 +    if (lockChains.get(request.requestId) === chain) {
        lockChains.delete(request.requestId)
-@@ -362,3 +407,3 @@ function lockTypedAnswer(request: ClarifyRequest, text: string): null | Promise<
+@@ -362,3 +416,3 @@ function lockTypedAnswer(request: ClarifyRequest, text: string): null | Promise<
 
 -  return sent
 +  return sent.then(saved => saved || handledByClarification)
@@ -66879,6 +67047,32 @@ index e009b8121ca86a60fd096da012bdc3a060a95c7b..a2475c4ff5136d6ea0df604ba5392c8f
    stateRows?: string[]
 +  motionWeight?: 'light' | 'standard' | 'heavy'
  }
+diff --git a/apps/desktop/src/store/server-requests.ts b/apps/desktop/src/store/server-requests.ts
+index 5b234a920007eb23ceb579658aca93bd5c3d2543..0cf8ee47502cf80abd6e4b9a7cced0a3b3d2131a 100644
+--- a/apps/desktop/src/store/server-requests.ts
++++ b/apps/desktop/src/store/server-requests.ts
+@@ -2,2 +2,6 @@ import type { ServerRequest } from '@hermes/shared'
+
++export interface DesktopServerRequest extends ServerRequest {
++  checkClarifySettlement?: () => Promise<boolean>
++}
++
+ /**
+@@ -15,5 +19,5 @@ import type { ServerRequest } from '@hermes/shared'
+  */
+-const open = new Map<string, ServerRequest>()
++const open = new Map<string, DesktopServerRequest>()
+
+-export function rememberServerRequest(request: ServerRequest): void {
++export function rememberServerRequest(request: DesktopServerRequest): void {
+   open.set(request.id, request)
+@@ -43,2 +47,6 @@ export function hasOpenServerRequest(id: string): boolean {
+
++export function clarifySettlementCheck(id: string): (() => Promise<boolean>) | undefined {
++  return open.get(id)?.checkClarifySettlement
++}
++
+ export function resetServerRequestsForTests(): void {
 diff --git a/apps/desktop/src/store/session-control.ts b/apps/desktop/src/store/session-control.ts
 index 0046d47826fe8c53df69858c9b22999ab8717597..c750a6537775a6f6450f159696861e444e4b3484 100644
 --- a/apps/desktop/src/store/session-control.ts
