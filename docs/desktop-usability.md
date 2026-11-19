@@ -8,6 +8,8 @@ The rail offers **New chat**, **History** and **Search**. New chat opens a nativ
 
 When you switch devices, History and message search pause until the switch
 settles. Your query stays in place, and results refresh on the active device.
+If a saved-chat search fails in History, use **Retry**. Activating the
+focused button returns keyboard focus to the search field.
 
 ![Search in messages fixture with three saved chats and the second result selected by keyboard.](images/saved-message-search-fixture.webp)
 
