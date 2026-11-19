@@ -35596,10 +35596,10 @@ index 7d1c2ea4b9ff9f1908bdb750a838cf1f6f1d2e47..2df76c02c22201edfd89371857f2fb7d
    )
 diff --git a/apps/desktop/src/contrib/plugin-characters.test.ts b/apps/desktop/src/contrib/plugin-characters.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..7c7b8df7a4c034db79bf082e7888e749112c4b50
+index 0000000000000000000000000000000000000000..845398ce162bdb62e882ea18546d79347839e438
 --- /dev/null
 +++ b/apps/desktop/src/contrib/plugin-characters.test.ts
-@@ -0,0 +1,754 @@
+@@ -0,0 +1,794 @@
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 +
 +import { setPetInfo } from '@/store/pet'
@@ -35903,9 +35903,49 @@ index 0000000000000000000000000000000000000000..7c7b8df7a4c034db79bf082e7888e749
 +    current.dispose()
 +  }
 +
-+  if (outcome !== 'success') {
-+    expect(close).toHaveBeenCalledOnce()
-+    expect($petOverlayActive.get()).toBe(false)
++  expect(close).toHaveBeenCalledOnce()
++  expect($petOverlayActive.get()).toBe(false)
++})
++
++it('retires an inherited empty Characters window and reopens on a fresh scene', async () => {
++  const open = vi.fn(async () => ({ ok: true })), close = vi.fn(async () => ({}))
++  Object.defineProperty(window, 'hermesDesktop', { configurable: true, value: { petOverlay: { open, close, pushState: vi.fn() } } })
++  const anchor = { x: 0, y: 0, width: 40, height: 40 }
++  const first = createPluginContext('first').pet.previewCharacters!(anchor, true)!
++  first.update([previewActor])
++  await Promise.resolve()
++  const replacement = createPluginContext('replacement').pet.previewCharacters!(anchor, true)!
++  first.dispose()
++
++  try {
++    vi.advanceTimersByTime(1499)
++    expect(close).not.toHaveBeenCalled()
++    replacement.update([previewActor])
++    vi.advanceTimersByTime(1)
++    expect(close).not.toHaveBeenCalled()
++    expect(open).toHaveBeenCalledOnce()
++
++    const empty = createPluginContext('empty').pet.previewCharacters!(anchor, true)!
++    replacement.dispose()
++    try {
++      vi.advanceTimersByTime(1500)
++      expect(close).toHaveBeenCalledOnce()
++      expect($petOverlayActive.get()).toBe(false)
++
++      empty.update([previewActor])
++      expect(open).toHaveBeenCalledTimes(2)
++      empty.update([])
++      popInPet()
++      popOutPet(anchor)
++      vi.advanceTimersByTime(1500)
++      expect(close).toHaveBeenCalledTimes(2)
++      expect($petOverlayActive.get()).toBe(true)
++    } finally {
++      empty.dispose()
++    }
++    expect(close).toHaveBeenCalledTimes(2)
++  } finally {
++    replacement.dispose()
 +  }
 +})
 +
@@ -36355,7 +36395,7 @@ index 0000000000000000000000000000000000000000..7c7b8df7a4c034db79bf082e7888e749
 +  expect($petOverlayActive.get()).toBe(false)
 +})
 diff --git a/apps/desktop/src/contrib/plugin.ts b/apps/desktop/src/contrib/plugin.ts
-index d487729ac19e2c5d823d0437d4882b3400114822..e635102fc2ab14932d6b726e9b1877400464989b 100644
+index d487729ac19e2c5d823d0437d4882b3400114822..e24dff8daa37af995677c8955943f9055951a54a 100644
 --- a/apps/desktop/src/contrib/plugin.ts
 +++ b/apps/desktop/src/contrib/plugin.ts
 @@ -25,2 +25,3 @@ import {
@@ -36378,12 +36418,56 @@ index d487729ac19e2c5d823d0437d4882b3400114822..e635102fc2ab14932d6b726e9b187740
 +   * scene. Returns null when the native Characters overlay is unavailable. */
 +  previewCharacters?: (anchor: PetOverlayBounds, independent?: boolean) => PetCharacterPublisher | null
    /** Show one plain-text line (no HTML; control characters stripped, capped
-@@ -270,2 +278,4 @@ function createPluginOs(pluginId: string): PluginOs {
+@@ -270,2 +278,48 @@ function createPluginOs(pluginId: string): PluginOs {
 
 +let rearmCharacterOverlay: (() => void) | undefined
++let stopWatchingCharacterOverlay: (() => void) | undefined
++
++function watchCharacterOverlay() {
++  stopWatchingCharacterOverlay?.()
++  let idleClose: ReturnType<typeof setTimeout> | undefined
++
++  const cancelIdleClose = () => {
++    clearTimeout(idleClose)
++    idleClose = undefined
++  }
++
++  // Watch the window's scene across publisher handoffs, including the initial empty scene.
++  const unwatchPreview = $petCharacterPreview.listen(snapshot => {
++    if (snapshot?.characters.length) {
++      cancelIdleClose()
++
++      return
++    }
++
++    if (idleClose !== undefined) {return}
++    // Give the departing sprites time to finish before releasing the renderer.
++    idleClose = setTimeout(() => {
++      idleClose = undefined
++
++      if (stopWatchingCharacterOverlay !== stop || $petCharacterPreview.get()?.characters.length) {return}
++      stop()
++      rearmCharacterOverlay?.()
++      popInPet()
++    }, 1500)
++  })
++
++  const unwatchActive = $petOverlayActive.listen(active => {
++    if (!active) {stop()}
++  })
++
++  const stop = () => {
++    cancelIdleClose()
++    unwatchPreview()
++    unwatchActive()
++    if (stopWatchingCharacterOverlay === stop) {stopWatchingCharacterOverlay = undefined}
++  }
++
++  stopWatchingCharacterOverlay = stop
++}
 +
  // Lines are attributed by the inventory name the loader published before
-@@ -275,4 +285,103 @@ function createPluginPet(pluginId: string, track: (dispose: () => void) => () =>
+@@ -275,4 +329,69 @@ function createPluginPet(pluginId: string, track: (dispose: () => void) => () =>
    let tracked = false
 +  let preview: PetCharacterPublisher | null = null
 +  let previewTracked = false
@@ -36405,20 +36489,7 @@ index d487729ac19e2c5d823d0437d4882b3400114822..e635102fc2ab14932d6b726e9b187740
 +
 +      preview?.dispose()
 +      let mayOpen = !$petOverlayActive.get()
-+      let stopWatchingOverlay: (() => void) | undefined
-+      let idleClose: ReturnType<typeof setTimeout> | undefined
 +      const publisher = createPetCharacterPublisher(pluginId)
-+
-+      const cancelIdleClose = () => {
-+        clearTimeout(idleClose)
-+        idleClose = undefined
-+      }
-+
-+      const releaseOwnership = () => {
-+        cancelIdleClose()
-+        stopWatchingOverlay?.()
-+        stopWatchingOverlay = undefined
-+      }
 +
 +      const rearmOverlay = () => {
 +        if (publisher.isCurrent()) {mayOpen = true}
@@ -36426,42 +36497,19 @@ index d487729ac19e2c5d823d0437d4882b3400114822..e635102fc2ab14932d6b726e9b187740
 +
 +      const unsubscribePreview = $petCharacterPreview.listen(snapshot => {
 +        if (!publisher.isCurrent()) {
-+          releaseOwnership()
 +          stopWatchingPreview()
 +
 +          return
 +        }
 +
-+        if (!snapshot?.characters.length) {
-+          if (stopWatchingOverlay && idleClose === undefined) {
-+            // Give the departing sprites time to finish before releasing the renderer.
-+            idleClose = setTimeout(() => {
-+              idleClose = undefined
-+
-+              if (!publisher.isCurrent() || !stopWatchingOverlay || $petCharacterPreview.get()?.characters.length) {return}
-+              releaseOwnership()
-+              mayOpen = true
-+              popInPet()
-+            }, 1500)
-+          }
-+
-+          return
-+        }
-+
-+        cancelIdleClose()
-+
-+        if (!mayOpen || (!independent && !$petActive.get())) {return}
++        if (!snapshot?.characters.length || !mayOpen || (!independent && !$petActive.get())) {return}
 +        mayOpen = false
 +
 +        if ($petOverlayActive.get()) {return}
 +        // The pending native open can outlive this publisher.
 +        popOutPet(anchor, () => rearmCharacterOverlay?.())
 +
-+        if ($petOverlayActive.get()) {
-+          stopWatchingOverlay = $petOverlayActive.listen(active => {
-+            if (!active) {releaseOwnership()}
-+          })
-+        }
++        if ($petOverlayActive.get()) {watchCharacterOverlay()}
 +      })
 +
 +      const stopWatchingPreview = () => {
@@ -36475,12 +36523,14 @@ index d487729ac19e2c5d823d0437d4882b3400114822..e635102fc2ab14932d6b726e9b187740
 +        prepareSprite: publisher.prepareSprite,
 +        update: publisher.update,
 +        dispose: () => {
-+          const closeOverlay = publisher.isCurrent() && Boolean(stopWatchingOverlay)
++          const ownedOverlay = publisher.isCurrent() ? stopWatchingCharacterOverlay : undefined
 +          stopWatchingPreview()
-+          releaseOwnership()
 +          publisher.dispose()
 +
-+          if (closeOverlay) {popInPet()}
++          if (ownedOverlay && stopWatchingCharacterOverlay === ownedOverlay) {
++            ownedOverlay()
++            popInPet()
++          }
 +        }
 +      }
 +
