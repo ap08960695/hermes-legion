@@ -1031,3 +1031,32 @@ zero late writes, and wake started one timer. Hide, resume, clear and
 pipe EOF also passed. The all-settled CPU sample is near baseline.
 Visible sprites still retain memory. Next isolate the native atlas
 backing while keeping the displayed pixels and five-sprite path.
+
+### Compare full and packed native atlas backing
+
+Eight network-denied Mac launches used the same five-sprite path,
+6 Hz timer and source images. Two adjacent pairs compared full-size
+and compact normalized bitmaps. Two more compared compact bitmaps
+with the existing direct ImageIO path, reversing launch order within
+each comparison. Resource samples used the second walking window.
+
+| Native backing | Helper RSS | Helper physical footprint | Added tree RSS | Added combined CPU |
+| --- | ---: | ---: | ---: | ---: |
+| Full normalized | 88.89–91.66 MiB | 47.22–47.59 MiB | 104.17–110.61 MiB | 1.61–2.40 points |
+| Compact normalized | 74.91–75.00 MiB | 30.84–30.94 MiB | 93.97–94.40 MiB | 1.88–2.71 points |
+| Direct ImageIO | 60.94–60.97 MiB | 30.69–30.70 MiB | 80.03–80.05 MiB | 1.82–1.87 points |
+
+Both normalized arms used the same premultiplied RGBA copy. The packed
+arm retained four reachable atlas rows and four guard scanlines. It
+cut backing size from 13.71 to 6.15 MiB across five distinct atlases,
+saving 13.89–16.75 MiB of helper RSS against full normalization.
+Against direct ImageIO, it added 13.98–14.03 MiB of helper RSS and
+0.19–0.20 MiB of helper physical footprint. Synchronous construction
+took 18.12–18.87 ms for compact backing and about 1.62 ms for direct
+ImageIO. Direct ImageIO can defer pixel decoding beyond that checkpoint.
+
+The retained scanlines matched byte for byte. All sixteen paired
+walking and waiting crops matched. Shared-reference reuse, restoration,
+hide/wake and backing release on EOF passed. Keep direct ImageIO in the
+fixture. The next compact test should draw into final-sized storage
+without an intermediate full-size bitmap.
