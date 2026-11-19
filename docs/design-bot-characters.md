@@ -876,3 +876,33 @@ Normal walking added 65.70–79.82 MiB RSS across the process tree and
 publisher-only baseline. This fixture met the RSS ceiling in all four
 walking samples and exceeded the CPU ceiling. Compare less frequent
 presentation while preserving the motion path and elapsed timing.
+
+### Test a lower native presentation cadence
+
+Four network-denied Mac launches compared 10, 8, 6 and 5 Hz with five
+Characters on the same 2× panel. Each presentation sampled the same
+10 Hz logical walking path from monotonic elapsed time. A missed
+sample advanced to the current pose without drawing catch-up frames.
+Adjacent 10 Hz comparisons reversed order, and 10/10 pairs measured
+short-term CPU drift. Publisher-only windows before and after the
+panel bracketed CPU. RSS uses the initial publisher-only baseline.
+
+| Presentation rate | Median added CPU | Added RSS range | Median added physical footprint | Longest submission gap |
+| --- | ---: | ---: | ---: | ---: |
+| 10 Hz | 3.19 points | 71.66–80.23 MiB | 36.72 MiB | 109.35 ms |
+| 8 Hz | 3.25 points | 71.77–80.15 MiB | 36.58 MiB | 133.43 ms |
+| 6 Hz | 2.10 points | 71.78–80.03 MiB | 40.36 MiB | 175.67 ms |
+| 5 Hz | 2.08 points | 65.92–80.13 MiB | 36.77 MiB | 208.79 ms |
+
+CPU combines the process tree and the system-wide WindowServer counter.
+Against its adjacent 10 Hz reference, 6 Hz saved 0.79–2.41 points in all
+four launches. The largest 10/10 control difference was 0.61 points.
+At 6 Hz, added CPU ranged from 1.76 to 2.48 points. No lower cadence
+met both budgets in every launch. The 5 Hz option also exceeded the
+fixture's 180 ms submission-gap screen.
+
+Twenty-four fixed-time crop pairs matched exactly across rates. This
+establishes pose and path parity. Live motion at the lower rates has
+longer holds, and its perceived smoothness remains open. Keep these
+rates in the fixture. Compare a shared native surface with bounded
+damage at the same cadence to isolate the cost of separate layers.
