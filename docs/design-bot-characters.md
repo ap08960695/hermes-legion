@@ -748,3 +748,36 @@ The fixture used software graphics in the Electron main process and one
 1710 × 1009 work area at 2× scale. The five-Character CPU and RSS budgets
 remain open. Compare a Character-only renderer entry and preload at the
 same panel geometry as part of removing the upstream mascot.
+
+### Character-only renderer comparison
+
+Five pairs of fresh signed Mac Electron launches alternated the original
+renderer and a Character-only build. Each used the stock preload, native
+IPC, fixed 1710 × 1009 work area at 2× scale, software graphics and five
+prepared atlases. The candidate removed the legacy mascot UI and state
+mirroring from the overlay. Both arms used the same Character renderer,
+hit-test logic, publisher and work-area panel. The comparison sampled
+main-only, blank and walking phases with equal seven-second windows.
+
+| Cost above main-only | Original median | Character-only median | Median paired change |
+| --- | ---: | ---: | ---: |
+| Blank Electron RSS (MiB) | 176.19 | 175.79 | −0.40 |
+| Blank Electron footprint (MiB) | 92.32 | 91.37 | −0.58 |
+| Walking Electron RSS (MiB) | 295.86 | 294.88 | −0.03 |
+| Walking Electron footprint (MiB) | 200.19 | 200.56 | +0.35 |
+| Walking Electron CPU (points of one core) | 5.64 | 5.71 | −0.28 |
+| Walking WindowServer CPU (points of one core) | 6.15 | 6.42 | −0.03 |
+
+Each paired change subtracts the original launch's cost from the
+candidate launch's cost before taking the median. In the walking phase
+Electron CPU changes ranged from −1.47 to +0.53 points. Draw counts were
+261–266 in both arms. All five characters painted and moved. Both builds
+finished the same synthetic output request before and after panel reload.
+
+The overlay entry chunk shrank by 5,458 minified bytes, but resident memory
+and CPU missed the comparison's 20 MiB or 0.5-point improvement threshold.
+Keep the current overlay for this performance change. The upstream mascot
+removal still belongs with the Characters switch and settings migration.
+The next resource test is an app-owned native panel fed by the existing
+publisher. The standalone AppKit result justifies measuring it with the
+same application-side baseline and checking interaction and teardown.
