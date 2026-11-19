@@ -1220,3 +1220,34 @@ is system-wide. Publisher-only WindowServer samples drifted by up to
 time. Compare renewal with no renewal at matched times before
 attributing the difference. Keep the binary path in the fixture
 while the initial CPU target and native integration remain open.
+
+### Test Character renewal at the same walking time
+
+Eight sequential signed Mac launches compared a real reference-only
+renewal with a renderer round trip at the same elapsed time. Both
+arms used binary transfer, five actors, the same 6 Hz walk and one
+continuous animation clock. The two 5.1-second windows stayed within
+the original lease. The real renewal used five existing atlases and
+a new acknowledgment. The sham left the state and lease unchanged.
+Fixed-pose pixel checks ran after both windows.
+
+| Post minus pre CPU change | Sham median | Renewal median | Paired renewal effect |
+| --- | ---: | ---: | ---: |
+| System-wide WindowServer | +0.045 | +0.010 | −0.25, −0.01, −0.06, −0.08 points |
+| Process tree plus WindowServer | −0.040 | −0.055 | −0.33, 0.00, −0.03, −0.10 points |
+
+The paired effect subtracts the adjacent sham's post-minus-pre
+change from the renewed trial's change. The median WindowServer
+effect was −0.07 points and publisher-only WindowServer drift reached
+0.18 points. This comparison did not reproduce the earlier CPU
+drop in either arm. Logical phase is matched between arms and
+advances between windows. WindowServer includes other processes'
+display work.
+
+Added walking RSS was 66.92–70.06 MiB. Combined CPU ranged from
+1.915–2.375 points before the intervention and 1.855–2.475 after.
+Both budgets passed in one of eight early and three of eight late
+windows. Each renewal sent 440 bytes and decoded zero atlases.
+Sixteen fixed-pose crops matched across arms and the two poses
+differed. Keep the existing bounded sender in the fixture. The
+initial CPU ceiling remains open.
