@@ -2,7 +2,11 @@
 
 ## Finding work and conversations
 
-The rail offers **New chat**, **History** and **Search**. New chat opens a native blank tab from a chat, retaining any earlier unsent draft. Choose a chat zone first or drag **New chat** to the zone's tab strip to place the new tab there. Ctrl+T (⌘T on Mac) opens a new tab in the focused chat zone. Search first lists recent conversations and commands. Choose **Search all saved chats** to carry the exact query into the native History full-text search across saved conversations. Native profile, archive, pin and project rules still apply.
+The rail offers **New chat**, **History** and **Search**. New chat opens a native blank tab from a chat, retaining any earlier unsent draft. Choose a chat zone first or drag **New chat** to the zone's tab strip to place the new tab there. Ctrl+T (⌘T on Mac) opens a new tab in the focused chat zone.
+
+**Search** first lists recent conversations and commands. Type a phrase and choose **Search in messages** to see the first page of saved-chat matches on the active connection and profile. Use the arrow keys to select a chat and Enter to open it. The results announce how many chats are shown. **Search all saved chats** carries your query into History for additional filters.
+
+![Search in messages fixture with three saved chats and the second result selected by keyboard.](images/saved-message-search-fixture.webp)
 
 Open **Settings** from the navigation rail in Focus or Workspace. In a compact window it sits beside **History**. The Settings shortcut (⌘, on Mac, Ctrl+, on Windows and Linux) and the command palette also open Settings. Standalone chat windows have a Settings gear in their titlebar.
 
@@ -10,7 +14,21 @@ In Hub, **Back** returns through the actual file/folder navigation history. At t
 
 A collection search names its scope. No matches are distinct from an empty collection. Use **Clear search and filters** to recover the collection or **Search all Hub** to keep the query and expand its scope. Searching does not grant bot membership or share a private chat file.
 
+## Recovering an earlier message
+
+Open the failed-message notice to read the full text and see any original attachments you need to review or reattach. **Park draft and edit failed message** puts the earlier text in this chat's composer and saves what you were typing. **Return to parked draft** brings back the draft and saves edits to the other message.
+
+Review the recovered message before you press Send. Sending the original payload uses its original submission ID on a gateway that supports idempotent admission. If you revise the text or replace attachments, confirm **Send as new message**. The earlier message may already have reached the gateway.
+
 When Hermes recovers an unsent draft from a deleted chat, it keeps the original saved copy until the new chat saves its copy. If **Undo** cannot save the draft back, an error appears beside the button and the draft stays in the editor for retry.
+
+![Failed-message recovery fixture before and after parking the current draft.](images/draft-recovery-fixture.webp)
+
+## Checking the configured provider
+
+**Settings → Accounts** shows the selected profile's configured provider and model on the active connection. A current per-account reading includes its timestamp. A provider without a reading shows that quota is unreported, while a configured local endpoint is labeled separately. Gemini API and AGY subscription reports have separate provider identities. The existing **Refresh** action checks supported quota sources.
+
+![Accounts fixture with Gemini API, a separate AGY reading, a NIM reading, and a local model.](images/accounts-provider-fixture.webp)
 
 ## Reading Workflow
 

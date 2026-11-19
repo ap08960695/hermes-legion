@@ -16465,11 +16465,44 @@ index 976f79976e40cc672ef1a9bdfe6c1c80b91f4f1f..a09c934491023034488d44cfe4e2f6d4
      ...resolveConfigWriteScope(config, profile),
 +    ...(autosave ? { configAutosave: true } : {}),
      path: preserveLanguage ? '/api/config?preserve_language=true' : '/api/config',
+diff --git a/apps/desktop/src/api/sessions.test.ts b/apps/desktop/src/api/sessions.test.ts
+index 7bdaff9c7d3aa3b231ef4ebfb1dac671d8ccbe30..d58d17aad10aa41c39fa6cd6913f269379bc07cf 100644
+--- a/apps/desktop/src/api/sessions.test.ts
++++ b/apps/desktop/src/api/sessions.test.ts
+@@ -354,2 +354,15 @@ describe('searchSessions profile scope', () => {
+   })
++
++  it.each(['local', 'fixture-remote', null])('uses the captured connection while the ambient source changes (%s)', async connectionId => {
++    hermesApi.mockResolvedValue({ results: [] } as never)
++    vi.mocked(client.profileScoped).mockReturnValue({ profile: 'research', priority: 'foreground' })
++
++    await searchSessions('old + new', 'research', connectionId)
++
++    expect(hermesApi.mock.calls[0][0]).toMatchObject({
++      connectionId,
++      path: '/api/sessions/search?q=old%20%2B%20new&profile=research',
++      profile: 'research'
++    })
++  })
+ })
 diff --git a/apps/desktop/src/api/sessions.ts b/apps/desktop/src/api/sessions.ts
-index b92ab645fba5b1cb71c1858da8fec74acb389bbb..610d3242999ecaccfafb972685f5822fccb9a908 100644
+index b92ab645fba5b1cb71c1858da8fec74acb389bbb..8879c794cffde5dd27a92379ee195c1a62b460d3 100644
 --- a/apps/desktop/src/api/sessions.ts
 +++ b/apps/desktop/src/api/sessions.ts
-@@ -452,2 +452,9 @@ export function searchSessions(query: string, profile?: null | string): Promise<
+@@ -438,3 +438,7 @@ export function setSessionUnreadRemote(id: string, unread: boolean, profile?: st
+ // asks the primary on purpose; omitted follows the ambient request profile.
+-export function searchSessions(query: string, profile?: null | string): Promise<SessionSearchResponse> {
++export function searchSessions(
++  query: string,
++  profile?: null | string,
++  connectionId?: null | string
++): Promise<SessionSearchResponse> {
+   const scope = profileScoped(profile)
+@@ -444,2 +448,3 @@ export function searchSessions(query: string, profile?: null | string): Promise<
+     ...scope,
++    ...(connectionId !== undefined ? { connectionId } : {}),
+     path: `/api/sessions/search?q=${encodeURIComponent(query)}${suffix}`
+@@ -452,2 +457,9 @@ export function searchSessions(query: string, profile?: null | string): Promise<
  // cross-profile list scan when locating an unknown id's owner.
 +/** Whether the native session-read resolver would stay on the expected owner. */
 +export function sessionReadMatchesOwner(id: string, profile: ProfileScope, connectionId: string): boolean {
@@ -17624,70 +17657,72 @@ index dc81c446f04ee3c655f150ca1df0e724b0aeb988..5afb00926edc1dee4ee8cec1b2711bec
      )
 diff --git a/apps/desktop/src/app/chat/composer/draft-recovery.tsx b/apps/desktop/src/app/chat/composer/draft-recovery.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..1393bf8dcfc12433411f779e19639cbc8cac8f7c
+index 0000000000000000000000000000000000000000..5f1942e4b4ceca2795143648a9a7f8e0de228d24
 --- /dev/null
 +++ b/apps/desktop/src/app/chat/composer/draft-recovery.tsx
-@@ -0,0 +1,69 @@
+@@ -0,0 +1,71 @@
 +import { useStore } from '@nanostores/react'
 +
 +import { freshDraftScope, isFreshDraftScope } from '@/store/composer'
 +import { draftOwnerKey } from '@/store/composer-draft-owner'
-+import { draftRetry } from '@/store/composer-draft-retry'
++import { missingRecoveredFiles } from '@/store/composer-draft-retry'
++import { isBrowsingHistory } from '@/store/composer-input-history'
 +import type { SessionOwnerScope } from '@/store/session-request-router'
 +
 +import type { useComposerDraft } from './hooks/use-composer-draft'
 +import { RestoredDraftNotice } from './restored-draft-notice'
-+import { RetainedSendNotice } from './retained-send-notice'
++import { RecoveryFiles, RetainedSendNotice } from './retained-send-notice'
 +import { useComposerScope } from './scope'
 +import { UnassignedDraftNotice } from './unassigned-draft-notice'
 +
 +interface ComposerDraftRecoveryProps {
++  disabled: boolean
 +  draft: ReturnType<typeof useComposerDraft>
 +  scope: string | null
 +  owner: SessionOwnerScope
 +}
 +
 +/** Both recovery paths follow the editor owner without putting draft text in shell state. */
-+export function ComposerDraftRecovery({ draft, scope, owner }: ComposerDraftRecoveryProps) {
++export function ComposerDraftRecovery({ disabled, draft, scope, owner }: ComposerDraftRecoveryProps) {
 +  const composer = useComposerScope()
 +  const attachments = useStore(composer.attachments.$attachments)
 +
 +  return (
 +    <>
 +      <UnassignedDraftNotice
-+        canRestore={() => !draft.syncDraftFromEditor().trim() && composer.attachments.$attachments.get().length === 0}
-+        empty={!draft.hasText && attachments.length === 0}
++        canRestore={() =>
++          !draft.getDraftRetry()?.recovery &&
++          !draft.syncDraftFromEditor().trim() &&
++          composer.attachments.$attachments.get().length === 0
++        }
++        empty={!draft.recovery && !draft.hasText && attachments.length === 0}
 +        onRestored={draft.loadIntoComposer}
 +        owner={owner}
 +        scope={scope}
 +      />
 +      <RetainedSendNotice
-+        canRestore={() => {
++        disabled={disabled || attachments.some(file => file.uploadState === 'uploading')}
++        occupied={draft.hasText || attachments.length > 0 || Boolean(draft.recovery)}
++        onRestored={draft.loadRecoveredDraft}
++        owner={owner}
++        scope={scope}
++        readCurrent={() => {
 +          const same =
 +            (draft.draftScopeRef.current || freshDraftScope()) === (scope || freshDraftScope()) &&
 +            draftOwnerKey(draft.draftOwnerRef.current) === draftOwnerKey(owner)
++          const current = composer.attachments.$attachments.get()
++          if (
++            !same ||
++            disabled ||
++            isBrowsingHistory(draft.sessionIdRef.current) ||
++            current.some(file => file.uploadState === 'uploading')
++          )
++            return undefined
 +
-+          if (!same || draft.syncDraftFromEditor().trim() || composer.attachments.$attachments.get().length) {
-+            return false
-+          }
-+
-+          draft.stashAt(scope, '', [], owner)
-+
-+          return true
++          return { text: draft.syncDraftFromEditor(), attachments: current }
 +        }}
-+        empty={!draft.hasText && attachments.length === 0}
-+        onRestored={(text, restored, id) => {
-+          draft.loadIntoComposer(text, restored)
-+
-+          if (id) {
-+            draft.rememberDraftRetry(scope, draftRetry(id, text, restored), owner)
-+          } else {
-+            draft.takeDraftRetry(text, restored)
-+          }
-+        }}
-+        owner={owner}
-+        scope={scope}
 +      />
++      {draft.recovery && <RecoveryFiles {...missingRecoveredFiles(draft.recovery, attachments)} />}
 +      <RestoredDraftNotice
 +        freshDraft={scope === null || isFreshDraftScope(scope)}
 +        onUndone={draft.clearDraft}
@@ -17804,16 +17839,16 @@ index 0000000000000000000000000000000000000000..9b045561725f9b103aaa28e07168cabd
 +}
 diff --git a/apps/desktop/src/app/chat/composer/hooks/composer-draft-restore.ts b/apps/desktop/src/app/chat/composer/hooks/composer-draft-restore.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..fb21c284c412c9cb526e2903a8ea974f72b9a7a3
+index 0000000000000000000000000000000000000000..2b8de4a2161ebdfe3bf0234705bab0e13e23c325
 --- /dev/null
 +++ b/apps/desktop/src/app/chat/composer/hooks/composer-draft-restore.ts
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,80 @@
 +import type { RefObject } from 'react'
 +
 +import { translateNow } from '@/i18n'
 +import { type ComposerAttachment, freshDraftScope, takeSessionDraft } from '@/store/composer'
 +import { draftOwnerKey } from '@/store/composer-draft-owner'
-+import { type ComposerDraftRetry, draftRetry, writeDraftRetry } from '@/store/composer-draft-retry'
++import { type ComposerDraftRetry, draftRetry, readDraftRetry, writeDraftRetry } from '@/store/composer-draft-retry'
 +import { retainRejectedDraft } from '@/store/composer-rejected-drafts'
 +import { notifyError } from '@/store/notifications'
 +import type { SessionOwnerScope } from '@/store/session-request-router'
@@ -17834,7 +17869,8 @@ index 0000000000000000000000000000000000000000..fb21c284c412c9cb526e2903a8ea974f
 +    text: string,
 +    attachments: ComposerAttachment[],
 +    owner: SessionOwnerScope = args.draftOwnerRef?.current,
-+    submissionId?: string
++    submissionId?: string,
++    keepRetained = false
 +  ) => {
 +    const captured = typeof owner === 'object' && owner ? { ...owner } : owner
 +    const source = typeof scope === 'function' ? scope : scope || freshDraftScope()
@@ -17848,7 +17884,12 @@ index 0000000000000000000000000000000000000000..fb21c284c412c9cb526e2903a8ea974f
 +
 +      const current = (sameEditor ? args.readCurrentDraft?.() : undefined) ?? takeSessionDraft(target, captured)
 +
-+      if (current.text.trim() || current.attachments.length) {
++      if (
++        keepRetained ||
++        current.text.trim() ||
++        current.attachments.length ||
++        readDraftRetry(target, captured)?.recovery
++      ) {
 +        if (sameEditor) {
 +          args.stashAt(target, current.text, current.attachments, captured ?? null)
 +        }
@@ -18031,10 +18072,10 @@ index 0000000000000000000000000000000000000000..66fe8024c4d64b03009c336b0459738e
 +})
 diff --git a/apps/desktop/src/app/chat/composer/hooks/composer-submit-dispatch.ts b/apps/desktop/src/app/chat/composer/hooks/composer-submit-dispatch.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..9546c12b5b3095dc7aa43970c4c63f6a9198986b
+index 0000000000000000000000000000000000000000..e592e58cc33696493da385a500fa52d6e1f6f3b1
 --- /dev/null
 +++ b/apps/desktop/src/app/chat/composer/hooks/composer-submit-dispatch.ts
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,99 @@
 +import { type ComposerAttachment, freshDraftScope, isFreshDraftScope } from '@/store/composer'
 +
 +import type { ChatBarProps } from '../types'
@@ -18099,7 +18140,14 @@ index 0000000000000000000000000000000000000000..9546c12b5b3095dc7aa43970c4c63f6a
 +    // message that repeats an uncertain send, in this pane or another, is its own turn.
 +    const submissionId = target?.submission_id ?? crypto.randomUUID()
 +
-+    const restore = restoreDraft(() => restoreScope, text, submittedAttachments, submittedOwner ?? null, submissionId)
++    const restore = restoreDraft(
++      () => restoreScope,
++      text,
++      submittedAttachments,
++      submittedOwner ?? null,
++      submissionId,
++      target?.requireIdempotentSubmit
++    )
 +
 +    // A hidden submit is machine text (a setup note, never something the user
 +    // typed), so a rejection drops it instead of loading it into the draft.
@@ -18338,14 +18386,14 @@ index 0000000000000000000000000000000000000000..cb2f941b3b9fc3735d5aa3a5abf1b385
 +  expect(handles.draft.draftRef.current.trim()).toBe('Keep work owner words')
 +})
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-draft.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-draft.ts
-index f88f22679132810982d3ea0deb83c3ee20ebfbcd..09e57873d0e23c78101486fcb9ed862d9de1e1c8 100644
+index f88f22679132810982d3ea0deb83c3ee20ebfbcd..6deb916cdf6b02cc1e35738d97af84085c3c1833 100644
 --- a/apps/desktop/src/app/chat/composer/hooks/use-composer-draft.ts
 +++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-draft.ts
 @@ -2,3 +2,3 @@ import { useAui, useAuiState, useComposerRuntime } from '@assistant-ui/react'
  import { SLASH_COMMAND_RE } from '@hermes/shared'
 -import { type RefObject, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 +import { type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
- 
+
 @@ -16,5 +16,5 @@ import {
    reloadPersistedDrafts,
 -  stashSessionDraft,
@@ -18360,9 +18408,9 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..09e57873d0e23c78101486fcb9ed862d
 @@ -29,2 +28,3 @@ import { $composerPopout } from '@/store/composer-popout'
  import { migrateQueuedPrompts } from '@/store/composer-queue'
 +import type { SessionOwnerScope } from '@/store/session-request-router'
- 
+
 @@ -62,4 +62,7 @@ import { useComposerVisible } from '../visibility'
- 
+
 +import { createComposerDraftAccess } from './composer-draft-access'
 +
  interface UseComposerDraftArgs {
@@ -18373,7 +18421,7 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..09e57873d0e23c78101486fcb9ed862d
    activeQueueSessionKey,
 +  draftOwner,
    focusKey,
-@@ -123,5 +127,8 @@ export function useComposerDraft({
+@@ -123,5 +127,9 @@ export function useComposerDraft({
    const draftRef = useRef('')
 +  // Like draftScopeRef, this belongs to the committed editor, not a pending render.
 +  const draftOwnerRef = useRef(draftOwner)
@@ -18381,10 +18429,11 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..09e57873d0e23c78101486fcb9ed862d
    // The uncertain send this draft was restored from, while the text is still exactly that send.
    const draftRetryRef = useRef<ComposerDraftRetry | undefined>(undefined)
 -  const pendingDraftPersistRef = useRef<{ scope: string | null; text: string } | null>(null)
++  const [recovery, setRecovery] = useState<ComposerDraftRetry>()
 +  const pendingDraftPersistRef = useRef<{ scope: string | null; text: string; owner: SessionOwnerScope } | null>(null)
    const draftPersistTimerRef = useRef<number | undefined>(undefined)
-@@ -302,30 +309,6 @@ export function useComposerDraft({
- 
+@@ -302,30 +310,6 @@ export function useComposerDraft({
+
 -  const stashAt = (scope: string | null, text = draftRef.current, attachments = attachmentScope.$attachments.get()) =>
 -    stashSessionDraft(scope, text, attachments)
 -
@@ -18413,21 +18462,50 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..09e57873d0e23c78101486fcb9ed862d
 -
 -    return retry
 -  }
-+  const { stashAt, rememberDraftRetry, takeDraftRetry } = useMemo(
++  const { stashAt, rememberDraftRetry, takeDraftRetry: spendDraftRetry } = useMemo(
 +    () => createComposerDraftAccess({ attachmentScope, draftRef, draftOwnerRef, draftRetryRef, draftScopeRef }),
 +    [attachmentScope]
 +  )
- 
-@@ -468,6 +451,6 @@ export function useComposerDraft({
+
+@@ -399,2 +383,25 @@ export function useComposerDraft({
+
++  const loadRecoveredDraft = (text: string, attachments: ComposerAttachment[], retry?: ComposerDraftRetry) => {
++    // The switch has already persisted the new identity. Painting must not clear it as an edit.
++    draftRetryRef.current = undefined
++    loadIntoComposer(text, attachments)
++    draftRetryRef.current = retry
++    setRecovery(retry?.recovery ? retry : undefined)
++    requestMainFocus()
++  }
++
++  const takeDraftRetry = (text: string, attachments: ComposerAttachment[]) => {
++    const recovered = draftRetryRef.current?.recovery
++    const retry = spendDraftRetry(text, attachments)
++
++    if (recovered) {
++      if (!retry) writeDraftRetry(draftScopeRef.current, undefined, draftOwnerRef.current)
++      setRecovery(undefined)
++    }
++
++    return retry
++  }
++
++  const getDraftRetry = () => draftRetryRef.current
++
+   const clearDraft = useCallback(() => {
+@@ -466,8 +473,8 @@ export function useComposerDraft({
+       // An edited (or cleared) restored draft is a new message: it no longer retries the old send.
+-      if (draftRetryRef.current && !draftRetryTextMatches(draftRetryRef.current, text)) {
++      if (draftRetryRef.current && !draftRetryRef.current.recovery && !draftRetryTextMatches(draftRetryRef.current, text)) {
          draftRetryRef.current = undefined
 -        writeDraftRetry(scope, undefined)
 +        writeDraftRetry(scope, undefined, draftOwnerRef.current)
        }
- 
+
 -      const entry = { scope, text }
 +      const entry = { scope, text, owner: draftOwnerRef.current }
        pendingDraftPersistRef.current = entry
-@@ -480,3 +463,6 @@ export function useComposerDraft({
+@@ -480,3 +487,6 @@ export function useComposerDraft({
          // silently filing text under the wrong session.
 -        if (!isPendingDraftPersistCurrent(pendingDraftPersistRef.current, entry)) {
 +        if (
@@ -18435,17 +18513,17 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..09e57873d0e23c78101486fcb9ed862d
 +          !isPendingDraftPersistCurrent(pendingDraftPersistRef.current, entry)
 +        ) {
            return
-@@ -485,3 +471,3 @@ export function useComposerDraft({
+@@ -485,3 +495,3 @@ export function useComposerDraft({
          pendingDraftPersistRef.current = null
 -        stashAt(scope, text)
 +        stashAt(scope, text, attachmentScope.$attachments.get(), entry.owner)
        }, DRAFT_PERSIST_DEBOUNCE_MS)
-@@ -495,3 +481,3 @@ export function useComposerDraft({
+@@ -495,3 +505,3 @@ export function useComposerDraft({
      }
 -  }, [composerRuntime, queueEditRef])
 +  }, [composerRuntime, queueEditRef, stashAt, attachmentScope.$attachments])
- 
-@@ -571,3 +557,6 @@ export function useComposerDraft({
+
+@@ -571,3 +581,6 @@ export function useComposerDraft({
      // later than the route flips the scope, so it is not a usable signal here.
 -    if ((isFreshDraftScope(draftScopeRef.current) || !draftScopeRef.current) && activeQueueSessionKey) {
 +    const owner = typeof draftOwner === 'object' && draftOwner ? { ...draftOwner } : draftOwner
@@ -18453,7 +18531,7 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..09e57873d0e23c78101486fcb9ed862d
 +
 +    if (sameOwner && (isFreshDraftScope(draftScopeRef.current) || !draftScopeRef.current) && activeQueueSessionKey) {
        const freshKey = draftScopeRef.current || freshDraftScope()
-@@ -577,6 +566,6 @@ export function useComposerDraft({
+@@ -577,6 +590,6 @@ export function useComposerDraft({
        // fresh → stored (#139190), so only this announced handoff does.
 -      if (adoptNewSessionDraft(activeQueueSessionKey)) {
 +      if (adoptNewSessionDraft(activeQueueSessionKey, owner)) {
@@ -18462,21 +18540,22 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..09e57873d0e23c78101486fcb9ed862d
 -    } else if (!activeQueueSessionKey) {
 +    } else if (sameOwner && !activeQueueSessionKey) {
        // The reverse handoff: a session the user was typing into turned out
-@@ -587,3 +576,3 @@ export function useComposerDraft({
+@@ -587,3 +600,3 @@ export function useComposerDraft({
        // verdict announced it. No announcement, no-op.
 -      adoptGoneSessionDraft()
 +      adoptGoneSessionDraft(owner)
      }
-@@ -591,5 +580,6 @@ export function useComposerDraft({
+@@ -591,5 +604,7 @@ export function useComposerDraft({
      draftScopeRef.current = activeQueueSessionKey
 -    draftRetryRef.current = readDraftRetry(activeQueueSessionKey)
 +    draftOwnerRef.current = owner
 +    draftRetryRef.current = readDraftRetry(activeQueueSessionKey, owner)
- 
++    setRecovery(draftRetryRef.current?.recovery ? draftRetryRef.current : undefined)
+
 -    const { attachments, text } = takeSessionDraft(activeQueueSessionKey)
 +    const { attachments, text } = takeSessionDraft(activeQueueSessionKey, owner)
      loadIntoComposer(text, attachments, true)
-@@ -601,8 +591,8 @@ export function useComposerDraft({
+@@ -601,8 +616,8 @@ export function useComposerDraft({
        if (editing?.sessionKey === activeQueueSessionKey) {
 -        stashAt(activeQueueSessionKey, editing.draft, editing.attachments)
 +        stashAt(activeQueueSessionKey, editing.draft, editing.attachments, owner)
@@ -18487,26 +18566,33 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..09e57873d0e23c78101486fcb9ed862d
      }
 -  }, [activeQueueSessionKey]) // eslint-disable-line react-hooks/exhaustive-deps
 +  }, [activeQueueSessionKey, ownerIdentity]) // eslint-disable-line react-hooks/exhaustive-deps
- 
-@@ -623,4 +613,4 @@ export function useComposerDraft({
+
+@@ -623,4 +638,5 @@ export function useComposerDraft({
      reloadPersistedDrafts()
 -    draftRetryRef.current = readDraftRetry(draftScopeRef.current)
 -    const stashed = takeSessionDraft(draftScopeRef.current)
 +    draftRetryRef.current = readDraftRetry(draftScopeRef.current, draftOwnerRef.current)
++    setRecovery(draftRetryRef.current?.recovery ? draftRetryRef.current : undefined)
 +    const stashed = takeSessionDraft(draftScopeRef.current, draftOwnerRef.current)
      loadIntoComposer(stashed.text, stashed.attachments)
-@@ -664,5 +654,6 @@ export function useComposerDraft({
+@@ -664,5 +680,6 @@ export function useComposerDraft({
      }
 -  }, [syncDraftFromEditor])
 +  }, [syncDraftFromEditor, stashAt])
- 
+
    return {
 +    ownerIdentity,
      activeQueueSessionKeyRef,
-@@ -670,2 +661,3 @@ export function useComposerDraft({
+@@ -670,2 +687,3 @@ export function useComposerDraft({
      draftScopeRef,
 +    draftOwnerRef,
      draftRef,
+@@ -679,2 +697,5 @@ export function useComposerDraft({
+     loadIntoComposer,
++    loadRecoveredDraft,
++    getDraftRetry,
++    recovery,
+     rememberDraftRetry,
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-file-paste.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-file-paste.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..33e83bfb74f1364a64afee6819d52a32dd7cd9a8
@@ -18764,11 +18850,95 @@ index b43a453ce927f76bdc0a7b9b96a463247982aaa1..23f32b4e6b23aa8c862aebee4853d1b7
 +  expect(takeSessionDraft('stored-B').text.trim()).toBe('Keep my newer unsent message')
 +  expect(onSubmit).toHaveBeenCalledTimes(1)
 +})
+diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.test.tsx b/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.test.tsx
+index d929e041de641a0d5ef8afe59196e3c00467c280..2e1601c2c45513b90262044bef1e1f497a8e63dd 100644
+--- a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.test.tsx
++++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.test.tsx
+@@ -13,2 +13,4 @@ import {
+ import { $queuedPromptsBySession, clearQueuedPrompts, getQueuedPrompts } from '@/store/composer-queue'
++import { type ComposerDraftRetry, draftRetry, matchingDraftRetry } from '@/store/composer-draft-retry'
++import { $confirmRequest, settleConfirm } from '@/store/confirm'
+ import { $connectionRequests, type ConnectionRequest } from '@/store/connection-request'
+@@ -38,2 +40,3 @@ interface SubmitHarnessOptions {
+   inputDisabled?: boolean
++  recovered?: ComposerDraftRetry
+   scopeTarget?: ComposerTarget
+@@ -53,2 +56,3 @@ function renderSubmitHook({
+   inputDisabled = false,
++  recovered,
+   scopeTarget = 'main',
+@@ -124,2 +128,8 @@ function renderSubmitHook({
+         focusInput: vi.fn(),
++        getDraftRetry: () => recovered,
++        takeDraftRetry: (value, files) => {
++          const matched = matchingDraftRetry(recovered, value, files)
++          recovered = undefined
++          return matched
++        },
+         inputDisabled,
+@@ -1027 +1037,57 @@ describe('useComposerSubmit with a setup card waiting in the onboarding chat', (
+ })
++
++
++describe('submitting a recovered send', () => {
++  const recovered = { ...draftRetry('original-id', 'Earlier input', []), recovery: {
++    attachmentCount: 0, attachmentLabels: []
++  } }
++
++  afterEach(() => {
++    settleConfirm(false)
++    cleanup()
++  })
++
++  it('sends the unchanged payload with the original id and requires idempotent admission', () => {
++    const f = renderSubmitHook({ text: 'Earlier input', recovered })
++    act(() => f.hook.result.current.submitDraft())
++    expect(f.onSubmit).toHaveBeenCalledExactlyOnceWith('Earlier input', expect.objectContaining({
++      submission_id: 'original-id', requireIdempotentSubmit: true
++    }))
++    expect($confirmRequest.get()).toBeNull()
++  })
++
++  it('requires acknowledgment before sending an edited payload under a new id', async () => {
++    const f = renderSubmitHook({ text: 'Edited input', recovered })
++    act(() => f.hook.result.current.submitDraft())
++    expect(f.onSubmit).not.toHaveBeenCalled()
++    expect($confirmRequest.get()?.title).toBe('Send edited copy as new?')
++    await act(async () => settleConfirm(false))
++    expect(f.clearDraft).not.toHaveBeenCalled()
++    act(() => f.hook.result.current.submitDraft())
++    await act(async () => settleConfirm(true))
++    expect(f.onSubmit).toHaveBeenCalledExactlyOnceWith('Edited input', expect.objectContaining({
++      submission_id: expect.not.stringMatching(/^original-id$/)
++    }))
++  })
++
++  it('does not confirm a recovered edit after its pane goes away', async () => {
++    const f = renderSubmitHook({ text: 'Edited input', recovered })
++    act(() => f.hook.result.current.submitDraft())
++    f.hook.unmount()
++    await act(async () => settleConfirm(true))
++    expect(f.onSubmit).not.toHaveBeenCalled()
++  })
++
++  it('does not steer or queue a recovered draft under a fresh identity while busy', () => {
++    const f = renderSubmitHook({ text: 'Earlier input', recovered, busy: true })
++    act(() => {
++      f.hook.result.current.submitDraft()
++      f.hook.result.current.steerDraft()
++      f.hook.result.current.queueDraft()
++    })
++    expect(f.onSteer).not.toHaveBeenCalled()
++    expect(f.queueCurrentDraft).not.toHaveBeenCalled()
++    expect(f.onSubmit).not.toHaveBeenCalled()
++    expect(f.clearDraft).not.toHaveBeenCalled()
++  })
++})
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.ts
-index c9ad1304796e1cef782ac3f75504b49c97ccc600..371a59b89c5777c3906c24e34c82db13acc2d97f 100644
+index c9ad1304796e1cef782ac3f75504b49c97ccc600..f2ce5bfc876c9bcfd3d101ba84efb33aa1054c4d 100644
 --- a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.ts
 +++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.ts
-@@ -10,9 +10,4 @@ import type { BusyInputMode } from '@/store/busy-input-mode'
+@@ -10,12 +10,9 @@ import type { BusyInputMode } from '@/store/busy-input-mode'
  import { hasClarifyRequest, skipClarifyRequest } from '@/store/clarify'
 -import {
 -  clearSessionDraft,
@@ -18778,23 +18948,32 @@ index c9ad1304796e1cef782ac3f75504b49c97ccc600..371a59b89c5777c3906c24e34c82db13
 -} from '@/store/composer'
 -import { type ComposerDraftRetry, draftRetry } from '@/store/composer-draft-retry'
 +import { type ComposerAttachment, freezeComposerTransportPayload, freshDraftScope } from '@/store/composer'
-+import { type ComposerDraftRetry } from '@/store/composer-draft-retry'
++import { attachmentIds, type ComposerDraftRetry, matchingDraftRetry } from '@/store/composer-draft-retry'
  import { resetBrowseState } from '@/store/composer-input-history'
-@@ -23,2 +18,3 @@ import { answerParkedCard, skipParkedCards, yieldParkedCardsToMessage } from '@/
+ import { enqueueQueuedPrompt, type QueuedPromptEntry, serverOwnsComposerQueue } from '@/store/composer-queue'
++import { confirm } from '@/store/confirm'
+ import { hasConnectionRequest, skipConnectionRequest } from '@/store/connection-request'
++import { draftOwnerKey } from '@/store/composer-draft-owner'
+ import { notify } from '@/store/notifications'
+@@ -23,2 +20,3 @@ import { answerParkedCard, skipParkedCards, yieldParkedCardsToMessage } from '@/
  import { hasBlockingPromptRequest } from '@/store/prompts'
 +import type { SessionOwnerScope } from '@/store/session-request-router'
- 
-@@ -31,2 +27,5 @@ import type { ChatBarProps } from '../types'
- 
+
+@@ -31,2 +29,5 @@ import type { ChatBarProps } from '../types'
+
 +import { createComposerDraftRestorer } from './composer-draft-restore'
 +import { createComposerSubmitDispatch } from './composer-submit-dispatch'
 +
  interface UseComposerSubmitArgs {
-@@ -39,2 +38,3 @@ interface UseComposerSubmitArgs {
+@@ -39,2 +40,3 @@ interface UseComposerSubmitArgs {
    disabled: boolean
 +  draftOwnerRef?: RefObject<SessionOwnerScope>
    draftScopeRef: RefObject<string | null>
-@@ -56,5 +56,5 @@ interface UseComposerSubmitArgs {
+@@ -45,2 +47,3 @@ interface UseComposerSubmitArgs {
+   focusInput: () => void
++  getDraftRetry?: () => ComposerDraftRetry | undefined
+   inputDisabled: boolean
+@@ -56,5 +59,5 @@ interface UseComposerSubmitArgs {
    setComposerText: (value: string) => void
 -  stashAt: (scope: string | null, text?: string, attachments?: ComposerAttachment[]) => void
 +  stashAt: (scope: string | null, text?: string, attachments?: ComposerAttachment[], owner?: SessionOwnerScope) => void
@@ -18802,12 +18981,16 @@ index c9ad1304796e1cef782ac3f75504b49c97ccc600..371a59b89c5777c3906c24e34c82db13
 -  rememberDraftRetry?: (scope: string | null, retry: ComposerDraftRetry) => void
 +  rememberDraftRetry?: (scope: string | null, retry: ComposerDraftRetry, owner?: SessionOwnerScope) => void
    takeDraftRetry?: (text: string, attachments: ComposerAttachment[]) => ComposerDraftRetry | undefined
-@@ -80,2 +80,3 @@ export function useComposerSubmit({
+@@ -80,2 +83,3 @@ export function useComposerSubmit({
    draftScopeRef,
 +  draftOwnerRef,
    draftRef,
-@@ -106,78 +107,29 @@ export function useComposerSubmit({
- 
+@@ -85,2 +89,3 @@ export function useComposerSubmit({
+   focusInput,
++  getDraftRetry,
+   inputDisabled,
+@@ -106,78 +111,29 @@ export function useComposerSubmit({
+
 -  // Shared send primitive: fire onSubmit, and if the gateway rejects (accepted
 -  // === false) or throws, re-stash the draft so the words survive. Repaint it
 -  // only while the same session still owns the visible composer; a late reject
@@ -18912,7 +19095,7 @@ index c9ad1304796e1cef782ac3f75504b49c97ccc600..371a59b89c5777c3906c24e34c82db13
 +  // External requests match the captured target and visible surface: mounted panes can share a session.
 +  // While busy, steer or enqueue instead of dropping the user's click; hidden notes retain their kind.
    const externalSubmitRef = useRef({ busy, dispatchSubmit, onSteer, onSteerHidden })
-@@ -328,11 +280,3 @@ export function useComposerSubmit({
+@@ -328,11 +284,3 @@ export function useComposerSubmit({
      // Like dispatchSubmit's restore: an answer that never reached the backend gives the words back.
 -    const answeredScope = draftScopeRef.current
 -
@@ -18924,19 +19107,138 @@ index c9ad1304796e1cef782ac3f75504b49c97ccc600..371a59b89c5777c3906c24e34c82db13
 -      }
 -    }
 +    const restore = restoreDraft(draftScopeRef.current, text, [])
- 
-@@ -464,3 +408,4 @@ export function useComposerSubmit({
- 
+
+@@ -366,2 +314,77 @@ export function useComposerSubmit({
+
++  const submitIdle = (text: string, files: ComposerAttachment[], editedCopy = false) => {
++    const submittedAttachments = cloneAttachments(files)
++    const retry = takeDraftRetry?.(text, submittedAttachments)
++    triggerHaptic('submit')
++    resetBrowseState(sessionId)
++    clearDraft()
++    // The optimistic bubble owns any blob previews after this handoff.
++    scope.attachments.clear({ retainPreviewUrls: true })
++    dispatchSubmit(
++      text,
++      submittedAttachments,
++      undefined,
++      !editedCopy && retry
++        ? {
++            submission_id: retry.id,
++            ...(retry.recovery ? { requireIdempotentSubmit: true } : {})
++          }
++        : undefined
++    )
++  }
++
++  const recoveredSendReady = useRef(false)
++  const recoveredSendAvailable = !disabled && !inputDisabled && !busy && !queueEdit && paneVisible
++  useLayoutEffect(() => {
++    recoveredSendReady.current = recoveredSendAvailable
++    return () => {
++      recoveredSendReady.current = false
++    }
++  }, [recoveredSendAvailable])
++
++  const notifyRecoveredBusy = () => notify({ kind: 'warning', title: t.composer.retainedSendBusy, message: '' })
++
++  const submitRecovered = (retry: ComposerDraftRetry, text: string, files: ComposerAttachment[]) => {
++    if (!recoveredSendReady.current || hasBlockingPromptRequest(sessionId)) {
++      notifyRecoveredBusy()
++      return
++    }
++
++    if (matchingDraftRetry(retry, text, files)) {
++      submitIdle(text, files)
++      focusInput()
++      return
++    }
++
++    const storedScope = draftScopeRef.current
++    const ownerKey = draftOwnerKey(draftOwnerRef?.current)
++    const originalFiles = JSON.stringify(attachmentIds(files))
++    void confirm({
++      title: t.composer.retainedSendEditConfirm,
++      description: t.composer.retainedSendEditDescription,
++      confirmLabel: t.composer.retainedSendEditAction
++    }).then(approved => {
++      if (
++        !approved ||
++        !recoveredSendReady.current ||
++        getDraftRetry?.() !== retry ||
++        draftScopeRef.current !== storedScope ||
++        draftOwnerKey(draftOwnerRef?.current) !== ownerKey ||
++        hasBlockingPromptRequest(sessionId)
++      )
++        return
++
++      const live = readCurrentDraft()
++      if (
++        pathifyRefs(live.text) !== text ||
++        JSON.stringify(attachmentIds(live.attachments)) !== originalFiles ||
++        live.attachments.some(file => file.uploadState === 'uploading' || file.uploadState === 'error')
++      )
++        return
++
++      submitIdle(text, live.attachments, true)
++      focusInput()
++    })
++  }
++
+   const submitDraft = () => {
+@@ -394,4 +417,10 @@ export function useComposerSubmit({
+     const text = pathifyRefs(draftRef.current)
+-    const payloadPresent = text.trim().length > 0 || attachments.length > 0
++    const liveFiles = scope.attachments.$attachments.get()
++    const retry = getDraftRetry?.()
++    if (!queueEdit && retry?.recovery && (text.trim() || liveFiles.length)) {
++      submitRecovered(retry, text, liveFiles)
++      return
++    }
+
++    const payloadPresent = text.trim().length > 0 || attachments.length > 0
+     const parked = answerParkedCardWithDraft(text, payloadPresent)
+@@ -421,11 +450,3 @@ export function useComposerSubmit({
+     } else if (payloadPresent) {
+-      const submittedAttachments = cloneAttachments(attachments)
+-      const retry = takeDraftRetry?.(text, submittedAttachments)
+-      triggerHaptic('submit')
+-      resetBrowseState(sessionId)
+-      clearDraft()
+-      // Keep blob: previews alive for the optimistic bubble; revoke when that
+-      // consumer is discarded/replaced (not here — clear would race the clone).
+-      scope.attachments.clear({ retainPreviewUrls: true })
+-      dispatchSubmit(text, submittedAttachments, undefined, retry && { submission_id: retry.id })
++      submitIdle(text, attachments)
+     }
+@@ -439,2 +460,7 @@ export function useComposerSubmit({
+   const steerDraft = (mode: 'interrupt' | 'steer' = 'interrupt') => {
++    if (getDraftRetry?.()?.recovery) {
++      notifyRecoveredBusy()
++      return
++    }
++
+     const text = draftRef.current.trim()
+@@ -464,3 +490,4 @@ export function useComposerSubmit({
+
 -    const submittedScope = activeQueueSessionKeyRef.current
 +    const submittedScope = draftScopeRef.current || freshDraftScope()
 +    const restore = restoreDraft(submittedScope, frozen.displayText, [], draftOwnerRef?.current ?? null)
- 
-@@ -477,4 +422,3 @@ export function useComposerSubmit({
+
+@@ -477,4 +504,3 @@ export function useComposerSubmit({
        if (!activeQueueSessionKey) {
 -        loadIntoComposer(frozen.displayText, [])
 -        stashAt(submittedScope, frozen.displayText, [])
 +        restore()
        } else if (canonical) {
+@@ -511,2 +537,7 @@ export function useComposerSubmit({
+
++    if (getDraftRetry?.()?.recovery) {
++      notifyRecoveredBusy()
++      return
++    }
++
+     queueCurrentDraft()
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-undo.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-undo.ts
 index 72f891f6dac0bcf3e9638b2f5aefa926405cb34b..c2b5b3d84a9b5e84b1a63da989e3956f05d570a5 100644
 --- a/apps/desktop/src/app/chat/composer/hooks/use-composer-undo.ts
@@ -18960,7 +19262,7 @@ index 72f891f6dac0bcf3e9638b2f5aefa926405cb34b..c2b5b3d84a9b5e84b1a63da989e3956f
 +
    const snapshot = useCallback((): ComposerSnapshot => {
 diff --git a/apps/desktop/src/app/chat/composer/index.tsx b/apps/desktop/src/app/chat/composer/index.tsx
-index aee9bf96c50cee698de0c72fff94dc22f26a541f..d7ba2b69bcc758a221913731be79d0b5ea65d89d 100644
+index aee9bf96c50cee698de0c72fff94dc22f26a541f..8917148a837a7a7adc48e6d583943d0c500b52bc 100644
 --- a/apps/desktop/src/app/chat/composer/index.tsx
 +++ b/apps/desktop/src/app/chat/composer/index.tsx
 @@ -29,2 +29,3 @@ import { useStoreSelector, useStoresSelector } from '@/lib/use-session-slice'
@@ -19128,22 +19430,29 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..d7ba2b69bcc758a221913731be79d0b5
        <ComposerDirectiveActions editorRef={editorRef} />
 +
        {/* assistant-ui requires ComposerPrimitive.Input somewhere in the tree
-@@ -1305,4 +1327,5 @@ export function ChatBar({
+@@ -1302,7 +1324,8 @@ export function ChatBar({
+             <PreparedImageRecovery
+-              occupied={hasText || attachments.length > 0 || busy || disabled}
++              occupied={hasText || attachments.length > 0 || Boolean(draft.recovery) || busy || disabled}
+               onRestore={(text, restored, id) => {
                  loadIntoComposer(text, restored)
 -                rememberDraftRetry(activeQueueSessionKey, draftRetry(id, text, restored))
 +                rememberDraftRetry(activeQueueSessionKey, draftRetry(id, text, restored), draftOwner)
                }}
 +              owner={draftOwner}
                request={requestBusyConfig}
-@@ -1487,7 +1510,3 @@ export function ChatBar({
+@@ -1487,6 +1510,7 @@ export function ChatBar({
                    <ContribSlot area={COMPOSER_AREAS.top} />
 -                  <RestoredDraftNotice
 -                    freshDraft={activeQueueSessionKey === null}
 -                    onUndone={clearDraft}
 -                    readLiveText={syncDraftFromEditor}
--                  />
-+                  <ComposerDraftRecovery draft={draft} owner={draftOwner} scope={activeQueueSessionKey} />
-                   <VoiceActivity state={voiceActivityState} />
++                  <ComposerDraftRecovery
++                    disabled={inputDisabled || Boolean(queueEdit)}
++                    draft={draft}
++                    owner={draftOwner}
++                    scope={activeQueueSessionKey}
+                   />
 diff --git a/apps/desktop/src/app/chat/composer/paste-files.test.tsx b/apps/desktop/src/app/chat/composer/paste-files.test.tsx
 new file mode 100644
 index 0000000000000000000000000000000000000000..a4af4194220b86b7f5fb5b75aca1b1fe91692b6d
@@ -20066,10 +20375,10 @@ index 609a4d3cabbd53af16e756cfefd9fb4b50a9266e..ad0ed78b19a944fda49e97f0a4e67506
            type="button"
 diff --git a/apps/desktop/src/app/chat/composer/retained-send-notice.test.tsx b/apps/desktop/src/app/chat/composer/retained-send-notice.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..e8ce0356cb156f084d5a4392014487fe8d68303e
+index 0000000000000000000000000000000000000000..deb8ff5162d06764926ed3c281c084200181fdce
 --- /dev/null
 +++ b/apps/desktop/src/app/chat/composer/retained-send-notice.test.tsx
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,80 @@
 +import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 +import { useState } from 'react'
 +import { afterEach, expect, it } from 'vitest'
@@ -20089,8 +20398,8 @@ index 0000000000000000000000000000000000000000..e8ce0356cb156f084d5a4392014487fe
 +  return (
 +    <>
 +      <RetainedSendNotice
-+        canRestore={() => !occupied}
-+        empty={!occupied}
++        readCurrent={() => ({ text: restored || (occupied ? 'Current input' : ''), attachments: [] })}
++        occupied={occupied || Boolean(restored)}
 +        onRestored={text => setRestored(text)}
 +        owner={owner}
 +        scope={scope}
@@ -20122,16 +20431,22 @@ index 0000000000000000000000000000000000000000..e8ce0356cb156f084d5a4392014487fe
 +  expect(retainedRejectedDrafts(scope, owner)).toEqual([])
 +})
 +
-+it('never replaces an occupied editor or exposes another owner recovery', () => {
++it('parks live input, restores the earlier text, and returns without crossing owners', () => {
 +  stashSessionDraft(scope, 'Current input', [], owner)
 +  retainRejectedDraft(scope, 'Earlier input', [], owner, 'retained-id')
 +  retainRejectedDraft(scope, 'Other owner private input', [], { ...owner, profile: 'other' }, 'other-id')
 +  const { container } = render(<Harness occupied />)
 +  fireEvent.click(container.querySelector('summary')!)
-+  fireEvent.click(screen.getByRole('button', { name: 'Restore message' }))
-+  expect(takeSessionDraft(scope, owner).text).toBe('Current input')
 +  expect(container.textContent).not.toContain('Other owner private input')
-+  expect(retainedRejectedDrafts(scope, owner)).toHaveLength(1)
++  fireEvent.click(screen.getByRole('button', { name: 'Park draft and edit failed message' }))
++  expect(container.querySelector('output')?.textContent).toBe('Earlier input')
++  expect(readDraftRetry(scope, owner)?.id).toBe('retained-id')
++  expect(retainedRejectedDrafts(scope, owner).map(row => row.text)).toEqual(['Current input'])
++
++  fireEvent.click(screen.getByRole('button', { name: 'Return to parked draft' }))
++  expect(container.querySelector('output')?.textContent).toBe('Current input')
++  expect(readDraftRetry(scope, owner)).toBeUndefined()
++  expect(retainedRejectedDrafts(scope, owner).map(row => row.text)).toEqual(['Earlier input'])
 +})
 +
 +it('removes a recovery affordance when the existing draft store retires that entry', () => {
@@ -20146,19 +20461,21 @@ index 0000000000000000000000000000000000000000..e8ce0356cb156f084d5a4392014487fe
 +})
 diff --git a/apps/desktop/src/app/chat/composer/retained-send-notice.tsx b/apps/desktop/src/app/chat/composer/retained-send-notice.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..5bf5baefcb36f1e31fa01173895bda29097a8993
+index 0000000000000000000000000000000000000000..00866453bb114e5b0a502cda9c2f6682bdad7b5a
 --- /dev/null
 +++ b/apps/desktop/src/app/chat/composer/retained-send-notice.tsx
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,117 @@
 +import { Button } from '@/components/ui/button'
 +import { useI18n } from '@/i18n'
 +import { useSessionSlice } from '@/lib/use-session-slice'
 +import type { ComposerAttachment } from '@/store/composer'
++import type { ComposerDraftRetry } from '@/store/composer-draft-retry'
 +import {
 +  $retainedSendScopes,
 +  discardRejectedDraft,
 +  readRetainedSend,
 +  restoreRejectedDraft,
++  retainedMissingFiles,
 +  retainedSendGroup
 +} from '@/store/composer-rejected-drafts'
 +import { notifyError } from '@/store/notifications'
@@ -20167,77 +20484,101 @@ index 0000000000000000000000000000000000000000..5bf5baefcb36f1e31fa01173895bda29
 +interface Props {
 +  scope: string | null
 +  owner: SessionOwnerScope
-+  empty: boolean
-+  canRestore: () => boolean
-+  onRestored: (text: string, attachments: ComposerAttachment[], id?: string) => void
++  occupied: boolean
++  disabled?: boolean
++  readCurrent: () => { text: string; attachments: ComposerAttachment[] } | undefined
++  onRestored: (text: string, attachments: ComposerAttachment[], retry?: ComposerDraftRetry) => void
 +}
 +
-+/** A user gesture copies saved input; this surface never submits or drains it. */
-+export function RetainedSendNotice({ scope, owner, empty, canRestore, onRestored }: Props) {
++export function RecoveryFiles({ count, labels }: { count: number; labels: string[] }) {
++  const { t } = useI18n()
++  if (count <= 0) return null
++
++  return (
++    <div className="text-xs text-muted-foreground">
++      <p>{t.composer.retainedSendFiles(count)}</p>
++      {labels.length > 0 && (
++        <ul className="list-inside list-disc break-all">
++          {labels.map((label, index) => (
++            <li key={index}>{label}</li>
++          ))}
++        </ul>
++      )}
++      <p>{t.composer.retainedSendMissingAttachments}</p>
++    </div>
++  )
++}
++
++/** The user switches editors here. The normal Send action owns dispatch. */
++export function RetainedSendNotice({ scope, owner, occupied, disabled, readCurrent, onRestored }: Props) {
 +  const { t } = useI18n()
 +  const copy = t.composer
 +  const rows = useSessionSlice($retainedSendScopes, retainedSendGroup(scope, owner))
 +  const entries = rows.flatMap(row => readRetainedSend(row.scope, owner) ?? [])
++  const hasFailed = entries.some(entry => !entry.meta?.parked)
 +
-+  if (!entries.length) {
-+    return null
-+  }
++  if (!entries.length) return null
 +
 +  return (
 +    <details className="text-xs text-muted-foreground" data-slot="composer-retained-send">
 +      <summary className="cursor-pointer">
-+        {copy.retainedSendNotice} ({entries.length})
++        {hasFailed ? copy.retainedSendNotice : copy.parkedDraftNotice} ({entries.length})
 +      </summary>
-+      {entries.map(entry => (
-+        <div className="flex items-center gap-2 py-1" key={entry.scope}>
-+          <span className="min-w-0 flex-1 truncate">
-+            {entry.text || entry.attachments.map(item => item.label).join(', ')}
-+          </span>
-+          {entry.attachmentCount > entry.attachments.length && <span>{copy.retainedSendMissingAttachments}</span>}
-+          <Button
-+            disabled={!empty}
-+            onClick={() => {
-+              if (!canRestore()) {
-+                return
-+              }
++      <div className="mt-2 max-h-56 space-y-2 overflow-y-auto overscroll-contain">
++        {entries.map(entry => {
++          const action = entry.meta?.parked
++            ? copy.parkedDraftReturn
++            : occupied
++              ? copy.retainedSendEdit
++              : copy.retainedSendRestore
++          return (
++            <div className="space-y-2 rounded-md border border-border px-3 py-2" key={entry.scope}>
++              {entry.text && <p className="whitespace-pre-wrap wrap-anywhere text-foreground">{entry.text}</p>}
++              {entry.attachments.length > 0 && (
++                <p className="break-all">{entry.attachments.map(file => file.label).join(', ')}</p>
++              )}
++              <RecoveryFiles {...retainedMissingFiles(entry)} />
++              <div className="flex flex-wrap items-center gap-2">
++                <Button
++                  className="h-auto min-h-7 whitespace-normal text-left"
++                  disabled={disabled}
++                  onClick={() => {
++                    const current = readCurrent()
++                    if (!current) return
 +
-+              const restored = restoreRejectedDraft(entry.scope, scope, owner)
-+
-+              if (restored) {
-+                onRestored(restored.text, restored.attachments, restored.id)
-+
-+                if (!restored.saved) {
-+                  notifyError(
-+                    new Error('Could not persist the restored message: storage failure'),
-+                    copy.retainedSendRestore
-+                  )
-+                }
-+              }
-+            }}
-+            size="sm"
-+            type="button"
-+            variant="ghost"
-+          >
-+            {copy.retainedSendRestore}
-+          </Button>
-+          <Button
-+            aria-label={copy.retainedSendDiscard}
-+            onClick={() => {
-+              if (!discardRejectedDraft(entry.scope, owner)) {
-+                notifyError(
-+                  new Error('Could not discard the retained message: storage failure'),
-+                  copy.retainedSendDiscard
-+                )
-+              }
-+            }}
-+            size="sm"
-+            type="button"
-+            variant="ghost"
-+          >
-+            ×
-+          </Button>
-+        </div>
-+      ))}
++                    const restored = restoreRejectedDraft(entry.scope, scope, owner, current)
++                    if (!restored) return
++                    if (restored.saved) {
++                      onRestored(restored.text, restored.attachments, restored.retry)
++                    } else {
++                      notifyError(new Error('Could not save the draft switch.'), action)
++                    }
++                  }}
++                  size="sm"
++                  type="button"
++                  variant="outline"
++                >
++                  {action}
++                </Button>
++                <Button
++                  aria-label={copy.retainedSendDiscard}
++                  disabled={disabled}
++                  onClick={() => {
++                    if (!discardRejectedDraft(entry.scope, owner)) {
++                      notifyError(new Error('Could not discard the saved draft.'), copy.retainedSendDiscard)
++                    }
++                  }}
++                  size="sm"
++                  type="button"
++                  variant="ghost"
++                >
++                  ×
++                </Button>
++              </div>
++            </div>
++          )
++        })}
++      </div>
 +    </details>
 +  )
 +}
@@ -21281,19 +21622,26 @@ index 98dcd623ac5805f845cb724e9739d35271b92672..7bba66937e9a24b1297cde988777eb99
        <WorkspaceAddButton
 diff --git a/apps/desktop/src/app/chat/sidebar/use-server-session-search.test.tsx b/apps/desktop/src/app/chat/sidebar/use-server-session-search.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..58cf040b33ec8349529adb8f2b7286ae71c4a480
+index 0000000000000000000000000000000000000000..e379891c3f333fa181f2252d0dc5f7f9cf18694d
 --- /dev/null
 +++ b/apps/desktop/src/app/chat/sidebar/use-server-session-search.test.tsx
-@@ -0,0 +1,73 @@
+@@ -0,0 +1,111 @@
 +import { act, cleanup, renderHook } from '@testing-library/react'
++import { atom } from 'nanostores'
 +import { afterEach, expect, it, vi } from 'vitest'
 +import { useServerSessionSearch } from './use-server-session-search'
++vi.mock('@/store/connections', () => ({ $activeConnectionId: atom<string | null>(null) }))
++import { $activeConnectionId } from '@/store/connections'
++import type { WritableAtom } from 'nanostores'
++
++const connectionId = $activeConnectionId as WritableAtom<string | null>
 +const io = vi.hoisted(() => ({ search: vi.fn() }))
 +vi.mock('@/hermes', async original => ({ ...(await original<typeof import('@/hermes')>()), searchSessions: io.search }))
 +afterEach(() => {
 +  cleanup()
 +  vi.useRealTimers()
 +  io.search.mockReset()
++  connectionId.set(null)
 +})
 +const hit = { id: 'old-hit', title: 'Earlier query', source: 'cli' }
 +async function tick() {
@@ -21323,7 +21671,7 @@ index 0000000000000000000000000000000000000000..58cf040b33ec8349529adb8f2b7286ae
 +  expect(result.current.serverMatches).toEqual([])
 +  expect(result.current.searchError).toBe(false)
 +  await tick()
-+  expect(io.search).toHaveBeenLastCalledWith('earlier', 'other')
++  expect(io.search).toHaveBeenLastCalledWith('earlier', 'other', null)
 +})
 +it('ignores late responses and makes one new request on explicit retry', async () => {
 +  vi.useFakeTimers()
@@ -21358,40 +21706,82 @@ index 0000000000000000000000000000000000000000..58cf040b33ec8349529adb8f2b7286ae
 +  await tick()
 +  expect(io.search).toHaveBeenCalledTimes(3)
 +})
++
++it('retires a previous same-query result on device switch and ignores the late old-device response', async () => {
++  vi.useFakeTimers()
++  connectionId.set('local')
++  let resolveRemote!: (value: unknown) => void
++  io.search
++    .mockResolvedValueOnce({ results: [hit] })
++    .mockReturnValueOnce(
++      new Promise(resolve => {
++        resolveRemote = resolve
++      })
++    )
++    .mockResolvedValueOnce({ results: [] })
++
++  const { result } = renderHook(() => useServerSessionSearch('same query', 'default'))
++  await tick()
++  expect(result.current.serverMatches).toEqual([hit])
++  act(() => connectionId.set('remote'))
++  expect(result.current.serverMatches).toEqual([])
++  expect(result.current.searchPending).toBe(true)
++  await tick()
++  expect(io.search).toHaveBeenLastCalledWith('same query', 'default', 'remote')
++
++  act(() => connectionId.set('local'))
++  expect(result.current.serverMatches).toEqual([])
++  await act(async () => resolveRemote({ results: [hit] }))
++  expect(result.current.serverMatches).toEqual([])
++  await tick()
++  expect(io.search).toHaveBeenLastCalledWith('same query', 'default', 'local')
++  expect(result.current.searchPending).toBe(false)
++})
 diff --git a/apps/desktop/src/app/chat/sidebar/use-server-session-search.ts b/apps/desktop/src/app/chat/sidebar/use-server-session-search.ts
-index 32fd677b19b6111588d2c0a2bf68486442f13b0a..52c7f2235736ff73f40ae62a60dc9b18296a86f8 100644
+index 32fd677b19b6111588d2c0a2bf68486442f13b0a..3e895fcf913eb5ca5d467f70780bef2aecfe2a0a 100644
 --- a/apps/desktop/src/app/chat/sidebar/use-server-session-search.ts
 +++ b/apps/desktop/src/app/chat/sidebar/use-server-session-search.ts
-@@ -6,3 +6,7 @@ import { ALL_PROFILES, normalizeProfileKey } from '@/store/profile'
+@@ -1,4 +1,6 @@
+-import { useEffect, useState } from 'react'
++import { useStore } from '@nanostores/react'
++import { useEffect, useMemo, useState } from 'react'
+
+ import { searchSessions, type SessionSearchResult } from '@/hermes'
++import { $activeConnectionId } from '@/store/connections'
+ import { ALL_PROFILES, normalizeProfileKey } from '@/store/profile'
+@@ -6,3 +8,8 @@ import { ALL_PROFILES, normalizeProfileKey } from '@/store/profile'
  const SEARCH_DEBOUNCE_MS = 200
 -
++type SearchRequest = { query: string; profile: string | null; connectionId: string | null }
 +interface SearchState {
-+  key: string
++  request: SearchRequest
 +  hits: SessionSearchResult[]
 +  failed: boolean
 +}
  export interface ServerSessionSearch {
-@@ -10,42 +14,25 @@ export interface ServerSessionSearch {
+@@ -10,42 +17,28 @@ export interface ServerSessionSearch {
    searchPending: boolean
 +  searchError: boolean
 +  retrySearch: () => void
  }
- 
+
 -/**
 - * Debounced full-text search across *all* sessions (not just the loaded page)
 - * so old sessions stay findable. Hits come from the profile the sidebar shows:
 - * an unscoped request searches the primary backend's launch profile, whatever
 - * profile is on screen. "All profiles" asks the primary as before.
 - */
-+/** Full-text hits belong to one query, profile and explicit attempt. */
++/** Full-text hits belong to one query, connection, profile and attempt. */
  export function useServerSessionSearch(query: string, profileScope: string): ServerSessionSearch {
 -  const [serverMatches, setServerMatches] = useState<SessionSearchResult[]>([])
 -  const [searchPending, setSearchPending] = useState(false)
-+  const [state, setState] = useState<SearchState>({ key: '', hits: [], failed: false })
++  const [state, setState] = useState<SearchState>()
 +  const [attempt, setAttempt] = useState(0)
    const profile = profileScope === ALL_PROFILES ? null : normalizeProfileKey(profileScope)
--
-+  const key = JSON.stringify([query, profile, attempt])
++  const connectionId = useStore($activeConnectionId)
+
++  // Identity also distinguishes a return to a previously visited query or connection.
++  const request = useMemo(() => ({ query, profile, connectionId, attempt }), [query, profile, connectionId, attempt])
    useEffect(() => {
 -    if (!query) {
 -      setServerMatches([])
@@ -21400,7 +21790,7 @@ index 32fd677b19b6111588d2c0a2bf68486442f13b0a..52c7f2235736ff73f40ae62a60dc9b18
 -      return
 -    }
 -
-+    if (!query) return
++    if (!request.query) return
      let cancelled = false
 -
 -    setSearchPending(true)
@@ -21418,28 +21808,29 @@ index 32fd677b19b6111588d2c0a2bf68486442f13b0a..52c7f2235736ff73f40ae62a60dc9b18
 -            setSearchPending(false)
 -          }
 -        })
-+      void searchSessions(query, profile).then(
++      void searchSessions(request.query, request.profile, request.connectionId).then(
 +        res => {
-+          if (!cancelled) setState({ key, hits: res.results, failed: false })
++          if (!cancelled) setState({ request, hits: res.results, failed: false })
 +        },
 +        () => {
-+          if (!cancelled) setState({ key, hits: [], failed: true })
++          if (!cancelled) setState({ request, hits: [], failed: true })
 +        }
 +      )
      }, SEARCH_DEBOUNCE_MS)
 -
      return () => {
-@@ -54,5 +41,10 @@ export function useServerSessionSearch(query: string, profileScope: string): Ser
+@@ -54,5 +47,11 @@ export function useServerSessionSearch(query: string, profileScope: string): Ser
      }
 -  }, [query, profile])
 -
 -  return { searchPending, serverMatches }
-+  }, [query, profile, key])
-+  const current = Boolean(query) && state.key === key
++  }, [request])
++
++  const current = query && state?.request === request ? state : undefined
 +  return {
-+    serverMatches: current ? state.hits : [],
++    serverMatches: current?.hits ?? [],
 +    searchPending: Boolean(query) && !current,
-+    searchError: current && state.failed,
++    searchError: current?.failed ?? false,
 +    retrySearch: () => setAttempt(n => n + 1)
 +  }
  }
@@ -21515,7 +21906,7 @@ index 6dd640fdb343634e5b12418fca2ede6080d0aa8f..299896ab1a40ce68194752c8eb41aa35
 +      <CacheUsageStats totals={totals} />
        <section>
 diff --git a/apps/desktop/src/app/command-palette/index.tsx b/apps/desktop/src/app/command-palette/index.tsx
-index 1c62d1c8548212752ac7b28b9dd844b8bca2e838..c46fb411b65f0f8a78a9e37dfd10b2d31772efab 100644
+index 1c62d1c8548212752ac7b28b9dd844b8bca2e838..9b33691f75fa2465766bacd1b5f589235b4be413 100644
 --- a/apps/desktop/src/app/command-palette/index.tsx
 +++ b/apps/desktop/src/app/command-palette/index.tsx
 @@ -16,5 +16,6 @@ import {
@@ -21542,22 +21933,26 @@ index 1c62d1c8548212752ac7b28b9dd844b8bca2e838..c46fb411b65f0f8a78a9e37dfd10b2d3
 +import { openProjectTarget } from '../session-manager/project-target'
 +import { $projectTree, openFolderAsProject, requestStartWorkSession } from '@/store/projects'
  import { $connection, $cronSessions, $messagingSessions, $sessions } from '@/store/session'
-@@ -119,3 +118,2 @@ import { HighlightWatcher } from './highlight-watcher'
+@@ -98,2 +97,3 @@ import { isUserTheme, resolveTheme } from '@/themes/user-themes'
+ import { buildSessionByAnyId, resolvePinnedSessions } from '../chat/sidebar/session-index'
++import { useFocusCopy } from '../focus/copy'
+ import { openSessionFromPicker, openSessionIntentFromModifiers } from '../open-session'
+@@ -119,3 +119,2 @@ import { HighlightWatcher } from './highlight-watcher'
  import { MarketplaceThemePage } from './marketplace-theme-page'
 -import { PetInlineToggle, PetPalettePage } from './pet-palette-page'
 
-@@ -239,3 +237,3 @@ const scoreItem = (item: PaletteItem, needle: string): number => {
+@@ -239,3 +238,3 @@ const scoreItem = (item: PaletteItem, needle: string): number => {
  // sort), so curated group/item ordering still breaks even scores.
 -const rankGroups = (groups: PaletteGroup[], search: string): PaletteGroup[] => {
 +export const rankGroups = (groups: PaletteGroup[], search: string): PaletteGroup[] => {
    const needle = normalize(search)
-@@ -243,3 +241,4 @@ const rankGroups = (groups: PaletteGroup[], search: string): PaletteGroup[] => {
+@@ -243,3 +242,4 @@ const rankGroups = (groups: PaletteGroup[], search: string): PaletteGroup[] => {
    if (!needle) {
 -    return groups
 +    // Never paint a bare heading over nothing.
 +    return groups.filter(group => group.items.length > 0)
    }
-@@ -395,2 +394,12 @@ type SessionRow = Awaited<ReturnType<typeof listAllProfileSessions>>['sessions']
+@@ -395,2 +395,12 @@ type SessionRow = Awaited<ReturnType<typeof listAllProfileSessions>>['sessions']
 
 +// A chat started since the palette's last fetch (or while it is in flight)
 +// lives only in the sidebar store; list it too, so its title matches as you
@@ -21570,17 +21965,31 @@ index 1c62d1c8548212752ac7b28b9dd844b8bca2e838..c46fb411b65f0f8a78a9e37dfd10b2d3
 +}
 +
  const toSessionEntry = (session: SessionRow): SessionEntry => ({
-@@ -704,3 +713,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+@@ -586,2 +596,4 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+
++  const searchCopy = useFocusCopy()
++  const [searchMessages, setSearchMessages] = useState(false)
+   const [search, setSearch] = useState('')
+@@ -704,3 +716,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
 
 -    return (sessionsQuery.data?.sessions ?? [])
 +    return withFreshLiveSessions(sessionsQuery.data?.sessions ?? [], liveSessions)
        .filter(session => !removedSessionIds.has(session.id))
-@@ -846,3 +855,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+@@ -735,2 +747,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+     if (pendingPage) {
++      setSearchMessages(false)
+       setPage(pendingPage)
+@@ -747,3 +760,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+     inputRef.current?.focus()
+-  }, [page])
++  }, [page, searchMessages])
+
+@@ -846,3 +859,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
            runWithEvent: (event?: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) =>
 -            goToProject(project.id, { newSession: Boolean(event?.metaKey || event?.ctrlKey) })
 +            openProjectTarget(project.id, event, navigate)
          }))
-@@ -1032,17 +1041,4 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+@@ -1032,17 +1045,4 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
              to: 'color-mode'
 -          },
 -          {
@@ -21599,7 +22008,7 @@ index 1c62d1c8548212752ac7b28b9dd844b8bca2e838..c46fb411b65f0f8a78a9e37dfd10b2d3
            }
 +
          ]
-@@ -1490,8 +1486,2 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+@@ -1490,8 +1490,2 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
        },
 -      // Server-driven page: browse petdex gallery, adopt/switch, toggle off.
 -      pets: {
@@ -21608,13 +22017,62 @@ index 1c62d1c8548212752ac7b28b9dd844b8bca2e838..c46fb411b65f0f8a78a9e37dfd10b2d3
 -        groups: []
 -      },
        // Server-driven page: items come from the Marketplace, rendered by
-@@ -1672,16 +1662,7 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+@@ -1528,3 +1522,13 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+   const visibleGroups = useMemo(() => rankGroups(unrankedGroups, search), [unrankedGroups, search])
+-  const placeholder = activePage ? activePage.placeholder : t.commandCenter.searchPlaceholder
++  const placeholder = searchMessages
++    ? searchCopy('messageSearchPlaceholder')
++    : activePage?.placeholder ?? t.commandCenter.searchPlaceholder
++  const pageTitle = searchMessages ? searchCopy('searchInMessages') : activePage?.title
++  const backToParent = () => {
++    if (searchMessages) {
++      setSearchMessages(false)
++    } else {
++      goBack()
++    }
++  }
+
+@@ -1634,8 +1638,11 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+         <DialogPrimitive.Title className="sr-only">{t.commandCenter.paletteTitle}</DialogPrimitive.Title>
+-        <Command className="bg-transparent" loop shouldFilter={false}>
++        <Command className="bg-transparent" key={searchMessages ? 'messages' : 'commands'} label={placeholder} loop shouldFilter={false}>
+           <HighlightWatcher onValue={handleHighlight} />
+-          {activePage && (
++          {pageTitle && (
+             <button
+               className="flex w-full items-center gap-1.5 border-b border-border px-3 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:text-foreground"
+-              onClick={goBack}
++              onClick={backToParent}
++              onKeyDown={event => {
++                if (event.key === 'Enter') event.stopPropagation()
++              }}
+               type="button"
+@@ -1645,3 +1652,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+               <span className="text-muted-foreground/50">/</span>
+-              <span className="font-medium text-foreground">{activePage.title}</span>
++              <span className="font-medium text-foreground">{pageTitle}</span>
+             </button>
+@@ -1655,3 +1662,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+
+-              if (!activePage) {
++              if (!pageTitle) {
+                 return
+@@ -1664,3 +1671,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+                 event.stopPropagation()
+-                goBack()
++                backToParent()
+
+@@ -1672,16 +1679,11 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
              ref={inputRef}
 -            right={page === 'pets' ? <PetInlineToggle /> : undefined}
              value={search}
            />
 -          <CommandList className="dt-portal-scrollbar max-h-[min(20rem,56vh)]">
-+          <SavedChatList query={page ? '' : search}>
++          <SavedChatList
++            onSearchMessages={() => setSearchMessages(true)}
++            query={page && !searchMessages ? '' : search}
++            searchingMessages={searchMessages}
++          >
              {/* Server-driven pages render their own list; the rest show groups. */}
 -            {page === 'pets' ? (
 -              <PetPalettePage
@@ -21627,7 +22085,7 @@ index 1c62d1c8548212752ac7b28b9dd844b8bca2e838..c46fb411b65f0f8a78a9e37dfd10b2d3
 -            ) : page === 'install-theme' ? (
 +            {page === 'install-theme' ? (
                <MarketplaceThemePage onPickTheme={setTheme} search={search} />
-@@ -1698,3 +1679,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+@@ -1698,3 +1700,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
              )}
 -          </CommandList>
 +          </SavedChatList>
@@ -21667,15 +22125,31 @@ index 0000000000000000000000000000000000000000..189b68a47b652f6202727159977a2f6f
 +})
 diff --git a/apps/desktop/src/app/command-palette/saved-chat-search.test.tsx b/apps/desktop/src/app/command-palette/saved-chat-search.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..07743d5be8701a95434a0def1a1b3c183154759c
+index 0000000000000000000000000000000000000000..550fc6272f651b609514322c8dfbf15f13cc6a0b
 --- /dev/null
 +++ b/apps/desktop/src/app/command-palette/saved-chat-search.test.tsx
-@@ -0,0 +1,39 @@
-+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+@@ -0,0 +1,157 @@
++import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 +import { MemoryRouter, useLocation } from 'react-router'
-+import { afterEach, beforeAll, expect, it } from 'vitest'
-+import { Command, CommandList } from '@/components/ui/command'
-+import { SavedChatSearch } from './saved-chat-search'
++import { atom, type WritableAtom } from 'nanostores'
++import { useState } from 'react'
++import { afterEach, beforeAll, expect, it, vi } from 'vitest'
++import { Command, CommandInput, CommandList } from '@/components/ui/command'
++import { SavedChatList, SavedChatSearch } from './saved-chat-search'
++
++const io = vi.hoisted(() => ({ search: vi.fn(), open: vi.fn() }))
++vi.mock('@/hermes', async original => ({ ...(await original<typeof import('@/hermes')>()), searchSessions: io.search }))
++vi.mock('@/store/connections', () => ({
++  $activeConnectionId: atom<string | null>('local'),
++  $pendingConnectionId: atom<string | null>(null)
++}))
++vi.mock('../open-session', () => ({ openSessionFromPicker: io.open }))
++import { $activeConnectionId, $pendingConnectionId } from '@/store/connections'
++import { $activeGatewayProfile } from '@/store/profile'
++
++const connection = $activeConnectionId as WritableAtom<string | null>
++const pending = $pendingConnectionId as WritableAtom<string | null>
++
 +function Location() {
 +  const loc = useLocation()
 +  return <output>{loc.pathname + loc.search}</output>
@@ -21683,7 +22157,14 @@ index 0000000000000000000000000000000000000000..07743d5be8701a95434a0def1a1b3c18
 +beforeAll(() => {
 +  Element.prototype.scrollIntoView = () => {}
 +})
-+afterEach(cleanup)
++afterEach(() => {
++  cleanup()
++  io.search.mockReset()
++  io.open.mockReset()
++  connection.set('local')
++  pending.set(null)
++  $activeGatewayProfile.set('default')
++})
 +it('hands the exact query to full native history only on selection', () => {
 +  render(
 +    <MemoryRouter>
@@ -21710,32 +22191,138 @@ index 0000000000000000000000000000000000000000..07743d5be8701a95434a0def1a1b3c18
 +  )
 +  expect(screen.queryByRole('option')).toBeNull()
 +})
++
++const older = [
++  {
++    session_id: 'old-chat-one',
++    profile: 'research',
++    title: 'Archived notebook',
++    snippet: 'Notes about >>>wayfinding<<<.'
++  },
++  { session_id: 'old-chat-two', profile: 'research', title: 'Trail planning', snippet: 'Older >>>wayfinding<<< cues.' }
++]
++
++function SearchHarness() {
++  const [messages, setMessages] = useState(false)
++  const [query, setQuery] = useState('')
++  return (
++    <MemoryRouter>
++      <Command key={messages ? 'messages' : 'commands'} shouldFilter={false}>
++        <CommandInput aria-label="Search" value={query} onValueChange={setQuery} />
++        <SavedChatList query={query} onSearchMessages={() => setMessages(true)} searchingMessages={messages}>
++          <></>
++        </SavedChatList>
++      </Command>
++      <Location />
++    </MemoryRouter>
++  )
++}
++
++function enterMessages() {
++  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'wayfinding' } })
++  expect(io.search).not.toHaveBeenCalled()
++  fireEvent.click(screen.getByRole('option', { name: 'Search in messages' }))
++  return screen.getByRole('combobox')
++}
++
++it('announces scoped first-page matches and opens the selected old chat with arrow and Enter', async () => {
++  $activeGatewayProfile.set('research')
++  io.search.mockResolvedValue({ results: older })
++  render(<SearchHarness />)
++  const input = enterMessages()
++  const announcement = await screen.findByText('2 matching chats shown.')
++  expect(io.search).toHaveBeenCalledExactlyOnceWith('wayfinding', 'research', 'local')
++  expect(announcement.getAttribute('role')).toBe('status')
++  expect(announcement.getAttribute('aria-live')).toBe('polite')
++  expect(screen.getByText('Notes about wayfinding.')).toBeTruthy()
++  await waitFor(() =>
++    expect(screen.getByRole('option', { name: /Archived notebook/ }).getAttribute('aria-selected')).toBe('true')
++  )
++  fireEvent.keyDown(input, { key: 'ArrowDown' })
++  fireEvent.keyDown(input, { key: 'Enter' })
++  expect(io.open).toHaveBeenCalledExactlyOnceWith('old-chat-two', expect.any(Function), 'stack', {
++    connectionId: 'local',
++    profile: 'research'
++  })
++})
++
++it('clears rows at a device switch and discards the response from an older same-profile attempt', async () => {
++  $activeGatewayProfile.set('research')
++  let resolve!: (value: unknown) => void
++  io.search
++    .mockResolvedValueOnce({ results: older })
++    .mockReturnValueOnce(
++      new Promise(r => {
++        resolve = r
++      })
++    )
++    .mockResolvedValueOnce({ results: [{ ...older[0], session_id: 'new-chat', title: 'New device result' }] })
++  render(<SearchHarness />)
++  enterMessages()
++  await screen.findByText('Archived notebook')
++  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'changed' } })
++  await waitFor(() => expect(io.search).toHaveBeenCalledTimes(2))
++  act(() => pending.set('remote'))
++  expect(screen.queryByRole('option')).toBeNull()
++  act(() => {
++    connection.set('remote')
++    pending.set(null)
++  })
++  await act(async () => resolve({ results: older }))
++  expect(screen.queryByText('Archived notebook')).toBeNull()
++  await screen.findByText('New device result')
++  expect(io.search).toHaveBeenLastCalledWith('changed', 'research', 'remote')
++})
++
++it('offers a single explicit retry and hands the exact query to History', async () => {
++  io.search.mockRejectedValueOnce(new Error('fixture failed')).mockResolvedValueOnce({ results: [] })
++  render(<SearchHarness />)
++  enterMessages()
++  await screen.findByText('Could not search saved messages.')
++  expect(io.search).toHaveBeenCalledTimes(1)
++  fireEvent.click(screen.getByRole('option', { name: 'Retry' }))
++  await screen.findByText('No matching saved chats.')
++  expect(io.search).toHaveBeenCalledTimes(2)
++  fireEvent.click(screen.getByRole('button', { name: 'Search all saved chats' }))
++  expect(screen.getByText('/history?search=wayfinding')).toBeTruthy()
++})
 diff --git a/apps/desktop/src/app/command-palette/saved-chat-search.tsx b/apps/desktop/src/app/command-palette/saved-chat-search.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..9ac6b42e6740f0dc88f0ac298b11a15442e3e2ec
+index 0000000000000000000000000000000000000000..ccf087e16a59adca95988ed79bbda22b646508a7
 --- /dev/null
 +++ b/apps/desktop/src/app/command-palette/saved-chat-search.tsx
-@@ -0,0 +1,37 @@
-+import { useNavigate } from 'react-router'
+@@ -0,0 +1,159 @@
++import { useStore } from '@nanostores/react'
 +import type { ReactNode } from 'react'
-+import { CommandGroup, CommandItem, CommandList } from '@/components/ui/command'
++import { useNavigate } from 'react-router'
++
++import { Button } from '@/components/ui/button'
 +import { Codicon } from '@/components/ui/codicon'
++import { CommandGroup, CommandItem, CommandList } from '@/components/ui/command'
++import { sessionTitle } from '@/lib/chat-runtime'
 +import { closeCommandPalette } from '@/store/command-palette'
++import { $activeConnectionId, $pendingConnectionId } from '@/store/connections'
++import { $activeGatewayProfile, normalizeProfileKey } from '@/store/profile'
++import { sessionOwnerRouteFromRow } from '@/store/session-request-router'
++
++import { searchResultToSession } from '../chat/sidebar/search-hit'
++import { useServerSessionSearch } from '../chat/sidebar/use-server-session-search'
 +import { useFocusCopy } from '../focus/copy'
++import { openSessionFromPicker } from '../open-session'
++
++function openSearchInHistory(navigate: (path: string) => void, query: string) {
++  closeCommandPalette()
++  navigate('/history?search=' + encodeURIComponent(query))
++}
 +
 +export function SavedChatSearch({ query }: { query: string }) {
-+  const navigate = useNavigate(),
-+    t = useFocusCopy()
++  const navigate = useNavigate()
++  const t = useFocusCopy()
 +  if (!query.trim()) return null
++
 +  return (
 +    <CommandGroup>
-+      <CommandItem
-+        value="search-all-saved-chats"
-+        onSelect={() => {
-+          closeCommandPalette()
-+          navigate('/history?search=' + encodeURIComponent(query.trim()))
-+        }}
-+      >
++      <CommandItem value="search-all-saved-chats" onSelect={() => openSearchInHistory(navigate, query.trim())}>
 +        <Codicon name="search" />
 +        <span>
 +          {t('searchAllChats')} · {query.trim()}
@@ -21745,9 +22332,120 @@ index 0000000000000000000000000000000000000000..9ac6b42e6740f0dc88f0ac298b11a154
 +  )
 +}
 +
-+export function SavedChatList({ query, children }: { query: string; children: ReactNode }) {
++export function SavedChatMessageResults({ query }: { query: string }) {
++  const navigate = useNavigate()
++  const t = useFocusCopy()
++  const connectionId = useStore($activeConnectionId)
++  const pendingConnection = useStore($pendingConnectionId)
++  const profile = normalizeProfileKey(useStore($activeGatewayProfile))
++  const search = query.trim()
++  const { serverMatches, searchPending, searchError, retrySearch } = useServerSessionSearch(
++    pendingConnection ? '' : search,
++    profile
++  )
++  const status = !search
++    ? t('messageSearchHint')
++    : searchPending || pendingConnection
++      ? t('messageSearchLoading')
++      : searchError
++        ? t('messageSearchFailed')
++        : serverMatches.length
++          ? serverMatches.length === 1
++            ? t('messageSearchSingle')
++            : t('messageSearchCount').replace('{count}', String(serverMatches.length))
++          : t('messageSearchEmpty')
++
++  return (
++    <>
++      <p aria-live="polite" aria-atomic="true" role="status" className="px-3 py-2 text-xs text-muted-foreground">
++        {status}
++      </p>
++      <CommandList className="dt-portal-scrollbar max-h-[min(20rem,56vh)]">
++        {searchError && (
++          <CommandGroup>
++            <CommandItem value="retry-saved-message-search" onSelect={retrySearch}>
++              <Codicon name="refresh" />
++              {t('retrySearch')}
++            </CommandItem>
++          </CommandGroup>
++        )}
++        {serverMatches.length > 0 && (
++          <CommandGroup>
++            {serverMatches.map(hit => {
++              const session = searchResultToSession(hit)
++              const owner = sessionOwnerRouteFromRow({ connection_id: connectionId, profile: hit.profile || profile })
++
++              return (
++                <CommandItem
++                  className="items-start"
++                  key={session.id}
++                  value={`saved-message:${session.id}`}
++                  onSelect={() => {
++                    if (
++                      $activeConnectionId.get() !== connectionId ||
++                      $pendingConnectionId.get() ||
++                      normalizeProfileKey($activeGatewayProfile.get()) !== profile
++                    )
++                      return
++
++                    openSessionFromPicker(session.id, navigate, 'stack', owner)
++                    closeCommandPalette()
++                  }}
++                >
++                  <Codicon className="mt-0.5" name="comment" />
++                  <span className="min-w-0">
++                    <span className="block truncate font-medium">{sessionTitle(session)}</span>
++                    {session.preview && <span className="line-clamp-2 text-xs opacity-75">{session.preview}</span>}
++                  </span>
++                </CommandItem>
++              )
++            })}
++          </CommandGroup>
++        )}
++      </CommandList>
++      {search && (
++        <div className="border-t border-border px-2 py-1">
++          <Button
++            onClick={() => openSearchInHistory(navigate, search)}
++            onKeyDown={event => {
++              if (event.key === 'Enter') event.stopPropagation()
++            }}
++            size="sm"
++            type="button"
++            variant="ghost"
++          >
++            {t('searchAllChats')}
++          </Button>
++        </div>
++      )}
++    </>
++  )
++}
++
++export function SavedChatList({
++  query,
++  onSearchMessages,
++  searchingMessages,
++  children
++}: {
++  query: string
++  onSearchMessages: () => void
++  searchingMessages: boolean
++  children: ReactNode
++}) {
++  const t = useFocusCopy()
++  if (searchingMessages) return <SavedChatMessageResults query={query} />
++
 +  return (
 +    <CommandList className="dt-portal-scrollbar max-h-[min(20rem,56vh)]">
++      {query.trim() && (
++        <CommandGroup>
++          <CommandItem value="search-in-saved-messages" onSelect={onSearchMessages}>
++            <Codicon name="search" />
++            {t('searchInMessages')}
++          </CommandItem>
++        </CommandGroup>
++      )}
 +      <SavedChatSearch query={query} />
 +      {children}
 +    </CommandList>
@@ -23275,10 +23973,10 @@ index 0000000000000000000000000000000000000000..d533dabc91a2d86f3c7942c59522aebb
 +}
 diff --git a/apps/desktop/src/app/focus/copy.ts b/apps/desktop/src/app/focus/copy.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..7a585f956854139236740ac17e2817e32d9ce520
+index 0000000000000000000000000000000000000000..17cea176f58acc83c21ea5ad4eed3c390c739d36
 --- /dev/null
 +++ b/apps/desktop/src/app/focus/copy.ts
-@@ -0,0 +1,293 @@
+@@ -0,0 +1,301 @@
 +import { registerPluginLocales, usePluginI18n } from '@/i18n'
 +
 +const ids =
@@ -23289,6 +23987,14 @@ index 0000000000000000000000000000000000000000..7a585f956854139236740ac17e2817e3
 +const en = {
 +  newChat: 'New chat',
 +  searchAllChats: 'Search all saved chats',
++  searchInMessages: 'Search in messages',
++  messageSearchPlaceholder: 'Search saved messages…',
++  messageSearchHint: 'Enter a word or phrase from a saved chat.',
++  messageSearchLoading: 'Searching saved messages…',
++  messageSearchFailed: 'Could not search saved messages.',
++  messageSearchEmpty: 'No matching saved chats.',
++  messageSearchSingle: '1 matching chat shown.',
++  messageSearchCount: '{count} matching chats shown.',
 +  sessionSearchError: 'Saved chat search failed. Local matches may still appear.',
 +  retrySearch: 'Retry',
 +  recentNoMatches: 'No matches among recent chats and commands',
@@ -32067,6 +32773,51 @@ index fb12b3dd1300e72a331b8b30657e30d425842ce0..7ee8435c0fdb6feb237b9a48682a0ebd
 -          await runExec(ctx)
 -        },
          // /browser connect|disconnect manages the live CDP connection on the
+diff --git a/apps/desktop/src/app/session/hooks/use-prompt-actions/submission-destination.test.tsx b/apps/desktop/src/app/session/hooks/use-prompt-actions/submission-destination.test.tsx
+index c3ca2749e50731d48a0546463f03a47cda8e8ef3..2839399c2e975e89bc8bb8263964de79689dcf12 100644
+--- a/apps/desktop/src/app/session/hooks/use-prompt-actions/submission-destination.test.tsx
++++ b/apps/desktop/src/app/session/hooks/use-prompt-actions/submission-destination.test.tsx
+@@ -324,2 +324,20 @@ describe('submission intent destinations', () => {
+
++  it('does not fall back to an identityless write for a recovered submission', async () => {
++    const { deps, requestGateway } = setup()
++    requestGateway.mockImplementation(async () => {
++      throw Object.assign(new Error('durable admission unsupported'), { code: 4094 })
++    })
++
++    const hook = renderHook(() => useSubmitPrompt(deps))
++    await act(async () => {
++      expect(await hook.result.current('Earlier input', {
++        submission_id: 'recover-original',
++        requireIdempotentSubmit: true
++      })).toBe(false)
++    })
++
++    const attempts = requestGateway.mock.calls.filter(call => call[0] === 'prompt.submit')
++    expect(attempts.map(call => call[1]?.submission_id)).toEqual(['recover-original'])
++  })
++
+   it.each(['missing', 'wrong', '4094', 'lost-legacy'])(
+diff --git a/apps/desktop/src/app/session/hooks/use-prompt-actions/submit.ts b/apps/desktop/src/app/session/hooks/use-prompt-actions/submit.ts
+index df0fc7b7c36a8ed28b16a6aec0f2f77058de5a73..ed60b33390419770cfc775ce73aeee8791c183df 100644
+--- a/apps/desktop/src/app/session/hooks/use-prompt-actions/submit.ts
++++ b/apps/desktop/src/app/session/hooks/use-prompt-actions/submit.ts
+@@ -1169,2 +1169,6 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
+
++                  if (options?.requireIdempotentSubmit) {
++                    throw new Error(translateNow('promptNotices.legacySendUnconfirmed'))
++                  }
++
+                   prepared.legacyAttempted = true
+diff --git a/apps/desktop/src/app/session/hooks/use-prompt-actions/utils.ts b/apps/desktop/src/app/session/hooks/use-prompt-actions/utils.ts
+index b504be19559ad3a91439f14fdfb6ff85c69aeee1..f88ef5f71e21e258404a966196a661f19def3f34 100644
+--- a/apps/desktop/src/app/session/hooks/use-prompt-actions/utils.ts
++++ b/apps/desktop/src/app/session/hooks/use-prompt-actions/utils.ts
+@@ -784,2 +784,4 @@ export interface SubmitTextOptions {
+   submission_id?: string
++  /** Never downgrade a recovered, unconfirmed send to an identityless write. */
++  requireIdempotentSubmit?: boolean
+   attachments?: ComposerAttachment[]
 diff --git a/apps/desktop/src/app/session/hooks/use-session-actions/index.ts b/apps/desktop/src/app/session/hooks/use-session-actions/index.ts
 index 75a4e608afbc77db7c82d1f02264e62690139620..7a6846bbd4e907cd48f5be2530e7446238285c70 100644
 --- a/apps/desktop/src/app/session/hooks/use-session-actions/index.ts
@@ -32098,10 +32849,10 @@ index 75a4e608afbc77db7c82d1f02264e62690139620..7a6846bbd4e907cd48f5be2530e74462
            startFreshSessionDraft(true)
 diff --git a/apps/desktop/src/app/settings/account-usage-panel.test.tsx b/apps/desktop/src/app/settings/account-usage-panel.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..b6860dc6c555647a7921fdce81574f69e2b9e549
+index 0000000000000000000000000000000000000000..d219d73de4bc5c0db6bde69a6c895d47d0322461
 --- /dev/null
 +++ b/apps/desktop/src/app/settings/account-usage-panel.test.tsx
-@@ -0,0 +1,159 @@
+@@ -0,0 +1,199 @@
 +import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 +import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
 +import { atom, type WritableAtom } from 'nanostores'
@@ -32154,6 +32905,7 @@ index 0000000000000000000000000000000000000000..b6860dc6c555647a7921fdce81574f69
 +
 +it('reads cached per-account data on entry, exposes all providers and only probes on Refresh', async () => {
 +  request.mockResolvedValue({
++    configured_route: { provider: 'anthropic', label: 'Anthropic', model: 'example-claude', local_endpoint: false },
 +    accounts: [
 +      reading('First'),
 +      reading('Second', 'anthropic', 5),
@@ -32168,6 +32920,7 @@ index 0000000000000000000000000000000000000000..b6860dc6c555647a7921fdce81574f69
 +  })
 +  const f = mount()
 +  await f.findByText('First')
++  expect(f.getByText('example-claude')).toBeTruthy()
 +  expect(request).toHaveBeenCalledExactlyOnceWith(
 +    'local',
 +    'captain',
@@ -32261,12 +33014,50 @@ index 0000000000000000000000000000000000000000..b6860dc6c555647a7921fdce81574f69
 +    clock.mockRestore()
 +  }
 +})
++
++
++it('shows Gemini API separately from AGY and uses unknown quota when Gemini has no reading', async () => {
++  request.mockResolvedValue({
++    configured_route: { provider: 'gemini', model: 'example-gemini', local_endpoint: false },
++    accounts: [reading('Subscription login', 'antigravity-subscription-directsdk', 80)]
++  })
++  const f = mount()
++  const gemini = within(await f.findByRole('region', { name: 'Gemini API' }))
++  expect(gemini.getByText('example-gemini')).toBeTruthy()
++  expect(gemini.getByText('Provider does not report quota')).toBeTruthy()
++  expect(gemini.queryByRole('progressbar')).toBeNull()
++  expect(within(f.getByRole('region', { name: 'AGY' })).getByRole('progressbar')).toBeTruthy()
++})
++
++it('shows a NIM snapshot with a timestamp, then retires that view on a same-profile device switch', async () => {
++  request.mockResolvedValue({
++    configured_route: { provider: 'nim', model: 'example-nim', local_endpoint: false },
++    accounts: [reading('Provider login', 'nvidia', 0)]
++  })
++  const f = mount()
++  const nim = within(await f.findByRole('region', { name: 'NVIDIA NIM' }))
++  expect(nim.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('0')
++  expect(nim.getByText(/Updated/).querySelector('time')?.getAttribute('datetime')).toBeTruthy()
++
++  request.mockResolvedValue({
++    configured_route: { provider: 'custom:studio', label: 'Studio', model: 'example-local', local_endpoint: true },
++    accounts: []
++  })
++  act(() => {
++    ;($activeConnectionId as WritableAtom<string | null>).set('remote')
++  })
++  expect(f.queryByRole('region', { name: 'NVIDIA NIM' })).toBeNull()
++  const local = within(await f.findByRole('region', { name: 'Studio' }))
++  expect(local.getByText('Local endpoint')).toBeTruthy()
++  expect(local.getByText('example-local')).toBeTruthy()
++  expect(local.queryByRole('progressbar')).toBeNull()
++})
 diff --git a/apps/desktop/src/app/settings/account-usage-panel.tsx b/apps/desktop/src/app/settings/account-usage-panel.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..1414effea6c441cf135fc6528fb16f7b31188c9c
+index 0000000000000000000000000000000000000000..65274c7838e86ed459c0c5233991d5100ef6a4c3
 --- /dev/null
 +++ b/apps/desktop/src/app/settings/account-usage-panel.tsx
-@@ -0,0 +1,227 @@
+@@ -0,0 +1,271 @@
 +import type { AccountUsageResult, AccountUsageRow } from '@hermes/shared'
 +import { useStore } from '@nanostores/react'
 +import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -32286,11 +33077,20 @@ index 0000000000000000000000000000000000000000..1414effea6c441cf135fc6528fb16f7b
 +
 +import { Pill } from './primitives'
 +
-+const PROVIDERS = [
++const PROVIDER_NAMES = new Map([
++  ['agy', 'AGY'],
 +  ['anthropic', 'Claude'],
-+  ['openai-codex', 'Codex'],
-+  ['agy', 'AGY']
-+] as const
++  ['gemini', 'Gemini API'],
++  ['nvidia', 'NVIDIA NIM'],
++  ['openai-codex', 'Codex']
++])
++
++function usageProvider(provider: string): string {
++  if (provider === 'antigravity-subscription-directsdk') return 'agy'
++  if (provider === 'nim' || provider === 'nvidia-nim') return 'nvidia'
++
++  return provider
++}
 +
 +const MAX_AGE_MS = 15 * 60 * 1000
 +
@@ -32453,31 +33253,7 @@ index 0000000000000000000000000000000000000000..1414effea6c441cf135fc6528fb16f7b
 +      {query.isPending ? (
 +        <Skeleton className="h-24 w-full" />
 +      ) : (
-+        <div className="grid gap-x-8 gap-y-5 @min-[38rem]:grid-cols-3">
-+          {PROVIDERS.map(([slug, name]) => {
-+            const rows =
-+              query.data?.accounts.filter(
-+                row =>
-+                  row.provider === slug || (slug === 'agy' && row.provider === 'antigravity-subscription-directsdk')
-+              ) ?? []
-+
-+            return (
-+              <section aria-label={name} className="min-w-0" key={slug}>
-+                <div className="flex items-baseline justify-between gap-2">
-+                  <h3 className="text-base font-semibold tracking-tight">{name}</h3>
-+                  <span className="text-[0.6875rem] text-muted-foreground">{copy.remaining}</span>
-+                </div>
-+                <div className="divide-y divide-border">
-+                  {rows.length ? (
-+                    rows.map(row => <AccountReading key={row.id} now={Math.max(now, query.dataUpdatedAt)} row={row} />)
-+                  ) : (
-+                    <p className="py-3 text-xs text-muted-foreground">{copy.noAccounts}</p>
-+                  )}
-+                </div>
-+              </section>
-+            )
-+          })}
-+        </div>
++        <AccountUsageRows result={query.data} now={Math.max(now, query.dataUpdatedAt)} />
 +      )}
 +      <p className="mt-1 border-t border-border pt-3 text-[0.6875rem] leading-relaxed text-muted-foreground">
 +        {copy.description}
@@ -32485,6 +33261,65 @@ index 0000000000000000000000000000000000000000..1414effea6c441cf135fc6528fb16f7b
 +    </section>
 +  )
 +}
++
++function AccountUsageRows({ result, now }: { result?: AccountUsageResult; now: number }) {
++  const { t } = useI18n()
++  const copy = t.settings.providers.usage
++  const route = result?.configured_route
++  const current = route?.provider ? usageProvider(route.provider) : null
++  const reports = new Map<string, AccountUsageRow[]>()
++
++  for (const row of result?.accounts ?? []) {
++    const provider = usageProvider(row.provider)
++    const accounts = reports.get(provider) ?? []
++    accounts.push(row)
++    reports.set(provider, accounts)
++  }
++
++  const currentAccounts = current && !route?.local_endpoint ? reports.get(current) : undefined
++  if (current && currentAccounts) reports.delete(current)
++
++  const title = current === 'auto'
++    ? copy.routeAutomatic
++    : (current && (PROVIDER_NAMES.get(current) ?? route?.label ?? current)) || copy.routeUnknown
++
++  return (
++    <div className="space-y-4">
++      <section aria-label={title} className="min-w-0 rounded-md border border-border p-4">
++        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
++          <h3 className="break-all text-base font-semibold tracking-tight">{title}</h3>
++          {route && <span className="text-xs text-muted-foreground">{copy.configuredRoute}</span>}
++        </div>
++        {route?.model && <p className="mt-1 break-all text-xs text-(--ui-text-secondary)">{route.model}</p>}
++        {route?.local_endpoint ? (
++          <p className="mt-3 text-xs text-muted-foreground">{copy.localEndpoint}</p>
++        ) : currentAccounts?.length ? (
++          <div className="divide-y divide-border">
++            {currentAccounts.map(row => <AccountReading key={row.id} now={now} row={row} />)}
++          </div>
++        ) : (
++          current && current !== 'auto' && <p className="mt-3 text-xs text-muted-foreground">{copy.noQuota}</p>
++        )}
++      </section>
++      {reports.size > 0 && (
++        <div className="grid gap-x-8 gap-y-5 @min-[38rem]:grid-cols-3">
++          {[...reports].map(([provider, rows]) => {
++            const name = PROVIDER_NAMES.get(provider) ?? provider
++            return (
++              <section aria-label={name} className="min-w-0" key={provider}>
++                <h3 className="break-all text-sm font-semibold tracking-tight">{name}</h3>
++                <div className="divide-y divide-border">
++                  {rows.map(row => <AccountReading key={row.id} now={now} row={row} />)}
++                </div>
++              </section>
++            )
++          })}
++        </div>
++      )}
++    </div>
++  )
++}
++
 +
 +export function AccountUsagePanel() {
 +  const profile = useStore($settingsScopeProfile)
@@ -34398,7 +35233,7 @@ index 7528c61ae6516435278f789c3b362c4847f070fb..8cb6ada91f882b1b47d250861513126b
    appearanceGeneral: Settings2,
 diff --git a/apps/desktop/src/app/shell/account-usage-statusbar.test.tsx b/apps/desktop/src/app/shell/account-usage-statusbar.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..fe28c0e6f75cb9008d117c9744de6233f37b44f4
+index 0000000000000000000000000000000000000000..1872df6dc9d15a3306237da4efb7181ddbdeedf8
 --- /dev/null
 +++ b/apps/desktop/src/app/shell/account-usage-statusbar.test.tsx
 @@ -0,0 +1,39 @@
@@ -34436,7 +35271,7 @@ index 0000000000000000000000000000000000000000..fe28c0e6f75cb9008d117c9744de6233
 +    'account.usage',
 +    { profile: 'default', refresh: false }
 +  ])
-+  expect(f.getByRole('region', { name: 'AGY' })).toBeTruthy()
++  expect(f.getByRole('region', { name: 'Provider not reported' })).toBeTruthy()
 +  await waitFor(() => expect(f.getByRole('button', { name: 'Refresh' }).hasAttribute('disabled')).toBe(false))
 +  await act(async () => fireEvent.click(f.getByRole('button', { name: 'Refresh' })))
 +  expect(request.mock.calls[1]?.[3]).toEqual({ profile: 'default', refresh: true })
@@ -39510,15 +40345,23 @@ index 24aea0d929c05016b8c0c9dfead3003f95955dd2..d341d4b192ee3f6a34a231529ab71cf5
  }
 diff --git a/apps/desktop/src/i18n/composer-draft-copy.ts b/apps/desktop/src/i18n/composer-draft-copy.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..e1ebb739984684b2628767adbf7bd43c9eac0107
+index 0000000000000000000000000000000000000000..4660efda4d5215c6effd7fb0e95266449fe04e28
 --- /dev/null
 +++ b/apps/desktop/src/i18n/composer-draft-copy.ts
-@@ -0,0 +1,112 @@
+@@ -0,0 +1,129 @@
 +export interface ComposerDraftCopy {
 +  retainedSendNotice: string
 +  retainedSendRestore: string
 +  retainedSendDiscard: string
 +  retainedSendMissingAttachments: string
++  retainedSendEdit: string
++  parkedDraftNotice: string
++  parkedDraftReturn: string
++  retainedSendFiles: (count: number) => string
++  retainedSendEditConfirm: string
++  retainedSendEditAction: string
++  retainedSendEditDescription: string
++  retainedSendBusy: string
 +
 +  unassignedDraftNotice: string
 +  unassignedDraftRestore: string
@@ -39532,7 +40375,16 @@ index 0000000000000000000000000000000000000000..e1ebb739984684b2628767adbf7bd43c
 +    retainedSendNotice: 'An earlier send could not be confirmed. Your current draft is unchanged.',
 +    retainedSendRestore: 'Restore message',
 +    retainedSendDiscard: 'Discard saved message',
-+    retainedSendMissingAttachments: 'Reattach missing files before sending.',
++    retainedSendMissingAttachments: 'Review the original attachments and reattach any files you still need.',
++    retainedSendEdit: 'Park draft and edit failed message',
++    parkedDraftNotice: 'Parked drafts',
++    parkedDraftReturn: 'Return to parked draft',
++    retainedSendFiles: (count: number) => `Original attachments to review (${count})`,
++    retainedSendEditConfirm: 'Send edited copy as new?',
++    retainedSendEditAction: 'Send as new message',
++    retainedSendEditDescription:
++      'The earlier message may already have reached this chat. Sending this copy starts a separate submission.',
++    retainedSendBusy: 'Wait for the current turn to finish before sending this recovered message.',
 +    unassignedDraftNotice:
 +      'An older unsent draft has no recorded owner. Restore it here only if it belongs to this chat.',
 +    unassignedDraftRestore: 'Restore draft',
@@ -39703,7 +40555,7 @@ index 0552e42fccd94a14c3817380fb31618725d18168..6741fd77c637de42b54ac46eb8c74dcd
 +      composer: 'gesendete Nachrichten laufen erst nach `hermes resume`'
      }
 diff --git a/apps/desktop/src/i18n/en.ts b/apps/desktop/src/i18n/en.ts
-index 57a5b0604644dcb4f61155382dda4beeef8224ca..7ed6ef263ec849dd67a5df62f4a5ddc526d85247 100644
+index 57a5b0604644dcb4f61155382dda4beeef8224ca..caab736500d1ac1cd3ed8fe66dff5d8ea2ca71d9 100644
 --- a/apps/desktop/src/i18n/en.ts
 +++ b/apps/desktop/src/i18n/en.ts
 @@ -1,4 +1,5 @@
@@ -39769,7 +40621,7 @@ index 57a5b0604644dcb4f61155382dda4beeef8224ca..7ed6ef263ec849dd67a5df62f4a5ddc5
 -          },
 +          }
          },
-@@ -1849,2 +1878,15 @@ export const en: Translations = {
+@@ -1849,2 +1878,20 @@ export const en: Translations = {
      providers: {
 +      usage: {
 +        title: 'Account usage',
@@ -39781,11 +40633,16 @@ index 57a5b0604644dcb4f61155382dda4beeef8224ca..7ed6ef263ec849dd67a5df62f4a5ddc5
 +        unavailable: 'Unavailable',
 +        stale: 'Stale reading',
 +        noAccounts: 'No account readings available.',
++        configuredRoute: 'Configured for this profile',
++        routeUnknown: 'Provider not reported',
++        routeAutomatic: 'Automatic provider selection',
++        noQuota: 'Provider does not report quota',
++        localEndpoint: 'Local endpoint',
 +        loadFailed: 'Could not load usage. Try Refresh.',
 +        description: 'Readings are per account. Refresh checks quotas without running a model.'
 +      },
        connectAccount: 'Connect an account',
-@@ -3268,2 +3310,7 @@ export const en: Translations = {
+@@ -3268,2 +3315,7 @@ export const en: Translations = {
    composer: {
 +    nextPrompt: 'Next prompt',
 +    autocomplete: 'Autocomplete',
@@ -39793,7 +40650,7 @@ index 57a5b0604644dcb4f61155382dda4beeef8224ca..7ed6ef263ec849dd67a5df62f4a5ddc5
 +    promptSuggestionHint: 'Generate once with a small model. Only runs when you click; never sends.',
 +    noPromptSuggestion: 'No suggestion this time.',
      message: 'Message',
-@@ -3430,4 +3477,3 @@ export const en: Translations = {
+@@ -3430,4 +3482,3 @@ export const en: Translations = {
      editingQueuedInComposer: 'Editing queued turn in composer',
 -    restoredDraftNotice: 'Restored your unsent message',
 -    restoredDraftUndo: 'Undo',
@@ -40177,7 +41034,7 @@ index 2f16980065ad8ca00ead0ebfcb8b1be389fe91ec..ffe3f023381c99c6270ee722b06b6d50
 +      composer: 'отправленные сообщения не выполнятся до `hermes resume`'
      }
 diff --git a/apps/desktop/src/i18n/types.ts b/apps/desktop/src/i18n/types.ts
-index 0f2e489af4f39fa0571f7d4880bc24e501b7707c..ec947e550427047cc0629fa749166352bac34a1d 100644
+index 0f2e489af4f39fa0571f7d4880bc24e501b7707c..e3e96d5dbd6d47818f88e71b59c9fc7024991e9b 100644
 --- a/apps/desktop/src/i18n/types.ts
 +++ b/apps/desktop/src/i18n/types.ts
 @@ -1 +1,3 @@
@@ -40216,7 +41073,7 @@ index 0f2e489af4f39fa0571f7d4880bc24e501b7707c..ec947e550427047cc0629fa749166352
 +      showAll: (count: number) => string
 +      showLess: string
      }
-@@ -1672,2 +1692,15 @@ catalog: CatalogTranslations
+@@ -1672,2 +1692,20 @@ catalog: CatalogTranslations
      providers: {
 +      usage: {
 +        title: string
@@ -40228,11 +41085,16 @@ index 0f2e489af4f39fa0571f7d4880bc24e501b7707c..ec947e550427047cc0629fa749166352
 +        unavailable: string
 +        stale: string
 +        noAccounts: string
++        configuredRoute: string
++        routeUnknown: string
++        routeAutomatic: string
++        noQuota: string
++        localEndpoint: string
 +        loadFailed: string
 +        description: string
 +      }
        connectAccount: string
-@@ -2879,3 +2912,8 @@ catalog: CatalogTranslations
+@@ -2879,3 +2917,8 @@ catalog: CatalogTranslations
 
 -  composer: {
 +  composer: ComposerDraftCopy & {
@@ -40242,7 +41104,7 @@ index 0f2e489af4f39fa0571f7d4880bc24e501b7707c..ec947e550427047cc0629fa749166352
 +    promptSuggestionHint: string
 +    noPromptSuggestion: string
      message: string
-@@ -2944,4 +2982,2 @@ catalog: CatalogTranslations
+@@ -2944,4 +2987,2 @@ catalog: CatalogTranslations
      editingQueuedInComposer: string
 -    restoredDraftNotice: string
 -    restoredDraftUndo: string
@@ -41249,10 +42111,10 @@ index 0000000000000000000000000000000000000000..c01fb5135bffca10f7694cb3809709d1
 +})
 diff --git a/apps/desktop/src/lib/composer-rejected-drafts.test.ts b/apps/desktop/src/lib/composer-rejected-drafts.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..465285e375c0fd730e8a45cd9ea6238ebfa28083
+index 0000000000000000000000000000000000000000..6c9a7376894557258a52ee58319782d5c5641716
 --- /dev/null
 +++ b/apps/desktop/src/lib/composer-rejected-drafts.test.ts
-@@ -0,0 +1,167 @@
+@@ -0,0 +1,233 @@
 +import { batch } from 'nanostores'
 +import { afterEach, expect, it, vi } from 'vitest'
 +
@@ -41266,10 +42128,11 @@ index 0000000000000000000000000000000000000000..465285e375c0fd730e8a45cd9ea6238e
 +} from '@/store/composer'
 +import { dropComposerStateForProfile, migrateComposerStateForProfile } from '@/store/composer-draft-lifecycle'
 +import { draftOwnerKey, ownedDraftKey } from '@/store/composer-draft-owner'
-+import { readDraftRetry } from '@/store/composer-draft-retry'
++import { draftRetry, matchingDraftRetry, readDraftRetry, writeDraftRetry } from '@/store/composer-draft-retry'
 +import {
 +  discardRejectedDraft,
 +  restoreRejectedDraft,
++  retainedMissingFiles,
 +  retainedRejectedDrafts,
 +  retainRejectedDraft
 +} from '@/store/composer-rejected-drafts'
@@ -41419,6 +42282,71 @@ index 0000000000000000000000000000000000000000..465285e375c0fd730e8a45cd9ea6238e
 +  expect(retainedRejectedDrafts('prior-tip', owner)).toEqual([])
 +  expect(retainedRejectedDrafts('durable-root', owner).map(row => row.text)).toEqual(['Earlier message'])
 +  expect(ownedDraftScopes().filter(row => row.ownerKey === draftOwnerKey(owner)).length).toBeLessThanOrEqual(50)
++})
++
++it('keeps attachment-only recoveries and their labels after reload without authorizing an altered retry', () => {
++  const file = { id: 'fixture-file', occurrenceId: 'fixture-original', kind: 'file' as const, label: 'brief.pdf' }
++  retainRejectedDraft(target, '', [file], owner, 'attachment-only')
++  const [saved] = retainedRejectedDrafts(target, owner)
++  const stored = window.localStorage.getItem(ownedDraftKey(saved.scope, owner)!)
++  clearSessionDraft(saved.scope, owner)
++  window.localStorage.setItem(ownedDraftKey(saved.scope, owner)!, stored!)
++  reloadPersistedDrafts()
++  window.dispatchEvent(new StorageEvent('storage', { key: ownedDraftKey(saved.scope, owner)!, newValue: stored }))
++
++  const [reloaded] = retainedRejectedDrafts(target, owner)
++  expect(reloaded.text).toBe('')
++  expect(retainedMissingFiles(reloaded)).toEqual({ count: 1, labels: ['brief.pdf'] })
++  const restored = restoreRejectedDraft(reloaded.scope, target, owner, { text: 'New live draft', attachments: [] })
++  expect(restored?.saved).toBe(true)
++  expect(restored?.retry?.id).toBe('attachment-only')
++  expect(matchingDraftRetry(restored?.retry, '', [])).toBeUndefined()
++  expect(matchingDraftRetry(restored?.retry, '', [{ ...file, occurrenceId: 'reselected' }])).toBeUndefined()
++  const [parked] = retainedRejectedDrafts(target, owner)
++  expect(parked.text).toBe('New live draft')
++  expect(restoreRejectedDraft(parked.scope, target, owner, { text: 'Revised recovery', attachments: [] })?.saved).toBe(
++    true
++  )
++  const [edited] = retainedRejectedDrafts(target, owner)
++  expect(readDraftRetry(edited.scope, owner)?.id).toBe('attachment-only')
++})
++
++it('leaves the live editor and failed source intact if parking runs out of storage', () => {
++  retainRejectedDraft(target, 'Earlier input', [], owner, 'earlier-send')
++  const [retained] = retainedRejectedDrafts(target, owner)
++  stashSessionDraft(target, 'Persisted draft', [], owner)
++  const write = window.localStorage.setItem.bind(window.localStorage)
++  vi.spyOn(Storage.prototype, 'setItem').mockImplementation((key, value) => {
++    if (key.includes('parked')) throw new DOMException('Full', 'QuotaExceededError')
++    write(key, value)
++  })
++  expect(
++    restoreRejectedDraft(retained.scope, target, owner, { text: 'Latest keystroke', attachments: [] })?.saved
++  ).toBe(false)
++  expect(retainedRejectedDrafts(target, owner).map(row => row.text)).toEqual(['Earlier input'])
++  expect(takeSessionDraft(target, owner).text).toBe('Persisted draft')
++})
++
++it('rolls back the editor and preserves its earlier identity if the new retry record cannot be written', () => {
++  stashSessionDraft(target, 'Current saved text', [], owner)
++  writeDraftRetry(target, draftRetry('current-id', 'Current saved text', []), owner)
++  retainRejectedDraft(target, 'Failed input', [], owner, 'incoming-id')
++  const [retained] = retainedRejectedDrafts(target, owner)
++
++  const write = window.localStorage.setItem.bind(window.localStorage)
++  vi.spyOn(Storage.prototype, 'setItem').mockImplementation((key, value) => {
++    if (key.startsWith('hermes:composer-draft-retry:') && JSON.parse(value).id === 'incoming-id') {
++      throw new DOMException('Full', 'QuotaExceededError')
++    }
++    write(key, value)
++  })
++
++  expect(
++    restoreRejectedDraft(retained.scope, target, owner, { text: 'Current live text', attachments: [] })?.saved
++  ).toBe(false)
++  expect(takeSessionDraft(target, owner).text).toBe('Current live text')
++  expect(readDraftRetry(target, owner)?.id).toBe('current-id')
++  expect(retainedRejectedDrafts(target, owner).map(row => row.id)).toEqual(['incoming-id'])
 +})
 diff --git a/apps/desktop/src/lib/desktop-slash-commands.test.ts b/apps/desktop/src/lib/desktop-slash-commands.test.ts
 index c432e2f6988d95a2d0926989ec2dc720aec55d1c..366220c0595800f524f79464b2f9ac41c1717d63 100644
@@ -57246,7 +58174,7 @@ index 0000000000000000000000000000000000000000..50205a473420470b016441b69893430a
 +  return retired
 +}
 diff --git a/apps/desktop/src/store/composer-draft-retry.ts b/apps/desktop/src/store/composer-draft-retry.ts
-index ef73e26c74a09cf9c401702b06b2041a8edbba85..74bd8667c71774c14d30818d54d1769f6381a483 100644
+index ef73e26c74a09cf9c401702b06b2041a8edbba85..5abaa0c3b51d7a18881dc776ea5ed5b981da0e10 100644
 --- a/apps/desktop/src/store/composer-draft-retry.ts
 +++ b/apps/desktop/src/store/composer-draft-retry.ts
 @@ -3,2 +3,9 @@ import { sanitizeComposerInput } from '@/lib/composer-input-sanitize'
@@ -57258,13 +58186,40 @@ index ef73e26c74a09cf9c401702b06b2041a8edbba85..74bd8667c71774c14d30818d54d1769f
 +  parseOwnedDraftKey
 +} from './composer-draft-owner'
 +import type { SessionOwnerScope } from './session-request-router'
- 
-@@ -17,2 +24,3 @@ export interface ComposerDraftRetry {
+
+@@ -12,2 +19,3 @@ export interface ComposerDraftRetry {
+   attachmentIds: string[]
++  recovery?: { attachmentCount: number; attachmentLabels: string[] }
+ }
+@@ -17,4 +25,5 @@ export interface ComposerDraftRetry {
  const RETRY_PREFIX = 'hermes:composer-draft-retry:v1:'
 +const OWNED_RETRY_PREFIX = 'hermes:composer-draft-retry:v2:'
- 
-@@ -44,5 +52,15 @@ const scopeKey = (scope: string | null | undefined) => scope?.trim() || freshDra
- 
+
+-const attachmentIds = (attachments: ComposerAttachment[]) => attachments.map(a => a.occurrenceId ?? a.id)
++export const attachmentIds = (attachments: ComposerAttachment[]) => attachments.map(a => a.occurrenceId ?? a.id)
+
+@@ -35,2 +44,3 @@ export function matchingDraftRetry(
+   return retry &&
++    (!retry.recovery || retry.recovery.attachmentCount === retry.attachmentIds.length) &&
+     draftRetryTextMatches(retry, text) &&
+@@ -41,2 +51,15 @@ export function matchingDraftRetry(
+
++export function missingRecoveredFiles(retry: ComposerDraftRetry, attachments: ComposerAttachment[]) {
++  const retained = retry.recovery
++  if (!retained) return { count: 0, labels: [] }
++
++  const current = new Set(attachmentIds(attachments))
++  return {
++    count: retained.attachmentCount - retry.attachmentIds.filter(id => current.has(id)).length,
++    labels: retained.attachmentLabels.filter(
++      (_, index) => retry.attachmentIds.length !== retained.attachmentCount || !current.has(retry.attachmentIds[index])
++    )
++  }
++}
++
+ /** The storage key of a draft scope, the same resolution the draft stash uses. */
+@@ -44,10 +67,38 @@ const scopeKey = (scope: string | null | undefined) => scope?.trim() || freshDra
+
 -export function readDraftRetry(scope: string | null | undefined): ComposerDraftRetry | undefined {
 +const retryStorageKey = (scope: string | null | undefined, owner: SessionOwnerScope): string => {
 +  const raw = scopeKey(scope)
@@ -57281,8 +58236,34 @@ index ef73e26c74a09cf9c401702b06b2041a8edbba85..74bd8667c71774c14d30818d54d1769f
 -    const parsed: unknown = JSON.parse(window.localStorage.getItem(RETRY_PREFIX + scopeKey(scope)) || 'null')
 +    const parsed: unknown = JSON.parse(window.localStorage.getItem(retryStorageKey(scope, owner)) || 'null')
      const retry = parsed as ComposerDraftRetry | null
-@@ -57,12 +75,58 @@ export function readDraftRetry(scope: string | null | undefined): ComposerDraftR
- 
+
+-    return retry && typeof retry.id === 'string' && typeof retry.text === 'string' && Array.isArray(retry.attachmentIds)
+-      ? retry
+-      : undefined
++    if (
++      !retry ||
++      typeof retry.id !== 'string' ||
++      typeof retry.text !== 'string' ||
++      !Array.isArray(retry.attachmentIds) ||
++      !retry.attachmentIds.every(id => typeof id === 'string')
++    ) {
++      return undefined
++    }
++
++    if (
++      retry.recovery &&
++      (!Number.isSafeInteger(retry.recovery.attachmentCount) ||
++        retry.recovery.attachmentCount < retry.attachmentIds.length ||
++        !Array.isArray(retry.recovery.attachmentLabels) ||
++        !retry.recovery.attachmentLabels.every(label => typeof label === 'string'))
++    ) {
++      return undefined
++    }
++
++    return retry
+   } catch {
+@@ -57,12 +108,58 @@ export function readDraftRetry(scope: string | null | undefined): ComposerDraftR
+
 -export function writeDraftRetry(scope: string | null | undefined, retry: ComposerDraftRetry | undefined): void {
 +export function writeDraftRetry(
 +  scope: string | null | undefined,
@@ -57436,11 +58417,11 @@ index 36bd81d269737621ab03d9ccfff85a0bc48808ed..7fce0f9d9edada9ee4bc8176894b2e7e
  }
 diff --git a/apps/desktop/src/store/composer-rejected-drafts.ts b/apps/desktop/src/store/composer-rejected-drafts.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..ba5ffac644e61bb7729b945e9a4c1e331ad169a1
+index 0000000000000000000000000000000000000000..99460ca52cdd9432d5ad710d189e10f1c93c5323
 --- /dev/null
 +++ b/apps/desktop/src/store/composer-rejected-drafts.ts
-@@ -0,0 +1,261 @@
-+import { atom } from 'nanostores'
+@@ -0,0 +1,368 @@
++import { atom, batch } from 'nanostores'
 +
 +import {
 +  clearSessionDraft,
@@ -57454,10 +58435,19 @@ index 0000000000000000000000000000000000000000..ba5ffac644e61bb7729b945e9a4c1e33
 +  takeSessionDraft
 +} from './composer'
 +import { draftOwnerKey, OWNED_DRAFT_STORAGE_PREFIX, parseOwnedDraftKey } from './composer-draft-owner'
-+import { draftRetry, writeDraftRetry } from './composer-draft-retry'
++import { type ComposerDraftRetry, draftRetry, readDraftRetry, writeDraftRetry } from './composer-draft-retry'
 +import type { SessionOwnerScope } from './session-request-router'
 +
 +const PREFIX = '__new__:retained-send:'
++const ATTACHMENTS_ONLY = '\u0001'
++
++interface RetainedSendMeta {
++  parked?: true
++  labels?: string[]
++  attachmentsOnly?: true
++}
++
++type DraftContents = { text: string; attachments: ComposerAttachment[] }
 +export const $retainedSendScopes = atom<Record<string, { scope: string }[]>>({})
 +export const retainedSendGroup = (origin: string | null, owner: SessionOwnerScope) =>
 +  JSON.stringify([draftOwnerKey(owner) ?? null, origin || freshDraftScope()])
@@ -57467,6 +58457,7 @@ index 0000000000000000000000000000000000000000..ba5ffac644e61bb7729b945e9a4c1e33
 +  id: string
 +  retry: boolean
 +  attachmentCount: number
++  meta?: RetainedSendMeta
 +}
 +export interface RetainedSend extends RetainedSendScope {
 +  scope: string
@@ -57484,7 +58475,7 @@ index 0000000000000000000000000000000000000000..ba5ffac644e61bb7729b945e9a4c1e33
 +
 +    if (
 +      !Array.isArray(value) ||
-+      value.length !== 4 ||
++      (value.length !== 4 && value.length !== 5) ||
 +      typeof value[0] !== 'string' ||
 +      typeof value[1] !== 'string' ||
 +      typeof value[2] !== 'boolean' ||
@@ -57494,10 +58485,42 @@ index 0000000000000000000000000000000000000000..ba5ffac644e61bb7729b945e9a4c1e33
 +      return undefined
 +    }
 +
-+    return { origin: value[0], id: value[1], retry: value[2], attachmentCount: value[3] }
++    const meta = value[4]
++    if (
++      meta !== undefined &&
++      (!meta ||
++        typeof meta !== 'object' ||
++        Array.isArray(meta) ||
++        (meta.parked !== undefined && meta.parked !== true) ||
++        (meta.attachmentsOnly !== undefined && meta.attachmentsOnly !== true) ||
++        (meta.labels !== undefined &&
++          (!Array.isArray(meta.labels) || !meta.labels.every((label: unknown) => typeof label === 'string'))))
++    ) {
++      return undefined
++    }
++
++    return { origin: value[0], id: value[1], retry: value[2], attachmentCount: value[3], meta }
 +  } catch {
 +    return undefined
 +  }
++}
++
++function retainedScope({ origin, id, retry, attachmentCount, meta }: RetainedSendScope): string {
++  return (
++    PREFIX + JSON.stringify(meta ? [origin, id, retry, attachmentCount, meta] : [origin, id, retry, attachmentCount])
++  )
++}
++
++function snapshotMeta(text: string, attachments: ComposerAttachment[], parked = false): RetainedSendMeta {
++  return {
++    ...(parked ? { parked: true } : {}),
++    ...(attachments.length ? { labels: attachments.map(file => file.label.slice(0, 200)) } : {}),
++    ...(!text.trim() && attachments.length ? { attachmentsOnly: true } : {})
++  }
++}
++
++function retainedText(text: string, meta?: RetainedSendMeta): string {
++  return meta?.attachmentsOnly ? ATTACHMENTS_ONLY : text
 +}
 +
 +/** Uses the existing owner-isolated, bounded draft store, never an automatic outbox. */
@@ -57508,10 +58531,16 @@ index 0000000000000000000000000000000000000000..ba5ffac644e61bb7729b945e9a4c1e33
 +  owner: SessionOwnerScope,
 +  submissionId?: string
 +): boolean {
-+  const scope =
-+    PREFIX + JSON.stringify([origin, submissionId ?? crypto.randomUUID(), Boolean(submissionId), attachments.length])
++  const meta = attachments.length ? snapshotMeta(text, attachments) : undefined
++  const scope = retainedScope({
++    origin,
++    id: submissionId ?? crypto.randomUUID(),
++    retry: Boolean(submissionId),
++    attachmentCount: attachments.length,
++    meta
++  })
 +
-+  const saved = stashSessionDraft(scope, text, attachments, owner, origin)
++  const saved = stashSessionDraft(scope, retainedText(text, meta), attachments, owner, origin)
 +  refresh(scope, owner)
 +
 +  return saved
@@ -57526,7 +58555,9 @@ index 0000000000000000000000000000000000000000..ba5ffac644e61bb7729b945e9a4c1e33
 +
 +  const draft = takeSessionDraft(scope, owner)
 +
-+  return draft.text.trim() || draft.attachments.length ? { ...entry, scope, ...draft } : undefined
++  return draft.text.trim() || draft.attachments.length
++    ? { ...entry, scope, attachments: draft.attachments, text: entry.meta?.attachmentsOnly ? '' : draft.text }
++    : undefined
 +}
 +
 +function refresh(scope: string, owner: SessionOwnerScope): void {
@@ -57569,7 +58600,9 @@ index 0000000000000000000000000000000000000000..ba5ffac644e61bb7729b945e9a4c1e33
 +  const previous = takeSessionDraft(scope, owner)
 +  const saved = clearSessionDraft(scope, owner)
 +
-+  if (!saved) {
++  if (saved) {
++    writeDraftRetry(scope, undefined, owner)
++  } else {
 +    stashSessionDraft(scope, previous.text, previous.attachments, owner)
 +  }
 +
@@ -57578,39 +58611,94 @@ index 0000000000000000000000000000000000000000..ba5ffac644e61bb7729b945e9a4c1e33
 +  return saved
 +}
 +
-+/** Copy first; an unsaved destination never retires the recoverable source. */
-+export function restoreRejectedDraft(scope: string, origin: string | null, owner: SessionOwnerScope) {
-+  const entry = parse(scope),
-+    target = origin || freshDraftScope()
-+
-+  const current = takeSessionDraft(target, owner)
-+
-+  if (!entry || entry.origin !== target || current.text.trim() || current.attachments.length) {
-+    return undefined
-+  }
-+
-+  const draft = takeSessionDraft(scope, owner)
-+
-+  if (!draft.text.trim() && !draft.attachments.length) {
-+    return undefined
-+  }
-+
-+  const saved = stashSessionDraft(target, draft.text, draft.attachments, owner, scope)
-+
-+  const identitySaved =
-+    saved &&
-+    writeDraftRetry(target, entry.retry ? draftRetry(entry.id, draft.text, draft.attachments) : undefined, owner)
-+
-+  if (identitySaved) {
-+    discardRejectedDraft(scope, owner)
-+  }
-+
++export function retainedMissingFiles(entry: RetainedSend): { count: number; labels: string[] } {
++  const labels = entry.meta?.labels ?? []
++  const remaining = entry.attachments.map(file => file.label.slice(0, 200))
 +  return {
-+    ...draft,
-+    id: entry.retry ? entry.id : undefined,
-+    saved: Boolean(identitySaved),
-+    missingAttachments: entry.attachmentCount > draft.attachments.length
++    count: Math.max(0, entry.attachmentCount - remaining.length),
++    labels: labels.filter(label => {
++      const index = remaining.indexOf(label)
++      if (index < 0) return true
++      remaining.splice(index, 1)
++      return false
++    })
 +  }
++}
++
++function parkDraft(
++  target: string,
++  current: DraftContents,
++  owner: SessionOwnerScope,
++  preserve: string,
++  retry?: ComposerDraftRetry
++) {
++  const meta = snapshotMeta(current.text, current.attachments, true)
++  if (!current.text.trim() && retry?.recovery) meta.attachmentsOnly = true
++  const parked = retainedScope({
++    origin: target,
++    id: crypto.randomUUID(),
++    retry: false,
++    attachmentCount: current.attachments.length,
++    meta
++  })
++
++  if (
++    stashSessionDraft(parked, retainedText(current.text, meta), current.attachments, owner, [target, preserve]) &&
++    writeDraftRetry(parked, retry, owner)
++  )
++    return parked
++
++  discardRejectedDraft(parked, owner)
++  return undefined
++}
++
++/** Publish the switch only after the current editor, replacement and retry metadata are saved. */
++export function restoreRejectedDraft(
++  scope: string,
++  origin: string | null,
++  owner: SessionOwnerScope,
++  liveDraft?: DraftContents
++): (DraftContents & { retry?: ComposerDraftRetry; saved: boolean }) | undefined {
++  const target = origin || freshDraftScope()
++  const entry = readRetainedSend(scope, owner)
++  if (!entry || entry.origin !== target) return undefined
++
++  const current = liveDraft ?? takeSessionDraft(target, owner)
++  const previousRetry = readDraftRetry(target, owner)
++  const occupied = Boolean(current.text.trim() || current.attachments.length || previousRetry?.recovery)
++  if (occupied && !liveDraft) return undefined
++
++  const draft = { text: entry.text, attachments: entry.attachments }
++  const retry = entry.meta?.parked
++    ? readDraftRetry(scope, owner)
++    : entry.retry
++      ? {
++          ...draftRetry(entry.id, draft.text, draft.attachments),
++          recovery: { attachmentCount: entry.attachmentCount, attachmentLabels: entry.meta?.labels ?? [] }
++        }
++      : undefined
++  let saved = false
++
++  batch(() => {
++    const parked = occupied ? parkDraft(target, current, owner, scope, previousRetry) : undefined
++    if (occupied && !parked) return
++
++    saved =
++      stashSessionDraft(target, draft.text, draft.attachments, owner, parked ? [scope, parked] : scope) &&
++      writeDraftRetry(target, retry, owner)
++
++    if (saved) {
++      discardRejectedDraft(scope, owner)
++    } else {
++      // The parked copy stays available if rollback cannot make the original editor durable.
++      const rolledBack =
++        stashSessionDraft(target, current.text, current.attachments, owner, parked ? [scope, parked] : scope) &&
++        writeDraftRetry(target, previousRetry, owner)
++      if (rolledBack && parked) discardRejectedDraft(parked, owner)
++    }
++  })
++
++  return { ...draft, retry, saved }
 +}
 +
 +// Only retained-key events update this index; normal typing does not enumerate draft storage.
@@ -57643,14 +58731,14 @@ index 0000000000000000000000000000000000000000..ba5ffac644e61bb7729b945e9a4c1e33
 +  const origin = target?.scope ?? to
 +
 +  for (const entry of retainedRejectedDrafts(source?.scope ?? from, owner)) {
-+    const scope = PREFIX + JSON.stringify([origin, entry.id, entry.retry, entry.attachmentCount])
-+    const existing = takeSessionDraft(scope, owner)
++    const scope = retainedScope({ ...entry, origin })
++    if (readRetainedSend(scope, owner)) continue
 +
-+    if (existing.text.trim() || existing.attachments.length) {
-+      continue
-+    }
-+
-+    if (stashSessionDraft(scope, entry.text, entry.attachments, owner, [entry.scope, origin])) {
++    const retry = entry.meta?.parked ? readDraftRetry(entry.scope, owner) : undefined
++    if (
++      stashSessionDraft(scope, retainedText(entry.text, entry.meta), entry.attachments, owner, [entry.scope, origin]) &&
++      (!retry || writeDraftRetry(scope, retry, owner))
++    ) {
 +      discardRejectedDraft(entry.scope, owner)
 +    }
 +  }
@@ -60097,10 +61185,10 @@ index 0000000000000000000000000000000000000000..48fb2a357fec113ea6d7fb268b1af5b0
 +  return Object.fromEntries(entries)
 +}
 diff --git a/apps/shared/src/gateway-contract.generated.ts b/apps/shared/src/gateway-contract.generated.ts
-index 57a5f6d6774588963334c22dccc5a7101a80b7ed..c50cc04c4d687184dfeaafa4a7a4fd17540f199e 100644
+index 57a5f6d6774588963334c22dccc5a7101a80b7ed..cac9b46aa46a986f9c9d2ede3724f0d165a7f58d 100644
 --- a/apps/shared/src/gateway-contract.generated.ts
 +++ b/apps/shared/src/gateway-contract.generated.ts
-@@ -812,2 +812,26 @@ export interface SharedMetricsDesktopDailyResult {
+@@ -812,2 +812,33 @@ export interface SharedMetricsDesktopDailyResult {
  }
 +export interface AccountUsageParams {
 +  profile?: string | null
@@ -60108,6 +61196,7 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..c50cc04c4d687184dfeaafa4a7a4fd17
 +}
 +export interface AccountUsageResult {
 +  accounts: AccountUsageRow[]
++  configured_route?: AccountUsageRoute | null
 +}
 +export interface AccountUsageRow {
 +  provider: string
@@ -60126,14 +61215,20 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..c50cc04c4d687184dfeaafa4a7a4fd17
 +  resets_at?: string | null
 +  scope: 'account' | 'model'
 +}
++export interface AccountUsageRoute {
++  provider: string | null
++  label: string | null
++  model: string
++  local_endpoint: boolean
++}
  export interface ModelOptionsParams {
-@@ -1004,2 +1028,5 @@ export interface SessionControlArgs {
+@@ -1004,2 +1035,5 @@ export interface SessionControlArgs {
    index?: number | null
 +  title?: string | null
 +  contract?: GoalContractSnapshot | null
 +  expected_revision?: string | null
  }
-@@ -1991,2 +2018,42 @@ export interface MachineInfo {
+@@ -1991,2 +2025,42 @@ export interface MachineInfo {
  }
 +export type OwnerInboxParams = Record<string, never>
 +export interface OwnerInboxList {
@@ -60176,16 +61271,16 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..c50cc04c4d687184dfeaafa4a7a4fd17
 +  status: 'resolved' | 'expired'
 +}
  /** ``word`` is the token under the cursor (``@`` prefix = context reference); ``cwd`` / ``session_id`` pick the directory the listing resolves against. */
-@@ -2067,2 +2134,3 @@ export interface ProfileRow {
+@@ -2067,2 +2141,3 @@ export interface ProfileRow {
    worker_session?: ProfileWorkerSession | null
 +  worker_sessions?: ProfileWorkerSession[] | null
    canonical_session?: ProfileCanonicalSession | null
-@@ -2082,3 +2150,3 @@ export interface ProfileSessionPreview {
+@@ -2082,3 +2157,3 @@ export interface ProfileSessionPreview {
  }
 -/** Newest kanban/tool worker row, so rosters can show a profile as working. */
 +/** Observed worker metadata, separate from human-facing conversation previews. */
  export interface ProfileWorkerSession {
-@@ -2088,2 +2156,13 @@ export interface ProfileWorkerSession {
+@@ -2088,2 +2163,13 @@ export interface ProfileWorkerSession {
    last_active?: number
 +  last_activity_description?: string
 +  ended_at?: number | null
@@ -60199,7 +61294,7 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..c50cc04c4d687184dfeaafa4a7a4fd17
 +  actual_cost_usd?: number | null
 +  model?: string | null
  }
-@@ -2100,2 +2179,18 @@ export interface ProfileCanonicalSession {
+@@ -2100,2 +2186,18 @@ export interface ProfileCanonicalSession {
    live_message_count?: number | null
 +  input_tokens?: number | null
 +  output_tokens?: number | null
@@ -60218,7 +61313,7 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..c50cc04c4d687184dfeaafa4a7a4fd17
 +  summary?: string
 +  error?: string
  }
-@@ -2433,2 +2528,41 @@ export interface SubagentTailResult {
+@@ -2433,2 +2535,41 @@ export interface SubagentTailResult {
  }
 +export interface ProfileWorkflowGetParams {
 +  profile?: string | null
@@ -60260,11 +61355,11 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..c50cc04c4d687184dfeaafa4a7a4fd17
 +  effort?: string
 +}
  /** ``methods_projects._projects_payload``: every project (archived included) + the active id. */
-@@ -2680,2 +2814,3 @@ export interface PetInfoResult {
+@@ -2680,2 +2821,3 @@ export interface PetInfoResult {
    stateRows?: string[] | null
 +  motionWeight?: 'light' | 'standard' | 'heavy' | null
    [key: string]: unknown
-@@ -2729,2 +2864,7 @@ export interface PetGalleryEntry {
+@@ -2729,2 +2871,7 @@ export interface PetGalleryEntry {
  }
 +export interface PetSpriteParams {
 +  profile?: string | null
@@ -60272,7 +61367,7 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..c50cc04c4d687184dfeaafa4a7a4fd17
 +  variant?: 'half' | null
 +}
  export interface PetSlugParams {
-@@ -4574,2 +4714,26 @@ export interface PluginCatalogLookupEntry {
+@@ -4574,2 +4721,26 @@ export interface PluginCatalogLookupEntry {
  }
 +export interface CanonicalSubagentListResult {
 +  subagents?: CanonicalSubagentSnapshot[]
@@ -60299,11 +61394,11 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..c50cc04c4d687184dfeaafa4a7a4fd17
 +  child_session_id?: string | null
 +}
  export interface CanonicalShellExecParams {
-@@ -5288,2 +5452,3 @@ export interface CanonicalProfileRow {
+@@ -5288,2 +5459,3 @@ export interface CanonicalProfileRow {
    worker_session?: ProfileWorkerSession | null
 +  worker_sessions?: ProfileWorkerSession[] | null
    canonical_session?: ProfileCanonicalSession | null
-@@ -5293,2 +5458,27 @@ export interface CanonicalProfileRow {
+@@ -5293,2 +5465,27 @@ export interface CanonicalProfileRow {
  }
 +export interface CanonicalBotOutputParams {
 +  profile?: string | null
@@ -60331,12 +61426,12 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..c50cc04c4d687184dfeaafa4a7a4fd17
 +  pdf_base64?: string | null
 +}
  export interface CanonicalAttachedImageResult {
-@@ -6057,2 +6247,4 @@ export type ConnectorErrorReason = 'INVALID_PARAMS' | 'NOT_OWNER' | 'UNSUPPORTED
+@@ -6057,2 +6254,4 @@ export type ConnectorErrorReason = 'INVALID_PARAMS' | 'NOT_OWNER' | 'UNSUPPORTED
  export interface RpcMethods {
 +  /** Read per-account quota snapshots. Only refresh=true queries readonly credential-scoped quota endpoints. */
 +  'account.usage': { params: AccountUsageParams; result: AccountUsageResult }
    /** Registry-wide background process summary for ``/agents``. */
-@@ -6291,2 +6483,8 @@ export interface RpcMethods {
+@@ -6291,2 +6490,8 @@ export interface RpcMethods {
    'onboarding.state': { params: OnboardingStateParams; result: OnboardingRunStateResult }
 +  /** Watch and list pending owner questions and approvals on the active gateway. */
 +  'owner_inbox.list': { params: OwnerInboxParams; result: OwnerInboxList }
@@ -60345,38 +61440,38 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..c50cc04c4d687184dfeaafa4a7a4fd17
 +  /** Stop inbox invalidations on this socket. */
 +  'owner_inbox.unwatch': { params: OwnerInboxParams; result: OwnerInboxUnwatch }
    /** Spill a large paste to a file and hand back the inline placeholder. */
-@@ -6323,2 +6521,4 @@ export interface RpcMethods {
+@@ -6323,2 +6528,4 @@ export interface RpcMethods {
    'pet.select': { params: PetSlugParams; result: PetSlugResult }
 +  /** Read one installed character atlas, optionally at half resolution, without changing selection. */
 +  'pet.sprite': { params: PetSpriteParams; result: PetInfoResult }
    /** Idle-frame PNG data URI for the picker (desktop CSP breaks CDN <img>). */
-@@ -6353,2 +6553,6 @@ export interface RpcMethods {
+@@ -6353,2 +6560,6 @@ export interface RpcMethods {
    'profiles.set_asset': { params: ProfilesSetAssetParams; result: ProfilesSetAssetResult }
 +  /** Role-specific THINK/ACTION configuration; linkage is not dispatch readiness. */
 +  'profiles.workflow.configure': { params: ProfileWorkflowConfigureParams; result: ProfileWorkflowResult }
 +  /** Role-specific THINK/ACTION configuration; linkage is not dispatch readiness. */
 +  'profiles.workflow.get': { params: ProfileWorkflowGetParams; result: ProfileWorkflowResult }
    /** Structured project facts for a cwd so UIs don't re-sniff the workspace. */
-@@ -6576,2 +6780,3 @@ export type RpcMethod = keyof RpcMethods
+@@ -6576,2 +6787,3 @@ export type RpcMethod = keyof RpcMethods
  export const RPC_METHODS = [
 +  'account.usage',
    'agents.list',
-@@ -6693,2 +6898,5 @@ export const RPC_METHODS = [
+@@ -6693,2 +6905,5 @@ export const RPC_METHODS = [
    'onboarding.state',
 +  'owner_inbox.list',
 +  'owner_inbox.respond',
 +  'owner_inbox.unwatch',
    'paste.collapse',
-@@ -6709,2 +6917,3 @@ export const RPC_METHODS = [
+@@ -6709,2 +6924,3 @@ export const RPC_METHODS = [
    'pet.select',
 +  'pet.sprite',
    'pet.thumb',
-@@ -6724,2 +6933,4 @@ export const RPC_METHODS = [
+@@ -6724,2 +6940,4 @@ export const RPC_METHODS = [
    'profiles.set_asset',
 +  'profiles.workflow.configure',
 +  'profiles.workflow.get',
    'project.facts',
-@@ -6871,3 +7082,15 @@ export interface CanonicalRpcMethods {
+@@ -6871,3 +7089,15 @@ export interface CanonicalRpcMethods {
    'kanban.run': { params: KanbanRunParams; result: KanbanRunResult }
 +  /** Watch and list pending owner questions and approvals on the active gateway. */
 +  'owner_inbox.list': { params: OwnerInboxParams; result: OwnerInboxList }
@@ -60392,14 +61487,14 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..c50cc04c4d687184dfeaafa4a7a4fd17
 +  /** Profile-scoped bot workflow configuration with an expected-revision fence. */
 +  'profiles.workflow.get': { params: ProfileWorkflowGetParams; result: ProfileWorkflowResult }
    /** Retire a still-queued admission; a started one is unaffected. */
-@@ -6910,2 +7133,6 @@ export interface CanonicalRpcMethods {
+@@ -6910,2 +7140,6 @@ export interface CanonicalRpcMethods {
    'shell.exec': { params: CanonicalShellExecParams; result: ShellExecResult }
 +  /** Interrupt one owned worker, optionally matching its child session ID. */
 +  'subagent.interrupt': { params: CanonicalSubagentInterruptParams; result: SubagentInterruptResult }
 +  /** List the session's live workers, with a child session ID for controllable workers. */
 +  'subagent.list': { params: SessionParams; result: CanonicalSubagentListResult }
    /** Adopt a registered execution after verifying the live producer claim. */
-@@ -6940,3 +7167,10 @@ export const CANONICAL_RPC_METHODS = [
+@@ -6940,3 +7174,10 @@ export const CANONICAL_RPC_METHODS = [
    'kanban.run',
 +  'owner_inbox.list',
 +  'owner_inbox.respond',
@@ -60410,22 +61505,22 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..c50cc04c4d687184dfeaafa4a7a4fd17
 +  'profiles.workflow.configure',
 +  'profiles.workflow.get',
    'prompt.cancel',
-@@ -6964,2 +7198,4 @@ export const CANONICAL_RPC_METHODS = [
+@@ -6964,2 +7205,4 @@ export const CANONICAL_RPC_METHODS = [
    'shell.exec',
 +  'subagent.interrupt',
 +  'subagent.list',
    'worker.adopt',
-@@ -7092,2 +7328,4 @@ export interface BackendGatewayEventMap {
+@@ -7092,2 +7335,4 @@ export interface BackendGatewayEventMap {
    'onboarding.ended': OnboardingEndedPayload
 +  /** Content-free invalidation for a socket watching the owner inbox. */
 +  'owner_inbox.changed': Record<string, never>
    /** Pairing state moved; refetch pairing. */
-@@ -7222,2 +7460,3 @@ export const GATEWAY_EVENT_TYPES = [
+@@ -7222,2 +7467,3 @@ export const GATEWAY_EVENT_TYPES = [
    'onboarding.ended',
 +  'owner_inbox.changed',
    'pairing.changed',
 diff --git a/apps/shared/src/gateway-contract.openrpc.json b/apps/shared/src/gateway-contract.openrpc.json
-index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..6571b0f2c3787a854944d3db22eb012b27be82ec 100644
+index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..bda42f36bce3882ed7ba32cab698843971b0cbcb 100644
 --- a/apps/shared/src/gateway-contract.openrpc.json
 +++ b/apps/shared/src/gateway-contract.openrpc.json
 @@ -8,2 +8,20 @@
@@ -60566,7 +61661,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..6571b0f2c3787a854944d3db22eb012b
 +      }
 +    },
      {
-@@ -4787,2 +4913,160 @@
+@@ -4787,2 +4913,214 @@
        },
 +      "AccountQuotaWindow": {
 +        "additionalProperties": false,
@@ -60646,12 +61741,66 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..6571b0f2c3787a854944d3db22eb012b
 +            },
 +            "title": "Accounts",
 +            "type": "array"
++          },
++          "configured_route": {
++            "anyOf": [
++              {
++                "$ref": "#/components/schemas/AccountUsageRoute"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null
 +          }
 +        },
 +        "required": [
 +          "accounts"
 +        ],
 +        "title": "AccountUsageResult",
++        "type": "object"
++      },
++      "AccountUsageRoute": {
++        "additionalProperties": false,
++        "properties": {
++          "provider": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "title": "Provider"
++          },
++          "label": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "title": "Label"
++          },
++          "model": {
++            "title": "Model",
++            "type": "string"
++          },
++          "local_endpoint": {
++            "title": "Local Endpoint",
++            "type": "boolean"
++          }
++        },
++        "required": [
++          "provider",
++          "label",
++          "model",
++          "local_endpoint"
++        ],
++        "title": "AccountUsageRoute",
 +        "type": "object"
 +      },
 +      "AccountUsageRow": {
@@ -60727,7 +61876,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..6571b0f2c3787a854944d3db22eb012b
 +        "type": "object"
 +      },
        "ActiveIdResult": {
-@@ -7283,2 +7567,75 @@
+@@ -7283,2 +7621,75 @@
        },
 +      "BotModelSelection": {
 +        "additionalProperties": false,
@@ -60803,7 +61952,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..6571b0f2c3787a854944d3db22eb012b
 +        "type": "object"
 +      },
        "BotRelayDeliverParams": {
-@@ -7499,2 +7856,42 @@
+@@ -7499,2 +7910,42 @@
        },
 +      "BotWorkflow": {
 +        "additionalProperties": false,
@@ -60846,7 +61995,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..6571b0f2c3787a854944d3db22eb012b
 +        "type": "object"
 +      },
        "BrowserAction": {
-@@ -8269,2 +8666,177 @@
+@@ -8269,2 +8720,177 @@
        },
 +      "CanonicalBotFileParams": {
 +        "additionalProperties": false,
@@ -61024,7 +62173,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..6571b0f2c3787a854944d3db22eb012b
 +        "type": "object"
 +      },
        "CanonicalConfigGetResult": {
-@@ -9474,2 +10046,18 @@
+@@ -9474,2 +10100,18 @@
            },
 +          "worker_sessions": {
 +            "anyOf": [
@@ -61043,7 +62192,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..6571b0f2c3787a854944d3db22eb012b
 +            "title": "Worker Sessions"
 +          },
            "canonical_session": {
-@@ -11289,2 +11877,215 @@
+@@ -11289,2 +11931,215 @@
        },
 +      "CanonicalSubagentInterruptParams": {
 +        "additionalProperties": false,
@@ -61259,7 +62408,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..6571b0f2c3787a854944d3db22eb012b
 +        "type": "object"
 +      },
        "CanonicalSubmitParams": {
-@@ -25231,2 +26032,308 @@
+@@ -25231,2 +26086,308 @@
        },
 +      "OwnerInboxItem": {
 +        "additionalProperties": false,
@@ -61568,7 +62717,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..6571b0f2c3787a854944d3db22eb012b
 +        "type": "object"
 +      },
        "PaneRevealPayload": {
-@@ -26897,2 +28004,19 @@
+@@ -26897,2 +28058,19 @@
              "title": "Staterows"
 +          },
 +          "motionWeight": {
@@ -61588,7 +62737,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..6571b0f2c3787a854944d3db22eb012b
 +            "default": null,
 +            "title": "Motionweight"
            }
-@@ -27035,2 +28159,41 @@
+@@ -27035,2 +28213,41 @@
        },
 +      "PetSpriteParams": {
 +        "additionalProperties": false,
@@ -61630,7 +62779,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..6571b0f2c3787a854944d3db22eb012b
 +        "type": "object"
 +      },
        "PetSpritePayload": {
-@@ -29273,2 +30436,81 @@
+@@ -29273,2 +30490,81 @@
              "title": "Live Message Count"
 +          },
 +          "input_tokens": {
@@ -61712,7 +62861,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..6571b0f2c3787a854944d3db22eb012b
 +            "default": null,
 +            "title": "Delegation Reports"
            }
-@@ -29282,2 +30524,74 @@
+@@ -29282,2 +30578,74 @@
        },
 +      "ProfileDelegationReport": {
 +        "additionalProperties": false,
@@ -61787,7 +62936,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..6571b0f2c3787a854944d3db22eb012b
 +        "type": "object"
 +      },
        "ProfileMirrored": {
-@@ -29471,2 +30785,18 @@
+@@ -29471,2 +30839,18 @@
            },
 +          "worker_sessions": {
 +            "anyOf": [
@@ -61806,12 +62955,12 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..6571b0f2c3787a854944d3db22eb012b
 +            "title": "Worker Sessions"
 +          },
            "canonical_session": {
-@@ -29583,3 +30913,3 @@
+@@ -29583,3 +30967,3 @@
          "additionalProperties": false,
 -        "description": "Newest kanban/tool worker row, so rosters can show a profile as working.",
 +        "description": "Observed worker metadata, separate from human-facing conversation previews.",
          "properties": {
-@@ -29610,2 +30940,136 @@
+@@ -29610,2 +30994,136 @@
              "title": "Last Active"
 +          },
 +          "last_activity_description": {
@@ -61948,7 +63097,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..6571b0f2c3787a854944d3db22eb012b
 +            "default": null,
 +            "title": "Model"
            }
-@@ -29618,2 +31082,145 @@
+@@ -29618,2 +31136,145 @@
        },
 +      "ProfileWorkflowConfigureParams": {
 +        "additionalProperties": false,
@@ -62094,7 +63243,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..6571b0f2c3787a854944d3db22eb012b
 +        "type": "object"
 +      },
        "ProfilesConfigureApplied": {
-@@ -36096,2 +37703,37 @@
+@@ -36096,2 +37757,37 @@
              "title": "Index"
 +          },
 +          "title": {
@@ -62132,7 +63281,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..6571b0f2c3787a854944d3db22eb012b
 +            "default": null,
 +            "title": "Expected Revision"
            }
-@@ -48113,2 +49755,74 @@
+@@ -48113,2 +49809,74 @@
      },
 +    {
 +      "name": "owner_inbox.list",
@@ -62207,7 +63356,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..6571b0f2c3787a854944d3db22eb012b
 +      }
 +    },
      {
-@@ -48131,2 +49845,56 @@
+@@ -48131,2 +49899,56 @@
      },
 +    {
 +      "name": "profiles.output_file",
@@ -62264,7 +63413,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..6571b0f2c3787a854944d3db22eb012b
 +      }
 +    },
      {
-@@ -48545,2 +50313,38 @@
+@@ -48545,2 +50367,38 @@
      },
 +    {
 +      "name": "subagent.interrupt",
@@ -62303,7 +63452,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..6571b0f2c3787a854944d3db22eb012b
 +      }
 +    },
      {
-@@ -49287,2 +51091,15 @@
+@@ -49287,2 +51145,15 @@
      },
 +    {
 +      "name": "owner_inbox.changed",
@@ -65352,10 +66501,10 @@ index 0000000000000000000000000000000000000000..43b3dc65a69a049f51ce585991f8dedc
 +        pending.unlink(missing_ok=True)
 diff --git a/hermes_cli/account_usage_report.py b/hermes_cli/account_usage_report.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..c1c235bdc92b3375369336459083f59a86ef1c0d
+index 0000000000000000000000000000000000000000..fe395b16895892ff24d89365f8b9441375fff718
 --- /dev/null
 +++ b/hermes_cli/account_usage_report.py
-@@ -0,0 +1,199 @@
+@@ -0,0 +1,222 @@
 +"""Read-only per-account quota report, plus sanitized external adapter snapshots."""
 +
 +from __future__ import annotations
@@ -65471,6 +66620,29 @@ index 0000000000000000000000000000000000000000..c1c235bdc92b3375369336459083f59a
 +    row["state"] = _state(row["windows"])
 +    row["reason"] = snapshot.unavailable_reason
 +    return row
++
++
++def configured_account_route():
++    """Project the profile's configured model without resolving credentials or probing an endpoint."""
++    from agent.model_metadata import is_local_endpoint
++    from hermes_cli.config import coerce_provider_id, load_config
++    from hermes_cli.models import normalize_provider, provider_label
++    from hermes_cli.providers import LLAMACPP_ALIASES
++    from hermes_cli.runtime_provider_custom import _get_named_custom_provider
++
++    config = load_config()
++    model_config = config.get("model")
++    if not isinstance(model_config, dict):
++        return {"provider": None, "label": None, "model": str(model_config or ""), "local_endpoint": False}
++
++    requested = coerce_provider_id(model_config.get("provider", "")).strip()
++    model = str(model_config.get("default", model_config.get("name", "")) or "")
++    named = _get_named_custom_provider(requested, config=config, resolve_credentials=False) if requested else None
++    base_url = str(model_config.get("base_url") or (named or {}).get("base_url") or "")
++    local = requested.lower() in LLAMACPP_ALIASES or is_local_endpoint(base_url)
++    provider = normalize_provider(requested) if requested else ("custom" if local else None)
++    label = (named or {}).get("name") or (provider_label(provider) if provider else None)
++    return {"provider": provider, "label": label, "model": model, "local_endpoint": local}
 +
 +
 +def collect_accounts(provider=None, *, refresh=True, refresh_external=True):
@@ -81304,7 +82476,7 @@ index 0000000000000000000000000000000000000000..a742c9fd4f1ca178e0c2ebfb51899cab
 +# All 25 Unicode61 ignored codepoints lie in this serialized escape prefix.
 +IGNORED_ESCAPE_PREFIX = 'u03'
 diff --git a/locales/_keys.desktop.json b/locales/_keys.desktop.json
-index ae0fe91d3341eb7d3bc13db9bfa17122e1cb8289..11480d708860f0f4237e22c672651ff5ee0592d2 100644
+index ae0fe91d3341eb7d3bc13db9bfa17122e1cb8289..3f50d3f9b7b6911a4cf4ff013c2764c9d5f92ad9 100644
 --- a/locales/_keys.desktop.json
 +++ b/locales/_keys.desktop.json
 @@ -574,2 +574,6 @@
@@ -81318,34 +82490,43 @@ index ae0fe91d3341eb7d3bc13db9bfa17122e1cb8289..11480d708860f0f4237e22c672651ff5
      "composer.attachments",
 +    "composer.autocomplete",
      "composer.commandDescs./agents",
-@@ -1004,3 +1009,5 @@
+@@ -1004,4 +1009,8 @@
      "composer.newSessionPlaceholders",
 +    "composer.nextPrompt",
      "composer.noMatchingThemes",
 +    "composer.noPromptSuggestion",
      "composer.openDirective",
-@@ -1014,2 +1021,3 @@
++    "composer.parkedDraftNotice",
++    "composer.parkedDraftReturn",
+     "composer.pasteImage",
+@@ -1014,2 +1023,3 @@
      "composer.promptSnippets",
 +    "composer.promptSuggestionHint",
      "composer.queueCancelFailed",
-@@ -1041,2 +1049,7 @@
+@@ -1041,2 +1051,13 @@
      "composer.restoredDraftUndo",
 +    "composer.restoredDraftUndoFailed",
++    "composer.retainedSendBusy",
 +    "composer.retainedSendDiscard",
++    "composer.retainedSendEdit",
++    "composer.retainedSendEditAction",
++    "composer.retainedSendEditConfirm",
++    "composer.retainedSendEditDescription",
++    "composer.retainedSendFiles",
 +    "composer.retainedSendMissingAttachments",
 +    "composer.retainedSendNotice",
 +    "composer.retainedSendRestore",
      "composer.send",
-@@ -1063,2 +1076,3 @@
+@@ -1063,2 +1084,3 @@
      "composer.stopSpeakingReplies",
 +    "composer.suggestPrompt",
      "composer.terminalSelectionMissingBody",
-@@ -1073,2 +1087,4 @@
+@@ -1073,2 +1095,4 @@
      "composer.transcribingDictation",
 +    "composer.unassignedDraftNotice",
 +    "composer.unassignedDraftRestore",
      "composer.unmuteMic",
-@@ -3168,2 +3184,23 @@
+@@ -3168,2 +3192,23 @@
      "settings.connections.sshHostTitle",
 +    "settings.connections.sshStatus.disconnected",
 +    "settings.connections.sshStatus.failure.auth-failed",
@@ -81369,37 +82550,42 @@ index ae0fe91d3341eb7d3bc13db9bfa17122e1cb8289..11480d708860f0f4237e22c672651ff5
 +    "settings.connections.sshStatus.socketClosed",
 +    "settings.connections.sshStatus.starting",
      "settings.connections.stagedNote",
-@@ -3252,2 +3289,4 @@
+@@ -3252,2 +3297,4 @@
      "settings.fieldDescriptions.fileReadMaxChars",
 +    "settings.fieldDescriptions.goals.allowSelfManagement",
 +    "settings.fieldDescriptions.goals.delegatedDecisions",
      "settings.fieldDescriptions.memory.memoryEnabled",
-@@ -3317,2 +3356,4 @@
+@@ -3317,2 +3364,4 @@
      "settings.fieldLabels.fileReadMaxChars",
 +    "settings.fieldLabels.goals.allowSelfManagement",
 +    "settings.fieldLabels.goals.delegatedDecisions",
      "settings.fieldLabels.memory.memoryCharLimit",
-@@ -3993,2 +4034,5 @@
+@@ -3993,2 +4042,5 @@
      "settings.profileScope.editsProfile",
 +    "settings.profileScope.filter",
 +    "settings.profileScope.showAll",
 +    "settings.profileScope.showLess",
      "settings.providers.collapse",
-@@ -4016,2 +4060,13 @@
+@@ -4016,2 +4068,18 @@
      "settings.providers.searchKeys",
++    "settings.providers.usage.configuredRoute",
 +    "settings.providers.usage.description",
 +    "settings.providers.usage.loadFailed",
++    "settings.providers.usage.localEndpoint",
 +    "settings.providers.usage.noAccounts",
++    "settings.providers.usage.noQuota",
 +    "settings.providers.usage.refresh",
 +    "settings.providers.usage.refreshing",
 +    "settings.providers.usage.remaining",
 +    "settings.providers.usage.resets",
++    "settings.providers.usage.routeAutomatic",
++    "settings.providers.usage.routeUnknown",
 +    "settings.providers.usage.stale",
 +    "settings.providers.usage.title",
 +    "settings.providers.usage.unavailable",
 +    "settings.providers.usage.updated",
      "settings.quickEntry.active",
-@@ -4125,2 +4180,3 @@
+@@ -4125,2 +4193,3 @@
      "settings.subpages.safetyApprovals",
 +    "settings.subpages.safetyAutonomy",
      "settings.subpages.safetyCheckpoints",
@@ -121505,10 +122691,10 @@ index 0000000000000000000000000000000000000000..d81dbf5291eca4e17e4b94a3c8e14f78
 +    assert params["args"] == args
 diff --git a/tests/tui_gateway/test_account_usage_profile.py b/tests/tui_gateway/test_account_usage_profile.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..76d43a0b278a60e441350ab09b46e9a75cfb8163
+index 0000000000000000000000000000000000000000..22f5ff40dcd633634949d39f7552dfee5868230f
 --- /dev/null
 +++ b/tests/tui_gateway/test_account_usage_profile.py
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,72 @@
 +"""Actual profile RPC dispatch must not leak launch-profile usage or mutate auth."""
 +
 +from datetime import datetime, UTC
@@ -121524,6 +122710,8 @@ index 0000000000000000000000000000000000000000..76d43a0b278a60e441350ab09b46e9a7
 +    launch, worker = tmp_path / "launch", tmp_path / "worker"
 +    for home, label in [(launch, "launch-only"), (worker, "worker-only")]:
 +        home.mkdir()
++        provider, model = ("antigravity-subscription-directsdk", "demo-pro") if home == launch else ("gemini", "demo-flash")
++        (home / "config.yaml").write_text(f"model:\n  provider: {provider}\n  default: {model}\n")
 +        (home / "auth.json").write_text('{"version":1,"credential_pool":{}}')
 +        target = home / "state/account-usage/external.json"
 +        target.parent.mkdir(parents=True)
@@ -121558,9 +122746,27 @@ index 0000000000000000000000000000000000000000..76d43a0b278a60e441350ab09b46e9a7
 +    )
 +    assert result.get("error") is None, result
 +    assert [r["label"] for r in result["result"]["accounts"]] == ["worker-only"]
++    route = result["result"]["configured_route"]
++    assert (route["provider"], route["model"], route["local_endpoint"]) == ("gemini", "demo-flash", False)
 +    assert all(
 +        (home / "auth.json").read_bytes() == data for home, data in before.items()
 +    )
++
++
++def test_configured_route_labels_named_local_without_returning_endpoint_details(tmp_path, monkeypatch):
++    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
++    fixture_host = tmp_path.name.replace("_", "-")
++    (tmp_path / "config.yaml").write_text(
++        "model:\n  provider: 'custom:workbench'\n  default: demo-local\n"
++        f"providers:\n  workbench:\n    name: Workbench\n    base_url: http://{fixture_host}/v1\n"
++    )
++
++    assert report.configured_account_route() == {
++        "provider": "custom:workbench",
++        "label": "Workbench",
++        "model": "demo-local",
++        "local_endpoint": True,
++    }
 diff --git a/tests/tui_gateway/test_config_location_profile_scope.py b/tests/tui_gateway/test_config_location_profile_scope.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..e6de764c5dfcf879bc66fd671b0b690385934a10
@@ -128951,11 +130157,11 @@ index 7b8931440e4299f155949b0e5943f89093dbeeaa..dd905a05ef172c02b73a6ad1d78ace72
 +    ('profiles.output_file', CanonicalBotFileParams, CanonicalBotFileResult),
      ('image.attach_bytes', ImageAttachBytesParams, CanonicalAttachedImageResult),
 diff --git a/tui_gateway/contracts/config_free_tier_control.py b/tui_gateway/contracts/config_free_tier_control.py
-index a7346e3f0a6d57a6ea1eeb0a05517eb943b737d0..da2738697b6257c235c147bd6f5b3662e61439e3 100644
+index a7346e3f0a6d57a6ea1eeb0a05517eb943b737d0..ed1169926bebccad1c301c04f7f37efe2109d478 100644
 --- a/tui_gateway/contracts/config_free_tier_control.py
 +++ b/tui_gateway/contracts/config_free_tier_control.py
-@@ -445,2 +445,40 @@ method("shared_metrics.desktop_daily", params=SharedMetricsDesktopDailyParams,
- 
+@@ -445,2 +445,48 @@ method("shared_metrics.desktop_daily", params=SharedMetricsDesktopDailyParams,
+
 +# ── account.usage ────────────────────────────────────────────────────────────
 +
 +
@@ -128982,8 +130188,16 @@ index a7346e3f0a6d57a6ea1eeb0a05517eb943b737d0..da2738697b6257c235c147bd6f5b3662
 +    reason: str | None = None
 +
 +
++class AccountUsageRoute(Result):
++    provider: str | None
++    label: str | None
++    model: str
++    local_endpoint: bool
++
++
 +class AccountUsageResult(Result):
 +    accounts: list[AccountUsageRow]
++    configured_route: AccountUsageRoute | None = None
 +
 +
 +method(
@@ -128995,16 +130209,16 @@ index a7346e3f0a6d57a6ea1eeb0a05517eb943b737d0..da2738697b6257c235c147bd6f5b3662
 +
 +
  # ── model.options ─────────────────────────────────────────────────────────────────────────────
-@@ -707,2 +745,3 @@ method("session.control.read", params=SessionControlReadParams, result=SessionCo
+@@ -707,2 +753,3 @@ method("session.control.read", params=SessionControlReadParams, result=SessionCo
  class SessionControlAction(WireEnum):
 +    goal_configure = "goal.configure"
      goal_pause = "goal.pause"
-@@ -727,2 +766,5 @@ class SessionControlArgs(Params):
+@@ -727,2 +774,5 @@ class SessionControlArgs(Params):
      index: int | None = None
 +    title: str | None = None
 +    contract: GoalContractSnapshot | None = None
 +    expected_revision: str | None = None
- 
+
 diff --git a/tui_gateway/contracts/owner_inbox.py b/tui_gateway/contracts/owner_inbox.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..a23ef6295e5dd96e26cd17a6039960bb4da444d4
@@ -129297,19 +130511,22 @@ index 2d14741a5d897f0d740ac610ab901f8c4ff48f62..0ea5b1ecae3fe50f2ead4f42b3faafa8
 +            room_thread = spawn_context_thread(
                  target=self._run_room_once, args=(binding,),
 diff --git a/tui_gateway/methods_complete.py b/tui_gateway/methods_complete.py
-index ea2b069c6eec82d36e1a30f0e524faf1c98e0b6b..fb6d824e249e73e2845eff9712f060674abcc893 100644
+index ea2b069c6eec82d36e1a30f0e524faf1c98e0b6b..23391cd6202f5da50e910bf124cb8636bf4d6877 100644
 --- a/tui_gateway/methods_complete.py
 +++ b/tui_gateway/methods_complete.py
-@@ -318,2 +318,12 @@ def _model_skew_err(rid) -> dict | None:
- 
+@@ -318,2 +318,15 @@ def _model_skew_err(rid) -> dict | None:
+
 +@method("account.usage")
 +@_profile_scoped
 +@_catch(5038)
 +def _(rid, params: dict) -> dict:
 +    """Read owning-profile account snapshots; query quotas only on manual refresh."""
-+    from hermes_cli.account_usage_report import collect_accounts
++    from hermes_cli.account_usage_report import collect_accounts, configured_account_route
 +
-+    return _ok(rid, {"accounts": collect_accounts(refresh=params.get("refresh") is True)})
++    return _ok(rid, {
++        "configured_route": configured_account_route(),
++        "accounts": collect_accounts(refresh=params.get("refresh") is True),
++    })
 +
 +
  @method("model.options")
