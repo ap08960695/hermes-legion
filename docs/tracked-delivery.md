@@ -47,7 +47,8 @@ worker run to its profile session and compression continuation. Legacy runs
 can contribute a bounded diagnostic sample when its key and run binding
 match. Each row opens its native run evidence on demand. If a run fails to
 load, close and reopen that row to retry.
-If the usage read fails, **Retry usage** rechecks the same card and review.
+If a refresh fails, the last loaded totals and open run evidence stay
+visible with a warning. **Retry usage** rechecks the same card and review.
 
 Coverage is partial. When THINK usage is linked, the table explains that
 adding card totals can count the same run twice. Use the run evidence to
