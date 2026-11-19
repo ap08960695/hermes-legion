@@ -15797,11 +15797,44 @@ index 976f79976e40cc672ef1a9bdfe6c1c80b91f4f1f..a09c934491023034488d44cfe4e2f6d4
      ...resolveConfigWriteScope(config, profile),
 +    ...(autosave ? { configAutosave: true } : {}),
      path: preserveLanguage ? '/api/config?preserve_language=true' : '/api/config',
+diff --git a/apps/desktop/src/api/sessions.test.ts b/apps/desktop/src/api/sessions.test.ts
+index 7bdaff9c7d3aa3b231ef4ebfb1dac671d8ccbe30..d58d17aad10aa41c39fa6cd6913f269379bc07cf 100644
+--- a/apps/desktop/src/api/sessions.test.ts
++++ b/apps/desktop/src/api/sessions.test.ts
+@@ -354,2 +354,15 @@ describe('searchSessions profile scope', () => {
+   })
++
++  it.each(['local', 'fixture-remote', null])('uses the captured connection while the ambient source changes (%s)', async connectionId => {
++    hermesApi.mockResolvedValue({ results: [] } as never)
++    vi.mocked(client.profileScoped).mockReturnValue({ profile: 'research', priority: 'foreground' })
++
++    await searchSessions('old + new', 'research', connectionId)
++
++    expect(hermesApi.mock.calls[0][0]).toMatchObject({
++      connectionId,
++      path: '/api/sessions/search?q=old%20%2B%20new&profile=research',
++      profile: 'research'
++    })
++  })
+ })
 diff --git a/apps/desktop/src/api/sessions.ts b/apps/desktop/src/api/sessions.ts
-index b92ab645fba5b1cb71c1858da8fec74acb389bbb..610d3242999ecaccfafb972685f5822fccb9a908 100644
+index b92ab645fba5b1cb71c1858da8fec74acb389bbb..8879c794cffde5dd27a92379ee195c1a62b460d3 100644
 --- a/apps/desktop/src/api/sessions.ts
 +++ b/apps/desktop/src/api/sessions.ts
-@@ -452,2 +452,9 @@ export function searchSessions(query: string, profile?: null | string): Promise<
+@@ -438,3 +438,7 @@ export function setSessionUnreadRemote(id: string, unread: boolean, profile?: st
+ // asks the primary on purpose; omitted follows the ambient request profile.
+-export function searchSessions(query: string, profile?: null | string): Promise<SessionSearchResponse> {
++export function searchSessions(
++  query: string,
++  profile?: null | string,
++  connectionId?: null | string
++): Promise<SessionSearchResponse> {
+   const scope = profileScoped(profile)
+@@ -444,2 +448,3 @@ export function searchSessions(query: string, profile?: null | string): Promise<
+     ...scope,
++    ...(connectionId !== undefined ? { connectionId } : {}),
+     path: `/api/sessions/search?q=${encodeURIComponent(query)}${suffix}`
+@@ -452,2 +457,9 @@ export function searchSessions(query: string, profile?: null | string): Promise<
  // cross-profile list scan when locating an unknown id's owner.
 +/** Whether the native session-read resolver would stay on the expected owner. */
 +export function sessionReadMatchesOwner(id: string, profile: ProfileScope, connectionId: string): boolean {
@@ -20675,19 +20708,26 @@ index 98dcd623ac5805f845cb724e9739d35271b92672..7bba66937e9a24b1297cde988777eb99
        <WorkspaceAddButton
 diff --git a/apps/desktop/src/app/chat/sidebar/use-server-session-search.test.tsx b/apps/desktop/src/app/chat/sidebar/use-server-session-search.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..58cf040b33ec8349529adb8f2b7286ae71c4a480
+index 0000000000000000000000000000000000000000..e379891c3f333fa181f2252d0dc5f7f9cf18694d
 --- /dev/null
 +++ b/apps/desktop/src/app/chat/sidebar/use-server-session-search.test.tsx
-@@ -0,0 +1,73 @@
+@@ -0,0 +1,111 @@
 +import { act, cleanup, renderHook } from '@testing-library/react'
++import { atom } from 'nanostores'
 +import { afterEach, expect, it, vi } from 'vitest'
 +import { useServerSessionSearch } from './use-server-session-search'
++vi.mock('@/store/connections', () => ({ $activeConnectionId: atom<string | null>(null) }))
++import { $activeConnectionId } from '@/store/connections'
++import type { WritableAtom } from 'nanostores'
++
++const connectionId = $activeConnectionId as WritableAtom<string | null>
 +const io = vi.hoisted(() => ({ search: vi.fn() }))
 +vi.mock('@/hermes', async original => ({ ...(await original<typeof import('@/hermes')>()), searchSessions: io.search }))
 +afterEach(() => {
 +  cleanup()
 +  vi.useRealTimers()
 +  io.search.mockReset()
++  connectionId.set(null)
 +})
 +const hit = { id: 'old-hit', title: 'Earlier query', source: 'cli' }
 +async function tick() {
@@ -20717,7 +20757,7 @@ index 0000000000000000000000000000000000000000..58cf040b33ec8349529adb8f2b7286ae
 +  expect(result.current.serverMatches).toEqual([])
 +  expect(result.current.searchError).toBe(false)
 +  await tick()
-+  expect(io.search).toHaveBeenLastCalledWith('earlier', 'other')
++  expect(io.search).toHaveBeenLastCalledWith('earlier', 'other', null)
 +})
 +it('ignores late responses and makes one new request on explicit retry', async () => {
 +  vi.useFakeTimers()
@@ -20752,20 +20792,60 @@ index 0000000000000000000000000000000000000000..58cf040b33ec8349529adb8f2b7286ae
 +  await tick()
 +  expect(io.search).toHaveBeenCalledTimes(3)
 +})
++
++it('retires a previous same-query result on device switch and ignores the late old-device response', async () => {
++  vi.useFakeTimers()
++  connectionId.set('local')
++  let resolveRemote!: (value: unknown) => void
++  io.search
++    .mockResolvedValueOnce({ results: [hit] })
++    .mockReturnValueOnce(
++      new Promise(resolve => {
++        resolveRemote = resolve
++      })
++    )
++    .mockResolvedValueOnce({ results: [] })
++
++  const { result } = renderHook(() => useServerSessionSearch('same query', 'default'))
++  await tick()
++  expect(result.current.serverMatches).toEqual([hit])
++  act(() => connectionId.set('remote'))
++  expect(result.current.serverMatches).toEqual([])
++  expect(result.current.searchPending).toBe(true)
++  await tick()
++  expect(io.search).toHaveBeenLastCalledWith('same query', 'default', 'remote')
++
++  act(() => connectionId.set('local'))
++  expect(result.current.serverMatches).toEqual([])
++  await act(async () => resolveRemote({ results: [hit] }))
++  expect(result.current.serverMatches).toEqual([])
++  await tick()
++  expect(io.search).toHaveBeenLastCalledWith('same query', 'default', 'local')
++  expect(result.current.searchPending).toBe(false)
++})
 diff --git a/apps/desktop/src/app/chat/sidebar/use-server-session-search.ts b/apps/desktop/src/app/chat/sidebar/use-server-session-search.ts
-index 32fd677b19b6111588d2c0a2bf68486442f13b0a..52c7f2235736ff73f40ae62a60dc9b18296a86f8 100644
+index 32fd677b19b6111588d2c0a2bf68486442f13b0a..3e895fcf913eb5ca5d467f70780bef2aecfe2a0a 100644
 --- a/apps/desktop/src/app/chat/sidebar/use-server-session-search.ts
 +++ b/apps/desktop/src/app/chat/sidebar/use-server-session-search.ts
-@@ -6,3 +6,7 @@ import { ALL_PROFILES, normalizeProfileKey } from '@/store/profile'
+@@ -1,4 +1,6 @@
+-import { useEffect, useState } from 'react'
++import { useStore } from '@nanostores/react'
++import { useEffect, useMemo, useState } from 'react'
+ 
+ import { searchSessions, type SessionSearchResult } from '@/hermes'
++import { $activeConnectionId } from '@/store/connections'
+ import { ALL_PROFILES, normalizeProfileKey } from '@/store/profile'
+@@ -6,3 +8,8 @@ import { ALL_PROFILES, normalizeProfileKey } from '@/store/profile'
  const SEARCH_DEBOUNCE_MS = 200
 -
++type SearchRequest = { query: string; profile: string | null; connectionId: string | null }
 +interface SearchState {
-+  key: string
++  request: SearchRequest
 +  hits: SessionSearchResult[]
 +  failed: boolean
 +}
  export interface ServerSessionSearch {
-@@ -10,42 +14,25 @@ export interface ServerSessionSearch {
+@@ -10,42 +17,28 @@ export interface ServerSessionSearch {
    searchPending: boolean
 +  searchError: boolean
 +  retrySearch: () => void
@@ -20777,15 +20857,17 @@ index 32fd677b19b6111588d2c0a2bf68486442f13b0a..52c7f2235736ff73f40ae62a60dc9b18
 - * an unscoped request searches the primary backend's launch profile, whatever
 - * profile is on screen. "All profiles" asks the primary as before.
 - */
-+/** Full-text hits belong to one query, profile and explicit attempt. */
++/** Full-text hits belong to one query, connection, profile and attempt. */
  export function useServerSessionSearch(query: string, profileScope: string): ServerSessionSearch {
 -  const [serverMatches, setServerMatches] = useState<SessionSearchResult[]>([])
 -  const [searchPending, setSearchPending] = useState(false)
-+  const [state, setState] = useState<SearchState>({ key: '', hits: [], failed: false })
++  const [state, setState] = useState<SearchState>()
 +  const [attempt, setAttempt] = useState(0)
    const profile = profileScope === ALL_PROFILES ? null : normalizeProfileKey(profileScope)
--
-+  const key = JSON.stringify([query, profile, attempt])
++  const connectionId = useStore($activeConnectionId)
+ 
++  // Identity also distinguishes a return to a previously visited query or connection.
++  const request = useMemo(() => ({ query, profile, connectionId, attempt }), [query, profile, connectionId, attempt])
    useEffect(() => {
 -    if (!query) {
 -      setServerMatches([])
@@ -20794,7 +20876,7 @@ index 32fd677b19b6111588d2c0a2bf68486442f13b0a..52c7f2235736ff73f40ae62a60dc9b18
 -      return
 -    }
 -
-+    if (!query) return
++    if (!request.query) return
      let cancelled = false
 -
 -    setSearchPending(true)
@@ -20812,28 +20894,29 @@ index 32fd677b19b6111588d2c0a2bf68486442f13b0a..52c7f2235736ff73f40ae62a60dc9b18
 -            setSearchPending(false)
 -          }
 -        })
-+      void searchSessions(query, profile).then(
++      void searchSessions(request.query, request.profile, request.connectionId).then(
 +        res => {
-+          if (!cancelled) setState({ key, hits: res.results, failed: false })
++          if (!cancelled) setState({ request, hits: res.results, failed: false })
 +        },
 +        () => {
-+          if (!cancelled) setState({ key, hits: [], failed: true })
++          if (!cancelled) setState({ request, hits: [], failed: true })
 +        }
 +      )
      }, SEARCH_DEBOUNCE_MS)
 -
      return () => {
-@@ -54,5 +41,10 @@ export function useServerSessionSearch(query: string, profileScope: string): Ser
+@@ -54,5 +47,11 @@ export function useServerSessionSearch(query: string, profileScope: string): Ser
      }
 -  }, [query, profile])
 -
 -  return { searchPending, serverMatches }
-+  }, [query, profile, key])
-+  const current = Boolean(query) && state.key === key
++  }, [request])
++
++  const current = query && state?.request === request ? state : undefined
 +  return {
-+    serverMatches: current ? state.hits : [],
++    serverMatches: current?.hits ?? [],
 +    searchPending: Boolean(query) && !current,
-+    searchError: current && state.failed,
++    searchError: current?.failed ?? false,
 +    retrySearch: () => setAttempt(n => n + 1)
 +  }
  }
@@ -20909,7 +20992,7 @@ index 6dd640fdb343634e5b12418fca2ede6080d0aa8f..299896ab1a40ce68194752c8eb41aa35
 +      <CacheUsageStats totals={totals} />
        <section>
 diff --git a/apps/desktop/src/app/command-palette/index.tsx b/apps/desktop/src/app/command-palette/index.tsx
-index 1c62d1c8548212752ac7b28b9dd844b8bca2e838..c46fb411b65f0f8a78a9e37dfd10b2d31772efab 100644
+index 1c62d1c8548212752ac7b28b9dd844b8bca2e838..9b33691f75fa2465766bacd1b5f589235b4be413 100644
 --- a/apps/desktop/src/app/command-palette/index.tsx
 +++ b/apps/desktop/src/app/command-palette/index.tsx
 @@ -16,5 +16,6 @@ import {
@@ -20936,23 +21019,27 @@ index 1c62d1c8548212752ac7b28b9dd844b8bca2e838..c46fb411b65f0f8a78a9e37dfd10b2d3
 +import { openProjectTarget } from '../session-manager/project-target'
 +import { $projectTree, openFolderAsProject, requestStartWorkSession } from '@/store/projects'
  import { $connection, $cronSessions, $messagingSessions, $sessions } from '@/store/session'
-@@ -119,3 +118,2 @@ import { HighlightWatcher } from './highlight-watcher'
+@@ -98,2 +97,3 @@ import { isUserTheme, resolveTheme } from '@/themes/user-themes'
+ import { buildSessionByAnyId, resolvePinnedSessions } from '../chat/sidebar/session-index'
++import { useFocusCopy } from '../focus/copy'
+ import { openSessionFromPicker, openSessionIntentFromModifiers } from '../open-session'
+@@ -119,3 +119,2 @@ import { HighlightWatcher } from './highlight-watcher'
  import { MarketplaceThemePage } from './marketplace-theme-page'
 -import { PetInlineToggle, PetPalettePage } from './pet-palette-page'
-
-@@ -239,3 +237,3 @@ const scoreItem = (item: PaletteItem, needle: string): number => {
+ 
+@@ -239,3 +238,3 @@ const scoreItem = (item: PaletteItem, needle: string): number => {
  // sort), so curated group/item ordering still breaks even scores.
 -const rankGroups = (groups: PaletteGroup[], search: string): PaletteGroup[] => {
 +export const rankGroups = (groups: PaletteGroup[], search: string): PaletteGroup[] => {
    const needle = normalize(search)
-@@ -243,3 +241,4 @@ const rankGroups = (groups: PaletteGroup[], search: string): PaletteGroup[] => {
+@@ -243,3 +242,4 @@ const rankGroups = (groups: PaletteGroup[], search: string): PaletteGroup[] => {
    if (!needle) {
 -    return groups
 +    // Never paint a bare heading over nothing.
 +    return groups.filter(group => group.items.length > 0)
    }
-@@ -395,2 +394,12 @@ type SessionRow = Awaited<ReturnType<typeof listAllProfileSessions>>['sessions']
-
+@@ -395,2 +395,12 @@ type SessionRow = Awaited<ReturnType<typeof listAllProfileSessions>>['sessions']
+ 
 +// A chat started since the palette's last fetch (or while it is in flight)
 +// lives only in the sidebar store; list it too, so its title matches as you
 +// type instead of falling through to "Search all saved chats".
@@ -20964,17 +21051,31 @@ index 1c62d1c8548212752ac7b28b9dd844b8bca2e838..c46fb411b65f0f8a78a9e37dfd10b2d3
 +}
 +
  const toSessionEntry = (session: SessionRow): SessionEntry => ({
-@@ -704,3 +713,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
-
+@@ -586,2 +596,4 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+ 
++  const searchCopy = useFocusCopy()
++  const [searchMessages, setSearchMessages] = useState(false)
+   const [search, setSearch] = useState('')
+@@ -704,3 +716,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+ 
 -    return (sessionsQuery.data?.sessions ?? [])
 +    return withFreshLiveSessions(sessionsQuery.data?.sessions ?? [], liveSessions)
        .filter(session => !removedSessionIds.has(session.id))
-@@ -846,3 +855,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+@@ -735,2 +747,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+     if (pendingPage) {
++      setSearchMessages(false)
+       setPage(pendingPage)
+@@ -747,3 +760,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+     inputRef.current?.focus()
+-  }, [page])
++  }, [page, searchMessages])
+ 
+@@ -846,3 +859,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
            runWithEvent: (event?: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) =>
 -            goToProject(project.id, { newSession: Boolean(event?.metaKey || event?.ctrlKey) })
 +            openProjectTarget(project.id, event, navigate)
          }))
-@@ -1032,17 +1041,4 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+@@ -1032,17 +1045,4 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
              to: 'color-mode'
 -          },
 -          {
@@ -20993,7 +21094,7 @@ index 1c62d1c8548212752ac7b28b9dd844b8bca2e838..c46fb411b65f0f8a78a9e37dfd10b2d3
            }
 +
          ]
-@@ -1490,8 +1486,2 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+@@ -1490,8 +1490,2 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
        },
 -      // Server-driven page: browse petdex gallery, adopt/switch, toggle off.
 -      pets: {
@@ -21002,13 +21103,62 @@ index 1c62d1c8548212752ac7b28b9dd844b8bca2e838..c46fb411b65f0f8a78a9e37dfd10b2d3
 -        groups: []
 -      },
        // Server-driven page: items come from the Marketplace, rendered by
-@@ -1672,16 +1662,7 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+@@ -1528,3 +1522,13 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+   const visibleGroups = useMemo(() => rankGroups(unrankedGroups, search), [unrankedGroups, search])
+-  const placeholder = activePage ? activePage.placeholder : t.commandCenter.searchPlaceholder
++  const placeholder = searchMessages
++    ? searchCopy('messageSearchPlaceholder')
++    : activePage?.placeholder ?? t.commandCenter.searchPlaceholder
++  const pageTitle = searchMessages ? searchCopy('searchInMessages') : activePage?.title
++  const backToParent = () => {
++    if (searchMessages) {
++      setSearchMessages(false)
++    } else {
++      goBack()
++    }
++  }
+ 
+@@ -1634,8 +1638,11 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+         <DialogPrimitive.Title className="sr-only">{t.commandCenter.paletteTitle}</DialogPrimitive.Title>
+-        <Command className="bg-transparent" loop shouldFilter={false}>
++        <Command className="bg-transparent" key={searchMessages ? 'messages' : 'commands'} label={placeholder} loop shouldFilter={false}>
+           <HighlightWatcher onValue={handleHighlight} />
+-          {activePage && (
++          {pageTitle && (
+             <button
+               className="flex w-full items-center gap-1.5 border-b border-border px-3 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:text-foreground"
+-              onClick={goBack}
++              onClick={backToParent}
++              onKeyDown={event => {
++                if (event.key === 'Enter') event.stopPropagation()
++              }}
+               type="button"
+@@ -1645,3 +1652,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+               <span className="text-muted-foreground/50">/</span>
+-              <span className="font-medium text-foreground">{activePage.title}</span>
++              <span className="font-medium text-foreground">{pageTitle}</span>
+             </button>
+@@ -1655,3 +1662,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+ 
+-              if (!activePage) {
++              if (!pageTitle) {
+                 return
+@@ -1664,3 +1671,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+                 event.stopPropagation()
+-                goBack()
++                backToParent()
+ 
+@@ -1672,16 +1679,11 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
              ref={inputRef}
 -            right={page === 'pets' ? <PetInlineToggle /> : undefined}
              value={search}
            />
 -          <CommandList className="dt-portal-scrollbar max-h-[min(20rem,56vh)]">
-+          <SavedChatList query={page ? '' : search}>
++          <SavedChatList
++            onSearchMessages={() => setSearchMessages(true)}
++            query={page && !searchMessages ? '' : search}
++            searchingMessages={searchMessages}
++          >
              {/* Server-driven pages render their own list; the rest show groups. */}
 -            {page === 'pets' ? (
 -              <PetPalettePage
@@ -21021,7 +21171,7 @@ index 1c62d1c8548212752ac7b28b9dd844b8bca2e838..c46fb411b65f0f8a78a9e37dfd10b2d3
 -            ) : page === 'install-theme' ? (
 +            {page === 'install-theme' ? (
                <MarketplaceThemePage onPickTheme={setTheme} search={search} />
-@@ -1698,3 +1679,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
+@@ -1698,3 +1700,3 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
              )}
 -          </CommandList>
 +          </SavedChatList>
@@ -21061,15 +21211,31 @@ index 0000000000000000000000000000000000000000..189b68a47b652f6202727159977a2f6f
 +})
 diff --git a/apps/desktop/src/app/command-palette/saved-chat-search.test.tsx b/apps/desktop/src/app/command-palette/saved-chat-search.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..07743d5be8701a95434a0def1a1b3c183154759c
+index 0000000000000000000000000000000000000000..550fc6272f651b609514322c8dfbf15f13cc6a0b
 --- /dev/null
 +++ b/apps/desktop/src/app/command-palette/saved-chat-search.test.tsx
-@@ -0,0 +1,39 @@
-+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+@@ -0,0 +1,157 @@
++import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 +import { MemoryRouter, useLocation } from 'react-router'
-+import { afterEach, beforeAll, expect, it } from 'vitest'
-+import { Command, CommandList } from '@/components/ui/command'
-+import { SavedChatSearch } from './saved-chat-search'
++import { atom, type WritableAtom } from 'nanostores'
++import { useState } from 'react'
++import { afterEach, beforeAll, expect, it, vi } from 'vitest'
++import { Command, CommandInput, CommandList } from '@/components/ui/command'
++import { SavedChatList, SavedChatSearch } from './saved-chat-search'
++
++const io = vi.hoisted(() => ({ search: vi.fn(), open: vi.fn() }))
++vi.mock('@/hermes', async original => ({ ...(await original<typeof import('@/hermes')>()), searchSessions: io.search }))
++vi.mock('@/store/connections', () => ({
++  $activeConnectionId: atom<string | null>('local'),
++  $pendingConnectionId: atom<string | null>(null)
++}))
++vi.mock('../open-session', () => ({ openSessionFromPicker: io.open }))
++import { $activeConnectionId, $pendingConnectionId } from '@/store/connections'
++import { $activeGatewayProfile } from '@/store/profile'
++
++const connection = $activeConnectionId as WritableAtom<string | null>
++const pending = $pendingConnectionId as WritableAtom<string | null>
++
 +function Location() {
 +  const loc = useLocation()
 +  return <output>{loc.pathname + loc.search}</output>
@@ -21077,7 +21243,14 @@ index 0000000000000000000000000000000000000000..07743d5be8701a95434a0def1a1b3c18
 +beforeAll(() => {
 +  Element.prototype.scrollIntoView = () => {}
 +})
-+afterEach(cleanup)
++afterEach(() => {
++  cleanup()
++  io.search.mockReset()
++  io.open.mockReset()
++  connection.set('local')
++  pending.set(null)
++  $activeGatewayProfile.set('default')
++})
 +it('hands the exact query to full native history only on selection', () => {
 +  render(
 +    <MemoryRouter>
@@ -21104,32 +21277,138 @@ index 0000000000000000000000000000000000000000..07743d5be8701a95434a0def1a1b3c18
 +  )
 +  expect(screen.queryByRole('option')).toBeNull()
 +})
++
++const older = [
++  {
++    session_id: 'old-chat-one',
++    profile: 'research',
++    title: 'Archived notebook',
++    snippet: 'Notes about >>>wayfinding<<<.'
++  },
++  { session_id: 'old-chat-two', profile: 'research', title: 'Trail planning', snippet: 'Older >>>wayfinding<<< cues.' }
++]
++
++function SearchHarness() {
++  const [messages, setMessages] = useState(false)
++  const [query, setQuery] = useState('')
++  return (
++    <MemoryRouter>
++      <Command key={messages ? 'messages' : 'commands'} shouldFilter={false}>
++        <CommandInput aria-label="Search" value={query} onValueChange={setQuery} />
++        <SavedChatList query={query} onSearchMessages={() => setMessages(true)} searchingMessages={messages}>
++          <></>
++        </SavedChatList>
++      </Command>
++      <Location />
++    </MemoryRouter>
++  )
++}
++
++function enterMessages() {
++  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'wayfinding' } })
++  expect(io.search).not.toHaveBeenCalled()
++  fireEvent.click(screen.getByRole('option', { name: 'Search in messages' }))
++  return screen.getByRole('combobox')
++}
++
++it('announces scoped first-page matches and opens the selected old chat with arrow and Enter', async () => {
++  $activeGatewayProfile.set('research')
++  io.search.mockResolvedValue({ results: older })
++  render(<SearchHarness />)
++  const input = enterMessages()
++  const announcement = await screen.findByText('2 matching chats shown.')
++  expect(io.search).toHaveBeenCalledExactlyOnceWith('wayfinding', 'research', 'local')
++  expect(announcement.getAttribute('role')).toBe('status')
++  expect(announcement.getAttribute('aria-live')).toBe('polite')
++  expect(screen.getByText('Notes about wayfinding.')).toBeTruthy()
++  await waitFor(() =>
++    expect(screen.getByRole('option', { name: /Archived notebook/ }).getAttribute('aria-selected')).toBe('true')
++  )
++  fireEvent.keyDown(input, { key: 'ArrowDown' })
++  fireEvent.keyDown(input, { key: 'Enter' })
++  expect(io.open).toHaveBeenCalledExactlyOnceWith('old-chat-two', expect.any(Function), 'stack', {
++    connectionId: 'local',
++    profile: 'research'
++  })
++})
++
++it('clears rows at a device switch and discards the response from an older same-profile attempt', async () => {
++  $activeGatewayProfile.set('research')
++  let resolve!: (value: unknown) => void
++  io.search
++    .mockResolvedValueOnce({ results: older })
++    .mockReturnValueOnce(
++      new Promise(r => {
++        resolve = r
++      })
++    )
++    .mockResolvedValueOnce({ results: [{ ...older[0], session_id: 'new-chat', title: 'New device result' }] })
++  render(<SearchHarness />)
++  enterMessages()
++  await screen.findByText('Archived notebook')
++  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'changed' } })
++  await waitFor(() => expect(io.search).toHaveBeenCalledTimes(2))
++  act(() => pending.set('remote'))
++  expect(screen.queryByRole('option')).toBeNull()
++  act(() => {
++    connection.set('remote')
++    pending.set(null)
++  })
++  await act(async () => resolve({ results: older }))
++  expect(screen.queryByText('Archived notebook')).toBeNull()
++  await screen.findByText('New device result')
++  expect(io.search).toHaveBeenLastCalledWith('changed', 'research', 'remote')
++})
++
++it('offers a single explicit retry and hands the exact query to History', async () => {
++  io.search.mockRejectedValueOnce(new Error('fixture failed')).mockResolvedValueOnce({ results: [] })
++  render(<SearchHarness />)
++  enterMessages()
++  await screen.findByText('Could not search saved messages.')
++  expect(io.search).toHaveBeenCalledTimes(1)
++  fireEvent.click(screen.getByRole('option', { name: 'Retry' }))
++  await screen.findByText('No matching saved chats.')
++  expect(io.search).toHaveBeenCalledTimes(2)
++  fireEvent.click(screen.getByRole('button', { name: 'Search all saved chats' }))
++  expect(screen.getByText('/history?search=wayfinding')).toBeTruthy()
++})
 diff --git a/apps/desktop/src/app/command-palette/saved-chat-search.tsx b/apps/desktop/src/app/command-palette/saved-chat-search.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..9ac6b42e6740f0dc88f0ac298b11a15442e3e2ec
+index 0000000000000000000000000000000000000000..ccf087e16a59adca95988ed79bbda22b646508a7
 --- /dev/null
 +++ b/apps/desktop/src/app/command-palette/saved-chat-search.tsx
-@@ -0,0 +1,37 @@
-+import { useNavigate } from 'react-router'
+@@ -0,0 +1,159 @@
++import { useStore } from '@nanostores/react'
 +import type { ReactNode } from 'react'
-+import { CommandGroup, CommandItem, CommandList } from '@/components/ui/command'
++import { useNavigate } from 'react-router'
++
++import { Button } from '@/components/ui/button'
 +import { Codicon } from '@/components/ui/codicon'
++import { CommandGroup, CommandItem, CommandList } from '@/components/ui/command'
++import { sessionTitle } from '@/lib/chat-runtime'
 +import { closeCommandPalette } from '@/store/command-palette'
++import { $activeConnectionId, $pendingConnectionId } from '@/store/connections'
++import { $activeGatewayProfile, normalizeProfileKey } from '@/store/profile'
++import { sessionOwnerRouteFromRow } from '@/store/session-request-router'
++
++import { searchResultToSession } from '../chat/sidebar/search-hit'
++import { useServerSessionSearch } from '../chat/sidebar/use-server-session-search'
 +import { useFocusCopy } from '../focus/copy'
++import { openSessionFromPicker } from '../open-session'
++
++function openSearchInHistory(navigate: (path: string) => void, query: string) {
++  closeCommandPalette()
++  navigate('/history?search=' + encodeURIComponent(query))
++}
 +
 +export function SavedChatSearch({ query }: { query: string }) {
-+  const navigate = useNavigate(),
-+    t = useFocusCopy()
++  const navigate = useNavigate()
++  const t = useFocusCopy()
 +  if (!query.trim()) return null
++
 +  return (
 +    <CommandGroup>
-+      <CommandItem
-+        value="search-all-saved-chats"
-+        onSelect={() => {
-+          closeCommandPalette()
-+          navigate('/history?search=' + encodeURIComponent(query.trim()))
-+        }}
-+      >
++      <CommandItem value="search-all-saved-chats" onSelect={() => openSearchInHistory(navigate, query.trim())}>
 +        <Codicon name="search" />
 +        <span>
 +          {t('searchAllChats')} · {query.trim()}
@@ -21139,9 +21418,120 @@ index 0000000000000000000000000000000000000000..9ac6b42e6740f0dc88f0ac298b11a154
 +  )
 +}
 +
-+export function SavedChatList({ query, children }: { query: string; children: ReactNode }) {
++export function SavedChatMessageResults({ query }: { query: string }) {
++  const navigate = useNavigate()
++  const t = useFocusCopy()
++  const connectionId = useStore($activeConnectionId)
++  const pendingConnection = useStore($pendingConnectionId)
++  const profile = normalizeProfileKey(useStore($activeGatewayProfile))
++  const search = query.trim()
++  const { serverMatches, searchPending, searchError, retrySearch } = useServerSessionSearch(
++    pendingConnection ? '' : search,
++    profile
++  )
++  const status = !search
++    ? t('messageSearchHint')
++    : searchPending || pendingConnection
++      ? t('messageSearchLoading')
++      : searchError
++        ? t('messageSearchFailed')
++        : serverMatches.length
++          ? serverMatches.length === 1
++            ? t('messageSearchSingle')
++            : t('messageSearchCount').replace('{count}', String(serverMatches.length))
++          : t('messageSearchEmpty')
++
++  return (
++    <>
++      <p aria-live="polite" aria-atomic="true" role="status" className="px-3 py-2 text-xs text-muted-foreground">
++        {status}
++      </p>
++      <CommandList className="dt-portal-scrollbar max-h-[min(20rem,56vh)]">
++        {searchError && (
++          <CommandGroup>
++            <CommandItem value="retry-saved-message-search" onSelect={retrySearch}>
++              <Codicon name="refresh" />
++              {t('retrySearch')}
++            </CommandItem>
++          </CommandGroup>
++        )}
++        {serverMatches.length > 0 && (
++          <CommandGroup>
++            {serverMatches.map(hit => {
++              const session = searchResultToSession(hit)
++              const owner = sessionOwnerRouteFromRow({ connection_id: connectionId, profile: hit.profile || profile })
++
++              return (
++                <CommandItem
++                  className="items-start"
++                  key={session.id}
++                  value={`saved-message:${session.id}`}
++                  onSelect={() => {
++                    if (
++                      $activeConnectionId.get() !== connectionId ||
++                      $pendingConnectionId.get() ||
++                      normalizeProfileKey($activeGatewayProfile.get()) !== profile
++                    )
++                      return
++
++                    openSessionFromPicker(session.id, navigate, 'stack', owner)
++                    closeCommandPalette()
++                  }}
++                >
++                  <Codicon className="mt-0.5" name="comment" />
++                  <span className="min-w-0">
++                    <span className="block truncate font-medium">{sessionTitle(session)}</span>
++                    {session.preview && <span className="line-clamp-2 text-xs opacity-75">{session.preview}</span>}
++                  </span>
++                </CommandItem>
++              )
++            })}
++          </CommandGroup>
++        )}
++      </CommandList>
++      {search && (
++        <div className="border-t border-border px-2 py-1">
++          <Button
++            onClick={() => openSearchInHistory(navigate, search)}
++            onKeyDown={event => {
++              if (event.key === 'Enter') event.stopPropagation()
++            }}
++            size="sm"
++            type="button"
++            variant="ghost"
++          >
++            {t('searchAllChats')}
++          </Button>
++        </div>
++      )}
++    </>
++  )
++}
++
++export function SavedChatList({
++  query,
++  onSearchMessages,
++  searchingMessages,
++  children
++}: {
++  query: string
++  onSearchMessages: () => void
++  searchingMessages: boolean
++  children: ReactNode
++}) {
++  const t = useFocusCopy()
++  if (searchingMessages) return <SavedChatMessageResults query={query} />
++
 +  return (
 +    <CommandList className="dt-portal-scrollbar max-h-[min(20rem,56vh)]">
++      {query.trim() && (
++        <CommandGroup>
++          <CommandItem value="search-in-saved-messages" onSelect={onSearchMessages}>
++            <Codicon name="search" />
++            {t('searchInMessages')}
++          </CommandItem>
++        </CommandGroup>
++      )}
 +      <SavedChatSearch query={query} />
 +      {children}
 +    </CommandList>
@@ -22669,10 +23059,10 @@ index 0000000000000000000000000000000000000000..d533dabc91a2d86f3c7942c59522aebb
 +}
 diff --git a/apps/desktop/src/app/focus/copy.ts b/apps/desktop/src/app/focus/copy.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..7a585f956854139236740ac17e2817e32d9ce520
+index 0000000000000000000000000000000000000000..17cea176f58acc83c21ea5ad4eed3c390c739d36
 --- /dev/null
 +++ b/apps/desktop/src/app/focus/copy.ts
-@@ -0,0 +1,293 @@
+@@ -0,0 +1,301 @@
 +import { registerPluginLocales, usePluginI18n } from '@/i18n'
 +
 +const ids =
@@ -22683,6 +23073,14 @@ index 0000000000000000000000000000000000000000..7a585f956854139236740ac17e2817e3
 +const en = {
 +  newChat: 'New chat',
 +  searchAllChats: 'Search all saved chats',
++  searchInMessages: 'Search in messages',
++  messageSearchPlaceholder: 'Search saved messages…',
++  messageSearchHint: 'Enter a word or phrase from a saved chat.',
++  messageSearchLoading: 'Searching saved messages…',
++  messageSearchFailed: 'Could not search saved messages.',
++  messageSearchEmpty: 'No matching saved chats.',
++  messageSearchSingle: '1 matching chat shown.',
++  messageSearchCount: '{count} matching chats shown.',
 +  sessionSearchError: 'Saved chat search failed. Local matches may still appear.',
 +  retrySearch: 'Retry',
 +  recentNoMatches: 'No matches among recent chats and commands',

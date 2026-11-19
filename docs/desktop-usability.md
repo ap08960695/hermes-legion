@@ -2,7 +2,11 @@
 
 ## Finding work and conversations
 
-The rail offers **New chat**, **History** and **Search**. New chat opens a native blank tab from a chat, retaining any earlier unsent draft. Choose a chat zone first or drag **New chat** to the zone's tab strip to place the new tab there. Ctrl+T (⌘T on Mac) opens a new tab in the focused chat zone. Search first lists recent conversations and commands. Choose **Search all saved chats** to carry the exact query into the native History full-text search across saved conversations. Native profile, archive, pin and project rules still apply.
+The rail offers **New chat**, **History** and **Search**. New chat opens a native blank tab from a chat, retaining any earlier unsent draft. Choose a chat zone first or drag **New chat** to the zone's tab strip to place the new tab there. Ctrl+T (⌘T on Mac) opens a new tab in the focused chat zone.
+
+**Search** first lists recent conversations and commands. Type a phrase and choose **Search in messages** to see the first page of saved-chat matches on the active connection and profile. Use the arrow keys to select a chat and Enter to open it. The results announce how many chats are shown. **Search all saved chats** carries your query into History for additional filters.
+
+![Search in messages fixture with three saved chats and the second result selected by keyboard.](images/saved-message-search-fixture.webp)
 
 Open **Settings** from the navigation rail in Focus or Workspace. In a compact window it sits beside **History**. The Settings shortcut (⌘, on Mac, Ctrl+, on Windows and Linux) and the command palette also open Settings. Standalone chat windows have a Settings gear in their titlebar.
 
