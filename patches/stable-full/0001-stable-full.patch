@@ -20781,15 +20781,16 @@ index 609a4d3cabbd53af16e756cfefd9fb4b50a9266e..ad0ed78b19a944fda49e97f0a4e67506
            type="button"
 diff --git a/apps/desktop/src/app/chat/composer/retained-send-notice.test.tsx b/apps/desktop/src/app/chat/composer/retained-send-notice.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..4c3c471cf9d7bbd7078b5ea671c0bc4dc1bffeab
+index 0000000000000000000000000000000000000000..d0a4b1bd8027c7c2a5b2fbe6320278ee4409a01b
 --- /dev/null
 +++ b/apps/desktop/src/app/chat/composer/retained-send-notice.test.tsx
-@@ -0,0 +1,120 @@
+@@ -0,0 +1,162 @@
 +import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 +import { useRef, useState } from 'react'
 +import { afterEach, expect, it, vi } from 'vitest'
 +
 +import { clearSessionDraft, ownedDraftScopes, stashSessionDraft, takeSessionDraft } from '@/store/composer'
++import { ownedDraftKey, readOwnedDraftValue } from '@/store/composer-draft-owner'
 +import { readDraftRetry } from '@/store/composer-draft-retry'
 +import { retainedRejectedDrafts, retainRejectedDraft } from '@/store/composer-rejected-drafts'
 +
@@ -20798,7 +20799,7 @@ index 0000000000000000000000000000000000000000..4c3c471cf9d7bbd7078b5ea671c0bc4d
 +const owner = { connectionId: 'retained-notice', profile: 'work' }
 +const scope = 'retained-notice-session'
 +
-+function Harness({ occupied = false }: { occupied?: boolean }) {
++function Harness({ occupied = false, draftOwner = owner }: { occupied?: boolean; draftOwner?: typeof owner }) {
 +  const [restored, setRestored] = useState('')
 +  const editor = useRef<HTMLTextAreaElement>(null)
 +
@@ -20809,7 +20810,7 @@ index 0000000000000000000000000000000000000000..4c3c471cf9d7bbd7078b5ea671c0bc4d
 +        occupied={occupied || Boolean(restored)}
 +        onFocusComposer={() => editor.current?.focus()}
 +        onRestored={text => setRestored(text)}
-+        owner={owner}
++        owner={draftOwner}
 +        scope={scope}
 +      />
 +      <output>{restored}</output>
@@ -20905,13 +20906,54 @@ index 0000000000000000000000000000000000000000..4c3c471cf9d7bbd7078b5ea671c0bc4d
 +  expect(screen.getByText('Saved input')).toBeTruthy()
 +  expect(document.activeElement).toBe(discard)
 +})
++
++it('shows a draft switch failure only in its retained row and allows a safe retry', () => {
++  const otherOwner = { ...owner, profile: 'other' }
++  stashSessionDraft(scope, 'Current input', [], owner)
++  retainRejectedDraft(scope, 'Earlier input', [], owner, 'retained-id')
++  retainRejectedDraft(scope, 'Other owner input', [], otherOwner, 'retained-id')
++  const [saved] = retainedRejectedDrafts(scope, owner)
++  const currentKey = ownedDraftKey(scope, owner)!
++  const retainedKey = ownedDraftKey(saved.scope, owner)!
++  const readSaved = (key: string) => readOwnedDraftValue(localStorage.getItem(key))?.text
++  const { container, rerender } = render(<Harness occupied />)
++  fireEvent.click(container.querySelector('summary')!)
++  const action = screen.getByRole('button', { name: 'Park draft and edit failed message' })
++  const setItem = Storage.prototype.setItem
++  const write = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
++    if (key.includes('parked')) throw new DOMException('Fixture storage full', 'QuotaExceededError')
++    setItem.call(this, key, value)
++  })
++
++  action.focus()
++  fireEvent.click(action)
++  expect(screen.getByRole('alert').textContent).toBe('Could not switch drafts. Your current draft is still in the editor.')
++  expect(document.activeElement).toBe(action)
++  expect(readSaved(currentKey)).toBe('Current input')
++  expect(readSaved(retainedKey)).toBe('Earlier input')
++  expect(container.querySelector('output')?.textContent).toBe('')
++
++  rerender(<Harness occupied draftOwner={otherOwner} />)
++  expect(screen.getByText('Other owner input')).toBeTruthy()
++  expect(screen.queryByRole('alert')).toBeNull()
++  rerender(<Harness occupied />)
++  expect(screen.getByRole('alert')).toBeTruthy()
++
++  write.mockRestore()
++  fireEvent.click(screen.getByRole('button', { name: 'Park draft and edit failed message' }))
++  expect(screen.queryByRole('alert')).toBeNull()
++  expect(container.querySelector('output')?.textContent).toBe('Earlier input')
++  expect(readSaved(currentKey)).toBe('Earlier input')
++  expect(retainedRejectedDrafts(scope, owner).map(row => row.text)).toEqual(['Current input'])
++  expect(readDraftRetry(scope, owner)?.id).toBe('retained-id')
++})
 diff --git a/apps/desktop/src/app/chat/composer/retained-send-notice.tsx b/apps/desktop/src/app/chat/composer/retained-send-notice.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..a3702e2769d19ee54fafe5bd5128b7257c87567f
+index 0000000000000000000000000000000000000000..9f32ca5e90d17319a58df72fbe848cc988101574
 --- /dev/null
 +++ b/apps/desktop/src/app/chat/composer/retained-send-notice.tsx
-@@ -0,0 +1,132 @@
-+import { useRef } from 'react'
+@@ -0,0 +1,139 @@
++import { useRef, useState } from 'react'
 +
 +import { Button } from '@/components/ui/button'
 +import { useI18n } from '@/i18n'
@@ -20963,7 +21005,9 @@ index 0000000000000000000000000000000000000000..a3702e2769d19ee54fafe5bd5128b725
 +  const { t } = useI18n()
 +  const copy = t.composer
 +  const summary = useRef<HTMLElement>(null)
++  const [failedRow, setFailedRow] = useState<{ group: string; scope: string }>()
 +  const group = retainedSendGroup(scope, owner)
++  const hasFailure = failedRow?.group === group
 +  const rows = useSessionSlice($retainedSendScopes, group)
 +  const entries = rows.flatMap(row => readRetainedSend(row.scope, owner) ?? [])
 +  const hasFailed = entries.some(entry => !entry.meta?.parked)
@@ -20977,6 +21021,7 @@ index 0000000000000000000000000000000000000000..a3702e2769d19ee54fafe5bd5128b725
 +      </summary>
 +      <div className="mt-2 max-h-56 space-y-2 overflow-y-auto overscroll-contain">
 +        {entries.map(entry => {
++          const failed = hasFailure && failedRow.scope === entry.scope
 +          const action = entry.meta?.parked
 +            ? copy.parkedDraftReturn
 +            : occupied
@@ -20999,11 +21044,13 @@ index 0000000000000000000000000000000000000000..a3702e2769d19ee54fafe5bd5128b725
 +
 +                    const restored = restoreRejectedDraft(entry.scope, scope, owner, current)
 +                    if (!restored) return
-+                    if (restored.saved) {
-+                      onRestored(restored.text, restored.attachments, restored.retry)
-+                    } else {
-+                      notifyError(new Error('Could not save the draft switch.'), action)
++                    if (!restored.saved) {
++                      setFailedRow({ group, scope: entry.scope })
++                      return
 +                    }
++
++                    if (hasFailure) setFailedRow(undefined)
++                    onRestored(restored.text, restored.attachments, restored.retry)
 +                  }}
 +                  size="sm"
 +                  type="button"
@@ -21022,6 +21069,7 @@ index 0000000000000000000000000000000000000000..a3702e2769d19ee54fafe5bd5128b725
 +                      return
 +                    }
 +
++                    if (failed) setFailedRow(undefined)
 +                    if (!hadFocus) return
 +                    if ($retainedSendScopes.get()[group]?.length) {
 +                      summary.current?.focus()
@@ -21036,6 +21084,7 @@ index 0000000000000000000000000000000000000000..a3702e2769d19ee54fafe5bd5128b725
 +                  ×
 +                </Button>
 +              </div>
++              {failed && <p className="text-destructive" role="alert">{copy.retainedSendSwitchFailed}</p>}
 +            </div>
 +          )
 +        })}
@@ -42597,16 +42646,17 @@ index 24aea0d929c05016b8c0c9dfead3003f95955dd2..d341d4b192ee3f6a34a231529ab71cf5
  }
 diff --git a/apps/desktop/src/i18n/composer-draft-copy.ts b/apps/desktop/src/i18n/composer-draft-copy.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..bd5f36123459d126ad9099914bcbc3751a6d15b6
+index 0000000000000000000000000000000000000000..d98ca642aa28b1d730d03ef7b0fb69c60c5b8653
 --- /dev/null
 +++ b/apps/desktop/src/i18n/composer-draft-copy.ts
-@@ -0,0 +1,131 @@
+@@ -0,0 +1,133 @@
 +export interface ComposerDraftCopy {
 +  retainedSendNotice: string
 +  retainedSendRestore: string
 +  retainedSendDiscard: string
 +  retainedSendMissingAttachments: string
 +  retainedSendEdit: string
++  retainedSendSwitchFailed: string
 +  parkedDraftNotice: string
 +  parkedDraftReturn: string
 +  retainedSendFiles: (count: number) => string
@@ -42630,6 +42680,7 @@ index 0000000000000000000000000000000000000000..bd5f36123459d126ad9099914bcbc375
 +    retainedSendDiscard: 'Discard saved message',
 +    retainedSendMissingAttachments: 'Review the original attachments and reattach any files you still need.',
 +    retainedSendEdit: 'Park draft and edit failed message',
++    retainedSendSwitchFailed: 'Could not switch drafts. Your current draft is still in the editor.',
 +    parkedDraftNotice: 'Parked drafts',
 +    parkedDraftReturn: 'Return to parked draft',
 +    retainedSendFiles: (count: number) => `Original attachments to review (${count})`,
