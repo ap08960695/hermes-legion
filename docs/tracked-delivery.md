@@ -45,8 +45,9 @@ The accepted card loads recorded usage for THINK, ACTION, revisions, REVIEW
 and goal judges when opened in **Track work**. Exact owner admission binds a
 worker run to its profile session and compression continuation. Legacy runs
 can contribute a bounded diagnostic sample when its key and run binding
-match. Each row opens its native run evidence on demand. If a run fails to
-load, close and reopen that row to retry.
+match. Each row opens its native run evidence on demand. If it fails to
+load, use **Retry run** in the open row. The totals and other open run
+details stay visible.
 If a refresh fails, the last loaded totals and open run evidence stay
 visible with a warning. **Retry usage** rechecks the same card and review.
 
