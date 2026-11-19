@@ -173,8 +173,9 @@ card. It reports different checkouts and missing declarations separately.
 When checkout or scope information is missing, or the card limit is reached,
 the preview marks the check as incomplete and still shows any known overlaps.
 While the check runs, **Check declared writes** keeps focus and the step and
-checkout stay locked. Rechecking clears any previous preview. If the check fails,
-run it again to get a preview you can confirm.
+checkout stay locked. During a recheck, the last loaded findings remain visible
+with a status message. If the recheck fails, the findings stay labeled and a
+successful check is required before the confirmation buttons return.
 If the plan changes while the card is open, check its declared writes
 again before confirming. The selected checkout is kept.
 After Local reconnect, new board edits refresh the open card.
