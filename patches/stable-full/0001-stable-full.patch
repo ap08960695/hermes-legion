@@ -32351,10 +32351,10 @@ index 0000000000000000000000000000000000000000..73e394c9ff3cad099aa98ac6a9dd1056
 +}
 diff --git a/apps/desktop/src/app/shell/character-controls.test.tsx b/apps/desktop/src/app/shell/character-controls.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..4e71feaa0537aaf2851027a487013274868b81a4
+index 0000000000000000000000000000000000000000..5e193a6cf495d7e8b334fe9b6fa38e9b56ccb8e0
 --- /dev/null
 +++ b/apps/desktop/src/app/shell/character-controls.test.tsx
-@@ -0,0 +1,158 @@
+@@ -0,0 +1,241 @@
 +import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 +import { atom } from 'nanostores'
 +import { afterEach, expect, it, vi } from 'vitest'
@@ -32399,6 +32399,7 @@ index 0000000000000000000000000000000000000000..4e71feaa0537aaf2851027a487013274
 +  $botPluginCtx.set({ pet: { visible: atom(false), previewCharacters: vi.fn() } } as unknown as NonNullable<ReturnType<typeof $botPluginCtx.get>>)
 +  $connection.set({ connectionId: 'local' } as NonNullable<ReturnType<typeof $connection.get>>)
 +  $activeGatewayProfile.set('writer')
++  $gatewayState.set('open')
 +  const writerScope = JSON.stringify(['local', 'writer'])
 +  const view = render(<><CharacterController /><CharacterControls /><main key="monitor">Monitor</main></>)
 +
@@ -32433,6 +32434,62 @@ index 0000000000000000000000000000000000000000..4e71feaa0537aaf2851027a487013274
 +  expect(character()).toBeNull()
 +})
 +
++it('retires the Characters publisher while connecting and resumes with the saved size', () => {
++  let menuAction: ((action: CharacterMenuAction) => void) | undefined
++  const setState = vi.fn()
++  Object.defineProperty(window, 'hermesDesktop', { configurable: true, value: {
++    petOverlay: { onControl: () => () => {} },
++    characterMenu: { setState, onAction: (listener: typeof menuAction) => {
++      menuAction = listener
++
++      return () => {menuAction = undefined}
++    } }
++  } })
++  $botPluginCtx.set({ pet: { visible: atom(false), previewCharacters: vi.fn() } } as unknown as NonNullable<ReturnType<typeof $botPluginCtx.get>>)
++  $connection.set({ connectionId: 'local' } as NonNullable<ReturnType<typeof $connection.get>>)
++  $activeGatewayProfile.set('writer')
++  $gatewayState.set('open')
++  const scope = characterScope('local', 'writer')
++  render(<><CharacterController /><CharacterControls /></>)
++  const toggle = screen.getByRole('switch', { name: 'Characters' })
++  fireEvent.click(toggle)
++  const actor = screen.getByLabelText('Fixture Characters')
++
++  act(() => $gatewayState.set('connecting'))
++  expect(screen.queryByLabelText('Fixture Characters')).toBeNull()
++  expect(toggle.getAttribute('aria-checked')).toBe('true')
++  act(() => menuAction?.({ scope, change: { size: 'large' } }))
++  expect(setState).toHaveBeenLastCalledWith({ scope, enabled: true, size: 'large' })
++  expect(screen.queryByLabelText('Fixture Characters')).toBeNull()
++
++  act(() => $gatewayState.set('open'))
++  expect(screen.getByLabelText('Fixture Characters')).not.toBe(actor)
++  expect(screen.getByLabelText('Fixture Characters').textContent).toBe('large')
++})
++
++it('rejects offline roster work and drops a late gallery result before loading its sprite', async () => {
++  const { host } = await import('@hermes/plugin-sdk')
++  const { readCharacterRoster, readDefaultCharacterSprite } = await vi.importActual<typeof import('@/plugins/hermes-bots/desktop-characters')>(
++    '@/plugins/hermes-bots/desktop-characters'
++  )
++  let finish: (value: unknown) => void = () => {}
++  const request = vi.fn().mockResolvedValue({ profiles: [] }).mockImplementationOnce(() => new Promise(resolve => {finish = resolve}))
++  vi.spyOn(host, 'getGateway').mockReturnValue({ request } as unknown as NonNullable<ReturnType<typeof host.getGateway>>)
++  $connection.set({ connectionId: 'local' } as NonNullable<ReturnType<typeof $connection.get>>)
++  $activeGatewayProfile.set('writer')
++  $gatewayState.set('open')
++  const lifetime = new AbortController()
++  const pending = readDefaultCharacterSprite('local', 'writer', lifetime.signal)
++  $gatewayState.set('connecting')
++  finish({ active: 'owned', pets: [{ slug: 'owned', installed: true }] })
++  await expect(pending).rejects.toThrow('Characters gateway changed')
++  expect(request).toHaveBeenCalledExactlyOnceWith('pet.gallery', { localOnly: true }, 8_000, lifetime.signal)
++
++  request.mockResolvedValueOnce({ profiles: [] })
++  await expect(readCharacterRoster('local', 'writer')).rejects.toThrow('Characters gateway changed')
++  expect(request).toHaveBeenCalledTimes(1)
++})
++
 +it('discards a pending Characters roster on a profile change', async () => {
 +  const { host } = await import('@hermes/plugin-sdk')
 +  const { readCharacterRoster } = await vi.importActual<typeof import('@/plugins/hermes-bots/desktop-characters')>(
@@ -32444,10 +32501,11 @@ index 0000000000000000000000000000000000000000..4e71feaa0537aaf2851027a487013274
 +  const union = vi.spyOn(host, 'agents')
 +  $connection.set({ connectionId: 'local' } as NonNullable<ReturnType<typeof $connection.get>>)
 +  $activeGatewayProfile.set('writer')
++  $gatewayState.set('open')
 +
 +  try {
 +    const pending = readCharacterRoster('local', 'writer')
-+    expect(request).toHaveBeenCalledWith('profiles.list', {}, 8_000)
++    expect(request).toHaveBeenCalledWith('profiles.list', {}, 8_000, undefined)
 +    $activeGatewayProfile.set('other')
 +    finish({ profiles: [] })
 +    await expect(pending).rejects.toThrow('Characters gateway changed')
@@ -32509,13 +32567,38 @@ index 0000000000000000000000000000000000000000..4e71feaa0537aaf2851027a487013274
 +  vi.spyOn(host, 'getGateway').mockReturnValue({ request } as unknown as NonNullable<ReturnType<typeof host.getGateway>>)
 +  $connection.set({ connectionId: 'local' } as NonNullable<ReturnType<typeof $connection.get>>)
 +  $activeGatewayProfile.set('writer')
++  $gatewayState.set('open')
 +  await expect(readDefaultCharacterSprite('local', 'writer')).resolves.toBeNull()
-+  expect(request).toHaveBeenNthCalledWith(1, 'pet.gallery', { localOnly: true }, 8_000)
-+  expect(request).toHaveBeenNthCalledWith(2, 'pet.sprite', expect.objectContaining({ slug: 'owned' }), 8_000)
++  expect(request).toHaveBeenNthCalledWith(1, 'pet.gallery', { localOnly: true }, 8_000, undefined)
++  expect(request).toHaveBeenNthCalledWith(2, 'pet.sprite', expect.objectContaining({ slug: 'owned' }), 8_000, undefined)
++})
++
++it('qualifies direct roster rows and preserves explicit reachability', async () => {
++  const { host } = await import('@hermes/plugin-sdk')
++  const { readCharacterRoster } = await vi.importActual<typeof import('@/plugins/hermes-bots/desktop-characters')>(
++    '@/plugins/hermes-bots/desktop-characters'
++  )
++  const request = vi.fn().mockResolvedValue({ profiles: [
++    { name: 'local-bot' },
++    { name: 'offline-bot', sourceReachable: false },
++    { name: 'foreign-bot', connectionId: 'another' },
++    { name: 'remote-bot', remoteSource: true },
++    { name: 'ghost', ghost: true }
++  ] })
++  vi.spyOn(host, 'getGateway').mockReturnValue({ request } as unknown as NonNullable<ReturnType<typeof host.getGateway>>)
++  $connection.set({ connectionId: 'local' } as NonNullable<ReturnType<typeof $connection.get>>)
++  $activeGatewayProfile.set('writer')
++  $gatewayState.set('open')
++  const { profiles } = await readCharacterRoster('local', 'writer')
++
++  expect(profiles).toMatchObject([
++    { name: 'local-bot', connectionId: 'local', sourceScoped: true, sourceReachable: true },
++    { name: 'offline-bot', connectionId: 'local', sourceScoped: true, sourceReachable: false }
++  ])
 +})
 diff --git a/apps/desktop/src/app/shell/character-controls.tsx b/apps/desktop/src/app/shell/character-controls.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..35a30f2ff88cce004edd3aa473f07263ffa5b9b4
+index 0000000000000000000000000000000000000000..f9d6def0cb72b3d9a6e854f26eaa25fb912961bf
 --- /dev/null
 +++ b/apps/desktop/src/app/shell/character-controls.tsx
 @@ -0,0 +1,94 @@
@@ -32586,7 +32669,7 @@ index 0000000000000000000000000000000000000000..35a30f2ff88cce004edd3aa473f07263
 +    menu?.setState(available ? { enabled, scope, size } : null)
 +  }, [available, enabled, menu, scope, size])
 +
-+  return available && enabled && connectionId
++  return available && enabled && connectionId && gatewayState === 'open'
 +    ? <DesktopCharacters connectionId={connectionId} key={scope} profile={profile} size={size} />
 +    : null
 +}
@@ -42041,12 +42124,12 @@ index 46c90a0a39c3ce9f35181ef3b0d04d3f88ffe159..c45b85e0733162ac84a411da98282ce6
        staleTime: 5000
 diff --git a/apps/desktop/src/plugins/hermes-bots/desktop-characters.tsx b/apps/desktop/src/plugins/hermes-bots/desktop-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..519f6bb0091a857cf5eb0ab97572859831d597d3
+index 0000000000000000000000000000000000000000..43634b380cb6808b558898a99f567a6f1041c477
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/desktop-characters.tsx
-@@ -0,0 +1,117 @@
+@@ -0,0 +1,128 @@
 +import { host, useQuery, useValue } from '@hermes/plugin-sdk'
-+import { useEffect } from 'react'
++import { useEffect, useId } from 'react'
 +
 +// eslint-disable-next-line no-restricted-imports -- the built-in publisher reads the shell setting.
 +import { boundedCharacterSprite } from '@/lib/pet-character-sprite'
@@ -42067,7 +42150,8 @@ index 0000000000000000000000000000000000000000..519f6bb0091a857cf5eb0ab975728598
 +
 +function characterGateway(connectionId: string, profile: string, signal?: AbortSignal) {
 +  const gateway = host.getGateway()
-+  const current = () => !signal?.aborted && host.state.connectionId.get() === connectionId &&
++  const current = () => !signal?.aborted && host.state.gateway.get() === 'open' &&
++    host.state.connectionId.get() === connectionId &&
 +    host.state.profile.get() === profile && host.getGateway() === gateway
 +
 +  if (!gateway || !current()) {throw new Error('Characters gateway changed')}
@@ -42078,17 +42162,26 @@ index 0000000000000000000000000000000000000000..519f6bb0091a857cf5eb0ab975728598
 +export async function readCharacterRoster(connectionId: string, profile: string, signal?: AbortSignal) {
 +  const { gateway, current } = characterGateway(connectionId, profile, signal)
 +  const now = Date.now()
-+  const { profiles } = await gateway.request<{ profiles?: RosterRow[] }>('profiles.list', {}, 8_000)
++  const { profiles } = await gateway.request<{ profiles?: RosterRow[] }>('profiles.list', {}, 8_000, signal)
 +
 +  if (!current()) {throw new Error('Characters gateway changed')}
 +
-+  return { profiles: Array.isArray(profiles) ? profiles : [], now }
++  const rows = Array.isArray(profiles) ? profiles.flatMap<RosterRow>(row => {
++    if (typeof row?.name !== 'string' || !row.name || row.ghost || row.remoteSource ||
++        (row.connectionId && row.connectionId !== connectionId)) {return []}
++
++    // Direct profiles.list replies omit the reachability added by the merged roster.
++    return [{ ...row, connectionId, connectionKind: connectionId === 'local' ? 'local' : 'remote',
++      route: undefined, sourceScoped: true, sourceReachable: row.sourceReachable ?? true }]
++  }) : []
++
++  return { profiles: rows, now }
 +}
 +
 +export async function readDefaultCharacterSprite(connectionId: string, profile: string, signal?: AbortSignal) {
 +  const { gateway, current } = characterGateway(connectionId, profile, signal)
 +  const gallery = await gateway.request<{ active?: string; pets?: { slug?: string; installed?: boolean }[] }>(
-+    'pet.gallery', { localOnly: true }, 8_000
++    'pet.gallery', { localOnly: true }, 8_000, signal
 +  )
 +
 +  if (!current()) {throw new Error('Characters gateway changed')}
@@ -42097,7 +42190,7 @@ index 0000000000000000000000000000000000000000..519f6bb0091a857cf5eb0ab975728598
 +  const slug = (installed.find(pet => pet.slug === gallery.active) ?? installed[0])?.slug
 +
 +  if (!slug) {return null}
-+  const request = (params: { slug: string; variant?: 'half' }) => gateway.request<{ slug?: string }>('pet.sprite', params, 8_000)
++  const request = (params: { slug: string; variant?: 'half' }) => gateway.request<{ slug?: string }>('pet.sprite', params, 8_000, signal)
 +  const sprite = await (isMacPlatform() ? request({ slug, variant: 'half' }).catch((error: unknown) => {
 +    if (!current() || !String((error as Error | null)?.message).startsWith('invalid params for pet.sprite: variant:')) {throw error}
 +
@@ -42115,8 +42208,10 @@ index 0000000000000000000000000000000000000000..519f6bb0091a857cf5eb0ab975728598
 +  const focused = focusedRosterOwner(useValue($focusedBotOwner))
 +  const busy = useTurnBusy()
 +  const includeSixth = useValue($characterExtraActor)
++  // A remount after reconnect waits for a new roster even before the old cache is collected.
++  const mountId = useId()
 +  const roster = useQuery({
-+    queryKey: ['desktop-characters', connectionId, profile],
++    queryKey: ['desktop-characters', connectionId, profile, mountId],
 +    queryFn: ({ signal }) => readCharacterRoster(connectionId, profile, signal),
 +    refetchInterval: 5_000,
 +    staleTime: 0,
@@ -42127,15 +42222,14 @@ index 0000000000000000000000000000000000000000..519f6bb0091a857cf5eb0ab975728598
 +  const { refetch } = roster
 +
 +  useEffect(() => window.hermesDesktop?.characterMenu?.onRefresh(scope => {
-+    if (scope === characterScope(connectionId, profile)) {void refetch({ cancelRefetch: false })}
++    if (host.state.gateway.get() === 'open' && scope === characterScope(connectionId, profile)) {
++      void refetch({ cancelRefetch: false })
++    }
 +  }), [connectionId, profile, refetch])
 +
 +  const now = roster.data?.now ?? 0
 +  let needsDefault = false
-+  const rows = (roster.data?.profiles ?? []).flatMap(row => {
-+    if (!row?.name || row.ghost || row.remoteSource || (row.connectionId && row.connectionId !== connectionId)) {return []}
-+    const bot = { ...row, connectionId, connectionKind: connectionId === 'local' ? 'local' : 'remote',
-+      route: undefined, sourceScoped: true }
++  const rows = (roster.data?.profiles ?? []).flatMap(bot => {
 +    const info = botRosterMeta(bot, meta) || bot.ui_meta?.['hermes-bots']
 +
 +    if (info?.hidden) {return []}
@@ -42150,7 +42244,7 @@ index 0000000000000000000000000000000000000000..519f6bb0091a857cf5eb0ab975728598
 +  })
 +
 +  const fallback = useQuery({
-+    queryKey: ['desktop-character-default', connectionId, profile],
++    queryKey: ['desktop-character-default', connectionId, profile, mountId],
 +    queryFn: ({ signal }) => readDefaultCharacterSprite(connectionId, profile, signal),
 +    enabled: needsDefault && !roster.isError,
 +    staleTime: Infinity,
