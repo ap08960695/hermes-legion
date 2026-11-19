@@ -972,3 +972,33 @@ combined CPU points over publisher-only. All four launches met the
 accounted for most added CPU. The next comparison should hold sprite
 art and viewport constant while reducing position submissions from the
 helper. This fixture covers one 2× display and a mouse-ignored panel.
+
+### Compare compositor-driven positions with explicit writes
+
+Four network-denied Mac launches kept the same five layers, full panel
+and 6 Hz atlas writes. Both modes used the same nine-second path. The
+Core Animation arm installed discrete position keyframes once and
+made no timed position writes. The explicit arm wrote the position
+with each atlas update. Both paired orders ran, with adjacent
+explicit/explicit windows to estimate drift.
+
+| Mode | Added combined CPU | Added RSS | Median added physical footprint |
+| --- | ---: | ---: | ---: |
+| Explicit position updates | 2.22–2.53 points | 72.89–94.80 MiB | 46.37 MiB |
+| Discrete position keyframes | 2.49–3.65 points | 79.06–94.63 MiB | 46.66 MiB |
+
+WindowServer CPU rose 0.42–0.94 points in each matched keyframe run.
+Combined CPU changed by −0.04 to +1.43 points and the largest
+explicit/explicit drift was 0.39 points. Helper CPU changed by at most
+0.03 points. RSS savings varied by launch.
+
+An explicit end key fixed a stale position on the last step before
+the loop repeated. Eight fixed-time crop pairs matched exactly. Live
+mid-step checks matched the expected positions and cells in both arms.
+Near transitions, 46 of 2,050 keyframe actor samples had a position and
+atlas cell that matched no adjacent coherent pose. The explicit arm
+had zero such samples. Hide, resume, clear and helper EOF passed.
+
+Keep explicit position updates in the fixture. Neither mode met the
+CPU ceiling. Next measure a mixed workload and stop updates for
+settled sprites while preserving the cadence of moving sprites.
