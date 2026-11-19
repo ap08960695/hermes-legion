@@ -680,3 +680,21 @@ pet lands. The report must be recorded during this preview and within
 the last 15 seconds. Reopening a preview keeps the failed pose and the
 saved report available. Click the pet, then **Open in Hermes**, to see
 the report. Reduce Motion holds the cue still. [Verification](verification.md#flag-newly-saved-worker-errors-on-mac-desktop-pets).
+
+## CPU cost of equivalent preview refreshes
+
+Two network-isolated Mac fixture launches loaded the same production
+overlay with five moving Characters. Each launch measured motion alone
+and motion with one equivalent preview snapshot per second, in opposite
+orders. Median Electron CPU above the main-only baseline rose from 4.92
+to 13.24 percentage points. Within each launch the refresh added 8.89
+and 7.74 points. Both phases drew roughly the same number of sprite
+frames. Canvas setup calls rose from zero to 25 in each launch.
+
+Two experimental receiver changes reused equal animation metadata across
+snapshots, with the second also skipping equivalent mascot-state
+notifications. Both removed all 25 canvas setups and preserved motion,
+real atlas changes, and document reload. Neither produced a repeatable
+CPU saving, so both stayed out of the runtime patch. The next comparison
+should isolate publisher, IPC and React commit work while preserving
+snapshot expiry and updates to status, output and display geometry.
