@@ -9374,10 +9374,10 @@ index 0000000000000000000000000000000000000000..69595a89989d84c3f8e7e0def2559df8
 +}
 diff --git a/apps/desktop/electron/pet-overlay-ipc.test.ts b/apps/desktop/electron/pet-overlay-ipc.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..1f9612a61e545fba4d8d5595e0ceed333036865f
+index 0000000000000000000000000000000000000000..1e42194991c2a7b9167d81cf75c649ef17bfc996
 --- /dev/null
 +++ b/apps/desktop/electron/pet-overlay-ipc.test.ts
-@@ -0,0 +1,855 @@
+@@ -0,0 +1,896 @@
 +import { EventEmitter } from 'node:events'
 +
 +import { afterEach, expect, it, vi } from 'vitest'
@@ -9397,6 +9397,47 @@ index 0000000000000000000000000000000000000000..1f9612a61e545fba4d8d5595e0ceed33
 +import { registerPetOverlayIpc } from './pet-overlay-ipc'
 +
 +afterEach(() => { powerMonitor.removeAllListeners(); io.on.clear(); io.displays = []; io.writeText.mockReset() })
++
++it('only grants output focus to the current overlay document and releases it on document loss', () => {
++  const makeOverlay = () => {
++    let focused = false
++    const contents = Object.assign(new EventEmitter(), { mainFrame: {}, isDestroyed: () => false, send: vi.fn() })
++
++    return Object.assign(new EventEmitter(), {
++      webContents: contents, isDestroyed: () => false, isFocused: () => focused,
++      setFocusable: vi.fn(), focus: vi.fn(() => {focused = true}), blur: vi.fn(() => {focused = false})
++    })
++  }
++  const overlay = makeOverlay(), replacement = makeOverlay()
++  let current = overlay
++  registerPetOverlayIpc({ getMainWindow: () => null, getPetOverlayWindow: () => current as never,
++    openPetOverlay: vi.fn(), closePetOverlay: vi.fn() })
++  const setFocus = io.on.get('hermes:pet-overlay:set-focusable')!
++  const event = { sender: overlay.webContents, senderFrame: overlay.webContents.mainFrame }
++
++  setFocus({ ...event, sender: {} }, true)
++  setFocus({ ...event, senderFrame: {} }, true)
++  setFocus(event, 'true')
++  expect(overlay.setFocusable).not.toHaveBeenCalled()
++  setFocus(event, true)
++  setFocus(event, true)
++  expect(overlay.focus).toHaveBeenCalledOnce()
++  overlay.webContents.emit('render-process-gone')
++  expect(overlay.blur).toHaveBeenCalledOnce()
++  expect(overlay.setFocusable.mock.calls).toEqual([[true], [false]])
++  expect(overlay.webContents.listenerCount('did-start-loading')).toBe(0)
++
++  current = replacement
++  const next = { sender: replacement.webContents, senderFrame: replacement.webContents.mainFrame }
++  setFocus(event, true)
++  expect(replacement.setFocusable).not.toHaveBeenCalled()
++  setFocus(next, true)
++  replacement.blur()
++  setFocus(next, false)
++  expect(replacement.blur).toHaveBeenCalledOnce()
++  expect(replacement.setFocusable.mock.calls).toEqual([[true], [false]])
++  expect(replacement.webContents.listenerCount('render-process-gone')).toBe(0)
++})
 +
 +it('only echoes an unsolicited overlay close to the renderer', () => {
 +  const live = { appQuitting: false, mainWindowAlive: true }
@@ -10234,7 +10275,7 @@ index 0000000000000000000000000000000000000000..1f9612a61e545fba4d8d5595e0ceed33
 +  expect(owner.listenerCount('render-process-gone')).toBe(0)
 +})
 diff --git a/apps/desktop/electron/pet-overlay-ipc.ts b/apps/desktop/electron/pet-overlay-ipc.ts
-index 59d8dd527dae029c695a8520996f6051d75df371..a4a8d9b3223aa5375387d40986798682afae2984 100644
+index 59d8dd527dae029c695a8520996f6051d75df371..bc957d3023f7b6b9d4dbb717da907153d20415a9 100644
 --- a/apps/desktop/electron/pet-overlay-ipc.ts
 +++ b/apps/desktop/electron/pet-overlay-ipc.ts
 @@ -2,5 +2,10 @@
@@ -10323,7 +10364,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a4a8d9b3223aa5375387d40986798682
 +}
 +
  export function registerPetOverlayIpc({
-@@ -34,4 +107,286 @@ export function registerPetOverlayIpc({
+@@ -34,4 +107,287 @@ export function registerPetOverlayIpc({
    openPetOverlay,
 -  closePetOverlay
 +  closePetOverlay,
@@ -10339,6 +10380,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a4a8d9b3223aa5375387d40986798682
 +  let outputAction: (Pick<PetCharacterOutput, 'id' | 'request' | 'canOpen'> & { window: BrowserWindow; links?: string[]; deliveredFile?: string; fileText?: string; imageReady?: true; pdfPage?: string; pdfRender?: AbortController; file?: 'offered' | 'pending'; stop?: 'offered' | 'pending' }) | null = null
 +  let stopObserving: (() => void) | null = null
 +  let stopWatchingOwner: (() => void) | undefined
++  let outputFocus: { window: BrowserWindow; release: () => void } | undefined
 +  let locked = false, suspended = false
 +  let desktop: { window: BrowserWindow; mascot: Rectangle; layout: { bounds: Rectangle; areas: Rectangle[] } } | null = null
 +
@@ -10611,7 +10653,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a4a8d9b3223aa5375387d40986798682
 +  }
 +
    // `request` is `{ bounds, screen }`. A fresh pop-out passes viewport-space
-@@ -41,6 +396,10 @@ export function registerPetOverlayIpc({
+@@ -41,6 +397,10 @@ export function registerPetOverlayIpc({
    // resolved screen bounds so the renderer can persist exactly where it opened.
 -  ipcMain.handle('hermes:pet-overlay:open', async (_event, request) => {
 -    const bounds = request && request.bounds ? request.bounds : request
@@ -10625,13 +10667,13 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a4a8d9b3223aa5375387d40986798682
 +    const bounds = request.bounds
 +    const isScreen = request.screen === true
      let screenBounds = bounds
-@@ -69,2 +428,5 @@ export function registerPetOverlayIpc({
+@@ -69,2 +429,5 @@ export function registerPetOverlayIpc({
      openPetOverlay(screenBounds)
 +    const overlay = getPetOverlayWindow()
 +
 +    if (overlay && !overlay.isDestroyed()) {watchCharacterOwner(mainWindow, overlay)}
 
-@@ -72,2 +434,16 @@ export function registerPetOverlayIpc({
+@@ -72,2 +435,16 @@ export function registerPetOverlayIpc({
    })
 +  ipcMain.on('hermes:pet-overlay:characters-supported', event => {
 +    const main = getMainWindow()
@@ -10648,16 +10690,68 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a4a8d9b3223aa5375387d40986798682
 +    if (region) {state.input.set(region)}
 +  })
    ipcMain.handle('hermes:pet-overlay:close', async () => {
-@@ -86,3 +462,3 @@ export function registerPetOverlayIpc({
+@@ -86,3 +463,3 @@ export function registerPetOverlayIpc({
 
 -    if (!petOverlayWindow || petOverlayWindow.isDestroyed() || !bounds) {
 +    if (!petOverlayWindow || petOverlayWindow.isDestroyed() || !bounds || desktop?.window === petOverlayWindow) {
        return
-@@ -115,2 +491,3 @@ export function registerPetOverlayIpc({
+@@ -115,2 +492,3 @@ export function registerPetOverlayIpc({
    ipcMain.on('hermes:pet-overlay:ignore-mouse', (_event, ignore) => {
 +    if (linuxInput && linuxInput.phase !== 'idle') {return}
      const petOverlayWindow = getPetOverlayWindow()
-@@ -144,3 +521,148 @@ export function registerPetOverlayIpc({
+@@ -126,10 +504,11 @@ export function registerPetOverlayIpc({
+   })
+-  // The overlay is a non-activating panel (focusable:false) so it never steals
+-  // the app's cmd/alt-tab anchor from the main window. But the pop-up composer
+-  // needs the keyboard, so the renderer asks us to flip it focusable + focus it
+-  // while the composer is open, then back to non-activating when it closes.
+-  ipcMain.on('hermes:pet-overlay:set-focusable', (_event, focusable) => {
+-    const petOverlayWindow = getPetOverlayWindow()
++  ipcMain.on('hermes:pet-overlay:set-focusable', (event, focusable) => {
++    const overlay = getPetOverlayWindow()
++
++    if (!overlay || overlay.isDestroyed() || typeof focusable !== 'boolean' ||
++        event.sender !== overlay.webContents || event.senderFrame !== overlay.webContents.mainFrame) {return}
++
++    if (!focusable) {
++      if (outputFocus?.window === overlay) {outputFocus.release()}
+
+-    if (!petOverlayWindow || petOverlayWindow.isDestroyed()) {
+       return
+@@ -137,10 +516,178 @@ export function registerPetOverlayIpc({
+
+-    petOverlayWindow.setFocusable(Boolean(focusable))
++    if (outputFocus?.window === overlay) {return}
++    outputFocus?.release()
++
++    const contents = overlay.webContents
++    const release = () => {
++      if (outputFocus?.release !== release) {return}
++      outputFocus = undefined
+
+-    if (focusable) {
+-      petOverlayWindow.focus()
++      if (!contents.isDestroyed()) {
++        contents.removeListener('did-start-loading', release)
++        contents.removeListener('render-process-gone', release)
++      }
++
++      overlay.removeListener('closed', release)
++
++      if (!overlay.isDestroyed()) {
++        // macOS can keep a focused window key after setFocusable(false).
++        if (overlay.isFocused()) {overlay.blur()}
++        overlay.setFocusable(false)
++      }
+     }
++
++    outputFocus = { window: overlay, release }
++    contents.once('did-start-loading', release)
++    contents.once('render-process-gone', release)
++    overlay.once('closed', release)
++    overlay.setFocusable(true)
++    overlay.focus()
+   })
    // Main renderer → overlay: forward the latest pet state for the overlay to render.
 -  ipcMain.on('hermes:pet-overlay:state', (_event, payload) => {
 +  ipcMain.on('hermes:pet-overlay:state', async (event, payload) => {
@@ -10807,12 +10901,12 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a4a8d9b3223aa5375387d40986798682
 +    if (payload?.characterOutput || payload?.characterFile) {return}
 +    retireCharacterScene()
      const petOverlayWindow = getPetOverlayWindow()
-@@ -152,3 +674,3 @@ export function registerPetOverlayIpc({
+@@ -152,3 +699,3 @@ export function registerPetOverlayIpc({
    // Overlay → main renderer: control messages (pop back in, composer submit).
 -  ipcMain.on('hermes:pet-overlay:control', (_event, payload) => {
 +  ipcMain.on('hermes:pet-overlay:control', (event, payload) => {
      const mainWindow = getMainWindow()
-@@ -159,7 +681,80 @@ export function registerPetOverlayIpc({
+@@ -159,7 +706,80 @@ export function registerPetOverlayIpc({
 
 -    // Double-click toggles the app window: hide it away if it's up front, bring it
 -    // back if it's minimized/buried. Pure window control — nothing for the
@@ -10898,7 +10992,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a4a8d9b3223aa5375387d40986798682
 +        }
 +
          mainWindow.show()
-@@ -167,5 +762,8 @@ export function registerPetOverlayIpc({
+@@ -167,5 +787,8 @@ export function registerPetOverlayIpc({
        } else {
 -        mainWindow.minimize()
 +        discardOutput()
@@ -10908,7 +11002,7 @@ index 59d8dd527dae029c695a8520996f6051d75df371..a4a8d9b3223aa5375387d40986798682
 +      mainWindow.webContents.send('hermes:pet-overlay:control', { type: payload.type, id, request, ...(pdfPage ? { pdfPage } : {}) })
 +
        return
-@@ -173,21 +771,24 @@ export function registerPetOverlayIpc({
+@@ -173,21 +796,24 @@ export function registerPetOverlayIpc({
 
 -    // The mail icon means "take me to the app": raise the main window (it may be
 -    // minimized or buried) before the renderer navigates to the latest thread.
@@ -26487,10 +26581,10 @@ index 0000000000000000000000000000000000000000..cfd558ab8cc274b91b75a0ebc07d1374
 +}
 diff --git a/apps/desktop/src/app/pet-overlay/pet-characters.tsx b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..5fae2e2e9a09c51b802304fdeace018c55b60068
+index 0000000000000000000000000000000000000000..71c0a80d326377d531e28ca339d4c712a88c7fcb
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
-@@ -0,0 +1,1005 @@
+@@ -0,0 +1,1015 @@
 +import { AnimatePresence, motion, type TargetAndTransition, useIsPresent, useReducedMotion } from 'motion/react'
 +import { type CSSProperties, useCallback, useEffect, useRef, useState } from 'react'
 +
@@ -27264,15 +27358,19 @@ index 0000000000000000000000000000000000000000..5fae2e2e9a09c51b802304fdeace018c
 +
 +  useEffect(onHitTargetsChanged, [desktopScale, hitTargets, onHitTargetsChanged])
 +
-+  const observeOutput = useCallback((panel: HTMLElement | null) => {
-+    if (!panel || typeof ResizeObserver === 'undefined') {return}
++  const mountOutput = useCallback((panel: HTMLElement | null) => {
++    if (!panel) {return}
 +
-+    const observer = new ResizeObserver(onHitTargetsChanged)
++    const overlay = window.hermesDesktop?.petOverlay
++    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(onHitTargetsChanged)
 +
-+    observer.observe(panel, { box: 'border-box' })
++    overlay?.setFocusable(true)
++    panel.focus({ preventScroll: true })
++    observer?.observe(panel, { box: 'border-box' })
 +
 +    return () => {
-+      observer.disconnect()
++      observer?.disconnect()
++      overlay?.setFocusable(false)
 +      onHitTargetsChanged()
 +    }
 +  }, [onHitTargetsChanged])
@@ -27407,7 +27505,7 @@ index 0000000000000000000000000000000000000000..5fae2e2e9a09c51b802304fdeace018c
 +    setCue(null)
 +  }} ref={panelRef} style={{ position: 'fixed', inset: 0, pointerEvents: 'none' }}>
 +    {output && outputActor && <section aria-label={`${title} · ${outputActor.name}`} data-pet-output-target="true"
-+      onKeyDown={event => {if (event.key === 'Escape') {showOutput(null)}}} ref={observeOutput} role="region"
++      onKeyDown={event => {if (event.key === 'Escape') {showOutput(null)}}} ref={mountOutput} role="region" tabIndex={-1}
 +      style={{ position: 'fixed', zIndex: 2, ...(desktop && outputArea
 +        ? { bottom: desktop.bounds.y + desktop.bounds.height - (outputArea.y + outputArea.height) + bottomInset,
 +          right: desktop.bounds.x + desktop.bounds.width - (outputArea.x + outputArea.width) + 20 }
@@ -27431,7 +27529,10 @@ index 0000000000000000000000000000000000000000..5fae2e2e9a09c51b802304fdeace018c
 +      {outputActor.actionsOnly ? (output.canStop
 +        ? <button onClick={onStop} style={{ marginTop: 6, textDecoration: 'underline' }} type="button">Stop worker</button>
 +        : <p role="status" style={{ margin: '6px 0 0' }}>{stopLabel}</p>
-+      ) : showActions ? <button onClick={onPreview} style={{ marginTop: 6, textDecoration: 'underline' }} type="button">
++      ) : showActions ? <button onClick={event => {
++          event.currentTarget.closest('section')?.focus({ preventScroll: true })
++          onPreview()
++        }} style={{ marginTop: 6, textDecoration: 'underline' }} type="button">
 +        Preview latest output
 +      </button> : <>
 +        <div key={fileReady ? 'file' : 'output'} style={{ marginTop: 4, overflowY: 'auto', minHeight: 0,
@@ -27440,7 +27541,10 @@ index 0000000000000000000000000000000000000000..5fae2e2e9a09c51b802304fdeace018c
 +            <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 6 }}>
 +              <strong>Delivered file</strong>
 +              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-+                {output.canPreviewFile && <button onClick={onPreviewFile} style={{ textDecoration: 'underline' }} type="button">Preview file</button>}
++                {output.canPreviewFile && <button onClick={event => {
++                    event.currentTarget.closest('section')?.focus({ preventScroll: true })
++                    onPreviewFile()
++                  }} style={{ textDecoration: 'underline' }} type="button">Preview file</button>}
 +                {(file?.text || (file?.png_base64 && decodedImageRequest === output.request)) &&
 +                  <button onClick={onViewFile} style={{ textDecoration: 'underline' }} type="button">
 +                    {file.text ? 'View text' : pdf ? 'View first page' : 'View image'}
@@ -28144,10 +28248,10 @@ index 82319976a166e658f80e794b0033fed81a48d456..aba792302107fac16bdf675b321efe2f
  }
 diff --git a/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..fd2a5294dafbcb08780caec8ceb2a05b45cd35c0
+index 0000000000000000000000000000000000000000..9d2d18d29c702e567b3e484b2b1418cf22c5c47f
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
-@@ -0,0 +1,1758 @@
+@@ -0,0 +1,1790 @@
 +import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 +import type * as Motion from 'motion/react'
 +import type { ComponentProps } from 'react'
@@ -29535,6 +29639,38 @@ index 0000000000000000000000000000000000000000..fd2a5294dafbcb08780caec8ceb2a05b
 +  } finally {
 +    vi.unstubAllGlobals()
 +  }
++})
++
++it.each(['Escape', 'scene removal'])('releases preview keyboard focus on %s', dismiss => {
++  render(<PetOverlayApp />)
++  const payload = preview()
++  const api = window.hermesDesktop!.petOverlay!
++
++  Object.assign(payload.characterPreview.characters[0], { outputId: 'keyboard-output' })
++  act(() => emit(payload))
++  expect(api.setFocusable).not.toHaveBeenCalled()
++
++  const caption = screen.getByRole('button', { name: /Latest output/ })
++  fireEvent.contextMenu(caption)
++  const panel = screen.getByRole('region', { name: /Output actions/ })
++  const request = vi.mocked(api.control).mock.lastCall?.[0]
++
++  if (request?.type !== 'character-output') {throw new Error('missing output request')}
++
++  expect(api.setFocusable).toHaveBeenCalledExactlyOnceWith(true)
++  expect(document.activeElement).toBe(panel)
++  act(() => emit({ ...payload, characterOutput: { id: request.id, request: request.request, text: 'Fixture preview' } }))
++  const previewButton = screen.getByRole('button', { name: 'Preview latest output' })
++
++  previewButton.focus()
++  fireEvent.click(previewButton)
++  expect(api.setFocusable).toHaveBeenCalledTimes(1)
++  expect(document.activeElement).toBe(panel)
++
++  if (dismiss === 'Escape') {fireEvent.keyDown(panel, { key: 'Escape' })}
++  else {act(() => emit(normal))}
++  expect(screen.queryByRole('region', { name: /Latest output/ })).toBeNull()
++  expect(vi.mocked(api.setFocusable).mock.calls).toEqual([[true], [false]])
 +})
 +
 +it('rechecks a stationary pointer when the output panel changes size or is removed', () => {
