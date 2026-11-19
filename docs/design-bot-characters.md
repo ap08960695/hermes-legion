@@ -1114,3 +1114,36 @@ All eight paired crops matched. Fragmented bodies, coalesced renewals,
 clear and pipe EOF passed. Ten malformed frame cases were rejected.
 Binary remains a fixture candidate. Next compare incremental JSON
 scanning and test sender backpressure under bursty updates.
+
+### Scan JSON once and bound pending Character snapshots
+
+A same-build replay sent the same 2,598,722-byte atlas frame through
+both JSON receivers. The original search examined 208–209 million
+bytes across reads. The incremental search examined each byte once
+and cut receiver intake from 347–358 ms to 10.59–10.87 ms in that
+replay. Parsing remained about 1 ms in both arms.
+
+Four network-denied packaged fixture launches compared incremental
+JSON and binary on the same five-sprite ImageIO workload at 6 Hz.
+All eight paired crops matched.
+
+| Measure | Incremental JSON | Binary |
+| --- | ---: | ---: |
+| Initial receiver intake | 6.70–8.04 ms | 0.94–1.41 ms |
+| Reference-only renewal | 428 bytes | 428 bytes |
+| Warm added tree RSS | 74.71–80.42 MiB | 73.91–75.73 MiB |
+| Warm added tree physical footprint | 47.43–48.13 MiB | 41.61–43.43 MiB |
+| Warm added combined CPU | 1.78–2.51 points | 2.13–2.53 points |
+
+Binary saved 0.80–4.69 MiB paired warm tree RSS. Both binary runs
+exceeded the 2-point CPU ceiling. Intake measures the receiver from
+its first read to render dispatch. First-pixel latency remains open.
+
+In a separate 24-update burst with the owned helper stopped before
+its first acknowledgment, the original binary sender queued
+16.88 MiB and 25 unacknowledged states. The bounded sender held one
+state in flight, retained the latest pending snapshot, and kept
+queued pipe bytes at 0.45 MiB. Reusing a skipped atlas sent its
+definition. Clear preceded reload and EOF. A separate held
+acknowledgment triggered timeout and helper teardown in 1.51 seconds.
+Next test the bounded sender through the packaged preview lifecycle.
