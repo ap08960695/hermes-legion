@@ -1339,3 +1339,33 @@ The last two pairs had smaller baseline drift and still added
 9.06–9.87 combined CPU points with grouped motion. No grouped
 window met the CPU ceiling. Retain manual atlas updates. Physical
 scanout, graphics attribution and production acceptance remain open.
+
+### Verify explicit hide and show through the Mac preview
+
+Four signed, network-denied launches used the pinned Electron
+publisher and its window event listeners with the private native
+helper. Actual BrowserWindow hide/show kept one valid lease, the
+same panel and all five atlases. WindowServer confirmed the panel
+was absent while hidden. Over 4.45 seconds, neither the clock nor
+the animation or snapshot-write counters advanced. Show resumed at
+the parked pose and made 240–250 new motion writes. Every actor
+changed position in a fresh frame.
+
+The native pause acknowledgment followed the hide call by 267–280 ms.
+The Electron hide event accounted for 265–276 ms of that interval.
+Show-to-ack took 18–27 ms. The helper sampled 0.00 CPU points hidden,
+against 0.14–0.35 visible in the captured runs.
+
+The captured runs included a layer-tree render before hiding. A
+separate capture-free control measured 54.55, 54.53 and 54.58 MiB
+helper RSS across visible, hidden and resumed phases. Added process
+tree RSS was 70.19, 70.83 and 71.86 MiB. The higher hidden RSS in the
+capture runs did not recur in this control. Atlas memory remains
+resident during a live hidden lease.
+
+An independent run withheld renderer clear/close and observed native
+lease expiry with the pipe open. Show left the expired scene hidden.
+A fresh publish restored all five atlases and motion. Raw stdin EOF
+with active lease headroom cleared and retired the helper in every
+accepted launch. Minimize behavior, lock/suspend, production native
+routing and Linux remain open.
