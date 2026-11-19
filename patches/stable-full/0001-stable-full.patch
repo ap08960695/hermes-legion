@@ -59557,10 +59557,10 @@ index 0000000000000000000000000000000000000000..22418d88e7d13b0ae017aee46212e5e1
 +}
 diff --git a/apps/desktop/src/plugins/kanban/work-view.test.tsx b/apps/desktop/src/plugins/kanban/work-view.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..93efa5183f825d6fcbb299d169103b885cb5e9fa
+index 0000000000000000000000000000000000000000..3a18fde25b42ad44c43a72928cbf6069a35ac64f
 --- /dev/null
 +++ b/apps/desktop/src/plugins/kanban/work-view.test.tsx
-@@ -0,0 +1,442 @@
+@@ -0,0 +1,501 @@
 +import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 +import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 +import { afterEach, expect, it, vi } from 'vitest'
@@ -59646,6 +59646,65 @@ index 0000000000000000000000000000000000000000..93efa5183f825d6fcbb299d169103b88
 +  expect(io.write).not.toHaveBeenCalled()
 +  client.clear()
 +  dispose()
++})
++
++it.each([true, false])('retries a first card read once and preserves the user focus choice (%s)', async keepRetryFocus => {
++  const dispose = registerPluginLocales('kanban', KANBAN_LOCALES)
++  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
++  const task = { id: 'retry-card', title: 'Read again', status: 'done' }
++  const board = {
++    columns: [{ name: 'done', tasks: [task] }],
++    tenants: [],
++    assignees: [],
++    now: 1,
++    latest_event_id: 1
++  }
++  let finish!: (value: unknown) => void
++  io.read.mockRejectedValueOnce(new Error('fixture offline')).mockImplementationOnce(
++    () => new Promise(resolve => { finish = resolve })
++  )
++
++  const focused = vi.spyOn(document, 'hasFocus').mockReturnValue(true)
++
++  try {
++    render(
++      <QueryClientProvider client={client}>
++        <WorkView board={board} onOpen={vi.fn()} />
++        <button type="button">Continue</button>
++      </QueryClientProvider>
++    )
++    fireEvent.click(screen.getByRole('button', { name: 'Read again' }))
++    const retry = await screen.findByRole('button', { name: 'Retry' })
++    retry.focus()
++
++    io.route.mockReturnValue(false)
++    fireEvent.click(retry)
++    expect(io.read).toHaveBeenCalledTimes(1)
++    io.route.mockReturnValue(true)
++
++    act(() => {
++      fireEvent.click(retry)
++      fireEvent.click(retry)
++    })
++    await waitFor(() => expect(io.read).toHaveBeenCalledTimes(2))
++    expect(screen.getByRole('button', { name: 'Retry' })).toBe(retry)
++    expect(retry.getAttribute('aria-disabled')).toBe('true')
++    expect(document.activeElement).toBe(retry)
++
++    const next = screen.getByRole('button', { name: 'Continue' })
++    if (!keepRetryFocus) next.focus()
++    await act(async () => finish({ task, runs: [] }))
++    expect(await screen.findByRole('heading', { name: 'Read again' })).toBeTruthy()
++    expect(document.activeElement).toBe(keepRetryFocus ? screen.getByRole('article', { name: 'Read again' }) : next)
++    expect(io.read).toHaveBeenCalledTimes(2)
++    expect(io.write).not.toHaveBeenCalled()
++  } finally {
++    cleanup()
++    client.clear()
++    io.read.mockReset()
++    focused.mockRestore()
++    dispose()
++  }
 +})
 +
 +it('restores the same card after remount without dispatch and does not leak it to another board', async () => {
@@ -60005,12 +60064,12 @@ index 0000000000000000000000000000000000000000..93efa5183f825d6fcbb299d169103b88
 +})
 diff --git a/apps/desktop/src/plugins/kanban/work-view.tsx b/apps/desktop/src/plugins/kanban/work-view.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..aa7035a3565ef0d244641a14440bcd1861d0aab9
+index 0000000000000000000000000000000000000000..8119c522b47ebaadfe2ceb2ff4cfee24b669fa25
 --- /dev/null
 +++ b/apps/desktop/src/plugins/kanban/work-view.tsx
-@@ -0,0 +1,247 @@
-+import { Button, Codicon, ErrorState, Loader, useQuery, useValue } from '@hermes/plugin-sdk'
-+import { useState } from 'react'
+@@ -0,0 +1,293 @@
++import { Button, Codicon, ErrorState, Loader, useI18n, useQuery, useValue } from '@hermes/plugin-sdk'
++import { useCallback, useRef, useState } from 'react'
 +
 +import { $boardSlug, fetchTask, routedToScope, taskKey, useKanbanScope } from './api'
 +import { BotJourney } from './bot-journey'
@@ -60152,8 +60211,20 @@ index 0000000000000000000000000000000000000000..aa7035a3565ef0d244641a14440bcd18
 +    scope = useKanbanScope(),
 +    slug = useValue($boardSlug)
 +
-+  const { data, error } = useQuery({
-+    queryKey: taskKey(scope, board || slug, id),
++  const { t } = useI18n()
++  const queryKey = taskKey(scope, board || slug, id)
++  const focusKey = JSON.stringify(queryKey)
++  const retryFocus = useRef<string | null>(null)
++  const rememberRetryFocus = useCallback((button: HTMLButtonElement | null) => {
++    if (!button) return
++
++    return () => {
++      retryFocus.current = button.ownerDocument.activeElement === button ? focusKey : null
++    }
++  }, [focusKey])
++
++  const { data, error, fetchStatus, isFetched, refetch } = useQuery({
++    queryKey,
 +    queryFn: () => fetchTask(id, board || undefined),
 +    enabled: query => routedToScope(query),
 +    staleTime: 60_000,
@@ -60161,16 +60232,50 @@ index 0000000000000000000000000000000000000000..aa7035a3565ef0d244641a14440bcd18
 +    refetchOnWindowFocus: false
 +  })
 +
-+  if (error) {
-+    return <ErrorState title={k.botJourneyError} />
++  if (!data) {
++    if (!isFetched) return <Loader />
++
++    const busy = fetchStatus !== 'idle'
++
++    return (
++      <ErrorState title={busy ? t.common.loading : k.botJourneyError}>
++        <Button
++          aria-busy={busy || undefined}
++          aria-disabled={busy || undefined}
++          className="mx-auto aria-disabled:opacity-60"
++          onClick={() => {
++            if (!busy && $boardSlug.get() === slug && routedToScope({ queryKey })) {
++              void refetch({ cancelRefetch: false })
++            }
++          }}
++          ref={rememberRetryFocus}
++          size="sm"
++          variant="outline"
++        >
++          {t.common.retry}
++        </Button>
++      </ErrorState>
++    )
 +  }
 +
-+  if (!data) {
-+    return <Loader />
-+  }
++  if (error) return <ErrorState title={k.botJourneyError} />
 +
 +  return (
-+    <article className="kanban-delivery">
++    <article
++      aria-label={data.delivery?.objective ?? data.task.title}
++      className="kanban-delivery"
++      ref={panel => {
++        if (!panel) return
++
++        const restore = retryFocus.current === focusKey
++        retryFocus.current = null
++        const owner = panel.ownerDocument
++        if (restore && routedToScope({ queryKey }) && owner.hasFocus() && owner.activeElement === owner.body) {
++          panel.focus({ preventScroll: true })
++        }
++      }}
++      tabIndex={-1}
++    >
 +      {data.delivery ? (
 +        <Delivery
 +          data={{ ...data.delivery, native_status: data.delivery.native_status ?? data.task.status }}
