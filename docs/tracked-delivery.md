@@ -15,3 +15,29 @@ After installation, three fresh simple cards exercised successful arithmetic del
 Linux and Mac packages were rebuilt and installed before publication. Native Work was checked at wide and narrow sizes, including restoring the selected completed card. The download check uses the real native download route with a controlled save-dialog destination and compares the returned bytes. Linux exposed no GPU devices and used an isolated, network-disabled UI fixture. The expected external font request failure is separate from JavaScript page errors. Mac used an isolated home and an offline provider; the UI fixture carries a copy of the accepted card with its output path mapped to that fixture.
 
 Acceptance describes recorded evidence at handoff, not a new execution of checks whenever the page opens, nor universal output correctness. Existing running Gateways were not restarted; protected production settings and held work were preserved. New worker processes and rebuilt Desktop packages contain the update; an already-running process may retain previously loaded code until its normal restart.
+
+## Compare a revision
+
+In **Track work**, open **Compare with the round that asked for changes**.
+The comparison pairs the handoff before the latest request with the handoff
+after it, when available. It shows artifact changes from recorded hashes and
+labels check evidence with its own run. The text diff reads only the selected
+file. Both versions must be bounded text and match their recorded hashes.
+Historical hashes can remain available after the original file bytes are gone.
+
+[Revision comparison in a synthetic browser fixture](images/work-card-revision-fixture.webp)
+
+## Usage for an accepted result
+
+The accepted card loads recorded usage for THINK, ACTION, revisions, REVIEW
+and goal judges when opened in **Track work**. Exact owner admission binds a
+worker run to its profile session and compression continuation. Legacy runs
+can contribute a bounded diagnostic sample when its key and run binding
+match. Each row opens its native run evidence on demand.
+
+Coverage is partial. A shared THINK run can appear on several cards.
+Originating Captain sessions, ambiguous ownership and duplicate samples
+are excluded. Input includes cached tokens. The cost column sums only
+recorded actual USD amounts and leaves absent prices unavailable.
+
+[Usage breakdown in a synthetic browser fixture](images/work-card-usage-fixture.webp)
