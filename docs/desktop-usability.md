@@ -10,6 +10,14 @@ In Hub, **Back** returns through the actual file/folder navigation history. At t
 
 A collection search names its scope. No matches are distinct from an empty collection. Use **Clear search and filters** to recover the collection or **Search all Hub** to keep the query and expand its scope. Searching does not grant bot membership or share a private chat file.
 
+## Recovering an earlier message
+
+Open the failed-message notice to read the full text and see any original attachments you need to review or reattach. **Park draft and edit failed message** puts the earlier text in this chat's composer and saves what you were typing. **Return to parked draft** brings back the draft and saves edits to the other message.
+
+Review the recovered message before you press Send. Sending the original payload uses its original submission ID on a gateway that supports idempotent admission. If you revise the text or replace attachments, confirm **Send as new message**. The earlier message may already have reached the gateway.
+
+![Failed-message recovery fixture before and after parking the current draft.](images/draft-recovery-fixture.webp)
+
 ## Checking the configured provider
 
 **Settings → Accounts** shows the selected profile's configured provider and model on the active connection. A current per-account reading includes its timestamp. A provider without a reading shows that quota is unreported, while a configured local endpoint is labeled separately. Gemini API and AGY subscription reports have separate provider identities. The existing **Refresh** action checks supported quota sources.

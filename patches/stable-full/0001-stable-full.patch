@@ -16956,70 +16956,72 @@ index dc81c446f04ee3c655f150ca1df0e724b0aeb988..5afb00926edc1dee4ee8cec1b2711bec
      )
 diff --git a/apps/desktop/src/app/chat/composer/draft-recovery.tsx b/apps/desktop/src/app/chat/composer/draft-recovery.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..1393bf8dcfc12433411f779e19639cbc8cac8f7c
+index 0000000000000000000000000000000000000000..5f1942e4b4ceca2795143648a9a7f8e0de228d24
 --- /dev/null
 +++ b/apps/desktop/src/app/chat/composer/draft-recovery.tsx
-@@ -0,0 +1,69 @@
+@@ -0,0 +1,71 @@
 +import { useStore } from '@nanostores/react'
 +
 +import { freshDraftScope, isFreshDraftScope } from '@/store/composer'
 +import { draftOwnerKey } from '@/store/composer-draft-owner'
-+import { draftRetry } from '@/store/composer-draft-retry'
++import { missingRecoveredFiles } from '@/store/composer-draft-retry'
++import { isBrowsingHistory } from '@/store/composer-input-history'
 +import type { SessionOwnerScope } from '@/store/session-request-router'
 +
 +import type { useComposerDraft } from './hooks/use-composer-draft'
 +import { RestoredDraftNotice } from './restored-draft-notice'
-+import { RetainedSendNotice } from './retained-send-notice'
++import { RecoveryFiles, RetainedSendNotice } from './retained-send-notice'
 +import { useComposerScope } from './scope'
 +import { UnassignedDraftNotice } from './unassigned-draft-notice'
 +
 +interface ComposerDraftRecoveryProps {
++  disabled: boolean
 +  draft: ReturnType<typeof useComposerDraft>
 +  scope: string | null
 +  owner: SessionOwnerScope
 +}
 +
 +/** Both recovery paths follow the editor owner without putting draft text in shell state. */
-+export function ComposerDraftRecovery({ draft, scope, owner }: ComposerDraftRecoveryProps) {
++export function ComposerDraftRecovery({ disabled, draft, scope, owner }: ComposerDraftRecoveryProps) {
 +  const composer = useComposerScope()
 +  const attachments = useStore(composer.attachments.$attachments)
 +
 +  return (
 +    <>
 +      <UnassignedDraftNotice
-+        canRestore={() => !draft.syncDraftFromEditor().trim() && composer.attachments.$attachments.get().length === 0}
-+        empty={!draft.hasText && attachments.length === 0}
++        canRestore={() =>
++          !draft.getDraftRetry()?.recovery &&
++          !draft.syncDraftFromEditor().trim() &&
++          composer.attachments.$attachments.get().length === 0
++        }
++        empty={!draft.recovery && !draft.hasText && attachments.length === 0}
 +        onRestored={draft.loadIntoComposer}
 +        owner={owner}
 +        scope={scope}
 +      />
 +      <RetainedSendNotice
-+        canRestore={() => {
++        disabled={disabled || attachments.some(file => file.uploadState === 'uploading')}
++        occupied={draft.hasText || attachments.length > 0 || Boolean(draft.recovery)}
++        onRestored={draft.loadRecoveredDraft}
++        owner={owner}
++        scope={scope}
++        readCurrent={() => {
 +          const same =
 +            (draft.draftScopeRef.current || freshDraftScope()) === (scope || freshDraftScope()) &&
 +            draftOwnerKey(draft.draftOwnerRef.current) === draftOwnerKey(owner)
++          const current = composer.attachments.$attachments.get()
++          if (
++            !same ||
++            disabled ||
++            isBrowsingHistory(draft.sessionIdRef.current) ||
++            current.some(file => file.uploadState === 'uploading')
++          )
++            return undefined
 +
-+          if (!same || draft.syncDraftFromEditor().trim() || composer.attachments.$attachments.get().length) {
-+            return false
-+          }
-+
-+          draft.stashAt(scope, '', [], owner)
-+
-+          return true
++          return { text: draft.syncDraftFromEditor(), attachments: current }
 +        }}
-+        empty={!draft.hasText && attachments.length === 0}
-+        onRestored={(text, restored, id) => {
-+          draft.loadIntoComposer(text, restored)
-+
-+          if (id) {
-+            draft.rememberDraftRetry(scope, draftRetry(id, text, restored), owner)
-+          } else {
-+            draft.takeDraftRetry(text, restored)
-+          }
-+        }}
-+        owner={owner}
-+        scope={scope}
 +      />
++      {draft.recovery && <RecoveryFiles {...missingRecoveredFiles(draft.recovery, attachments)} />}
 +      <RestoredDraftNotice
 +        freshDraft={scope === null || isFreshDraftScope(scope)}
 +        onUndone={draft.clearDraft}
@@ -17136,16 +17138,16 @@ index 0000000000000000000000000000000000000000..9b045561725f9b103aaa28e07168cabd
 +}
 diff --git a/apps/desktop/src/app/chat/composer/hooks/composer-draft-restore.ts b/apps/desktop/src/app/chat/composer/hooks/composer-draft-restore.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..fb21c284c412c9cb526e2903a8ea974f72b9a7a3
+index 0000000000000000000000000000000000000000..2b8de4a2161ebdfe3bf0234705bab0e13e23c325
 --- /dev/null
 +++ b/apps/desktop/src/app/chat/composer/hooks/composer-draft-restore.ts
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,80 @@
 +import type { RefObject } from 'react'
 +
 +import { translateNow } from '@/i18n'
 +import { type ComposerAttachment, freshDraftScope, takeSessionDraft } from '@/store/composer'
 +import { draftOwnerKey } from '@/store/composer-draft-owner'
-+import { type ComposerDraftRetry, draftRetry, writeDraftRetry } from '@/store/composer-draft-retry'
++import { type ComposerDraftRetry, draftRetry, readDraftRetry, writeDraftRetry } from '@/store/composer-draft-retry'
 +import { retainRejectedDraft } from '@/store/composer-rejected-drafts'
 +import { notifyError } from '@/store/notifications'
 +import type { SessionOwnerScope } from '@/store/session-request-router'
@@ -17166,7 +17168,8 @@ index 0000000000000000000000000000000000000000..fb21c284c412c9cb526e2903a8ea974f
 +    text: string,
 +    attachments: ComposerAttachment[],
 +    owner: SessionOwnerScope = args.draftOwnerRef?.current,
-+    submissionId?: string
++    submissionId?: string,
++    keepRetained = false
 +  ) => {
 +    const captured = typeof owner === 'object' && owner ? { ...owner } : owner
 +    const source = typeof scope === 'function' ? scope : scope || freshDraftScope()
@@ -17180,7 +17183,12 @@ index 0000000000000000000000000000000000000000..fb21c284c412c9cb526e2903a8ea974f
 +
 +      const current = (sameEditor ? args.readCurrentDraft?.() : undefined) ?? takeSessionDraft(target, captured)
 +
-+      if (current.text.trim() || current.attachments.length) {
++      if (
++        keepRetained ||
++        current.text.trim() ||
++        current.attachments.length ||
++        readDraftRetry(target, captured)?.recovery
++      ) {
 +        if (sameEditor) {
 +          args.stashAt(target, current.text, current.attachments, captured ?? null)
 +        }
@@ -17363,10 +17371,10 @@ index 0000000000000000000000000000000000000000..66fe8024c4d64b03009c336b0459738e
 +})
 diff --git a/apps/desktop/src/app/chat/composer/hooks/composer-submit-dispatch.ts b/apps/desktop/src/app/chat/composer/hooks/composer-submit-dispatch.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..9546c12b5b3095dc7aa43970c4c63f6a9198986b
+index 0000000000000000000000000000000000000000..e592e58cc33696493da385a500fa52d6e1f6f3b1
 --- /dev/null
 +++ b/apps/desktop/src/app/chat/composer/hooks/composer-submit-dispatch.ts
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,99 @@
 +import { type ComposerAttachment, freshDraftScope, isFreshDraftScope } from '@/store/composer'
 +
 +import type { ChatBarProps } from '../types'
@@ -17431,7 +17439,14 @@ index 0000000000000000000000000000000000000000..9546c12b5b3095dc7aa43970c4c63f6a
 +    // message that repeats an uncertain send, in this pane or another, is its own turn.
 +    const submissionId = target?.submission_id ?? crypto.randomUUID()
 +
-+    const restore = restoreDraft(() => restoreScope, text, submittedAttachments, submittedOwner ?? null, submissionId)
++    const restore = restoreDraft(
++      () => restoreScope,
++      text,
++      submittedAttachments,
++      submittedOwner ?? null,
++      submissionId,
++      target?.requireIdempotentSubmit
++    )
 +
 +    // A hidden submit is machine text (a setup note, never something the user
 +    // typed), so a rejection drops it instead of loading it into the draft.
@@ -17670,7 +17685,7 @@ index 0000000000000000000000000000000000000000..cb2f941b3b9fc3735d5aa3a5abf1b385
 +  expect(handles.draft.draftRef.current.trim()).toBe('Keep work owner words')
 +})
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-draft.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-draft.ts
-index f88f22679132810982d3ea0deb83c3ee20ebfbcd..09e57873d0e23c78101486fcb9ed862d9de1e1c8 100644
+index f88f22679132810982d3ea0deb83c3ee20ebfbcd..6deb916cdf6b02cc1e35738d97af84085c3c1833 100644
 --- a/apps/desktop/src/app/chat/composer/hooks/use-composer-draft.ts
 +++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-draft.ts
 @@ -2,3 +2,3 @@ import { useAui, useAuiState, useComposerRuntime } from '@assistant-ui/react'
@@ -17705,7 +17720,7 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..09e57873d0e23c78101486fcb9ed862d
    activeQueueSessionKey,
 +  draftOwner,
    focusKey,
-@@ -123,5 +127,8 @@ export function useComposerDraft({
+@@ -123,5 +127,9 @@ export function useComposerDraft({
    const draftRef = useRef('')
 +  // Like draftScopeRef, this belongs to the committed editor, not a pending render.
 +  const draftOwnerRef = useRef(draftOwner)
@@ -17713,9 +17728,10 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..09e57873d0e23c78101486fcb9ed862d
    // The uncertain send this draft was restored from, while the text is still exactly that send.
    const draftRetryRef = useRef<ComposerDraftRetry | undefined>(undefined)
 -  const pendingDraftPersistRef = useRef<{ scope: string | null; text: string } | null>(null)
++  const [recovery, setRecovery] = useState<ComposerDraftRetry>()
 +  const pendingDraftPersistRef = useRef<{ scope: string | null; text: string; owner: SessionOwnerScope } | null>(null)
    const draftPersistTimerRef = useRef<number | undefined>(undefined)
-@@ -302,30 +309,6 @@ export function useComposerDraft({
+@@ -302,30 +310,6 @@ export function useComposerDraft({
  
 -  const stashAt = (scope: string | null, text = draftRef.current, attachments = attachmentScope.$attachments.get()) =>
 -    stashSessionDraft(scope, text, attachments)
@@ -17745,12 +17761,41 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..09e57873d0e23c78101486fcb9ed862d
 -
 -    return retry
 -  }
-+  const { stashAt, rememberDraftRetry, takeDraftRetry } = useMemo(
++  const { stashAt, rememberDraftRetry, takeDraftRetry: spendDraftRetry } = useMemo(
 +    () => createComposerDraftAccess({ attachmentScope, draftRef, draftOwnerRef, draftRetryRef, draftScopeRef }),
 +    [attachmentScope]
 +  )
  
-@@ -468,6 +451,6 @@ export function useComposerDraft({
+@@ -399,2 +383,25 @@ export function useComposerDraft({
+ 
++  const loadRecoveredDraft = (text: string, attachments: ComposerAttachment[], retry?: ComposerDraftRetry) => {
++    // The switch has already persisted the new identity. Painting must not clear it as an edit.
++    draftRetryRef.current = undefined
++    loadIntoComposer(text, attachments)
++    draftRetryRef.current = retry
++    setRecovery(retry?.recovery ? retry : undefined)
++    requestMainFocus()
++  }
++
++  const takeDraftRetry = (text: string, attachments: ComposerAttachment[]) => {
++    const recovered = draftRetryRef.current?.recovery
++    const retry = spendDraftRetry(text, attachments)
++
++    if (recovered) {
++      if (!retry) writeDraftRetry(draftScopeRef.current, undefined, draftOwnerRef.current)
++      setRecovery(undefined)
++    }
++
++    return retry
++  }
++
++  const getDraftRetry = () => draftRetryRef.current
++
+   const clearDraft = useCallback(() => {
+@@ -466,8 +473,8 @@ export function useComposerDraft({
+       // An edited (or cleared) restored draft is a new message: it no longer retries the old send.
+-      if (draftRetryRef.current && !draftRetryTextMatches(draftRetryRef.current, text)) {
++      if (draftRetryRef.current && !draftRetryRef.current.recovery && !draftRetryTextMatches(draftRetryRef.current, text)) {
          draftRetryRef.current = undefined
 -        writeDraftRetry(scope, undefined)
 +        writeDraftRetry(scope, undefined, draftOwnerRef.current)
@@ -17759,7 +17804,7 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..09e57873d0e23c78101486fcb9ed862d
 -      const entry = { scope, text }
 +      const entry = { scope, text, owner: draftOwnerRef.current }
        pendingDraftPersistRef.current = entry
-@@ -480,3 +463,6 @@ export function useComposerDraft({
+@@ -480,3 +487,6 @@ export function useComposerDraft({
          // silently filing text under the wrong session.
 -        if (!isPendingDraftPersistCurrent(pendingDraftPersistRef.current, entry)) {
 +        if (
@@ -17767,17 +17812,17 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..09e57873d0e23c78101486fcb9ed862d
 +          !isPendingDraftPersistCurrent(pendingDraftPersistRef.current, entry)
 +        ) {
            return
-@@ -485,3 +471,3 @@ export function useComposerDraft({
+@@ -485,3 +495,3 @@ export function useComposerDraft({
          pendingDraftPersistRef.current = null
 -        stashAt(scope, text)
 +        stashAt(scope, text, attachmentScope.$attachments.get(), entry.owner)
        }, DRAFT_PERSIST_DEBOUNCE_MS)
-@@ -495,3 +481,3 @@ export function useComposerDraft({
+@@ -495,3 +505,3 @@ export function useComposerDraft({
      }
 -  }, [composerRuntime, queueEditRef])
 +  }, [composerRuntime, queueEditRef, stashAt, attachmentScope.$attachments])
  
-@@ -571,3 +557,6 @@ export function useComposerDraft({
+@@ -571,3 +581,6 @@ export function useComposerDraft({
      // later than the route flips the scope, so it is not a usable signal here.
 -    if ((isFreshDraftScope(draftScopeRef.current) || !draftScopeRef.current) && activeQueueSessionKey) {
 +    const owner = typeof draftOwner === 'object' && draftOwner ? { ...draftOwner } : draftOwner
@@ -17785,7 +17830,7 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..09e57873d0e23c78101486fcb9ed862d
 +
 +    if (sameOwner && (isFreshDraftScope(draftScopeRef.current) || !draftScopeRef.current) && activeQueueSessionKey) {
        const freshKey = draftScopeRef.current || freshDraftScope()
-@@ -577,6 +566,6 @@ export function useComposerDraft({
+@@ -577,6 +590,6 @@ export function useComposerDraft({
        // fresh → stored (#139190), so only this announced handoff does.
 -      if (adoptNewSessionDraft(activeQueueSessionKey)) {
 +      if (adoptNewSessionDraft(activeQueueSessionKey, owner)) {
@@ -17794,21 +17839,22 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..09e57873d0e23c78101486fcb9ed862d
 -    } else if (!activeQueueSessionKey) {
 +    } else if (sameOwner && !activeQueueSessionKey) {
        // The reverse handoff: a session the user was typing into turned out
-@@ -587,3 +576,3 @@ export function useComposerDraft({
+@@ -587,3 +600,3 @@ export function useComposerDraft({
        // verdict announced it. No announcement, no-op.
 -      adoptGoneSessionDraft()
 +      adoptGoneSessionDraft(owner)
      }
-@@ -591,5 +580,6 @@ export function useComposerDraft({
+@@ -591,5 +604,7 @@ export function useComposerDraft({
      draftScopeRef.current = activeQueueSessionKey
 -    draftRetryRef.current = readDraftRetry(activeQueueSessionKey)
 +    draftOwnerRef.current = owner
 +    draftRetryRef.current = readDraftRetry(activeQueueSessionKey, owner)
++    setRecovery(draftRetryRef.current?.recovery ? draftRetryRef.current : undefined)
  
 -    const { attachments, text } = takeSessionDraft(activeQueueSessionKey)
 +    const { attachments, text } = takeSessionDraft(activeQueueSessionKey, owner)
      loadIntoComposer(text, attachments, true)
-@@ -601,8 +591,8 @@ export function useComposerDraft({
+@@ -601,8 +616,8 @@ export function useComposerDraft({
        if (editing?.sessionKey === activeQueueSessionKey) {
 -        stashAt(activeQueueSessionKey, editing.draft, editing.attachments)
 +        stashAt(activeQueueSessionKey, editing.draft, editing.attachments, owner)
@@ -17820,14 +17866,15 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..09e57873d0e23c78101486fcb9ed862d
 -  }, [activeQueueSessionKey]) // eslint-disable-line react-hooks/exhaustive-deps
 +  }, [activeQueueSessionKey, ownerIdentity]) // eslint-disable-line react-hooks/exhaustive-deps
  
-@@ -623,4 +613,4 @@ export function useComposerDraft({
+@@ -623,4 +638,5 @@ export function useComposerDraft({
      reloadPersistedDrafts()
 -    draftRetryRef.current = readDraftRetry(draftScopeRef.current)
 -    const stashed = takeSessionDraft(draftScopeRef.current)
 +    draftRetryRef.current = readDraftRetry(draftScopeRef.current, draftOwnerRef.current)
++    setRecovery(draftRetryRef.current?.recovery ? draftRetryRef.current : undefined)
 +    const stashed = takeSessionDraft(draftScopeRef.current, draftOwnerRef.current)
      loadIntoComposer(stashed.text, stashed.attachments)
-@@ -664,5 +654,6 @@ export function useComposerDraft({
+@@ -664,5 +680,6 @@ export function useComposerDraft({
      }
 -  }, [syncDraftFromEditor])
 +  }, [syncDraftFromEditor, stashAt])
@@ -17835,10 +17882,16 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..09e57873d0e23c78101486fcb9ed862d
    return {
 +    ownerIdentity,
      activeQueueSessionKeyRef,
-@@ -670,2 +661,3 @@ export function useComposerDraft({
+@@ -670,2 +687,3 @@ export function useComposerDraft({
      draftScopeRef,
 +    draftOwnerRef,
      draftRef,
+@@ -679,2 +697,5 @@ export function useComposerDraft({
+     loadIntoComposer,
++    loadRecoveredDraft,
++    getDraftRetry,
++    recovery,
+     rememberDraftRetry,
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-file-paste.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-file-paste.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..33e83bfb74f1364a64afee6819d52a32dd7cd9a8
@@ -18096,11 +18149,95 @@ index b43a453ce927f76bdc0a7b9b96a463247982aaa1..23f32b4e6b23aa8c862aebee4853d1b7
 +  expect(takeSessionDraft('stored-B').text.trim()).toBe('Keep my newer unsent message')
 +  expect(onSubmit).toHaveBeenCalledTimes(1)
 +})
+diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.test.tsx b/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.test.tsx
+index d929e041de641a0d5ef8afe59196e3c00467c280..2e1601c2c45513b90262044bef1e1f497a8e63dd 100644
+--- a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.test.tsx
++++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.test.tsx
+@@ -13,2 +13,4 @@ import {
+ import { $queuedPromptsBySession, clearQueuedPrompts, getQueuedPrompts } from '@/store/composer-queue'
++import { type ComposerDraftRetry, draftRetry, matchingDraftRetry } from '@/store/composer-draft-retry'
++import { $confirmRequest, settleConfirm } from '@/store/confirm'
+ import { $connectionRequests, type ConnectionRequest } from '@/store/connection-request'
+@@ -38,2 +40,3 @@ interface SubmitHarnessOptions {
+   inputDisabled?: boolean
++  recovered?: ComposerDraftRetry
+   scopeTarget?: ComposerTarget
+@@ -53,2 +56,3 @@ function renderSubmitHook({
+   inputDisabled = false,
++  recovered,
+   scopeTarget = 'main',
+@@ -124,2 +128,8 @@ function renderSubmitHook({
+         focusInput: vi.fn(),
++        getDraftRetry: () => recovered,
++        takeDraftRetry: (value, files) => {
++          const matched = matchingDraftRetry(recovered, value, files)
++          recovered = undefined
++          return matched
++        },
+         inputDisabled,
+@@ -1027 +1037,57 @@ describe('useComposerSubmit with a setup card waiting in the onboarding chat', (
+ })
++
++
++describe('submitting a recovered send', () => {
++  const recovered = { ...draftRetry('original-id', 'Earlier input', []), recovery: {
++    attachmentCount: 0, attachmentLabels: []
++  } }
++
++  afterEach(() => {
++    settleConfirm(false)
++    cleanup()
++  })
++
++  it('sends the unchanged payload with the original id and requires idempotent admission', () => {
++    const f = renderSubmitHook({ text: 'Earlier input', recovered })
++    act(() => f.hook.result.current.submitDraft())
++    expect(f.onSubmit).toHaveBeenCalledExactlyOnceWith('Earlier input', expect.objectContaining({
++      submission_id: 'original-id', requireIdempotentSubmit: true
++    }))
++    expect($confirmRequest.get()).toBeNull()
++  })
++
++  it('requires acknowledgment before sending an edited payload under a new id', async () => {
++    const f = renderSubmitHook({ text: 'Edited input', recovered })
++    act(() => f.hook.result.current.submitDraft())
++    expect(f.onSubmit).not.toHaveBeenCalled()
++    expect($confirmRequest.get()?.title).toBe('Send edited copy as new?')
++    await act(async () => settleConfirm(false))
++    expect(f.clearDraft).not.toHaveBeenCalled()
++    act(() => f.hook.result.current.submitDraft())
++    await act(async () => settleConfirm(true))
++    expect(f.onSubmit).toHaveBeenCalledExactlyOnceWith('Edited input', expect.objectContaining({
++      submission_id: expect.not.stringMatching(/^original-id$/)
++    }))
++  })
++
++  it('does not confirm a recovered edit after its pane goes away', async () => {
++    const f = renderSubmitHook({ text: 'Edited input', recovered })
++    act(() => f.hook.result.current.submitDraft())
++    f.hook.unmount()
++    await act(async () => settleConfirm(true))
++    expect(f.onSubmit).not.toHaveBeenCalled()
++  })
++
++  it('does not steer or queue a recovered draft under a fresh identity while busy', () => {
++    const f = renderSubmitHook({ text: 'Earlier input', recovered, busy: true })
++    act(() => {
++      f.hook.result.current.submitDraft()
++      f.hook.result.current.steerDraft()
++      f.hook.result.current.queueDraft()
++    })
++    expect(f.onSteer).not.toHaveBeenCalled()
++    expect(f.queueCurrentDraft).not.toHaveBeenCalled()
++    expect(f.onSubmit).not.toHaveBeenCalled()
++    expect(f.clearDraft).not.toHaveBeenCalled()
++  })
++})
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.ts
-index c9ad1304796e1cef782ac3f75504b49c97ccc600..371a59b89c5777c3906c24e34c82db13acc2d97f 100644
+index c9ad1304796e1cef782ac3f75504b49c97ccc600..f2ce5bfc876c9bcfd3d101ba84efb33aa1054c4d 100644
 --- a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.ts
 +++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.ts
-@@ -10,9 +10,4 @@ import type { BusyInputMode } from '@/store/busy-input-mode'
+@@ -10,12 +10,9 @@ import type { BusyInputMode } from '@/store/busy-input-mode'
  import { hasClarifyRequest, skipClarifyRequest } from '@/store/clarify'
 -import {
 -  clearSessionDraft,
@@ -18110,23 +18247,32 @@ index c9ad1304796e1cef782ac3f75504b49c97ccc600..371a59b89c5777c3906c24e34c82db13
 -} from '@/store/composer'
 -import { type ComposerDraftRetry, draftRetry } from '@/store/composer-draft-retry'
 +import { type ComposerAttachment, freezeComposerTransportPayload, freshDraftScope } from '@/store/composer'
-+import { type ComposerDraftRetry } from '@/store/composer-draft-retry'
++import { attachmentIds, type ComposerDraftRetry, matchingDraftRetry } from '@/store/composer-draft-retry'
  import { resetBrowseState } from '@/store/composer-input-history'
-@@ -23,2 +18,3 @@ import { answerParkedCard, skipParkedCards, yieldParkedCardsToMessage } from '@/
+ import { enqueueQueuedPrompt, type QueuedPromptEntry, serverOwnsComposerQueue } from '@/store/composer-queue'
++import { confirm } from '@/store/confirm'
+ import { hasConnectionRequest, skipConnectionRequest } from '@/store/connection-request'
++import { draftOwnerKey } from '@/store/composer-draft-owner'
+ import { notify } from '@/store/notifications'
+@@ -23,2 +20,3 @@ import { answerParkedCard, skipParkedCards, yieldParkedCardsToMessage } from '@/
  import { hasBlockingPromptRequest } from '@/store/prompts'
 +import type { SessionOwnerScope } from '@/store/session-request-router'
  
-@@ -31,2 +27,5 @@ import type { ChatBarProps } from '../types'
+@@ -31,2 +29,5 @@ import type { ChatBarProps } from '../types'
  
 +import { createComposerDraftRestorer } from './composer-draft-restore'
 +import { createComposerSubmitDispatch } from './composer-submit-dispatch'
 +
  interface UseComposerSubmitArgs {
-@@ -39,2 +38,3 @@ interface UseComposerSubmitArgs {
+@@ -39,2 +40,3 @@ interface UseComposerSubmitArgs {
    disabled: boolean
 +  draftOwnerRef?: RefObject<SessionOwnerScope>
    draftScopeRef: RefObject<string | null>
-@@ -56,5 +56,5 @@ interface UseComposerSubmitArgs {
+@@ -45,2 +47,3 @@ interface UseComposerSubmitArgs {
+   focusInput: () => void
++  getDraftRetry?: () => ComposerDraftRetry | undefined
+   inputDisabled: boolean
+@@ -56,5 +59,5 @@ interface UseComposerSubmitArgs {
    setComposerText: (value: string) => void
 -  stashAt: (scope: string | null, text?: string, attachments?: ComposerAttachment[]) => void
 +  stashAt: (scope: string | null, text?: string, attachments?: ComposerAttachment[], owner?: SessionOwnerScope) => void
@@ -18134,11 +18280,15 @@ index c9ad1304796e1cef782ac3f75504b49c97ccc600..371a59b89c5777c3906c24e34c82db13
 -  rememberDraftRetry?: (scope: string | null, retry: ComposerDraftRetry) => void
 +  rememberDraftRetry?: (scope: string | null, retry: ComposerDraftRetry, owner?: SessionOwnerScope) => void
    takeDraftRetry?: (text: string, attachments: ComposerAttachment[]) => ComposerDraftRetry | undefined
-@@ -80,2 +80,3 @@ export function useComposerSubmit({
+@@ -80,2 +83,3 @@ export function useComposerSubmit({
    draftScopeRef,
 +  draftOwnerRef,
    draftRef,
-@@ -106,78 +107,29 @@ export function useComposerSubmit({
+@@ -85,2 +89,3 @@ export function useComposerSubmit({
+   focusInput,
++  getDraftRetry,
+   inputDisabled,
+@@ -106,78 +111,29 @@ export function useComposerSubmit({
  
 -  // Shared send primitive: fire onSubmit, and if the gateway rejects (accepted
 -  // === false) or throws, re-stash the draft so the words survive. Repaint it
@@ -18244,7 +18394,7 @@ index c9ad1304796e1cef782ac3f75504b49c97ccc600..371a59b89c5777c3906c24e34c82db13
 +  // External requests match the captured target and visible surface: mounted panes can share a session.
 +  // While busy, steer or enqueue instead of dropping the user's click; hidden notes retain their kind.
    const externalSubmitRef = useRef({ busy, dispatchSubmit, onSteer, onSteerHidden })
-@@ -328,11 +280,3 @@ export function useComposerSubmit({
+@@ -328,11 +284,3 @@ export function useComposerSubmit({
      // Like dispatchSubmit's restore: an answer that never reached the backend gives the words back.
 -    const answeredScope = draftScopeRef.current
 -
@@ -18257,18 +18407,137 @@ index c9ad1304796e1cef782ac3f75504b49c97ccc600..371a59b89c5777c3906c24e34c82db13
 -    }
 +    const restore = restoreDraft(draftScopeRef.current, text, [])
  
-@@ -464,3 +408,4 @@ export function useComposerSubmit({
+@@ -366,2 +314,77 @@ export function useComposerSubmit({
+ 
++  const submitIdle = (text: string, files: ComposerAttachment[], editedCopy = false) => {
++    const submittedAttachments = cloneAttachments(files)
++    const retry = takeDraftRetry?.(text, submittedAttachments)
++    triggerHaptic('submit')
++    resetBrowseState(sessionId)
++    clearDraft()
++    // The optimistic bubble owns any blob previews after this handoff.
++    scope.attachments.clear({ retainPreviewUrls: true })
++    dispatchSubmit(
++      text,
++      submittedAttachments,
++      undefined,
++      !editedCopy && retry
++        ? {
++            submission_id: retry.id,
++            ...(retry.recovery ? { requireIdempotentSubmit: true } : {})
++          }
++        : undefined
++    )
++  }
++
++  const recoveredSendReady = useRef(false)
++  const recoveredSendAvailable = !disabled && !inputDisabled && !busy && !queueEdit && paneVisible
++  useLayoutEffect(() => {
++    recoveredSendReady.current = recoveredSendAvailable
++    return () => {
++      recoveredSendReady.current = false
++    }
++  }, [recoveredSendAvailable])
++
++  const notifyRecoveredBusy = () => notify({ kind: 'warning', title: t.composer.retainedSendBusy, message: '' })
++
++  const submitRecovered = (retry: ComposerDraftRetry, text: string, files: ComposerAttachment[]) => {
++    if (!recoveredSendReady.current || hasBlockingPromptRequest(sessionId)) {
++      notifyRecoveredBusy()
++      return
++    }
++
++    if (matchingDraftRetry(retry, text, files)) {
++      submitIdle(text, files)
++      focusInput()
++      return
++    }
++
++    const storedScope = draftScopeRef.current
++    const ownerKey = draftOwnerKey(draftOwnerRef?.current)
++    const originalFiles = JSON.stringify(attachmentIds(files))
++    void confirm({
++      title: t.composer.retainedSendEditConfirm,
++      description: t.composer.retainedSendEditDescription,
++      confirmLabel: t.composer.retainedSendEditAction
++    }).then(approved => {
++      if (
++        !approved ||
++        !recoveredSendReady.current ||
++        getDraftRetry?.() !== retry ||
++        draftScopeRef.current !== storedScope ||
++        draftOwnerKey(draftOwnerRef?.current) !== ownerKey ||
++        hasBlockingPromptRequest(sessionId)
++      )
++        return
++
++      const live = readCurrentDraft()
++      if (
++        pathifyRefs(live.text) !== text ||
++        JSON.stringify(attachmentIds(live.attachments)) !== originalFiles ||
++        live.attachments.some(file => file.uploadState === 'uploading' || file.uploadState === 'error')
++      )
++        return
++
++      submitIdle(text, live.attachments, true)
++      focusInput()
++    })
++  }
++
+   const submitDraft = () => {
+@@ -394,4 +417,10 @@ export function useComposerSubmit({
+     const text = pathifyRefs(draftRef.current)
+-    const payloadPresent = text.trim().length > 0 || attachments.length > 0
++    const liveFiles = scope.attachments.$attachments.get()
++    const retry = getDraftRetry?.()
++    if (!queueEdit && retry?.recovery && (text.trim() || liveFiles.length)) {
++      submitRecovered(retry, text, liveFiles)
++      return
++    }
+ 
++    const payloadPresent = text.trim().length > 0 || attachments.length > 0
+     const parked = answerParkedCardWithDraft(text, payloadPresent)
+@@ -421,11 +450,3 @@ export function useComposerSubmit({
+     } else if (payloadPresent) {
+-      const submittedAttachments = cloneAttachments(attachments)
+-      const retry = takeDraftRetry?.(text, submittedAttachments)
+-      triggerHaptic('submit')
+-      resetBrowseState(sessionId)
+-      clearDraft()
+-      // Keep blob: previews alive for the optimistic bubble; revoke when that
+-      // consumer is discarded/replaced (not here — clear would race the clone).
+-      scope.attachments.clear({ retainPreviewUrls: true })
+-      dispatchSubmit(text, submittedAttachments, undefined, retry && { submission_id: retry.id })
++      submitIdle(text, attachments)
+     }
+@@ -439,2 +460,7 @@ export function useComposerSubmit({
+   const steerDraft = (mode: 'interrupt' | 'steer' = 'interrupt') => {
++    if (getDraftRetry?.()?.recovery) {
++      notifyRecoveredBusy()
++      return
++    }
++
+     const text = draftRef.current.trim()
+@@ -464,3 +490,4 @@ export function useComposerSubmit({
  
 -    const submittedScope = activeQueueSessionKeyRef.current
 +    const submittedScope = draftScopeRef.current || freshDraftScope()
 +    const restore = restoreDraft(submittedScope, frozen.displayText, [], draftOwnerRef?.current ?? null)
  
-@@ -477,4 +422,3 @@ export function useComposerSubmit({
+@@ -477,4 +504,3 @@ export function useComposerSubmit({
        if (!activeQueueSessionKey) {
 -        loadIntoComposer(frozen.displayText, [])
 -        stashAt(submittedScope, frozen.displayText, [])
 +        restore()
        } else if (canonical) {
+@@ -511,2 +537,7 @@ export function useComposerSubmit({
+ 
++    if (getDraftRetry?.()?.recovery) {
++      notifyRecoveredBusy()
++      return
++    }
++
+     queueCurrentDraft()
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-undo.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-undo.ts
 index 72f891f6dac0bcf3e9638b2f5aefa926405cb34b..c2b5b3d84a9b5e84b1a63da989e3956f05d570a5 100644
 --- a/apps/desktop/src/app/chat/composer/hooks/use-composer-undo.ts
@@ -18292,7 +18561,7 @@ index 72f891f6dac0bcf3e9638b2f5aefa926405cb34b..c2b5b3d84a9b5e84b1a63da989e3956f
 +
    const snapshot = useCallback((): ComposerSnapshot => {
 diff --git a/apps/desktop/src/app/chat/composer/index.tsx b/apps/desktop/src/app/chat/composer/index.tsx
-index aee9bf96c50cee698de0c72fff94dc22f26a541f..d7ba2b69bcc758a221913731be79d0b5ea65d89d 100644
+index aee9bf96c50cee698de0c72fff94dc22f26a541f..8917148a837a7a7adc48e6d583943d0c500b52bc 100644
 --- a/apps/desktop/src/app/chat/composer/index.tsx
 +++ b/apps/desktop/src/app/chat/composer/index.tsx
 @@ -29,2 +29,3 @@ import { useStoreSelector, useStoresSelector } from '@/lib/use-session-slice'
@@ -18332,7 +18601,7 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..d7ba2b69bcc758a221913731be79d0b5
 @@ -200,2 +202,3 @@ export function ChatBar({
    const statusSessionId = sessionId ?? null
 +  const backgroundResume = useStore(useMemo(() => sessionBackgroundResume(statusSessionId), [statusSessionId]))
-
+ 
 @@ -279,2 +282,11 @@ export function ChatBar({
    // and threads it in so the draft↔queue coupling is an explicit dep, not a tangle.
 +  const draft = useComposerDraft({
@@ -18357,10 +18626,10 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..d7ba2b69bcc758a221913731be79d0b5
 -  } = useComposerDraft({ activeQueueSessionKey, focusKey, inputDisabled, queueEditRef, sessionId })
 +    syncDraftFromEditor
 +  } = draft
-
+ 
    useComposerScreenshot({ sessionKey: activeQueueSessionKey, focusKey, onAttachImageBlob })
 +  const pasteFiles = useComposerFilePaste({ disabled: inputDisabled, onAttachDroppedItems, target: scope.target })
-
+ 
 @@ -306,4 +316,5 @@ export function ChatBar({
    // path below banks its pre-edit state through `recordUndoPoint`.
 -  const { recordUndoPoint, redo, resetUndoHistory, undo, withUndoPoint } = useComposerUndo({
@@ -18369,7 +18638,7 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..d7ba2b69bcc758a221913731be79d0b5
 +    scopeKey: JSON.stringify([activeQueueSessionKey, draft.ownerIdentity]),
      syncDraftFromEditor
 @@ -332,8 +343,2 @@ export function ChatBar({
-
+ 
 -  // Prior history belongs to the draft that just left — undoing into another
 -  // conversation's text is worse than having none.
 -  useEffect(() => {
@@ -18405,7 +18674,7 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..d7ba2b69bcc758a221913731be79d0b5
 -    takeDraftRetry
 +    sessionId
    })
-
+ 
 -  // Resting / reconnecting / starting placeholder text, re-rolled only on a real
 -  // conversation change.
 -  const placeholder = useComposerPlaceholder({ disabled, reconnecting, sessionId })
@@ -18415,7 +18684,7 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..d7ba2b69bcc758a221913731be79d0b5
 +    sessionId,
 +    historyScope: composerHistoryScope(activeQueueSessionKey, draftOwner)
 +  })
-
+ 
 -  // Trigger / completion engine: @// detection, the adapter-driven item list,
 -  // popover selection, and chip insertion. The keydown nav block below consumes
 -  // this API; keyup uses triggerKeyConsumedRef to skip its refresh.
@@ -18460,22 +18729,29 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..d7ba2b69bcc758a221913731be79d0b5
        <ComposerDirectiveActions editorRef={editorRef} />
 +
        {/* assistant-ui requires ComposerPrimitive.Input somewhere in the tree
-@@ -1305,4 +1327,5 @@ export function ChatBar({
+@@ -1302,7 +1324,8 @@ export function ChatBar({
+             <PreparedImageRecovery
+-              occupied={hasText || attachments.length > 0 || busy || disabled}
++              occupied={hasText || attachments.length > 0 || Boolean(draft.recovery) || busy || disabled}
+               onRestore={(text, restored, id) => {
                  loadIntoComposer(text, restored)
 -                rememberDraftRetry(activeQueueSessionKey, draftRetry(id, text, restored))
 +                rememberDraftRetry(activeQueueSessionKey, draftRetry(id, text, restored), draftOwner)
                }}
 +              owner={draftOwner}
                request={requestBusyConfig}
-@@ -1487,7 +1510,3 @@ export function ChatBar({
+@@ -1487,6 +1510,7 @@ export function ChatBar({
                    <ContribSlot area={COMPOSER_AREAS.top} />
 -                  <RestoredDraftNotice
 -                    freshDraft={activeQueueSessionKey === null}
 -                    onUndone={clearDraft}
 -                    readLiveText={syncDraftFromEditor}
--                  />
-+                  <ComposerDraftRecovery draft={draft} owner={draftOwner} scope={activeQueueSessionKey} />
-                   <VoiceActivity state={voiceActivityState} />
++                  <ComposerDraftRecovery
++                    disabled={inputDisabled || Boolean(queueEdit)}
++                    draft={draft}
++                    owner={draftOwner}
++                    scope={activeQueueSessionKey}
+                   />
 diff --git a/apps/desktop/src/app/chat/composer/paste-files.test.tsx b/apps/desktop/src/app/chat/composer/paste-files.test.tsx
 new file mode 100644
 index 0000000000000000000000000000000000000000..a4af4194220b86b7f5fb5b75aca1b1fe91692b6d
@@ -19367,10 +19643,10 @@ index 609a4d3cabbd53af16e756cfefd9fb4b50a9266e..355b3a6ec72ee9310f176eddd7761088
            type="button"
 diff --git a/apps/desktop/src/app/chat/composer/retained-send-notice.test.tsx b/apps/desktop/src/app/chat/composer/retained-send-notice.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..e8ce0356cb156f084d5a4392014487fe8d68303e
+index 0000000000000000000000000000000000000000..deb8ff5162d06764926ed3c281c084200181fdce
 --- /dev/null
 +++ b/apps/desktop/src/app/chat/composer/retained-send-notice.test.tsx
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,80 @@
 +import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 +import { useState } from 'react'
 +import { afterEach, expect, it } from 'vitest'
@@ -19390,8 +19666,8 @@ index 0000000000000000000000000000000000000000..e8ce0356cb156f084d5a4392014487fe
 +  return (
 +    <>
 +      <RetainedSendNotice
-+        canRestore={() => !occupied}
-+        empty={!occupied}
++        readCurrent={() => ({ text: restored || (occupied ? 'Current input' : ''), attachments: [] })}
++        occupied={occupied || Boolean(restored)}
 +        onRestored={text => setRestored(text)}
 +        owner={owner}
 +        scope={scope}
@@ -19423,16 +19699,22 @@ index 0000000000000000000000000000000000000000..e8ce0356cb156f084d5a4392014487fe
 +  expect(retainedRejectedDrafts(scope, owner)).toEqual([])
 +})
 +
-+it('never replaces an occupied editor or exposes another owner recovery', () => {
++it('parks live input, restores the earlier text, and returns without crossing owners', () => {
 +  stashSessionDraft(scope, 'Current input', [], owner)
 +  retainRejectedDraft(scope, 'Earlier input', [], owner, 'retained-id')
 +  retainRejectedDraft(scope, 'Other owner private input', [], { ...owner, profile: 'other' }, 'other-id')
 +  const { container } = render(<Harness occupied />)
 +  fireEvent.click(container.querySelector('summary')!)
-+  fireEvent.click(screen.getByRole('button', { name: 'Restore message' }))
-+  expect(takeSessionDraft(scope, owner).text).toBe('Current input')
 +  expect(container.textContent).not.toContain('Other owner private input')
-+  expect(retainedRejectedDrafts(scope, owner)).toHaveLength(1)
++  fireEvent.click(screen.getByRole('button', { name: 'Park draft and edit failed message' }))
++  expect(container.querySelector('output')?.textContent).toBe('Earlier input')
++  expect(readDraftRetry(scope, owner)?.id).toBe('retained-id')
++  expect(retainedRejectedDrafts(scope, owner).map(row => row.text)).toEqual(['Current input'])
++
++  fireEvent.click(screen.getByRole('button', { name: 'Return to parked draft' }))
++  expect(container.querySelector('output')?.textContent).toBe('Current input')
++  expect(readDraftRetry(scope, owner)).toBeUndefined()
++  expect(retainedRejectedDrafts(scope, owner).map(row => row.text)).toEqual(['Earlier input'])
 +})
 +
 +it('removes a recovery affordance when the existing draft store retires that entry', () => {
@@ -19447,19 +19729,21 @@ index 0000000000000000000000000000000000000000..e8ce0356cb156f084d5a4392014487fe
 +})
 diff --git a/apps/desktop/src/app/chat/composer/retained-send-notice.tsx b/apps/desktop/src/app/chat/composer/retained-send-notice.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..5bf5baefcb36f1e31fa01173895bda29097a8993
+index 0000000000000000000000000000000000000000..00866453bb114e5b0a502cda9c2f6682bdad7b5a
 --- /dev/null
 +++ b/apps/desktop/src/app/chat/composer/retained-send-notice.tsx
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,117 @@
 +import { Button } from '@/components/ui/button'
 +import { useI18n } from '@/i18n'
 +import { useSessionSlice } from '@/lib/use-session-slice'
 +import type { ComposerAttachment } from '@/store/composer'
++import type { ComposerDraftRetry } from '@/store/composer-draft-retry'
 +import {
 +  $retainedSendScopes,
 +  discardRejectedDraft,
 +  readRetainedSend,
 +  restoreRejectedDraft,
++  retainedMissingFiles,
 +  retainedSendGroup
 +} from '@/store/composer-rejected-drafts'
 +import { notifyError } from '@/store/notifications'
@@ -19468,77 +19752,101 @@ index 0000000000000000000000000000000000000000..5bf5baefcb36f1e31fa01173895bda29
 +interface Props {
 +  scope: string | null
 +  owner: SessionOwnerScope
-+  empty: boolean
-+  canRestore: () => boolean
-+  onRestored: (text: string, attachments: ComposerAttachment[], id?: string) => void
++  occupied: boolean
++  disabled?: boolean
++  readCurrent: () => { text: string; attachments: ComposerAttachment[] } | undefined
++  onRestored: (text: string, attachments: ComposerAttachment[], retry?: ComposerDraftRetry) => void
 +}
 +
-+/** A user gesture copies saved input; this surface never submits or drains it. */
-+export function RetainedSendNotice({ scope, owner, empty, canRestore, onRestored }: Props) {
++export function RecoveryFiles({ count, labels }: { count: number; labels: string[] }) {
++  const { t } = useI18n()
++  if (count <= 0) return null
++
++  return (
++    <div className="text-xs text-muted-foreground">
++      <p>{t.composer.retainedSendFiles(count)}</p>
++      {labels.length > 0 && (
++        <ul className="list-inside list-disc break-all">
++          {labels.map((label, index) => (
++            <li key={index}>{label}</li>
++          ))}
++        </ul>
++      )}
++      <p>{t.composer.retainedSendMissingAttachments}</p>
++    </div>
++  )
++}
++
++/** The user switches editors here. The normal Send action owns dispatch. */
++export function RetainedSendNotice({ scope, owner, occupied, disabled, readCurrent, onRestored }: Props) {
 +  const { t } = useI18n()
 +  const copy = t.composer
 +  const rows = useSessionSlice($retainedSendScopes, retainedSendGroup(scope, owner))
 +  const entries = rows.flatMap(row => readRetainedSend(row.scope, owner) ?? [])
++  const hasFailed = entries.some(entry => !entry.meta?.parked)
 +
-+  if (!entries.length) {
-+    return null
-+  }
++  if (!entries.length) return null
 +
 +  return (
 +    <details className="text-xs text-muted-foreground" data-slot="composer-retained-send">
 +      <summary className="cursor-pointer">
-+        {copy.retainedSendNotice} ({entries.length})
++        {hasFailed ? copy.retainedSendNotice : copy.parkedDraftNotice} ({entries.length})
 +      </summary>
-+      {entries.map(entry => (
-+        <div className="flex items-center gap-2 py-1" key={entry.scope}>
-+          <span className="min-w-0 flex-1 truncate">
-+            {entry.text || entry.attachments.map(item => item.label).join(', ')}
-+          </span>
-+          {entry.attachmentCount > entry.attachments.length && <span>{copy.retainedSendMissingAttachments}</span>}
-+          <Button
-+            disabled={!empty}
-+            onClick={() => {
-+              if (!canRestore()) {
-+                return
-+              }
++      <div className="mt-2 max-h-56 space-y-2 overflow-y-auto overscroll-contain">
++        {entries.map(entry => {
++          const action = entry.meta?.parked
++            ? copy.parkedDraftReturn
++            : occupied
++              ? copy.retainedSendEdit
++              : copy.retainedSendRestore
++          return (
++            <div className="space-y-2 rounded-md border border-border px-3 py-2" key={entry.scope}>
++              {entry.text && <p className="whitespace-pre-wrap wrap-anywhere text-foreground">{entry.text}</p>}
++              {entry.attachments.length > 0 && (
++                <p className="break-all">{entry.attachments.map(file => file.label).join(', ')}</p>
++              )}
++              <RecoveryFiles {...retainedMissingFiles(entry)} />
++              <div className="flex flex-wrap items-center gap-2">
++                <Button
++                  className="h-auto min-h-7 whitespace-normal text-left"
++                  disabled={disabled}
++                  onClick={() => {
++                    const current = readCurrent()
++                    if (!current) return
 +
-+              const restored = restoreRejectedDraft(entry.scope, scope, owner)
-+
-+              if (restored) {
-+                onRestored(restored.text, restored.attachments, restored.id)
-+
-+                if (!restored.saved) {
-+                  notifyError(
-+                    new Error('Could not persist the restored message: storage failure'),
-+                    copy.retainedSendRestore
-+                  )
-+                }
-+              }
-+            }}
-+            size="sm"
-+            type="button"
-+            variant="ghost"
-+          >
-+            {copy.retainedSendRestore}
-+          </Button>
-+          <Button
-+            aria-label={copy.retainedSendDiscard}
-+            onClick={() => {
-+              if (!discardRejectedDraft(entry.scope, owner)) {
-+                notifyError(
-+                  new Error('Could not discard the retained message: storage failure'),
-+                  copy.retainedSendDiscard
-+                )
-+              }
-+            }}
-+            size="sm"
-+            type="button"
-+            variant="ghost"
-+          >
-+            ×
-+          </Button>
-+        </div>
-+      ))}
++                    const restored = restoreRejectedDraft(entry.scope, scope, owner, current)
++                    if (!restored) return
++                    if (restored.saved) {
++                      onRestored(restored.text, restored.attachments, restored.retry)
++                    } else {
++                      notifyError(new Error('Could not save the draft switch.'), action)
++                    }
++                  }}
++                  size="sm"
++                  type="button"
++                  variant="outline"
++                >
++                  {action}
++                </Button>
++                <Button
++                  aria-label={copy.retainedSendDiscard}
++                  disabled={disabled}
++                  onClick={() => {
++                    if (!discardRejectedDraft(entry.scope, owner)) {
++                      notifyError(new Error('Could not discard the saved draft.'), copy.retainedSendDiscard)
++                    }
++                  }}
++                  size="sm"
++                  type="button"
++                  variant="ghost"
++                >
++                  ×
++                </Button>
++              </div>
++            </div>
++          )
++        })}
++      </div>
 +    </details>
 +  )
 +}
@@ -30616,6 +30924,51 @@ index fb12b3dd1300e72a331b8b30657e30d425842ce0..7ee8435c0fdb6feb237b9a48682a0ebd
 -          await runExec(ctx)
 -        },
          // /browser connect|disconnect manages the live CDP connection on the
+diff --git a/apps/desktop/src/app/session/hooks/use-prompt-actions/submission-destination.test.tsx b/apps/desktop/src/app/session/hooks/use-prompt-actions/submission-destination.test.tsx
+index c3ca2749e50731d48a0546463f03a47cda8e8ef3..2839399c2e975e89bc8bb8263964de79689dcf12 100644
+--- a/apps/desktop/src/app/session/hooks/use-prompt-actions/submission-destination.test.tsx
++++ b/apps/desktop/src/app/session/hooks/use-prompt-actions/submission-destination.test.tsx
+@@ -324,2 +324,20 @@ describe('submission intent destinations', () => {
+ 
++  it('does not fall back to an identityless write for a recovered submission', async () => {
++    const { deps, requestGateway } = setup()
++    requestGateway.mockImplementation(async () => {
++      throw Object.assign(new Error('durable admission unsupported'), { code: 4094 })
++    })
++
++    const hook = renderHook(() => useSubmitPrompt(deps))
++    await act(async () => {
++      expect(await hook.result.current('Earlier input', {
++        submission_id: 'recover-original',
++        requireIdempotentSubmit: true
++      })).toBe(false)
++    })
++
++    const attempts = requestGateway.mock.calls.filter(call => call[0] === 'prompt.submit')
++    expect(attempts.map(call => call[1]?.submission_id)).toEqual(['recover-original'])
++  })
++
+   it.each(['missing', 'wrong', '4094', 'lost-legacy'])(
+diff --git a/apps/desktop/src/app/session/hooks/use-prompt-actions/submit.ts b/apps/desktop/src/app/session/hooks/use-prompt-actions/submit.ts
+index df0fc7b7c36a8ed28b16a6aec0f2f77058de5a73..ed60b33390419770cfc775ce73aeee8791c183df 100644
+--- a/apps/desktop/src/app/session/hooks/use-prompt-actions/submit.ts
++++ b/apps/desktop/src/app/session/hooks/use-prompt-actions/submit.ts
+@@ -1169,2 +1169,6 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
+ 
++                  if (options?.requireIdempotentSubmit) {
++                    throw new Error(translateNow('promptNotices.legacySendUnconfirmed'))
++                  }
++
+                   prepared.legacyAttempted = true
+diff --git a/apps/desktop/src/app/session/hooks/use-prompt-actions/utils.ts b/apps/desktop/src/app/session/hooks/use-prompt-actions/utils.ts
+index b504be19559ad3a91439f14fdfb6ff85c69aeee1..f88ef5f71e21e258404a966196a661f19def3f34 100644
+--- a/apps/desktop/src/app/session/hooks/use-prompt-actions/utils.ts
++++ b/apps/desktop/src/app/session/hooks/use-prompt-actions/utils.ts
+@@ -784,2 +784,4 @@ export interface SubmitTextOptions {
+   submission_id?: string
++  /** Never downgrade a recovered, unconfirmed send to an identityless write. */
++  requireIdempotentSubmit?: boolean
+   attachments?: ComposerAttachment[]
 diff --git a/apps/desktop/src/app/session/hooks/use-session-actions/index.ts b/apps/desktop/src/app/session/hooks/use-session-actions/index.ts
 index 75a4e608afbc77db7c82d1f02264e62690139620..7a6846bbd4e907cd48f5be2530e7446238285c70 100644
 --- a/apps/desktop/src/app/session/hooks/use-session-actions/index.ts
@@ -38009,15 +38362,23 @@ index 24aea0d929c05016b8c0c9dfead3003f95955dd2..d341d4b192ee3f6a34a231529ab71cf5
  }
 diff --git a/apps/desktop/src/i18n/composer-draft-copy.ts b/apps/desktop/src/i18n/composer-draft-copy.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..a7ad1b1eb98c1703f5debaa5633650a472ac9040
+index 0000000000000000000000000000000000000000..efbac2e73cc58b71b0113c35ed80bb1db6ea74bf
 --- /dev/null
 +++ b/apps/desktop/src/i18n/composer-draft-copy.ts
-@@ -0,0 +1,110 @@
+@@ -0,0 +1,127 @@
 +export interface ComposerDraftCopy {
 +  retainedSendNotice: string
 +  retainedSendRestore: string
 +  retainedSendDiscard: string
 +  retainedSendMissingAttachments: string
++  retainedSendEdit: string
++  parkedDraftNotice: string
++  parkedDraftReturn: string
++  retainedSendFiles: (count: number) => string
++  retainedSendEditConfirm: string
++  retainedSendEditAction: string
++  retainedSendEditDescription: string
++  retainedSendBusy: string
 +
 +  unassignedDraftNotice: string
 +  unassignedDraftRestore: string
@@ -38030,7 +38391,16 @@ index 0000000000000000000000000000000000000000..a7ad1b1eb98c1703f5debaa5633650a4
 +    retainedSendNotice: 'An earlier send could not be confirmed. Your current draft is unchanged.',
 +    retainedSendRestore: 'Restore message',
 +    retainedSendDiscard: 'Discard saved message',
-+    retainedSendMissingAttachments: 'Reattach missing files before sending.',
++    retainedSendMissingAttachments: 'Review the original attachments and reattach any files you still need.',
++    retainedSendEdit: 'Park draft and edit failed message',
++    parkedDraftNotice: 'Parked drafts',
++    parkedDraftReturn: 'Return to parked draft',
++    retainedSendFiles: (count: number) => `Original attachments to review (${count})`,
++    retainedSendEditConfirm: 'Send edited copy as new?',
++    retainedSendEditAction: 'Send as new message',
++    retainedSendEditDescription:
++      'The earlier message may already have reached this chat. Sending this copy starts a separate submission.',
++    retainedSendBusy: 'Wait for the current turn to finish before sending this recovered message.',
 +    unassignedDraftNotice:
 +      'An older unsent draft has no recorded owner. Restore it here only if it belongs to this chat.',
 +    unassignedDraftRestore: 'Restore draft',
@@ -38122,7 +38492,7 @@ index 0000000000000000000000000000000000000000..a7ad1b1eb98c1703f5debaa5633650a4
 +    restoredDraftNotice: 'تمت استعادة رسالتك غير المُرسلة',
 +    restoredDraftUndo: 'تراجع'
 +  }
-+} satisfies Record<string, ComposerDraftCopy>
++} satisfies Record<string, Partial<ComposerDraftCopy>>
 diff --git a/apps/desktop/src/i18n/de.ts b/apps/desktop/src/i18n/de.ts
 index fa52d7628c503d03a70de218d09664dbe6a33a4c..d31acd466fb060a771d6d6972c0995279bfcd5ff 100644
 --- a/apps/desktop/src/i18n/de.ts
@@ -39707,10 +40077,10 @@ index 0000000000000000000000000000000000000000..c01fb5135bffca10f7694cb3809709d1
 +})
 diff --git a/apps/desktop/src/lib/composer-rejected-drafts.test.ts b/apps/desktop/src/lib/composer-rejected-drafts.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..465285e375c0fd730e8a45cd9ea6238ebfa28083
+index 0000000000000000000000000000000000000000..6c9a7376894557258a52ee58319782d5c5641716
 --- /dev/null
 +++ b/apps/desktop/src/lib/composer-rejected-drafts.test.ts
-@@ -0,0 +1,167 @@
+@@ -0,0 +1,233 @@
 +import { batch } from 'nanostores'
 +import { afterEach, expect, it, vi } from 'vitest'
 +
@@ -39724,10 +40094,11 @@ index 0000000000000000000000000000000000000000..465285e375c0fd730e8a45cd9ea6238e
 +} from '@/store/composer'
 +import { dropComposerStateForProfile, migrateComposerStateForProfile } from '@/store/composer-draft-lifecycle'
 +import { draftOwnerKey, ownedDraftKey } from '@/store/composer-draft-owner'
-+import { readDraftRetry } from '@/store/composer-draft-retry'
++import { draftRetry, matchingDraftRetry, readDraftRetry, writeDraftRetry } from '@/store/composer-draft-retry'
 +import {
 +  discardRejectedDraft,
 +  restoreRejectedDraft,
++  retainedMissingFiles,
 +  retainedRejectedDrafts,
 +  retainRejectedDraft
 +} from '@/store/composer-rejected-drafts'
@@ -39877,6 +40248,71 @@ index 0000000000000000000000000000000000000000..465285e375c0fd730e8a45cd9ea6238e
 +  expect(retainedRejectedDrafts('prior-tip', owner)).toEqual([])
 +  expect(retainedRejectedDrafts('durable-root', owner).map(row => row.text)).toEqual(['Earlier message'])
 +  expect(ownedDraftScopes().filter(row => row.ownerKey === draftOwnerKey(owner)).length).toBeLessThanOrEqual(50)
++})
++
++it('keeps attachment-only recoveries and their labels after reload without authorizing an altered retry', () => {
++  const file = { id: 'fixture-file', occurrenceId: 'fixture-original', kind: 'file' as const, label: 'brief.pdf' }
++  retainRejectedDraft(target, '', [file], owner, 'attachment-only')
++  const [saved] = retainedRejectedDrafts(target, owner)
++  const stored = window.localStorage.getItem(ownedDraftKey(saved.scope, owner)!)
++  clearSessionDraft(saved.scope, owner)
++  window.localStorage.setItem(ownedDraftKey(saved.scope, owner)!, stored!)
++  reloadPersistedDrafts()
++  window.dispatchEvent(new StorageEvent('storage', { key: ownedDraftKey(saved.scope, owner)!, newValue: stored }))
++
++  const [reloaded] = retainedRejectedDrafts(target, owner)
++  expect(reloaded.text).toBe('')
++  expect(retainedMissingFiles(reloaded)).toEqual({ count: 1, labels: ['brief.pdf'] })
++  const restored = restoreRejectedDraft(reloaded.scope, target, owner, { text: 'New live draft', attachments: [] })
++  expect(restored?.saved).toBe(true)
++  expect(restored?.retry?.id).toBe('attachment-only')
++  expect(matchingDraftRetry(restored?.retry, '', [])).toBeUndefined()
++  expect(matchingDraftRetry(restored?.retry, '', [{ ...file, occurrenceId: 'reselected' }])).toBeUndefined()
++  const [parked] = retainedRejectedDrafts(target, owner)
++  expect(parked.text).toBe('New live draft')
++  expect(restoreRejectedDraft(parked.scope, target, owner, { text: 'Revised recovery', attachments: [] })?.saved).toBe(
++    true
++  )
++  const [edited] = retainedRejectedDrafts(target, owner)
++  expect(readDraftRetry(edited.scope, owner)?.id).toBe('attachment-only')
++})
++
++it('leaves the live editor and failed source intact if parking runs out of storage', () => {
++  retainRejectedDraft(target, 'Earlier input', [], owner, 'earlier-send')
++  const [retained] = retainedRejectedDrafts(target, owner)
++  stashSessionDraft(target, 'Persisted draft', [], owner)
++  const write = window.localStorage.setItem.bind(window.localStorage)
++  vi.spyOn(Storage.prototype, 'setItem').mockImplementation((key, value) => {
++    if (key.includes('parked')) throw new DOMException('Full', 'QuotaExceededError')
++    write(key, value)
++  })
++  expect(
++    restoreRejectedDraft(retained.scope, target, owner, { text: 'Latest keystroke', attachments: [] })?.saved
++  ).toBe(false)
++  expect(retainedRejectedDrafts(target, owner).map(row => row.text)).toEqual(['Earlier input'])
++  expect(takeSessionDraft(target, owner).text).toBe('Persisted draft')
++})
++
++it('rolls back the editor and preserves its earlier identity if the new retry record cannot be written', () => {
++  stashSessionDraft(target, 'Current saved text', [], owner)
++  writeDraftRetry(target, draftRetry('current-id', 'Current saved text', []), owner)
++  retainRejectedDraft(target, 'Failed input', [], owner, 'incoming-id')
++  const [retained] = retainedRejectedDrafts(target, owner)
++
++  const write = window.localStorage.setItem.bind(window.localStorage)
++  vi.spyOn(Storage.prototype, 'setItem').mockImplementation((key, value) => {
++    if (key.startsWith('hermes:composer-draft-retry:') && JSON.parse(value).id === 'incoming-id') {
++      throw new DOMException('Full', 'QuotaExceededError')
++    }
++    write(key, value)
++  })
++
++  expect(
++    restoreRejectedDraft(retained.scope, target, owner, { text: 'Current live text', attachments: [] })?.saved
++  ).toBe(false)
++  expect(takeSessionDraft(target, owner).text).toBe('Current live text')
++  expect(readDraftRetry(target, owner)?.id).toBe('current-id')
++  expect(retainedRejectedDrafts(target, owner).map(row => row.id)).toEqual(['incoming-id'])
 +})
 diff --git a/apps/desktop/src/lib/desktop-slash-commands.test.ts b/apps/desktop/src/lib/desktop-slash-commands.test.ts
 index c432e2f6988d95a2d0926989ec2dc720aec55d1c..366220c0595800f524f79464b2f9ac41c1717d63 100644
@@ -54039,7 +54475,7 @@ index 0000000000000000000000000000000000000000..50205a473420470b016441b69893430a
 +  return retired
 +}
 diff --git a/apps/desktop/src/store/composer-draft-retry.ts b/apps/desktop/src/store/composer-draft-retry.ts
-index ef73e26c74a09cf9c401702b06b2041a8edbba85..74bd8667c71774c14d30818d54d1769f6381a483 100644
+index ef73e26c74a09cf9c401702b06b2041a8edbba85..5abaa0c3b51d7a18881dc776ea5ed5b981da0e10 100644
 --- a/apps/desktop/src/store/composer-draft-retry.ts
 +++ b/apps/desktop/src/store/composer-draft-retry.ts
 @@ -3,2 +3,9 @@ import { sanitizeComposerInput } from '@/lib/composer-input-sanitize'
@@ -54052,11 +54488,38 @@ index ef73e26c74a09cf9c401702b06b2041a8edbba85..74bd8667c71774c14d30818d54d1769f
 +} from './composer-draft-owner'
 +import type { SessionOwnerScope } from './session-request-router'
  
-@@ -17,2 +24,3 @@ export interface ComposerDraftRetry {
+@@ -12,2 +19,3 @@ export interface ComposerDraftRetry {
+   attachmentIds: string[]
++  recovery?: { attachmentCount: number; attachmentLabels: string[] }
+ }
+@@ -17,4 +25,5 @@ export interface ComposerDraftRetry {
  const RETRY_PREFIX = 'hermes:composer-draft-retry:v1:'
 +const OWNED_RETRY_PREFIX = 'hermes:composer-draft-retry:v2:'
  
-@@ -44,5 +52,15 @@ const scopeKey = (scope: string | null | undefined) => scope?.trim() || freshDra
+-const attachmentIds = (attachments: ComposerAttachment[]) => attachments.map(a => a.occurrenceId ?? a.id)
++export const attachmentIds = (attachments: ComposerAttachment[]) => attachments.map(a => a.occurrenceId ?? a.id)
+ 
+@@ -35,2 +44,3 @@ export function matchingDraftRetry(
+   return retry &&
++    (!retry.recovery || retry.recovery.attachmentCount === retry.attachmentIds.length) &&
+     draftRetryTextMatches(retry, text) &&
+@@ -41,2 +51,15 @@ export function matchingDraftRetry(
+ 
++export function missingRecoveredFiles(retry: ComposerDraftRetry, attachments: ComposerAttachment[]) {
++  const retained = retry.recovery
++  if (!retained) return { count: 0, labels: [] }
++
++  const current = new Set(attachmentIds(attachments))
++  return {
++    count: retained.attachmentCount - retry.attachmentIds.filter(id => current.has(id)).length,
++    labels: retained.attachmentLabels.filter(
++      (_, index) => retry.attachmentIds.length !== retained.attachmentCount || !current.has(retry.attachmentIds[index])
++    )
++  }
++}
++
+ /** The storage key of a draft scope, the same resolution the draft stash uses. */
+@@ -44,10 +67,38 @@ const scopeKey = (scope: string | null | undefined) => scope?.trim() || freshDra
  
 -export function readDraftRetry(scope: string | null | undefined): ComposerDraftRetry | undefined {
 +const retryStorageKey = (scope: string | null | undefined, owner: SessionOwnerScope): string => {
@@ -54074,7 +54537,33 @@ index ef73e26c74a09cf9c401702b06b2041a8edbba85..74bd8667c71774c14d30818d54d1769f
 -    const parsed: unknown = JSON.parse(window.localStorage.getItem(RETRY_PREFIX + scopeKey(scope)) || 'null')
 +    const parsed: unknown = JSON.parse(window.localStorage.getItem(retryStorageKey(scope, owner)) || 'null')
      const retry = parsed as ComposerDraftRetry | null
-@@ -57,12 +75,58 @@ export function readDraftRetry(scope: string | null | undefined): ComposerDraftR
+ 
+-    return retry && typeof retry.id === 'string' && typeof retry.text === 'string' && Array.isArray(retry.attachmentIds)
+-      ? retry
+-      : undefined
++    if (
++      !retry ||
++      typeof retry.id !== 'string' ||
++      typeof retry.text !== 'string' ||
++      !Array.isArray(retry.attachmentIds) ||
++      !retry.attachmentIds.every(id => typeof id === 'string')
++    ) {
++      return undefined
++    }
++
++    if (
++      retry.recovery &&
++      (!Number.isSafeInteger(retry.recovery.attachmentCount) ||
++        retry.recovery.attachmentCount < retry.attachmentIds.length ||
++        !Array.isArray(retry.recovery.attachmentLabels) ||
++        !retry.recovery.attachmentLabels.every(label => typeof label === 'string'))
++    ) {
++      return undefined
++    }
++
++    return retry
+   } catch {
+@@ -57,12 +108,58 @@ export function readDraftRetry(scope: string | null | undefined): ComposerDraftR
  
 -export function writeDraftRetry(scope: string | null | undefined, retry: ComposerDraftRetry | undefined): void {
 +export function writeDraftRetry(
@@ -54229,11 +54718,11 @@ index 36bd81d269737621ab03d9ccfff85a0bc48808ed..7fce0f9d9edada9ee4bc8176894b2e7e
  }
 diff --git a/apps/desktop/src/store/composer-rejected-drafts.ts b/apps/desktop/src/store/composer-rejected-drafts.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..ba5ffac644e61bb7729b945e9a4c1e331ad169a1
+index 0000000000000000000000000000000000000000..99460ca52cdd9432d5ad710d189e10f1c93c5323
 --- /dev/null
 +++ b/apps/desktop/src/store/composer-rejected-drafts.ts
-@@ -0,0 +1,261 @@
-+import { atom } from 'nanostores'
+@@ -0,0 +1,368 @@
++import { atom, batch } from 'nanostores'
 +
 +import {
 +  clearSessionDraft,
@@ -54247,10 +54736,19 @@ index 0000000000000000000000000000000000000000..ba5ffac644e61bb7729b945e9a4c1e33
 +  takeSessionDraft
 +} from './composer'
 +import { draftOwnerKey, OWNED_DRAFT_STORAGE_PREFIX, parseOwnedDraftKey } from './composer-draft-owner'
-+import { draftRetry, writeDraftRetry } from './composer-draft-retry'
++import { type ComposerDraftRetry, draftRetry, readDraftRetry, writeDraftRetry } from './composer-draft-retry'
 +import type { SessionOwnerScope } from './session-request-router'
 +
 +const PREFIX = '__new__:retained-send:'
++const ATTACHMENTS_ONLY = '\u0001'
++
++interface RetainedSendMeta {
++  parked?: true
++  labels?: string[]
++  attachmentsOnly?: true
++}
++
++type DraftContents = { text: string; attachments: ComposerAttachment[] }
 +export const $retainedSendScopes = atom<Record<string, { scope: string }[]>>({})
 +export const retainedSendGroup = (origin: string | null, owner: SessionOwnerScope) =>
 +  JSON.stringify([draftOwnerKey(owner) ?? null, origin || freshDraftScope()])
@@ -54260,6 +54758,7 @@ index 0000000000000000000000000000000000000000..ba5ffac644e61bb7729b945e9a4c1e33
 +  id: string
 +  retry: boolean
 +  attachmentCount: number
++  meta?: RetainedSendMeta
 +}
 +export interface RetainedSend extends RetainedSendScope {
 +  scope: string
@@ -54277,7 +54776,7 @@ index 0000000000000000000000000000000000000000..ba5ffac644e61bb7729b945e9a4c1e33
 +
 +    if (
 +      !Array.isArray(value) ||
-+      value.length !== 4 ||
++      (value.length !== 4 && value.length !== 5) ||
 +      typeof value[0] !== 'string' ||
 +      typeof value[1] !== 'string' ||
 +      typeof value[2] !== 'boolean' ||
@@ -54287,10 +54786,42 @@ index 0000000000000000000000000000000000000000..ba5ffac644e61bb7729b945e9a4c1e33
 +      return undefined
 +    }
 +
-+    return { origin: value[0], id: value[1], retry: value[2], attachmentCount: value[3] }
++    const meta = value[4]
++    if (
++      meta !== undefined &&
++      (!meta ||
++        typeof meta !== 'object' ||
++        Array.isArray(meta) ||
++        (meta.parked !== undefined && meta.parked !== true) ||
++        (meta.attachmentsOnly !== undefined && meta.attachmentsOnly !== true) ||
++        (meta.labels !== undefined &&
++          (!Array.isArray(meta.labels) || !meta.labels.every((label: unknown) => typeof label === 'string'))))
++    ) {
++      return undefined
++    }
++
++    return { origin: value[0], id: value[1], retry: value[2], attachmentCount: value[3], meta }
 +  } catch {
 +    return undefined
 +  }
++}
++
++function retainedScope({ origin, id, retry, attachmentCount, meta }: RetainedSendScope): string {
++  return (
++    PREFIX + JSON.stringify(meta ? [origin, id, retry, attachmentCount, meta] : [origin, id, retry, attachmentCount])
++  )
++}
++
++function snapshotMeta(text: string, attachments: ComposerAttachment[], parked = false): RetainedSendMeta {
++  return {
++    ...(parked ? { parked: true } : {}),
++    ...(attachments.length ? { labels: attachments.map(file => file.label.slice(0, 200)) } : {}),
++    ...(!text.trim() && attachments.length ? { attachmentsOnly: true } : {})
++  }
++}
++
++function retainedText(text: string, meta?: RetainedSendMeta): string {
++  return meta?.attachmentsOnly ? ATTACHMENTS_ONLY : text
 +}
 +
 +/** Uses the existing owner-isolated, bounded draft store, never an automatic outbox. */
@@ -54301,10 +54832,16 @@ index 0000000000000000000000000000000000000000..ba5ffac644e61bb7729b945e9a4c1e33
 +  owner: SessionOwnerScope,
 +  submissionId?: string
 +): boolean {
-+  const scope =
-+    PREFIX + JSON.stringify([origin, submissionId ?? crypto.randomUUID(), Boolean(submissionId), attachments.length])
++  const meta = attachments.length ? snapshotMeta(text, attachments) : undefined
++  const scope = retainedScope({
++    origin,
++    id: submissionId ?? crypto.randomUUID(),
++    retry: Boolean(submissionId),
++    attachmentCount: attachments.length,
++    meta
++  })
 +
-+  const saved = stashSessionDraft(scope, text, attachments, owner, origin)
++  const saved = stashSessionDraft(scope, retainedText(text, meta), attachments, owner, origin)
 +  refresh(scope, owner)
 +
 +  return saved
@@ -54319,7 +54856,9 @@ index 0000000000000000000000000000000000000000..ba5ffac644e61bb7729b945e9a4c1e33
 +
 +  const draft = takeSessionDraft(scope, owner)
 +
-+  return draft.text.trim() || draft.attachments.length ? { ...entry, scope, ...draft } : undefined
++  return draft.text.trim() || draft.attachments.length
++    ? { ...entry, scope, attachments: draft.attachments, text: entry.meta?.attachmentsOnly ? '' : draft.text }
++    : undefined
 +}
 +
 +function refresh(scope: string, owner: SessionOwnerScope): void {
@@ -54362,7 +54901,9 @@ index 0000000000000000000000000000000000000000..ba5ffac644e61bb7729b945e9a4c1e33
 +  const previous = takeSessionDraft(scope, owner)
 +  const saved = clearSessionDraft(scope, owner)
 +
-+  if (!saved) {
++  if (saved) {
++    writeDraftRetry(scope, undefined, owner)
++  } else {
 +    stashSessionDraft(scope, previous.text, previous.attachments, owner)
 +  }
 +
@@ -54371,39 +54912,94 @@ index 0000000000000000000000000000000000000000..ba5ffac644e61bb7729b945e9a4c1e33
 +  return saved
 +}
 +
-+/** Copy first; an unsaved destination never retires the recoverable source. */
-+export function restoreRejectedDraft(scope: string, origin: string | null, owner: SessionOwnerScope) {
-+  const entry = parse(scope),
-+    target = origin || freshDraftScope()
-+
-+  const current = takeSessionDraft(target, owner)
-+
-+  if (!entry || entry.origin !== target || current.text.trim() || current.attachments.length) {
-+    return undefined
-+  }
-+
-+  const draft = takeSessionDraft(scope, owner)
-+
-+  if (!draft.text.trim() && !draft.attachments.length) {
-+    return undefined
-+  }
-+
-+  const saved = stashSessionDraft(target, draft.text, draft.attachments, owner, scope)
-+
-+  const identitySaved =
-+    saved &&
-+    writeDraftRetry(target, entry.retry ? draftRetry(entry.id, draft.text, draft.attachments) : undefined, owner)
-+
-+  if (identitySaved) {
-+    discardRejectedDraft(scope, owner)
-+  }
-+
++export function retainedMissingFiles(entry: RetainedSend): { count: number; labels: string[] } {
++  const labels = entry.meta?.labels ?? []
++  const remaining = entry.attachments.map(file => file.label.slice(0, 200))
 +  return {
-+    ...draft,
-+    id: entry.retry ? entry.id : undefined,
-+    saved: Boolean(identitySaved),
-+    missingAttachments: entry.attachmentCount > draft.attachments.length
++    count: Math.max(0, entry.attachmentCount - remaining.length),
++    labels: labels.filter(label => {
++      const index = remaining.indexOf(label)
++      if (index < 0) return true
++      remaining.splice(index, 1)
++      return false
++    })
 +  }
++}
++
++function parkDraft(
++  target: string,
++  current: DraftContents,
++  owner: SessionOwnerScope,
++  preserve: string,
++  retry?: ComposerDraftRetry
++) {
++  const meta = snapshotMeta(current.text, current.attachments, true)
++  if (!current.text.trim() && retry?.recovery) meta.attachmentsOnly = true
++  const parked = retainedScope({
++    origin: target,
++    id: crypto.randomUUID(),
++    retry: false,
++    attachmentCount: current.attachments.length,
++    meta
++  })
++
++  if (
++    stashSessionDraft(parked, retainedText(current.text, meta), current.attachments, owner, [target, preserve]) &&
++    writeDraftRetry(parked, retry, owner)
++  )
++    return parked
++
++  discardRejectedDraft(parked, owner)
++  return undefined
++}
++
++/** Publish the switch only after the current editor, replacement and retry metadata are saved. */
++export function restoreRejectedDraft(
++  scope: string,
++  origin: string | null,
++  owner: SessionOwnerScope,
++  liveDraft?: DraftContents
++): (DraftContents & { retry?: ComposerDraftRetry; saved: boolean }) | undefined {
++  const target = origin || freshDraftScope()
++  const entry = readRetainedSend(scope, owner)
++  if (!entry || entry.origin !== target) return undefined
++
++  const current = liveDraft ?? takeSessionDraft(target, owner)
++  const previousRetry = readDraftRetry(target, owner)
++  const occupied = Boolean(current.text.trim() || current.attachments.length || previousRetry?.recovery)
++  if (occupied && !liveDraft) return undefined
++
++  const draft = { text: entry.text, attachments: entry.attachments }
++  const retry = entry.meta?.parked
++    ? readDraftRetry(scope, owner)
++    : entry.retry
++      ? {
++          ...draftRetry(entry.id, draft.text, draft.attachments),
++          recovery: { attachmentCount: entry.attachmentCount, attachmentLabels: entry.meta?.labels ?? [] }
++        }
++      : undefined
++  let saved = false
++
++  batch(() => {
++    const parked = occupied ? parkDraft(target, current, owner, scope, previousRetry) : undefined
++    if (occupied && !parked) return
++
++    saved =
++      stashSessionDraft(target, draft.text, draft.attachments, owner, parked ? [scope, parked] : scope) &&
++      writeDraftRetry(target, retry, owner)
++
++    if (saved) {
++      discardRejectedDraft(scope, owner)
++    } else {
++      // The parked copy stays available if rollback cannot make the original editor durable.
++      const rolledBack =
++        stashSessionDraft(target, current.text, current.attachments, owner, parked ? [scope, parked] : scope) &&
++        writeDraftRetry(target, previousRetry, owner)
++      if (rolledBack && parked) discardRejectedDraft(parked, owner)
++    }
++  })
++
++  return { ...draft, retry, saved }
 +}
 +
 +// Only retained-key events update this index; normal typing does not enumerate draft storage.
@@ -54436,14 +55032,14 @@ index 0000000000000000000000000000000000000000..ba5ffac644e61bb7729b945e9a4c1e33
 +  const origin = target?.scope ?? to
 +
 +  for (const entry of retainedRejectedDrafts(source?.scope ?? from, owner)) {
-+    const scope = PREFIX + JSON.stringify([origin, entry.id, entry.retry, entry.attachmentCount])
-+    const existing = takeSessionDraft(scope, owner)
++    const scope = retainedScope({ ...entry, origin })
++    if (readRetainedSend(scope, owner)) continue
 +
-+    if (existing.text.trim() || existing.attachments.length) {
-+      continue
-+    }
-+
-+    if (stashSessionDraft(scope, entry.text, entry.attachments, owner, [entry.scope, origin])) {
++    const retry = entry.meta?.parked ? readDraftRetry(entry.scope, owner) : undefined
++    if (
++      stashSessionDraft(scope, retainedText(entry.text, entry.meta), entry.attachments, owner, [entry.scope, origin]) &&
++      (!retry || writeDraftRetry(scope, retry, owner))
++    ) {
 +      discardRejectedDraft(entry.scope, owner)
 +    }
 +  }
