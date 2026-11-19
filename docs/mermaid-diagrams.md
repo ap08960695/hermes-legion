@@ -16,8 +16,9 @@ Click the diagram to open the zoom and pan viewer. Press **Escape** to close
 it. If a toolbar tooltip is open, Escape dismisses the tooltip first.
 **Copy** keeps focus and runs one copy at a time in the expanded viewer.
 If the clipboard rejects both image and SVG text, the expanded viewer shows
-**Copy failed** and keeps the Copy button available. **Copy source** copies the
-original Mermaid text. **Save SVG** saves a scalable image, and **Save PNG**
+**Copy failed** and keeps the Copy button available. Open **Source** below a
+rendered diagram to read the original Mermaid text. Tab into the source and
+use the arrow keys to scroll. **Copy source** copies the original text. **Save SVG** saves a scalable image, and **Save PNG**
 saves a raster image. The button stays focused during export. If saving
 fails, select **Save PNG** again to retry. The diagram uses the app's light or dark appearance at
 render time. A failed diagram shows a short explanation and its source. Choose
