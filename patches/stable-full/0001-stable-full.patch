@@ -117227,19 +117227,22 @@ index 0000000000000000000000000000000000000000..311135c3b6a927d916f693212ede910a
 +    assert root_meta.read_bytes() == root_before
 diff --git a/tests/tui_gateway/test_pet_character_sprite.py b/tests/tui_gateway/test_pet_character_sprite.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..7ef76bc755e7f148f08374b80af2bc00df9f9934
+index 0000000000000000000000000000000000000000..de1b7a45dcf48cb25317eda1baf9a9eacdaa336f
 --- /dev/null
 +++ b/tests/tui_gateway/test_pet_character_sprite.py
-@@ -0,0 +1,247 @@
+@@ -0,0 +1,296 @@
 +"""Installed character reads never select/install a mascot or cross profile paths."""
 +from pathlib import Path
 +import base64
 +import hashlib
 +import json
 +import os
++from io import BytesIO
 +
 +import pytest
 +from PIL import Image
++
++pytestmark = pytest.mark.skipif(os.name != "posix", reason="installed sprite reads require POSIX directory descriptors")
 +
 +
 +@pytest.fixture
@@ -117286,6 +117289,45 @@ index 0000000000000000000000000000000000000000..7ef76bc755e7f148f08374b80af2bc00
 +    assert absent.get("error"), absent
 +
 +
++def test_full_character_payload_does_not_reopen_the_decoded_sprite(fleet, monkeypatch):
++    server, home = fleet
++    sheet = home / "profiles/alpha/pets/same/spritesheet.png"
++    expected = sheet.read_bytes()
++    native_read = Path.read_bytes
++
++    def refuse_path_read(path):
++        if path == sheet:
++            raise AssertionError("full atlas reopened path after validation")
++        return native_read(path)
++
++    monkeypatch.setattr(Path, "read_bytes", refuse_path_read)
++    response = server.handle_request({
++        "id": "snapshot", "method": "pet.sprite",
++        "params": {"profile": "alpha", "slug": "same"},
++    })
++    result = response["result"]
++    assert result["enabled"]
++    assert base64.b64decode(result["spritesheetBase64"], validate=True) == expected
++
++
++@pytest.mark.parametrize("declared", ["nested/art.png", "missing/art.png"])
++def test_snapshot_keeps_nested_and_conventional_sheet_resolution(fleet, declared):
++    server, home = fleet
++    pack = home / "profiles/alpha/pets/same"
++    source = pack / "spritesheet.png"
++    expected = source.read_bytes()
++    if declared.startswith("nested"):
++        (pack / "nested").mkdir()
++        source.rename(pack / declared)
++    (pack / "pet.json").write_text(json.dumps({"spritesheetPath": declared}))
++    result = server.handle_request({
++        "id": "snapshot", "method": "pet.sprite",
++        "params": {"profile": "alpha", "slug": "same"},
++    })["result"]
++    assert result["enabled"]
++    assert base64.b64decode(result["spritesheetBase64"], validate=True) == expected
++
++
 +def test_motion_weight_stays_current_when_atlas_is_cached(fleet):
 +    server, home = fleet
 +    meta = home / "profiles/alpha/pets/same/pet.json"
@@ -117326,8 +117368,7 @@ index 0000000000000000000000000000000000000000..7ef76bc755e7f148f08374b80af2bc00
 +    opens = []
 +
 +    def count_open(path, *args, **kwargs):
-+        if isinstance(path, (str, Path)) and Path(path) == sheet:
-+            opens.append(path)
++        opens.append(path)
 +        return open_image(path, *args, **kwargs)
 +
 +    with monkeypatch.context() as probe:
@@ -117336,7 +117377,7 @@ index 0000000000000000000000000000000000000000..7ef76bc755e7f148f08374b80af2bc00
 +            "id": "metadata", "method": "pet.sprite", "params": {"profile": "alpha", "slug": "same"},
 +        })["result"]
 +        assert result["enabled"]
-+        assert len(opens) == 1
++        assert len(opens) == 1 and isinstance(opens[0], BytesIO)
 +        assert render._raw_frames.cache_info() == old_cache
 +    names = constants.state_rows_for_grid(rows)
 +    assert result["stateRows"] == names
@@ -117349,7 +117390,7 @@ index 0000000000000000000000000000000000000000..7ef76bc755e7f148f08374b80af2bc00
 +    assert classic.frame("idle", 0) == expected_terminal
 +
 +
-+@pytest.mark.parametrize("case", ["missing", "traversal", "sheet-link", "metadata-link", "folder-link", "oversized", "huge-geometry", "animated", "malformed-metadata", "invalid-body", "declared-escape", "nested-link", "fallback-link"])
++@pytest.mark.parametrize("case", ["missing", "traversal", "sheet-link", "metadata-link", "folder-link", "hardlink", "oversized", "huge-geometry", "animated", "malformed-metadata", "invalid-body", "declared-escape", "nested-link", "fallback-link"])
 +def test_unavailable_or_unsafe_character_never_becomes_a_default_or_opens_external_art(fleet, tmp_path, monkeypatch, case):
 +    server, home = fleet
 +    pet = home / "profiles/alpha/pets/same"
@@ -117367,6 +117408,9 @@ index 0000000000000000000000000000000000000000..7ef76bc755e7f148f08374b80af2bc00
 +        (pet / "pet.json").unlink(); (pet / "pet.json").symlink_to(outside)
 +    elif case == "folder-link":
 +        pet.rename(pet.with_name("saved")); pet.symlink_to(pet.with_name("saved"), target_is_directory=True)
++    elif case == "hardlink":
++        sheet.unlink()
++        os.link(outside, sheet)
 +    elif case == "oversized":
 +        with sheet.open("ab") as stream:
 +            stream.truncate(4 * 1024 * 1024 + 1)
@@ -117404,8 +117448,6 @@ index 0000000000000000000000000000000000000000..7ef76bc755e7f148f08374b80af2bc00
 +
 +@pytest.mark.parametrize(("profile", "format", "rows"), [("alpha", "png", 9), ("beta", "webp", 8)])
 +def test_half_atlas_preserves_native_layout_and_default_reply(fleet, monkeypatch, profile, format, rows):
-+    from io import BytesIO
-+
 +    server, home = fleet
 +    sheet = home / "profiles" / profile / "pets/same" / f"spritesheet.{format}"
 +    with Image.new("RGBA", (1536, rows * 208)) as source:
@@ -117455,24 +117497,31 @@ index 0000000000000000000000000000000000000000..7ef76bc755e7f148f08374b80af2bc00
 +    assert base64.b64decode(full["spritesheetBase64"]) == before == sheet.read_bytes()
 +
 +
-+def test_half_atlas_cannot_cache_old_pixels_under_replacement_revision(fleet, monkeypatch):
-+    from io import BytesIO
-+
++@pytest.mark.parametrize("variant", [None, "half"])
++@pytest.mark.parametrize("replace_pack", [False, True])
++def test_atlas_cannot_cache_old_pixels_under_replacement_revision(fleet, monkeypatch, variant, replace_pack):
 +    server, home = fleet
 +    sheet = home / "profiles/alpha/pets/same/spritesheet.png"
-+    replacement = sheet.with_name("replacement.png")
-+    Image.new("RGBA", (1536, 1872), "blue").save(replacement)
++    pack = sheet.parent
++    replacement = pack.with_name("replacement") if replace_pack else sheet.with_name("replacement.png")
++    if replace_pack:
++        replacement.mkdir()
++    Image.new("RGBA", (1536, 1872), "blue").save(replacement / sheet.name if replace_pack else replacement)
 +    build_payload = server._pet_sprite_payload
 +
 +    def replace_after_decode(pet, **kwargs):
 +        if replacement.exists():
-+            replacement.replace(sheet)
++            if replace_pack:
++                pack.rename(pack.with_name("old-pack"))
++                replacement.rename(pack)
++            else:
++                replacement.replace(sheet)
 +        return build_payload(pet, **kwargs)
 +
 +    monkeypatch.setattr(server, "_pet_sprite_payload", replace_after_decode)
 +    request = {
 +        "id": "sprite", "method": "pet.sprite",
-+        "params": {"profile": "alpha", "slug": "same", "variant": "half"},
++        "params": {"profile": "alpha", "slug": "same", "variant": variant},
 +    }
 +    assert server.handle_request(request)["result"] == {"enabled": False}
 +    current = server.handle_request(request)["result"]
@@ -123285,11 +123334,16 @@ index 2ee5564f08d18f307a36adaa1dea304a0369a6f1..7c7f4e3bbc32dfcc0eb9b46cab925423
      "project": _cfg_get_project,
 diff --git a/tui_gateway/methods_pet_characters.py b/tui_gateway/methods_pet_characters.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..4abbac335890c7745381b3b1eb590e903bd8ae0b
+index 0000000000000000000000000000000000000000..eb6857cd7bd538435378b86154f8ba38eeadad93
 --- /dev/null
 +++ b/tui_gateway/methods_pet_characters.py
-@@ -0,0 +1,100 @@
+@@ -0,0 +1,138 @@
 +"""Read-only installed character atlases; global mascot selection stays separate."""
++import json
++import os
++from contextlib import contextmanager
++from pathlib import Path
++
 +from .method_ctx import HandlerRegistry, bind_module
 +
 +_registry = HandlerRegistry()
@@ -123298,92 +123352,125 @@ index 0000000000000000000000000000000000000000..4abbac335890c7745381b3b1eb590e90
 +
 +
 +def _character_slug(value) -> bool:
-+    from pathlib import Path
 +    return (isinstance(value, str) and 1 <= len(value) <= 128 and value.isprintable()
 +            and value.strip() == value and value not in (".", "..")
 +            and Path(value).name == value and "\\" not in value)
 +
 +
-+def _character_sheet_reference(directory, value) -> bool:
-+    from pathlib import Path
-+    if value in (None, ""):
-+        return True
-+    if not isinstance(value, str) or not value.isprintable() or "\\" in value:
-+        return False
-+    relative = Path(value)
-+    if relative.is_absolute() or ".." in relative.parts or not relative.parts:
-+        return False
-+    current = directory
-+    for part in relative.parts:
-+        current = current / part
-+        if current.is_symlink():
-+            return False
-+    return True
++@contextmanager
++def _character_directory(parts, *, dir_fd=None):
++    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
++    names = iter(parts)
++    directory = os.open(next(names, "."), flags, dir_fd=dir_fd)
++    try:
++        for name in names:
++            child = os.open(name, flags, dir_fd=directory)
++            os.close(directory)
++            directory = child
++        yield directory
++    finally:
++        os.close(directory)
 +
 +
-+def _character_installed_pet(slug):
++def _character_stamp(info):
++    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
++
++
++def _read_character_file(directory, name, limit):
 +    import stat
-+    from agent.pet import store
 +
-+    root = get_hermes_home() / "pets"
-+    directory = root / slug
-+    metadata = directory / "pet.json"
-+    if root.is_symlink() or directory.is_symlink() or not directory.is_dir():
-+        return None
-+    if any(path.is_symlink() for path in directory.iterdir()):
-+        return None
-+    if metadata.exists():
-+        if not metadata.is_file() or metadata.stat().st_size > 65536:
-+            return None
-+        meta = store._read_pet_json(directory)
-+        if not isinstance(meta, dict) or not _character_sheet_reference(directory, meta.get("spritesheetPath")):
-+            return None
-+    pet = store.load_pet(slug)
-+    if pet is None:
-+        return None
-+    sheet = pet.spritesheet
-+    if (not sheet.resolve().is_relative_to(directory.resolve()) or
-+            any(p.is_symlink() for p in (sheet, *sheet.parents) if p.is_relative_to(root))):
-+        return None
-+    before = sheet.stat()
-+    return pet if stat.S_ISREG(before.st_mode) and before.st_size <= 4 * 1024 * 1024 else None
++    leaf = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
++    try:
++        before = os.fstat(leaf)
++        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > limit:
++            raise ValueError("invalid character file")
++        with os.fdopen(leaf, "rb", closefd=False) as stream:
++            raw = stream.read(limit + 1)
++        if (len(raw) > limit or len(raw) != before.st_size or
++                _character_stamp(os.fstat(leaf)) != _character_stamp(before)):
++            raise ValueError("character file changed while reading")
++        return raw, before
++    finally:
++        os.close(leaf)
++
++
++def _character_snapshot(pack):
++    import stat
++
++    if any(stat.S_ISLNK(os.stat(name, dir_fd=pack, follow_symlinks=False).st_mode)
++           for name in os.listdir(pack)):
++        raise ValueError("character directory contains a symlink")
++    try:
++        raw, _ = _read_character_file(pack, "pet.json", 65536)
++        meta = json.loads(raw.decode("utf-8-sig"))
++    except FileNotFoundError:
++        meta = {}
++    if not isinstance(meta, dict):
++        raise ValueError("invalid character metadata")
++
++    declared = meta.get("spritesheetPath")
++    if declared is not None and (not isinstance(declared, str) or
++                                 (declared and (not declared.isprintable() or "\\" in declared))):
++        raise ValueError("invalid character sprite reference")
++    declared = (declared or "").strip()
++    candidates = ([declared] if declared else []) + ["spritesheet.webp", "spritesheet.png", "sprite.webp", "sprite.png"]
++    for candidate in candidates:
++        relative = Path(candidate)
++        if relative.is_absolute() or not relative.parts or ".." in relative.parts:
++            raise ValueError("character sprite must stay inside its directory")
++        try:
++            with _character_directory(relative.parts[:-1], dir_fd=pack) as directory:
++                raw, before = _read_character_file(directory, relative.name, 4 * 1024 * 1024)
++            return meta, relative, raw, before
++        except FileNotFoundError:
++            continue
++    raise FileNotFoundError("character has no installed spritesheet")
 +
 +
 +@method("pet.sprite")
 +@_profile_scoped
 +def _character_sprite(rid, params: dict) -> dict:
++    from io import BytesIO
++
 +    from PIL import Image
-+    from agent.pet import constants
++    from agent.pet import constants, store
 +
 +    disabled = {"enabled": False}
 +    variant = params.get("variant")
 +    if variant not in (None, "half"):
 +        return _err(rid, 4000, "invalid params for pet.sprite: variant: expected half")
 +    slug = params.get("slug")
-+    if not _character_slug(slug):
++    if (os.name != "posix" or not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY")
++            or not _character_slug(slug)):
 +        return _ok(rid, disabled)
 +    try:
-+        pet = _character_installed_pet(slug)
-+        if pet is None:
-+            return _ok(rid, disabled)
-+        before = pet.spritesheet.stat()
-+        with Image.open(pet.spritesheet, formats=("PNG", "WEBP")) as image:
-+            if (getattr(image, "is_animated", False) or image.width * image.height > 3_000_000
-+                    or image.width % constants.FRAME_W or image.height % constants.FRAME_H
-+                    or not 6 <= image.width // constants.FRAME_W <= 9
-+                    or image.height // constants.FRAME_H not in (8, 9)):
-+                return _ok(rid, disabled)
-+            image.load()
-+            payload = _pet_sprite_payload(pet, scale=constants.DEFAULT_SCALE, atlas=image,
-+                                          atlas_stat=before, half_resolution=variant == "half")
-+        after = pet.spritesheet.stat()
-+        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
-+            return _ok(rid, disabled)
++        home = get_hermes_home().resolve(strict=True)
++        pack_parts = ("pets", slug)
++        with _character_directory(home.parts) as home_fd:
++            with _character_directory(pack_parts, dir_fd=home_fd) as pack:
++                meta, relative, raw, before = _character_snapshot(pack)
++            directory = home.joinpath(*pack_parts)
++            pet = store.InstalledPet(slug, str(meta.get("displayName") or slug), "", directory, directory / relative)
++            with Image.open(BytesIO(raw), formats=("PNG", "WEBP")) as image:
++                if (getattr(image, "is_animated", False) or image.width * image.height > 3_000_000
++                        or image.width % constants.FRAME_W or image.height % constants.FRAME_H
++                        or not 6 <= image.width // constants.FRAME_W <= 9
++                        or image.height // constants.FRAME_H not in (8, 9)):
++                    return _ok(rid, disabled)
++                image.load()
++                payload = _pet_sprite_payload(pet, scale=constants.DEFAULT_SCALE, atlas=image,
++                                              atlas_bytes=raw, atlas_stat=before, half_resolution=variant == "half")
++            # Rewalk from the pinned home so a replaced pack or nested directory is also noticed.
++            with _character_directory((*pack_parts, *relative.parts[:-1]), dir_fd=home_fd) as parent:
++                after = os.stat(relative.name, dir_fd=parent, follow_symlinks=False)
++                if _character_stamp(before) != _character_stamp(after):
++                    return _ok(rid, disabled)
 +        result = {"enabled": True, **payload}
-+        if pet.motion_weight is not None:
-+            result["motionWeight"] = pet.motion_weight
++        weight = meta.get("motionWeight")
++        if weight in constants.MOTION_WEIGHTS:
++            result["motionWeight"] = weight
 +        return _ok(rid, result)
-+    except (OSError, ValueError, Image.DecompressionBombError):
++    except (OSError, NotImplementedError, ValueError, RecursionError, Image.DecompressionBombError):
 +        return _ok(rid, disabled)
 +
 +
@@ -123621,7 +123708,7 @@ index 67bf1e3c30a2c8a364db907f3906995972430052..4be689f312fc0c624704ac47599a2dcc
 +                after_model_turn=True)
              if verdict_msg := decision.get("message") or "":
 diff --git a/tui_gateway/server.py b/tui_gateway/server.py
-index b9ab08d4b480137f1194aa37831f51e4dfc915f8..db2a23a9b6a7a5ed733c3479080f1f5abdba8aa2 100644
+index b9ab08d4b480137f1194aa37831f51e4dfc915f8..d4d5db58fbbf2ad54062d9aab57343542d18a4e1 100644
 --- a/tui_gateway/server.py
 +++ b/tui_gateway/server.py
 @@ -1792,3 +1792,3 @@ def _clone_pet_payload(payload: dict) -> dict:
@@ -123648,20 +123735,25 @@ index b9ab08d4b480137f1194aa37831f51e4dfc915f8..db2a23a9b6a7a5ed733c3479080f1f5a
 +                cell = alpha.crop((col * W, top, (col + 1) * W, top + H))
 +                return cell.getextrema()[1] <= render._BLANK_ALPHA
              out[name] = next((col for col in range(cols) if blank(col)), cols)  # frames before the first blank cell
-@@ -1830,3 +1832,3 @@ def _pet_config_scale() -> float:
+@@ -1830,3 +1832,4 @@ def _pet_config_scale() -> float:
 
 -def _pet_sprite_payload(pet, *, scale: float) -> dict:
-+def _pet_sprite_payload(pet, *, scale: float, atlas=None, atlas_stat=None, half_resolution: bool = False) -> dict:
++def _pet_sprite_payload(pet, *, scale: float, atlas=None, atlas_bytes=None, atlas_stat=None,
++                        half_resolution: bool = False) -> dict:
      """Renderer payload (spritesheet bytes + geometry) for *pet* — one shape for ``pet.info`` (active
-@@ -1836,4 +1838,5 @@ def _pet_sprite_payload(pet, *, scale: float) -> dict:
+@@ -1835,5 +1838,9 @@ def _pet_sprite_payload(pet, *, scale: float) -> dict:
+     from agent.pet import constants
++    if atlas is not None and (atlas_bytes is None or atlas_stat is None):
++        raise ValueError("character payload requires a validated snapshot")
++    revision = hashlib.sha256(atlas_bytes).hexdigest() if atlas_bytes is not None else None
      try:
 -        stat = pet.spritesheet.stat()
 -        cache_key = (str(pet.spritesheet), stat.st_mtime_ns, stat.st_size, pet.slug, pet.display_name, round(scale, 4))
 +        stat = atlas_stat if atlas_stat is not None else pet.spritesheet.stat()
 +        cache_key = (str(pet.spritesheet), stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size,
-+                     pet.slug, pet.display_name, round(scale, 4), half_resolution)
++                     pet.slug, pet.display_name, round(scale, 4), half_resolution, revision)
      except Exception:
-@@ -1845,9 +1848,37 @@ def _pet_sprite_payload(pet, *, scale: float) -> dict:
+@@ -1845,9 +1852,40 @@ def _pet_sprite_payload(pet, *, scale: float) -> dict:
              return _clone_pet_payload(cached)
 -    try:  # real (padding-trimmed) frame count per state; {} → the canvas uses the static framesPerState
 -        from agent.pet import render
@@ -123688,8 +123780,8 @@ index b9ab08d4b480137f1194aa37831f51e4dfc915f8..db2a23a9b6a7a5ed733c3479080f1f5a
 +        except Exception:
 +            frames_by_state = {}
 +    divisor = 2 if half_resolution else 1
-+    revision = (f"{atlas_stat.st_mtime_ns}:{atlas_stat.st_size}" if atlas_stat is not None
-+                else _pet_sheet_revision(pet.spritesheet))
++    if revision is None:
++        revision = _pet_sheet_revision(pet.spritesheet)
 +    if half_resolution:
 +        from io import BytesIO
 +        from PIL import Image
@@ -123702,11 +123794,14 @@ index b9ab08d4b480137f1194aa37831f51e4dfc915f8..db2a23a9b6a7a5ed733c3479080f1f5a
 +            raw = output.getvalue()
 +        mime = "image/png"
 +        revision += ":half"
++    elif atlas is not None:
++        raw = atlas_bytes
++        mime = "image/png" if atlas.format == "PNG" else "image/webp"
 +    else:
 +        raw = pet.spritesheet.read_bytes()
 +        mime = "image/png" if pet.spritesheet.suffix.lower() == ".png" else "image/webp"
      payload = {
-@@ -1855,7 +1886,7 @@ def _pet_sprite_payload(pet, *, scale: float) -> dict:
+@@ -1855,7 +1893,7 @@ def _pet_sprite_payload(pet, *, scale: float) -> dict:
          "spritesheetBase64": base64.standard_b64encode(raw).decode("ascii"),
 -        "spritesheetRevision": _pet_sheet_revision(pet.spritesheet), "frameW": constants.FRAME_W,
 -        "frameH": constants.FRAME_H, "framesPerState": constants.FRAMES_PER_STATE,
@@ -123718,12 +123813,12 @@ index b9ab08d4b480137f1194aa37831f51e4dfc915f8..db2a23a9b6a7a5ed733c3479080f1f5a
 +        "framesByRow": frames_by_row, "loopMs": constants.LOOP_MS,
 +        "scale": scale * divisor, "stateRows": state_rows,
      }
-@@ -2166,3 +2197,3 @@ from . import (
+@@ -2166,3 +2204,3 @@ from . import (
      methods_config_set as _methods_config_set, methods_images as _methods_images,
 -    methods_profiles as _methods_profiles, methods_prompt as _methods_prompt, methods_session as _methods_session,
 +    methods_profiles as _methods_profiles, methods_prompt as _methods_prompt, methods_session as _methods_session, methods_pet_characters as _methods_pet_characters,
      methods_tools as _methods_tools, methods_tools_plugin_servers as _methods_tools_plugin_servers,
-@@ -2182,3 +2213,3 @@ for _m in (
+@@ -2182,3 +2220,3 @@ for _m in (
      _methods_complete_helpers, _methods_slash, _methods_voice, _methods_browser,
 -    _methods_browser_control, _methods_session, _methods_prompt, _methods_config,
 +    _methods_browser_control, _methods_session, _methods_pet_characters, _methods_prompt, _methods_config,

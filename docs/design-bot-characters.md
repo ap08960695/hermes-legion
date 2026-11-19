@@ -259,10 +259,15 @@ reverts another window's assignment. New/unassigned bots inherit the existing
 mascot. No download/install or global pet selection is part of assignment.
 
 Use a scoped read-only `pet.sprite` RPC and the existing payload/PetSprite path.
-Accept confined regular static PNG/WebP atlases, <=4MiB compressed and <=3million
-pixels, native192x208 frames and up to9rows/9columns; reject path/symlink escape,
-missing/oversized/animated packs. Enforce matching image-header dimensions,
-geometry, frame counts and bounded base64 at the publisher before rendering.
+Accept confined regular static PNG/WebP atlases up to 4 MiB compressed and
+3 million pixels, with native 192×208 frames and up to nine rows and columns.
+Open installed packs relative to the profile directory, refuse links and special
+files, and use one bounded byte snapshot for decoding, caching and full output.
+Half-size output derives from that same decoded image. A replaced sprite or pack
+detected before the reply returns unavailable. Platforms without POSIX directory
+descriptors, including Windows, also report installed sprites as unavailable.
+The publisher checks image-header dimensions, geometry, frame counts and
+bounded base64 before rendering.
 This ceiling bounds input; actual five-character CPU/RAM remains a live gate.
 
 Monitor resolves only its five current actors. Source/route/install/bot/slug key
