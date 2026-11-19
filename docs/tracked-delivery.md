@@ -2,7 +2,9 @@
 
 Open **Work → Track work** on an enabled Kanban board to follow an objective, its success criteria, responsible profile, recorded step, next action, latest summary, result and delivery evidence. Long task instructions are folded initially. Results use the existing rich Markdown renderer; declared outputs reuse the native download action. The selected card and view are saved by connection and resolved board. Opening or restoring this view does not dispatch work.
 
-If the first read fails, use **Retry** to load the same card.
+If the first read fails, use **Retry** to load the same card. If a refresh
+fails, Track work keeps the last loaded card and its open revision comparison
+visible with a warning. **Retry** updates the card when the read succeeds.
 
 A tracked delivery uses the existing version-1 `hermes-contract`, adding relative `required_artifacts`, named `acceptance_criteria` and `require_review: true`. The implementer submits an output and current check records to a different review profile. The reviewer inspects the output, reruns the checks, and either accepts, requests changes on the same card, or blocks for a concrete missing decision. The [goal execution skill](../skills/goal-driven-execution/SKILL.md) describes this flow without adding a scheduler, tool or permission.
 
