@@ -64,6 +64,24 @@ writer       | Working | …           | —       | —      | —    | configu
   worker A   | Working | read_file 3/8| 5m      | …      | —    | configured route
 ```
 
+## Waiting for owner
+
+In **Bots**, select **Waiting for owner** to see live questions and
+approvals on the active connection. Each row shows the bot, the actual
+prompt, and its age. A row shows its card or goal when the gateway can
+identify one. Answer inline, approve once, deny, or open the exact chat
+for the full context and any additional approval options.
+
+The inbox updates when the gateway opens or settles a request. An answer
+clears its row after the owner confirms it, and an expired request clears
+without changing the session. Private credential prompts stay in their
+native chat flow. Board-only gates still use the **Needs owner** lane in
+Work.
+
+![Two synthetic profile questions in the Bots owner inbox.](images/owner-inbox-two-questions.webp)
+
+![After the Tester answer, the Writer question remains in the inbox.](images/owner-inbox-one-remaining.webp)
+
 ## Approach and boundaries
 
 Extend BotsWorkspace with a sibling monitor component. Reuse `useRoster`,
