@@ -1,6 +1,6 @@
 # Consolidated stable source and Desktop kit
 
-This is the complete **1267-path** Legion source, interface and optimization alternative
+This is the complete **1272-path** Legion source, interface and optimization alternative
 for upstream Hermes **v0.22.5**, commit
 `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It replaces the need to assemble the
 historical cumulative kit and the smaller stable units. It is not an upstream release,
@@ -10,7 +10,7 @@ The [manifest](../patches/stable-full/manifest.json) pins every before/after fil
 The [test selection](../patches/stable-full/test-selection.json) records the offline
 Python and Desktop selection. No dependency or lockfile change is included.
 
-## Desktop Characters controls (unreleased)
+## Desktop Characters controls (v0.35.0)
 
 The main Desktop title bar has a **Characters** switch and a **Character size**
 selector. macOS also provides a **Characters** menu bar item that works while
@@ -21,7 +21,9 @@ and background refresh are retired. On the first successful config read for
 each profile, Desktop uses the old enabled flag and maps its scale to Small,
 Medium, or Large. An existing Characters preference takes precedence. Existing
 packs stay available in Edit Profile. Unassigned live Characters can use the
-profile's selected installed pack, or its first installed pack.
+profile's selected installed pack, or its first installed pack. Use **Refresh
+Characters** from the macOS menu or **Refresh** from Bots to retry a failed
+assigned sprite read. [Release notes and platform limits](release-notes-v0.35.0.md).
 
 ## Earlier Monitor-only Character preview
 

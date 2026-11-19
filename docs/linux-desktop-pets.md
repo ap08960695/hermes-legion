@@ -21,14 +21,15 @@ desktop:
 For a Linux source build, the helper needs a C compiler and the X11 and Xext
 development libraries (`libx11-dev` and `libxext-dev` on Debian and Ubuntu).
 The runtime needs XWayland or Xorg, X Shape 1.1, `libX11.so.6` and
-`libXext.so.6`. Open **Bots → Monitor → Show bot characters**.
+`libXext.so.6`. Use the **Characters** switch and size selector in the
+Desktop title bar.
 
 ## What works where
 
 | Feature | COSMIC 1.0.0 · XWayland | GNOME 46 · XWayland | Native Wayland |
 | --- | --- | --- | --- |
 | Transparent backdrop and stacking | Visible in the compositor capture over the focused synthetic backdrop | Visible in the compositor capture over the focused synthetic backdrop at 2× scale | Preview refused before it can widen the overlay |
-| Click-through and character actions | Named backdrop received clicks through a gap, a transparent sprite pixel and a vacated position. Solid sprite and panel controls received their clicks | Same checks passed | A stale character snapshot also left the existing mascot window at its small size |
+| Click-through and character actions | Named backdrop received clicks through a gap, a transparent sprite pixel and a vacated position. Solid sprite and panel controls received their clicks | Same checks passed | Character preview unavailable |
 | Drag, gravity and animation | Drag, gravity, walking and frame changes passed | Drag, gravity, walking and frame changes passed | Character preview unavailable |
 | More than one display | One connected display in the trial | One connected display in the trial | Character preview unavailable |
 | Main window minimized | Five characters kept walking and animating | Five characters kept walking and animating | Character preview unavailable |
@@ -62,6 +63,8 @@ shared pages can be counted in multiple processes. The baseline has only the
 synthetic foreground window. The five-pet sample uses the same foreground and
 adds the animated overlay and helper. The fixture uses software rendering.
 Use the change within each machine to read the overlay cost.
+These samples precede later Characters changes. The v0.35.0 build needs a fresh
+Linux compositor run and a new resource measurement.
 
 - [COSMIC compositor capture](images/linux-pets-cosmic.webp)
 - [GNOME compositor capture](images/linux-pets-gnome.webp)

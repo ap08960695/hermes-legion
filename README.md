@@ -1,25 +1,25 @@
 # Hermes Legion
 
-**See what your Hermes bots are doing, coordinate their work with a Captain, and follow their progress through desktop pets.**
+**See what your Hermes bots are doing, coordinate their work with a Captain, and follow their progress through desktop characters.**
 
 An independent open-source companion kit for [Hermes Agent](https://github.com/NousResearch/hermes-agent), with reviewed source patches, operating skills, and role templates.
 
-[**v0.34.0 · Bot Monitor release**](https://github.com/ap08960695/hermes-legion/releases/tag/v0.34.0) · [**MIT license**](LICENSE) · [**Mac quick start**](#quick-start-on-mac) · [**Changelog**](CHANGELOG.md)
+[**v0.35.0 · Desktop Characters notes**](docs/release-notes-v0.35.0.md) · [**MIT license**](LICENSE) · [**Mac quick start**](#quick-start-on-mac) · [**Changelog**](CHANGELOG.md)
 
 ![Hermes Bot Monitor lists two bots and one worker, with six small generated desktop pets shown beneath the table.](docs/images/hero.webp)
 
-*Composite of two isolated Mac Local demos. The Monitor is from the v0.34.0 work. The pets are from a later preview.*
+*Composite of two isolated Mac Local demos using synthetic bot activity and original character art.*
 
 ## Quick start on Mac
 
-1. Download the [v0.34.0 source ZIP](https://github.com/ap08960695/hermes-legion/archive/refs/tags/v0.34.0.zip). Extract it and run this in Terminal from the extracted directory.
+1. Use this source checkout or extract a source ZIP from [Releases](https://github.com/ap08960695/hermes-legion/releases). Desktop Characters uses the v0.35.0 source kit. Run this in Terminal from the source directory.
 
    ```sh
    python3 scripts/verify_release.py
    ```
 
 2. With a working Hermes installation, follow the [macOS guide](docs/macos-install-update.md). It checks the pinned upstream source, applies one matching patch, and rebuilds Desktop in a separate trial directory.
-3. Use a fresh trial home and app data with **Local** as the only Desktop connection. Open **Bots → Monitor** to find current work and recent reports. The [install and rollback guide](docs/installation-and-rollback.md) covers restoring or removing the trial.
+3. Use a fresh trial home and app data with **Local** as the only Desktop connection. Turn on **Characters** in the title bar, or open **Bots → Monitor** for a table of current work and reports. The [install and rollback guide](docs/installation-and-rollback.md) covers restoring or removing the trial.
 
 Want to try the planner first? This example only needs Python and uses synthetic work. It prints a proposed plan without starting bots.
 
@@ -47,9 +47,9 @@ In **Settings → Safety → Captain autonomy**, choose whether a profile can se
 
 ![Captain autonomy settings with separate switches for setting a goal and delegating routine decisions.](docs/images/captain-controls.webp)
 
-### Desktop pets · Preview
+### Desktop Characters
 
-Give each bot a character that can move on the Mac desktop while Hermes is minimized. Drag a pet where you want it. New pets choose from several entrances and exits, and Reduce Motion uses fades. Select a character to see its latest saved output or return to the conversation with **Open in Hermes**. [Desktop pets design and verification](docs/design-bot-characters.md)
+Turn **Characters** on and choose a size in the title bar or from the macOS menu bar, even while Hermes is minimized. Preferences follow the active connection and profile. Characters wander at their own pace. Drag one to another spot or use Reduce Motion for quieter movement. Select an active character to see its latest output or return to its conversation with **Open in Hermes**. [Desktop Characters release notes](docs/release-notes-v0.35.0.md)
 
 ![Character output bubble with links to preview the latest output and open the conversation in Hermes.](docs/images/pet-output.webp)
 
@@ -62,7 +62,7 @@ Give each bot a character that can move on the Mac desktop while Hermes is minim
 
 </details>
 
-### Make your own character · Preview
+### Make your own character
 
 Start with the blank pack template and your own art. Run `hermes pets validate` to check the pack, `hermes pets show --pack … --cycle --once` to preview its states, then `hermes pets import` to add it. Assign the new pack in **Bots → Edit profile**. [Character creator guide, template, and original example](docs/character-pack.md)
 
@@ -89,8 +89,9 @@ Open a delivered PDF in the built-in viewer, or glance at Markdown and CSV conte
 | **Opaque overlay.** The backing covered the test window. ![Five robot sprites on a solid dark overlay backing.](docs/images/overlay-opaque.webp) | **Transparent overlay.** The test backdrop shows through around the same sprites. ![The same five sprites over three colored bands from a test backdrop.](docs/images/overlay-transparent.webp) |
 | **Placeholder blocks.** Early builds used simple markers. ![Five teal placeholder blocks above an early Move button.](docs/images/overlay-placeholders.webp) | **Generated pets.** Six distinct packs on the frameless overlay. ![Six small generated characters spaced across a black privacy-filtered desktop strip.](docs/images/generated-desktop-pets.webp) |
 | **Separate bot cards.** You opened individual cards for context. ![Older Bots view showing two separate cards.](docs/images/bots-before-monitor.webp) | **One table.** Bot and worker activity can be searched, filtered, and sorted together. ![Bot Monitor table with worker activity, usage, models, and report actions.](docs/images/bot-monitor.webp) |
+| **Before manual refresh.** A fixture sprite read timed out. ![The Characters switch is on at Large and the fixture scene has no active characters.](docs/images/characters-before-manual-refresh.webp) | **After Refresh Characters.** The fixture actor returns. ![The same fixture shows the Writer character after a successful manual refresh.](docs/images/characters-after-manual-refresh.webp) |
 
-[What shipped in v0.34.0](docs/release-notes-v0.34.0.md) · [Full changelog](CHANGELOG.md)
+[Desktop Characters in v0.35.0](docs/release-notes-v0.35.0.md) · [Bot Monitor in v0.34.0](docs/release-notes-v0.34.0.md) · [Full changelog](CHANGELOG.md)
 
 ## FAQ
 
@@ -104,7 +105,7 @@ Local uses the gateway on this Mac. The ai option refers to a separately configu
 
 ### Why is a character or button missing?
 
-Use the source version that includes the preview, rebuild the trial app, and check the active profile. For characters, check that the overlay is enabled and that the selected pack is installed in that profile.
+Check that your trial uses the v0.35.0 source kit, **Characters** is on, and the assigned pack is installed in the active profile. If a temporary gateway error hid an assigned character, use **Refresh Characters** in the macOS menu bar or **Refresh** in Bots.
 
 ### Why is agent-desktop unavailable?
 

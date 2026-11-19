@@ -5,6 +5,18 @@ supported update or Desktop rebuild path. This kit does not install a rebuilt
 Hermes.app. Linked notes identify opt-in memory settings and admission guards
 that apply after adoption. Each entry states its adoption and verification limits.
 
+## v0.35.0 — Desktop Characters
+
+Turn **Characters** on and choose Small, Medium or Large from the Desktop
+title bar or the macOS menu bar. Active bots and workers can appear on a
+transparent desktop overlay, walk independently and show activity and latest
+output. Existing mascot settings migrate per profile and installed packs stay
+available. Use **Refresh Characters** or **Bots → Monitor → Refresh** to
+recover from a temporary sprite read failure. Background roster refreshes
+leave failed sprites alone. Five characters met the steady-state Mac fixture
+budget. The first walking sample briefly exceeded the CPU target. Apply the
+source kit to a separate Local build. [Release notes, fixture screenshots and platform limits](docs/release-notes-v0.35.0.md).
+
 ## v0.34.0 — Bot Monitor
 
 **Bots → Monitor** brings bot/worker activity into one searchable, sortable table:
