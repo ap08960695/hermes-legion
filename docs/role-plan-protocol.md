@@ -163,3 +163,24 @@ chosen pair is unavailable, decomposition refuses it instead of silently assigni
 the work to another bot or account.
 
 Completed independent review remains readable through the original card and pinned plan. A completed reviewer is recognized only by its latest completed native run, matching current assignee, and the original native claim marked as review. An unrelated terminal assignee cannot borrow that provenance. No new execution or publication authority is granted.
+
+## Review overlapping ACTION writes
+
+Open the completed THINK card and choose **Review an ACTION step**. Select the
+step and checkout, then check its declared writes. The preview identifies open
+cards with overlapping declarations in the same checkout and links to each
+card. It reports different checkouts and missing declarations separately.
+
+**Proceed** confirms the current preview. **Sequence after conflicting cards**
+adds those cards as native prerequisites. **Re-scope** leaves the step
+uncreated so THINK can submit a new plan. A changed conflict set requires a
+fresh confirmation. A direct `kanban_create` with a confirmed overlap returns
+the conflicting cards and paths before creating an ACTION. An existing native
+dependency can already sequence the work.
+
+The check covers up to 128 open cards on the selected board. It compares
+declarations. Checkout identity can remain unknown for unresolved custom
+worktree paths, and legacy cards may have no scope. A native replan excludes
+its directly superseded ACTION while that attempt remains blocked.
+
+[Write-scope decision in a synthetic browser fixture](images/work-card-scope-fixture.webp)
