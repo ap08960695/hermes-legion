@@ -42035,10 +42035,10 @@ index 0000000000000000000000000000000000000000..131e8fafdd5b27ae391c8ca1e19f2ca1
 +}
 diff --git a/apps/desktop/src/plugins/hermes-bots/character-sprites.test.ts b/apps/desktop/src/plugins/hermes-bots/character-sprites.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..75f69e0e3919a656dfdb0c9b299d147804717686
+index 0000000000000000000000000000000000000000..ab7104a54997244f21a0896f60908733c3764155
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/character-sprites.test.ts
-@@ -0,0 +1,63 @@
+@@ -0,0 +1,99 @@
 +import { expect, it, vi } from 'vitest'
 +
 +// eslint-disable-next-line no-restricted-imports -- exercise the real public preview capability in this consumer test
@@ -42102,13 +42102,56 @@ index 0000000000000000000000000000000000000000..75f69e0e3919a656dfdb0c9b299d1478
 +  expect(loader.get('missing')).toBeNull()
 +  loader.dispose();publisher.dispose()
 +})
++
++it('rearms only failed reads with the latest reader and leaves a pending retry alone', async () => {
++  const publisher = createPetCharacterPublisher('loader-recovery')
++  const loader = createCharacterSpriteLoader(vi.fn(), publisher.prepareSprite!)
++  const timedOut = vi.fn(async () => {throw new Error('Request timed out')})
++  const ready = vi.fn(async () => sprite)
++  const missing = vi.fn(async () => ({ enabled: false }))
++  const older = vi.fn(async () => {throw new Error('unknown method: pet.sprite')})
++  const initial = [{ key: 'timed-out', read: timedOut }, { key: 'ready', read: ready },
++    { key: 'missing', read: missing }, { key: 'older', read: older }]
++  let resolveRetry!: (value: unknown) => void
++  const recovered = vi.fn(() => new Promise(resolve => {resolveRetry = resolve}))
++
++  try {
++    loader.update(initial)
++    await vi.waitFor(() => expect(older).toHaveBeenCalledOnce())
++    loader.update([{ key: 'timed-out', read: recovered }, ...initial.slice(1)])
++    expect(timedOut).toHaveBeenCalledOnce()
++    expect(recovered).not.toHaveBeenCalled()
++    expect(loader.get('timed-out')).toBeNull()
++
++    loader.retryFailed()
++    await vi.waitFor(() => expect(recovered).toHaveBeenCalledOnce())
++    loader.retryFailed()
++    resolveRetry({ ...sprite, displayName: 'Recovered' })
++    await vi.waitFor(() => expect(loader.get('timed-out')?.displayName).toBe('Recovered'))
++    loader.retryFailed()
++    expect(loader.get('ready')?.displayName).toBe('Owned')
++    expect(loader.get('missing')).toBeNull()
++    expect(loader.get('older')).toBeNull()
++    for (const read of [timedOut, recovered, ready, missing, older]) {expect(read).toHaveBeenCalledOnce()}
++  } finally {
++    loader.dispose()
++    publisher.dispose()
++  }
++})
 diff --git a/apps/desktop/src/plugins/hermes-bots/character-sprites.ts b/apps/desktop/src/plugins/hermes-bots/character-sprites.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..50a9ac4e020a2152c41105466d5b1d88d8d8795e
+index 0000000000000000000000000000000000000000..c920b85d063aa926f7dc4b7d65899cf4aa12ae7d
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/character-sprites.ts
-@@ -0,0 +1,63 @@
-+import { MAX_PREVIEW_CHARACTERS, type PetCharacter } from '@hermes/plugin-sdk'
+@@ -0,0 +1,87 @@
++import { atom, MAX_PREVIEW_CHARACTERS, type PetCharacter } from '@hermes/plugin-sdk'
++
++// eslint-disable-next-line no-restricted-imports -- the bundled Characters loader distinguishes older backends from failed reads.
++import { isMissingRpcMethod } from '@/lib/gateway-rpc'
++
++export const $characterSpriteRefresh = atom<{ connectionId: string; profile: string } | null>(null)
++
++const failedRead = Symbol('failed sprite read')
 +
 +type Sprite = NonNullable<PetCharacter['sprite']>
 +export interface CharacterSpriteTarget {
@@ -42119,14 +42162,19 @@ index 0000000000000000000000000000000000000000..50a9ac4e020a2152c41105466d5b1d88
 +
 +interface Entry {
 +  read: CharacterSpriteTarget['read']
-+  value?: Sprite | null
++  value?: Sprite | null | typeof failedRead
 +}
 +
 +// shortcut: atlas snapshots last one preview; watch pet.changed when persistent tracking ships.
 +/** One serial read across remounts, bounded current identities; evicted replies never publish. */
 +export function createCharacterSpriteLoader(onChange: (sprites: Map<string, Sprite | null>) => void, prepare: (input: unknown) => Sprite | null) {
 +  let entries = new Map<string, Entry>(), running = false, disposed = false
-+  const publish = () => onChange(new Map([...entries].map(([key, entry]) => [key, entry.value ?? null])))
++  const get = (key: string) => {
++    const value = entries.get(key)?.value
++
++    return value === failedRead ? null : value ?? null
++  }
++  const publish = () => onChange(new Map([...entries.keys()].map(key => [key, get(key)])))
 +
 +  const drain = async () => {
 +    if (running || disposed) {return}
@@ -42139,16 +42187,16 @@ index 0000000000000000000000000000000000000000..50a9ac4e020a2152c41105466d5b1d88
 +        if (!next) {break}
 +        const [key, entry] = next
 +        entry.value = null
-+        let value: Sprite | null = null
++        let value: Entry['value'] = null
 +
 +        try {
 +          const read = readTail.then(() => !disposed && entries.get(key) === entry ? entry.read() : null)
 +          readTail = read.then(() => undefined, () => undefined)
-+          const reply = await read
++          const reply = await read.catch(error => isMissingRpcMethod(error) ? null : failedRead)
 +
 +          if (disposed || entries.get(key) !== entry) {continue}
-+          value = prepare(reply)
-+        } catch { /* A missing/older/failed source hides its assigned actor. */ }
++          value = reply === failedRead ? failedRead : reply === null ? null : prepare(reply)
++        } catch { /* An invalid atlas stays unavailable. */ }
 +
 +        if (!disposed && entries.get(key) === entry) {entry.value = value; publish()}
 +      }
@@ -42156,12 +42204,24 @@ index 0000000000000000000000000000000000000000..50a9ac4e020a2152c41105466d5b1d88
 +  }
 +
 +  return {
-+    get: (key: string) => entries.get(key)?.value ?? null,
++    get,
++    retryFailed: () => {
++      for (const entry of entries.values()) {
++        if (entry.value === failedRead) {entry.value = undefined}
++      }
++
++      void drain()
++    },
 +    update: (targets: CharacterSpriteTarget[]) => {
 +      if (disposed) {return}
 +      const next = new Map<string, Entry>()
 +
-+      for (const target of targets.slice(0, MAX_PREVIEW_CHARACTERS)) {next.set(target.key, entries.get(target.key) || { read: target.read })}
++      for (const target of targets.slice(0, MAX_PREVIEW_CHARACTERS)) {
++        const entry = entries.get(target.key) ?? { read: target.read }
++
++        entry.read = target.read
++        next.set(target.key, entry)
++      }
 +
 +      if (next.size === entries.size && [...next].every(([key, entry]) => entries.get(key) === entry)) {return}
 +      entries = next
@@ -42892,10 +42952,10 @@ index 46c90a0a39c3ce9f35181ef3b0d04d3f88ffe159..c45b85e0733162ac84a411da98282ce6
        staleTime: 5000
 diff --git a/apps/desktop/src/plugins/hermes-bots/desktop-characters.tsx b/apps/desktop/src/plugins/hermes-bots/desktop-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..43634b380cb6808b558898a99f567a6f1041c477
+index 0000000000000000000000000000000000000000..3f10eaaaab5da1fa99adfbc642b817af8ec822f0
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/desktop-characters.tsx
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,131 @@
 +import { host, useQuery, useValue } from '@hermes/plugin-sdk'
 +import { useEffect, useId } from 'react'
 +
@@ -42907,6 +42967,7 @@ index 0000000000000000000000000000000000000000..43634b380cb6808b558898a99f567a6f
 +import { $characterExtraActor, characterScope, type CharacterSize } from '@/store/character-settings'
 +
 +import { $focusedBotOwner, focusedRosterOwner } from './bot-state'
++import { $characterSpriteRefresh } from './character-sprites'
 +import { $botAttention, $botMeta, botAttentionHint, botRosterKey, botSelectionKey, botSourceStatus } from './data'
 +import { displayName } from './labels'
 +import { MonitorCharacters } from './monitor-characters'
@@ -42990,7 +43051,9 @@ index 0000000000000000000000000000000000000000..43634b380cb6808b558898a99f567a6f
 +  const { refetch } = roster
 +
 +  useEffect(() => window.hermesDesktop?.characterMenu?.onRefresh(scope => {
-+    if (host.state.gateway.get() === 'open' && scope === characterScope(connectionId, profile)) {
++    if (host.state.gateway.get() === 'open' && scope === characterScope(connectionId, profile) &&
++        scope === characterScope(host.state.connectionId.get(), host.state.profile.get())) {
++      $characterSpriteRefresh.set({ connectionId, profile })
 +      void refetch({ cancelRefetch: false })
 +    }
 +  }), [connectionId, profile, refetch])
@@ -43022,7 +43085,7 @@ index 0000000000000000000000000000000000000000..43634b380cb6808b558898a99f567a6f
 +    retry: false
 +  })
 +
-+  return <MonitorCharacters active anchor={characterAnchor} defaultSprite={fallback.data ?? undefined} includeSixth={includeSixth} independent now={now} rows={rows} size={size} stale={!roster.data || roster.isError} />
++  return <MonitorCharacters active anchor={characterAnchor} defaultSprite={fallback.data ?? undefined} includeSixth={includeSixth} independent now={now} refreshOwner={{ connectionId, profile }} rows={rows} size={size} stale={!roster.data || roster.isError} />
 +}
 diff --git a/apps/desktop/src/plugins/hermes-bots/dialog-parts.tsx b/apps/desktop/src/plugins/hermes-bots/dialog-parts.tsx
 index 05bd1586895a3d8cd23007d811dc0e8139cacdf7..96018b336f4cf28c672d830872635765e244e3b0 100644
@@ -44219,11 +44282,12 @@ index abe8afb7e670b207a192ac15fb797fb8dfed168e..2b2824a97bb7cfd9d21057f4efdfd811
              <SelectContent>
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..062ec394352db92a06c7653e8ea018bdb96bc341
+index 0000000000000000000000000000000000000000..decc7e4d66ec63b116c8bcbc290c9dc613a6e0c8
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-characters.test.tsx
-@@ -0,0 +1,705 @@
+@@ -0,0 +1,761 @@
 +import { atom, host, type PluginProfileRoute, useValue } from '@hermes/plugin-sdk'
++import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 +import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 +import { useState } from 'react'
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -44235,12 +44299,17 @@ index 0000000000000000000000000000000000000000..062ec394352db92a06c7653e8ea018bd
 +// eslint-disable-next-line no-restricted-imports
 +import { setPetInfo } from '@/store/pet'
 +// eslint-disable-next-line no-restricted-imports
++import { $connection, $gatewayState } from '@/store/session'
++// eslint-disable-next-line no-restricted-imports
++import { $activeGatewayProfile } from '@/store/profile'
++// eslint-disable-next-line no-restricted-imports
 +import { $petCharacterPreview } from '@/store/pet-characters'
 +// eslint-disable-next-line no-restricted-imports
 +import { $petOverlayFile, initPetOverlayBridge, type PetOverlayControl, popInPet } from '@/store/pet-overlay'
 +
 +import { $botMeta } from './data'
 +import { EditProfileDialog } from './edit-profile-dialog'
++import { DesktopCharacters } from './desktop-characters'
 +import { BOTS_LOCALES } from './i18n'
 +// eslint-disable-next-line no-restricted-imports
 +import { $characterExtraActor } from '@/store/character-settings'
@@ -44928,17 +44997,67 @@ index 0000000000000000000000000000000000000000..062ec394352db92a06c7653e8ea018bd
 +  expect(payload?.characterPreview?.characters).toHaveLength(2)
 +  expect(payload?.characterPreview?.characters.every(actor => !actor.sprite)).toBe(true)
 +})
++
++
++it('recovers an assigned atlas on the matching Characters menu refresh after a timeout', async () => {
++  vi.useRealTimers()
++  $connection.set({ connectionId: 'local' } as NonNullable<ReturnType<typeof $connection.get>>)
++  $activeGatewayProfile.set('default')
++  $gatewayState.set('open')
++  const gatewayRequest = vi.fn().mockResolvedValue({ profiles: [{
++    name: 'writer', worker_sessions: [{ id: 'working', last_active: Date.now() / 1000 }],
++    ui_meta: { 'hermes-bots': { character: 'same' } }
++  }] })
++  vi.spyOn(host, 'getGateway').mockReturnValue({ request: gatewayRequest } as unknown as NonNullable<ReturnType<typeof host.getGateway>>)
++  const sprite = vi.spyOn(host, 'requestProfile')
++    .mockRejectedValueOnce(new Error('pet.sprite timed out'))
++    .mockResolvedValue(ownedSprite(11))
++  let refresh = (_scope: string) => {}
++  Object.assign(window.hermesDesktop!, { characterMenu: {
++    onRefresh: (listener: typeof refresh) => {
++      refresh = listener
++
++      return () => {refresh = () => {}}
++    }
++  } })
++  const client = new QueryClient()
++  const desktop = (size: 'medium' | 'large') => <QueryClientProvider client={client}>
++    <DesktopCharacters connectionId="local" profile="default" size={size} />
++  </QueryClientProvider>
++  const view = render(desktop('medium'))
++
++  try {
++    await waitFor(() => expect(sprite).toHaveBeenCalledOnce())
++    expect($petCharacterPreview.get()?.characters).toEqual([])
++    view.rerender(desktop('large'))
++    act(() => refresh(JSON.stringify(['local', 'other'])))
++    expect(sprite).toHaveBeenCalledOnce()
++    expect(gatewayRequest).toHaveBeenCalledOnce()
++
++    act(() => refresh(JSON.stringify(['local', 'default'])))
++    await waitFor(() => expect($petCharacterPreview.get()?.characters[0]?.sprite?.displayName).toBe('Owned 11'))
++    expect(sprite).toHaveBeenCalledTimes(2)
++    expect(gatewayRequest).toHaveBeenCalledTimes(2)
++    expect(sprite).toHaveBeenLastCalledWith(expect.objectContaining({ connectionId: 'local', profile: 'writer' }),
++      'pet.sprite', expect.objectContaining({ profile: 'writer', slug: 'same' }), 8_000)
++  } finally {
++    view.unmount()
++    client.clear()
++    $gatewayState.set('idle')
++    $connection.set(null)
++  }
++})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..e7d2306b5a01150ef01a4637e92044c584bbb8c9
+index 0000000000000000000000000000000000000000..b8d01eafa6a125aeb013f529440eae7f16d8d1ab
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx
-@@ -0,0 +1,288 @@
+@@ -0,0 +1,299 @@
 +import { atom, Dialog, host, MAX_PREVIEW_CHARACTERS, type PetCharacterPublisher, useValue } from '@hermes/plugin-sdk'
 +import { useEffect, useMemo, useRef, useState } from 'react'
 +
 +import { notifyBotOpenFailure, openBotCanonicalChat } from './canonical-chat'
-+import { type CharacterSpriteTarget, createCharacterSpriteLoader } from './character-sprites'
++import { $characterSpriteRefresh, type CharacterSpriteTarget, createCharacterSpriteLoader } from './character-sprites'
 +import { $botMeta, botRosterKey } from './data'
 +import { useBots } from './i18n'
 +import { stripPreviewMarkdown } from './labels'
@@ -44985,12 +45104,13 @@ index 0000000000000000000000000000000000000000..e7d2306b5a01150ef01a4637e92044c5
 +    reports.filter(other => other?.delegation_id === report.delegation_id && other.task_index === report.task_index).length === 1)
 +}
 +
-+export function MonitorCharacters({ rows, now, stale, active, independent, includeSixth, size, anchor, defaultSprite }: Pick<BotMonitorProps, 'rows' | 'now' | 'stale'> & {
++export function MonitorCharacters({ rows, now, stale, active, independent, includeSixth, size, anchor, defaultSprite, refreshOwner }: Pick<BotMonitorProps, 'rows' | 'now' | 'stale'> & {
 +  active: boolean
 +  independent?: boolean
 +  includeSixth?: boolean
 +  size?: CharacterSize
 +  defaultSprite?: PetInfo
++  refreshOwner?: { connectionId: string; profile: string }
 +  anchor: () => DOMRect
 +}) {
 +  const b = useBots(), pet = useValue($botPluginCtx)?.pet
@@ -45207,6 +45327,16 @@ index 0000000000000000000000000000000000000000..e7d2306b5a01150ef01a4637e92044c5
 +  }, [active, visible, stale, rows, now, metadata, b, clarification, limit, independent, hasDefaultAtlas])
 +
 +  useEffect(() => {loader.current?.update(actors.flatMap(actor => actor.target ? [actor.target] : []))}, [actors])
++
++  const refreshConnection = refreshOwner?.connectionId, refreshProfile = refreshOwner?.profile
++
++  useEffect(() => {
++    if (!active || !visible || stale || !refreshConnection || !refreshProfile) {return}
++
++    return $characterSpriteRefresh.listen(owner => {
++      if (owner?.connectionId === refreshConnection && owner.profile === refreshProfile) {loader.current?.retryFailed()}
++    })
++  }, [active, visible, stale, refreshConnection, refreshProfile])
 +  useEffect(() => {
 +    preview.current?.update(actors.flatMap(({ character, target }) => {
 +      if (!target) {return [character]}
@@ -46167,10 +46297,10 @@ index 0000000000000000000000000000000000000000..30daf91f6ce26c20a17a3809177b8e38
 +})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-query.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-query.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..5fc6c8803f2d42007a67db6102bf1a12038a103b
+index 0000000000000000000000000000000000000000..f1a316f342ebec491b6afce71de01a61e0121b98
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-query.test.tsx
-@@ -0,0 +1,207 @@
+@@ -0,0 +1,219 @@
 +import type * as PluginSDK from '@hermes/plugin-sdk'
 +import { host } from '@hermes/plugin-sdk'
 +import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -46180,6 +46310,7 @@ index 0000000000000000000000000000000000000000..5fc6c8803f2d42007a67db6102bf1a12
 +// eslint-disable-next-line no-restricted-imports
 +import { registerPluginLocales } from '@/i18n/plugin-i18n'
 +
++import { $characterSpriteRefresh } from './character-sprites'
 +import { $botAttention, $botMeta, $lastRoster, ROSTER_KEY } from './data'
 +import { BOTS_LOCALES } from './i18n'
 +import { $botManagementOpen } from './management'
@@ -46362,7 +46493,18 @@ index 0000000000000000000000000000000000000000..5fc6c8803f2d42007a67db6102bf1a12
 +  expect(cached.profiles[0].worker_sessions).toEqual(active.profiles[0].worker_sessions)
 +  expect(cached.profiles[0].worker_sessions?.[0].ended_at).toBeUndefined()
 +  recovering = true
-+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
++  const refreshCharacter = vi.fn()
++  const unbind = $characterSpriteRefresh.listen(refreshCharacter)
++  const gatewayState = vi.spyOn(host.state.gateway, 'get').mockReturnValue('open')
++
++  try {
++    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
++  } finally {
++    gatewayState.mockRestore()
++    unbind()
++  }
++
++  expect(refreshCharacter.mock.calls.map(([owner]) => owner)).toEqual([{ connectionId: 'local', profile: 'default' }])
 +  await waitFor(() => expect(attempts).toBe(5))
 +  expect(screen.getByRole('status').textContent).toBe(notice.textContent)
 +  expect(screen.queryByText('Unconfirmed current task')).toBeNull()
@@ -48612,16 +48754,17 @@ index 0000000000000000000000000000000000000000..a04002008fa7775f744d2d0418a7353e
 +})
 diff --git a/apps/desktop/src/plugins/hermes-bots/workspace.tsx b/apps/desktop/src/plugins/hermes-bots/workspace.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..6d6bb2b43eb5979dfc4cf13d15cd65bd79834dba
+index 0000000000000000000000000000000000000000..215d4d8bc55ded4ab7895837ad5b6f3b72e21584
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/workspace.tsx
-@@ -0,0 +1,318 @@
+@@ -0,0 +1,324 @@
 +import { Button, Codicon, ErrorState, host, Loader, useValue } from '@hermes/plugin-sdk'
 +import { useMemo, useState } from 'react'
 +
 +import { avatarColor, botAppearance, BotFace } from './avatar'
 +import { $focusedBotOwner, focusedRosterOwner } from './bot-state'
 +import { BotWorkerActivity } from './bot-worker-activity'
++import { $characterSpriteRefresh } from './character-sprites'
 +import {
 +  $botAttention,
 +  $botMeta,
@@ -48746,7 +48889,12 @@ index 0000000000000000000000000000000000000000..6d6bb2b43eb5979dfc4cf13d15cd65bd
 +          {text.monitor.title}
 +        </Button>
 +        <BotWorkspaceActions onNavigate={() => setMonitor(false)} />
-+        <Button onClick={() => void roster.refetch()} size="sm" variant="ghost">
++        <Button onClick={() => {
++          const connectionId = host.state.connectionId.get(), profile = host.state.profile.get()
++
++          if (connectionId && profile && host.state.gateway.get() === 'open') {$characterSpriteRefresh.set({ connectionId, profile })}
++          void roster.refetch()
++        }} size="sm" variant="ghost">
 +          <Codicon name="refresh" />
 +          {b.refresh}
 +        </Button>
