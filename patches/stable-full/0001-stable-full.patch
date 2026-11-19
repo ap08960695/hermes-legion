@@ -25766,6 +25766,150 @@ index b4da7a42c45061d676c88b5b49f77b66aabcf4a7..dd0f767c20a1375503ad34189617448d
 -    }
 +    openSessionTile(storedSessionId, 'center', undefined, undefined, tileScope)
  
+diff --git a/apps/desktop/src/app/pet-overlay/character-wander.test.ts b/apps/desktop/src/app/pet-overlay/character-wander.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..410c358fc6c9c621cd090fa3e0b66719518e7229
+--- /dev/null
++++ b/apps/desktop/src/app/pet-overlay/character-wander.test.ts
+@@ -0,0 +1,56 @@
++import { expect, it } from 'vitest'
++
++import { createWander, limitForNeighbors } from './character-wander'
++
++const bounds = { min: -56, max: 56 }
++
++it('produces independent reproducible pauses and a varied action mix', () => {
++  function sample(seed: string) {
++    const model = createWander(seed)
++
++    return Array.from({ length: 80 }, () => [model.pause('standard'), model.next(0, bounds, 'standard', true)] as const)
++  }
++
++  const sequence = sample('first')
++  expect(sample('first')).toEqual(sequence)
++  expect(sample('second')).not.toEqual(sequence)
++  expect(new Set(sequence.map(([pause]) => pause)).size).toBeGreaterThan(20)
++  const actions = sequence.map(([, action]) => action)
++  expect(new Set(actions.map(action => action.kind))).toEqual(new Set(['walk', 'look', 'sit', 'stretch', 'yawn', 'hop']))
++  const walks = actions.filter(action => action.kind === 'walk')
++  expect(walks.some(action => action.turnAt !== undefined)).toBe(true)
++  expect(walks.some(action => action.target > 0)).toBe(true)
++  expect(walks.some(action => action.target < 0)).toBe(true)
++  expect(actions.filter(action => action.kind === 'hop').length).toBeLessThan(walks.length / 2)
++})
++
++it('keeps each path within its bounds and adjusts travel and speed for pack weight', () => {
++  for (const seed of ['first', 'second', 'third', 'fourth']) {
++    for (let i = 0; i < 32; i++) {
++      const light = createWander(seed + i), heavy = createWander(seed + i)
++      const fast = light.next(0, bounds, 'light', false), slow = heavy.next(0, bounds, 'heavy', false)
++      expect(fast.kind).not.toBe('hop')
++      expect(slow.kind).not.toBe('hop')
++      if (fast.kind !== 'walk' || slow.kind !== 'walk') {continue}
++      expect(fast.speed).toBeGreaterThan(slow.speed)
++      expect(Math.abs(fast.turnAt ?? fast.target)).toBeGreaterThanOrEqual(Math.abs(slow.turnAt ?? slow.target))
++      for (const point of [fast.target, fast.turnAt, slow.target, slow.turnAt]) {
++        if (point !== undefined) {
++          expect(point).toBeGreaterThanOrEqual(bounds.min)
++          expect(point).toBeLessThanOrEqual(bounds.max)
++        }
++      }
++    }
++  }
++})
++
++it('leaves room to move away from a crowd while avoiding another actor’s reserved path', () => {
++  const own = { left: 100, right: 140, top: 400, bottom: 460 }
++  expect(limitForNeighbors(own, [
++    { left: 170, right: 270, top: 395, bottom: 465 },
++    { left: 25, right: 70, top: 405, bottom: 465 },
++    { left: 142, right: 170, top: 320, bottom: 380 }
++  ], 0, bounds)).toEqual({ min: -24, max: 24 })
++  expect(limitForNeighbors(own, [{ left: 122, right: 170, top: 400, bottom: 460 }], 10, bounds))
++    .toEqual({ min: -56, max: 10 })
++})
+diff --git a/apps/desktop/src/app/pet-overlay/character-wander.ts b/apps/desktop/src/app/pet-overlay/character-wander.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..7e9d4334658d6c32f9471eb21c06fe0a0d22d889
+--- /dev/null
++++ b/apps/desktop/src/app/pet-overlay/character-wander.ts
+@@ -0,0 +1,76 @@
++import type { PetInfo } from '@/store/pet'
++
++type Weight = NonNullable<PetInfo['motionWeight']>
++export type WanderBounds = { min: number; max: number }
++export type WanderRect = { left: number; right: number; top: number; bottom: number }
++type Gesture = 'look' | 'sit' | 'stretch' | 'yawn' | 'hop'
++type Action = { kind: 'walk'; target: number; turnAt?: number; speed: number } | { kind: Gesture; duration: number }
++
++const movement = {
++  light: { speed: 29, distance: 30, pause: 0.85 },
++  standard: { speed: 22, distance: 24, pause: 1 },
++  heavy: { speed: 15, distance: 18, pause: 1.2 }
++}
++
++export function createWander(id: string) {
++  let seed = 2166136261
++  for (let i = 0; i < id.length; i++) {seed = Math.imul(seed ^ id.charCodeAt(i), 16777619)}
++
++  const random = () => {
++    seed = (seed + 0x6d2b79f5) | 0
++    let value = Math.imul(seed ^ (seed >>> 15), seed | 1)
++    value ^= value + Math.imul(value ^ (value >>> 7), value | 61)
++
++    return ((value ^ (value >>> 14)) >>> 0) / 4294967296
++  }
++  const energy = random(), curiosity = random()
++
++  return {
++    pause: (weight: Weight) => (430 + random() * (2_800 - energy * 1_200)) * movement[weight].pause,
++    next(offset: number, bounds: WanderBounds, weight: Weight, canHop: boolean): Action {
++      const { speed, distance } = movement[weight]
++      const roll = random()
++      const left = offset - bounds.min, right = bounds.max - offset
++
++      if (roll < 0.65 + energy * 0.16 && Math.max(left, right) >= 8) {
++        const dir = left < 8 || (right >= 8 && random() < 0.5) ? 1 : -1
++        const range = dir === 1 ? right : left
++        const length = Math.min(range, distance * (0.45 + random() * 1.1))
++        const endpoint = offset + dir * length
++        const rate = speed * (0.78 + random() * 0.55)
++
++        if (length >= 16 && random() < 0.11 + curiosity * 0.11) {
++          return { kind: 'walk', turnAt: endpoint, target: endpoint - dir * length * (0.25 + random() * 0.44), speed: rate }
++        }
++
++        return { kind: 'walk', target: endpoint, speed: rate }
++      }
++
++      if (canHop && random() < 0.10 + curiosity * 0.06) {return { kind: 'hop', duration: 550 }}
++      const look = 0.22 + curiosity * 0.25
++      const sit = look + 0.12 + (1 - energy) * 0.25
++      const stretch = sit + 0.13 + energy * 0.12
++      const pose = random()
++      const kind = pose < look ? 'look' : pose < sit ? 'sit' : pose < stretch ? 'stretch' : 'yawn'
++
++      return { kind, duration: 650 + random() * 650 }
++    }
++  }
++}
++
++/** Reserve a gap along the whole path. Existing overlap can clear by moving away. */
++export function limitForNeighbors(own: WanderRect, neighbors: WanderRect[], offset: number, bounds: WanderBounds): WanderBounds {
++  let { min, max } = bounds
++  const center = own.left + own.right
++  for (const peer of neighbors) {
++    if (peer.top >= own.bottom || peer.bottom <= own.top) {continue}
++
++    if (peer.left + peer.right >= center) {
++      max = Math.min(max, offset + Math.max(0, peer.left - own.right - 6))
++    } else {
++      min = Math.max(min, offset + Math.min(0, peer.right - own.left + 6))
++    }
++  }
++
++  return { min, max }
++}
 diff --git a/apps/desktop/src/app/pet-overlay/linux-input-region.test.ts b/apps/desktop/src/app/pet-overlay/linux-input-region.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..e677c958d63f0c267a454183f62ff13b764660f2
@@ -26343,10 +26487,10 @@ index 0000000000000000000000000000000000000000..cfd558ab8cc274b91b75a0ebc07d1374
 +}
 diff --git a/apps/desktop/src/app/pet-overlay/pet-characters.tsx b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..add32371b0e84abff2ef86540838a31412beaa9c
+index 0000000000000000000000000000000000000000..f360797b2d894786bc292f06c9f35b27a4eb9663
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-characters.tsx
-@@ -0,0 +1,879 @@
+@@ -0,0 +1,968 @@
 +import { AnimatePresence, motion, type TargetAndTransition, useIsPresent, useReducedMotion } from 'motion/react'
 +import { type CSSProperties, useCallback, useEffect, useRef, useState } from 'react'
 +
@@ -26358,6 +26502,7 @@ index 0000000000000000000000000000000000000000..add32371b0e84abff2ef86540838a314
 +import type { PetCharacter, PetCharacterFileContent, PetCharacterOutput, PetCharacterPreview } from '@/store/pet-characters'
 +import type { PetCharacterCopy, PetCharacterDesktop } from '@/store/pet-overlay'
 +
++import { createWander, limitForNeighbors, type WanderRect } from './character-wander'
 +import { nextPetArrival, nextPetDeparture, type PetArrival, petArrival, petAtRest, type PetDeparture, petDeparture } from './pet-character-transitions'
 +
 +interface PetCharactersProps {
@@ -26457,20 +26602,20 @@ index 0000000000000000000000000000000000000000..add32371b0e84abff2ef86540838a314
 +  'translateY(-2px) scaleY(1.03)', 'translateY(-1px) scaleY(1.01)',
 +  'translateY(0px) scaleY(0.95)', 'translateY(0px) scaleY(0.95)']
 +
-+const LIGHT_MOTION = { pace: 1.25, dropDuration: 1240, bounceHeight: 24, impactScale: 0.81 }
-+const STANDARD_MOTION = { pace: 1, dropDuration: 1040, bounceHeight: 16, impactScale: 0.74 }
-+const HEAVY_MOTION = { pace: 0.75, dropDuration: 920, bounceHeight: 10, impactScale: 0.68 }
++const LIGHT_MOTION = { dropDuration: 1240, bounceHeight: 24, impactScale: 0.81 }
++const STANDARD_MOTION = { dropDuration: 1040, bounceHeight: 16, impactScale: 0.74 }
++const HEAVY_MOTION = { dropDuration: 920, bounceHeight: 10, impactScale: 0.68 }
 +
-+const WALK_LEG = Array.from({ length: 30 }, (_, tick) => {
-+  if (tick < 2) {return { progress: 0, shape: 'translateY(0px) scaleY(0.92)' }}
++const wanderSession = Math.random()
++const wanderPaths = new WeakMap<HTMLElement, WanderRect>()
 +
-+  if (tick >= 26) {return { progress: 1, shape: tick === 26 ? 'translateY(0px) scaleY(0.96)' : 'none' }}
-+  const step = tick - 2
-+  const beat = step % STEP_TRAVEL.length
-+  const travel = (Math.floor(step / STEP_TRAVEL.length) + STEP_TRAVEL[beat]) / 4
-+
-+  return { progress: travel * travel * (3 - 2 * travel), shape: STEP_SHAPES[beat] }
-+})
++const GESTURE_SHAPES = {
++  look: ['scaleX(0.94)', 'scaleX(0.88)', 'none', 'scaleX(0.94)'],
++  sit: ['scaleY(0.9)', 'scaleY(0.76)', 'scaleY(0.76)', 'scaleY(0.89)'],
++  stretch: ['scale(0.82, 0.9)', 'scaleX(0.82)', 'scaleX(0.86)', 'scaleX(0.94)'],
++  yawn: ['scaleY(0.93)', 'scaleY(0.85)', 'scaleY(0.85)', 'scaleY(0.93)'],
++  hop: ['scaleY(0.92)', 'translateY(-5px)', 'translateY(-9px)', 'translateY(-5px)', 'scaleY(0.93)']
++}
 +
 +function handoffFlight({ start, end }: HandoffCue): TargetAndTransition {
 +  const x = end.x - start.x, y = end.y - start.y
@@ -26578,15 +26723,16 @@ index 0000000000000000000000000000000000000000..add32371b0e84abff2ef86540838a314
 +  }, [dropping, landed, onLanding])
 +  const [hint, setHint] = useState(false)
 +  const [statusCue, setStatusCue] = useState<string>()
-+  const drag = useRef<{ pointer: number; x: number; y: number; start: Point; destination?: Point; original: Point | null; walkTick: number; walkOffset: string } | null>(null)
++  const drag = useRef<{ pointer: number; x: number; y: number; start: Point; destination?: Point; original: Point | null; walkOffset: number } | null>(null)
 +  const clickArmed = useRef(false)
 +  const walkRef = useRef<HTMLDivElement>(null)
-+  const walkCycle = useRef({ tick: Math.round(slot / 8), scale: 1 })
++  const walkOffset = useRef(0)
++  const wander = useRef<ReturnType<typeof createWander> | null>(null)
 +  const [direction, setDirection] = useState<WalkDirection>(0)
 +  const { outputId, actionsOnly } = actor
 +  const sprite = actor.sprite ?? info
 +
-+  const { pace, dropDuration, bounceHeight, impactScale } = sprite.motionWeight === 'light' ? LIGHT_MOTION :
++  const { dropDuration, bounceHeight, impactScale } = sprite.motionWeight === 'light' ? LIGHT_MOTION :
 +    sprite.motionWeight === 'heavy' ? HEAVY_MOTION : STANDARD_MOTION
 +
 +  const width = sprite.frameW ?? 192
@@ -26611,12 +26757,14 @@ index 0000000000000000000000000000000000000000..add32371b0e84abff2ef86540838a314
 +  const current = position ?? anchor
 +  const fittedPoint = desktop ? fitDesktopPoint(desktop, current, w, h) : null
 +  const fitted = fittedPoint && dragPhase !== 'moving' ? groundPoint(fittedPoint, h) : fittedPoint
-+  const roomLeft = fitted ? fitted.x - fitted.area.x : 0
-+  const roomRight = fitted ? fitted.area.x + fitted.area.width - fitted.x - w : 0
-+  const stride = Math.min(48, Math.max(0, 96 - w))
-+  const distance = roomLeft >= roomRight ? -Math.min(roomLeft, stride) : Math.min(roomRight, stride)
++  const roomLeft = fitted ? Math.max(0, fitted.x - fitted.area.x) : 0
++  const roomRight = fitted ? Math.max(0, fitted.area.x + fitted.area.width - fitted.x - w) : 0
++  const stride = fitted ? 64 : 12
++  const minOffset = fitted ? -Math.min(roomLeft, stride) : -stride
++  const maxOffset = fitted ? Math.min(roomRight, stride) : stride
 +  const top = fitted ? topOutsideInput(fitted, w, h, stride, desktop?.input) : null
 +  const occluded = Boolean(fitted) && top === null
++  const canHop = Boolean(fitted && !desktop?.input && (top ?? fitted.y) - fitted.area.y >= 9)
 +  const waiting = actor.state === 'waiting'
 +  const failure = actor.state === 'failed' ? actor.failure : undefined
 +  const completion = actor.state === 'wave' ? actor.completion : undefined
@@ -26656,7 +26804,7 @@ index 0000000000000000000000000000000000000000..add32371b0e84abff2ef86540838a314
 +
 +    return () => clearTimeout(timer)
 +  }, [celebrating, statusId])
-+  const canWalk = !occluded && !reduced && distance !== 0 && (actor.state === 'idle' || actor.state === 'run')
++  const canWalk = !occluded && !reduced && (actor.state === 'idle' || actor.state === 'run')
 +  const parked = !present || held || dropping || hint || open || handoffActive
 +  const walking = canWalk && !parked
 +
@@ -26667,45 +26815,134 @@ index 0000000000000000000000000000000000000000..add32371b0e84abff2ef86540838a314
 +    const node = walkRef.current
 +
 +    if (!node) {return}
++    setDirection(0)
 +
 +    if (!canWalk) {
++      walkOffset.current = 0
 +      node.style.removeProperty('--pet-walk-offset')
-+      node.style.removeProperty('--pet-walk-shape')
 +
 +      return
 +    }
 +
++    const place = (offset: number) => {
++      walkOffset.current = offset
++      const px = `${Math.round(offset)}px`
++
++      if (node.style.getPropertyValue('--pet-walk-offset') !== px) {node.style.setProperty('--pet-walk-offset', px)}
++    }
++    place(Math.max(minOffset, Math.min(maxOffset, walkOffset.current)))
 +    if (!walking) {return}
-+    const cycle = walkCycle.current
-+    let lastDirection: WalkDirection | undefined
-+    const outbound: WalkDirection = distance < 0 ? -1 : 1
-+    const inbound = outbound === 1 ? -1 : 1
 +
-+    const move = () => {
-+      const phase = Math.floor(cycle.tick)
-+      cycle.tick = (cycle.tick + pace) % 90
++    const model = wander.current ??= createWander(`${wanderSession}:${actor.id}`)
++    const weight = sprite.motionWeight ?? 'standard'
++    let wake: ReturnType<typeof setTimeout> | undefined
++    let off: (() => void) | undefined
 +
-+      if (cycle.tick < pace) {cycle.scale = 0.75 + Math.random() * 0.25}
-+      // Brake at each endpoint before showing the work pose or changing direction.
-+      const returning = phase >= 60
-+      const stride = WALK_LEG[phase - (returning ? 60 : 12)]
-+      const progress = stride?.progress ?? Number(phase >= 42)
-+      const offset = `${Math.round((returning ? 1 - progress : progress) * distance * cycle.scale)}px`
-+      const shape = stride?.shape ?? 'none'
-+      const next = stride ? (returning ? inbound : outbound) : 0
-+
-+      if (node.style.getPropertyValue('--pet-walk-offset') !== offset) {node.style.setProperty('--pet-walk-offset', offset)}
-+
-+      if (node.style.getPropertyValue('--pet-walk-shape') !== shape) {node.style.setProperty('--pet-walk-shape', shape)}
-+
-+      if (next !== lastDirection) {
-+        lastDirection = next
-+        setDirection(next)
-+      }
++    const stop = () => {
++      clearTimeout(wake)
++      off?.()
++      off = undefined
++      wanderPaths.delete(node)
++      node.style.removeProperty('--pet-walk-shape')
++    }
++    const wait = () => {
++      if (document.visibilityState === 'visible') {wake = setTimeout(start, model.pause(weight))}
++    }
++    const settle = () => {
++      stop()
++      setDirection(0)
++      wait()
++    }
++    const shape = (value: string) => {
++      if (node.style.getPropertyValue('--pet-walk-shape') !== value) {node.style.setProperty('--pet-walk-shape', value)}
 +    }
 +
-+    return subscribeFrame(move)
-+  }, [canWalk, distance, pace, subscribeFrame, walking])
++    const start = () => {
++      if (document.visibilityState !== 'visible') {return}
++      const offset = walkOffset.current
++      const rect = node.getBoundingClientRect()
++      const neighbors: WanderRect[] = []
++      const siblings = node.parentElement?.parentElement?.children
++
++      // Sample only at decisions. Reservations cover destinations until the actor stops.
++      for (const sibling of siblings ?? []) {
++        const peer = sibling.firstElementChild
++
++        if (!(peer instanceof HTMLElement) || peer === node || !peer.hasAttribute('data-pet-wander') ||
++            sibling.getAttribute('aria-hidden') === 'true') {continue}
++        const bounds = wanderPaths.get(peer) ?? peer.getBoundingClientRect()
++
++        if (bounds.right > bounds.left && bounds.bottom > bounds.top) {neighbors.push(bounds)}
++      }
++
++      const bounds = limitForNeighbors(rect, neighbors, offset, { min: minOffset, max: maxOffset })
++      const hopRoom = canHop && neighbors.every(peer => rect.right <= peer.left || rect.left >= peer.right ||
++        rect.bottom <= peer.top || rect.top - 9 >= peer.bottom)
++      const action = model.next(offset, bounds, weight, hopRoom)
++      let started = performance.now()
++
++      if (action.kind !== 'walk') {
++        const poses = GESTURE_SHAPES[action.kind]
++
++        off = subscribeFrame(now => {
++          const progress = (now - started) / action.duration
++
++          if (progress >= 1) {settle()}
++          else {shape(poses[Math.max(0, Math.floor(progress * poses.length))])}
++        })
++
++        return
++      }
++
++      const furthest = action.turnAt ?? action.target
++      wanderPaths.set(node, { left: rect.left + Math.min(0, furthest - offset),
++        right: rect.right + Math.max(0, furthest - offset), top: rect.top, bottom: rect.bottom })
++      let from = offset
++      let to = furthest
++      let duration = Math.max(400, Math.abs(to - from) / action.speed * 1000)
++      setDirection(to > from ? 1 : -1)
++
++      off = subscribeFrame(now => {
++        const progress = (now - started) / duration
++
++        if (progress >= 1) {
++          place(to)
++
++          if (to === action.target) {settle()}
++          else {
++            from = to
++            to = action.target
++            started = now
++            duration = Math.max(400, Math.abs(to - from) / action.speed * 1000)
++            setDirection(to > from ? 1 : -1)
++          }
++
++          return
++        }
++
++        const steps = Math.max(1, Math.round(duration / 600))
++        const step = Math.min(steps * STEP_TRAVEL.length - 1, Math.max(0, Math.floor(progress * steps * STEP_TRAVEL.length)))
++        const beat = step % STEP_TRAVEL.length
++        const travel = (Math.floor(step / STEP_TRAVEL.length) + STEP_TRAVEL[beat]) / steps
++        place(from + (to - from) * travel)
++        shape(STEP_SHAPES[beat])
++      })
++    }
++
++    const visibilityChanged = () => {
++      stop()
++      setDirection(0)
++      wait()
++    }
++
++    document.addEventListener('visibilitychange', visibilityChanged)
++    wait()
++
++    return () => {
++      document.removeEventListener('visibilitychange', visibilityChanged)
++      stop()
++    }
++  }, [actor.id, canHop, canWalk, maxOffset, minOffset, sprite.motionWeight, subscribeFrame, walking])
 +
 +  // eslint-disable-next-line no-restricted-syntax -- retire an imperative pointer capture when the actor leaves.
 +  useEffect(() => {
@@ -26727,9 +26964,8 @@ index 0000000000000000000000000000000000000000..add32371b0e84abff2ef86540838a314
 +
 +    if (cancel) {
 +      setPosition(drag.current.original)
-+      walkCycle.current.tick = drag.current.walkTick
-+
-+      if (desktop) {walkRef.current?.style.setProperty('--pet-walk-offset', drag.current.walkOffset)}
++      walkOffset.current = drag.current.walkOffset
++      walkRef.current?.style.setProperty('--pet-walk-offset', `${walkOffset.current}px`)
 +      clickArmed.current = false
 +    } else if (desktop && drag.current.destination) {
 +      const release = fitDesktopPoint(desktop, drag.current.destination, w, h)
@@ -26770,10 +27006,8 @@ index 0000000000000000000000000000000000000000..add32371b0e84abff2ef86540838a314
 +      : { position: 'absolute', margin: 0, '--pet-x': `${current.x}px`, '--pet-y': `${current.y}px`,
 +        left: `clamp(64px, calc(${slot}% + var(--pet-x)), calc(100% - 64px))`,
 +        bottom: 'clamp(8px, calc(20px - var(--pet-y)), calc(100% - 112px))', translate: '-50% 0' } as CSSProperties}>
-+    <div className={desktop || reduced || parked ? undefined : 'pet-character-wander'} ref={walkRef}
-+      style={desktop ? { '--pet-walk-left': `${-roomLeft}px`, '--pet-walk-right': `${roomRight}px`,
-+        transform: 'translateX(clamp(var(--pet-walk-left), var(--pet-walk-offset, 0px), var(--pet-walk-right)))'
-+      } as CSSProperties : { animationDelay: `-${Math.round(slot) * 100}ms` }}>
++    <div data-pet-wander="" ref={walkRef}
++      style={{ transform: `translateX(clamp(${minOffset}px, var(--pet-walk-offset, 0px), ${maxOffset}px))` }}>
 +      <motion.button animate={desktop ? !entrance ? 'waiting' : arrival ?? petAtRest : { opacity: 1, scale: 1 }} aria-expanded={outputId ? open : undefined}
 +        aria-label={`${actionLabel}${waiting || failure ? ' · ' + statusText : ''}`}
 +        className="focus-visible:outline focus-visible:outline-2" data-pet-arrival={arrival ? entrance : undefined}
@@ -26849,10 +27083,10 @@ index 0000000000000000000000000000000000000000..add32371b0e84abff2ef86540838a314
 +          const rect = desktop ? event.currentTarget.getBoundingClientRect() : null
 +
 +          const start = rect ? { x: event.screenX - event.clientX + rect.left,
-+            y: event.screenY - event.clientY + rect.top } : current
++            y: event.screenY - event.clientY + rect.top } : { x: current.x + walkOffset.current, y: current.y }
 +
 +          drag.current = { pointer: event.pointerId, x: event.screenX, y: event.screenY, start, original: position,
-+            walkTick: walkCycle.current.tick, walkOffset: walkRef.current?.style.getPropertyValue('--pet-walk-offset') ?? '' }
++            walkOffset: walkOffset.current }
 +
 +          if (desktop) {onGrab(actor.id)}
 +          setDragPhase('held')
@@ -26873,10 +27107,9 @@ index 0000000000000000000000000000000000000000..add32371b0e84abff2ef86540838a314
 +
 +          if (clickArmed.current && Math.hypot(x, y) <= 3) {return}
 +
-+          if (clickArmed.current && desktop) {
++          if (clickArmed.current) {
 +            walkRef.current?.style.removeProperty('--pet-walk-offset')
-+            walkRef.current?.style.removeProperty('--pet-walk-shape')
-+            walkCycle.current.tick = 0
++            walkOffset.current = 0
 +          }
 +
 +          clickArmed.current = false
@@ -26890,7 +27123,7 @@ index 0000000000000000000000000000000000000000..add32371b0e84abff2ef86540838a314
 +          ...(dropping ? { '--pet-drop-offset': `${dropOffset}px`, '--pet-bounce-offset': `${Math.max(dropOffset * 0.3, -bounceHeight)}px` } : {})
 +        } as CSSProperties}
 +        transition={{ duration: desktop?.input ? 0 : reduced && !desktop ? 0 : 0.18, ease: 'easeOut' }} type="button" variants={desktop ? { waiting: { opacity: 0 }, leave } : undefined}>
-+        <PetSprite animate={present && !reduced && !occluded && (!savedFailure || showStatusCue)}
++        <PetSprite animate={present && !reduced && !occluded && (actor.state !== 'idle' || (walking && direction !== 0)) && (!savedFailure || showStatusCue)}
 +          info={celebrating ? { ...sheet, loopMs: CELEBRATION_MS } : sheet} key={savedFailure ? statusId : undefined}
 +          maxFps={15} playOnce={celebrating || (savedFailure && landed)}
 +          rowOverride={celebrating ? jumpRow : savedFailure ? 'failed' : walk.row}
@@ -27864,10 +28097,10 @@ index 82319976a166e658f80e794b0033fed81a48d456..d05530936953089b51783d61ed9d0ec0
  }
 diff --git a/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..66937f85af7e4bb0259e4304e82b6c43fd59ecac
+index 0000000000000000000000000000000000000000..b14d82a605d18035cc49eda8c49d61b56c739eef
 --- /dev/null
 +++ b/apps/desktop/src/app/pet-overlay/pet-overlay-characters.test.tsx
-@@ -0,0 +1,1465 @@
+@@ -0,0 +1,1487 @@
 +import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 +import type * as Motion from 'motion/react'
 +import type { ComponentProps } from 'react'
@@ -27877,9 +28110,25 @@ index 0000000000000000000000000000000000000000..66937f85af7e4bb0259e4304e82b6c43
 +import { setPetInfo } from '@/store/pet'
 +import type { PetOverlayStatePayload } from '@/store/pet-overlay'
 +
++import { createWander } from './character-wander'
 +import { nextPetArrival, nextPetDeparture, petArrival, petDeparture } from './pet-character-transitions'
 +import { hasSolidSpritePixel } from './pet-characters'
 +import { PetOverlayApp } from './pet-overlay-app'
++
++vi.mock('./character-wander', async original => {
++  const actual = await original<typeof import('./character-wander')>()
++
++  return { ...actual, createWander: vi.fn(actual.createWander) }
++})
++
++function forceWalk(target: number) {
++  vi.spyOn(performance, 'now').mockImplementation(() => Date.now())
++  const next = vi.fn<ReturnType<typeof createWander>['next']>()
++    .mockImplementation((_offset, bounds) => ({ kind: 'walk', speed: 24, target: Math.min(bounds.max, Math.max(bounds.min, target)) }))
++  vi.mocked(createWander).mockReturnValue({ pause: () => 300, next })
++
++  return next
++}
 +
 +const io = vi.hoisted(() => ({ reduced: false, holdArrivals: false, complete: new Map<string, () => void>() }))
 +vi.mock('motion/react', async original => {
@@ -27943,6 +28192,7 @@ index 0000000000000000000000000000000000000000..66937f85af7e4bb0259e4304e82b6c43
 +  } } })
 +})
 +afterEach(() => {
++  vi.mocked(createWander).mockReset()
 +  cleanup(); setPetInfo({ enabled: false }); vi.clearAllTimers(); vi.useRealTimers(); vi.clearAllMocks(); vi.restoreAllMocks()
 +  delete (window as unknown as { hermesDesktop?: unknown }).hermesDesktop
 +  delete (window.document as unknown as { elementFromPoint?: unknown }).elementFromPoint
@@ -27985,21 +28235,26 @@ index 0000000000000000000000000000000000000000..66937f85af7e4bb0259e4304e82b6c43
 +  view.unmount(); expect(off).toHaveBeenCalledTimes(1)
 +})
 +
-+it('wanders until keyboard focus and keeps the other character moving', () => {
++it('pauses only the focused fallback character and has no fixed CSS cycle', () => {
++  forceWalk(12)
 +  render(<PetOverlayApp />)
-+  act(() => emit(preview()))
++  const payload = preview()
++  act(() => emit({ ...payload, characterPreview: { ...payload.characterPreview,
++    characters: payload.characterPreview.characters.map(actor => ({ ...actor, state: 'idle' })) } }))
 +  const [first, second] = screen.getAllByRole('button', { name: /^Move / })
 +  const firstWander = first.parentElement!
 +  const secondWander = second.parentElement!
-+
-+  expect(firstWander.classList.contains('pet-character-wander')).toBe(true)
-+  expect(secondWander.classList.contains('pet-character-wander')).toBe(true)
-+  expect(firstWander.style.animationDelay).not.toEqual(secondWander.style.animationDelay)
++  const offset = (node: HTMLElement) => node.style.getPropertyValue('--pet-walk-offset')
++  act(() => vi.advanceTimersByTime(450))
++  const firstBefore = offset(firstWander)
++  const secondBefore = offset(secondWander)
++  expect(firstWander.style.animationDelay).toBe('')
 +  fireEvent.focus(first)
-+  expect(firstWander.classList.contains('pet-character-wander')).toBe(false)
-+  expect(secondWander.classList.contains('pet-character-wander')).toBe(true)
++  act(() => vi.advanceTimersByTime(400))
++  expect(offset(firstWander)).toBe(firstBefore)
++  expect(offset(secondWander)).not.toBe(secondBefore)
 +  fireEvent.blur(first)
-+  expect(firstWander.classList.contains('pet-character-wander')).toBe(true)
++  expect(first.hasAttribute('data-pet-walking')).toBe(true)
 +})
 +
 +it('uses static poses for reduced motion and bounds an oversized mirrored list', () => {
@@ -28010,7 +28265,7 @@ index 0000000000000000000000000000000000000000..66937f85af7e4bb0259e4304e82b6c43
 +  act(() => emit(payload))
 +  expect(screen.getAllByTestId('sprite')).toHaveLength(6)
 +  expect(screen.getAllByTestId('sprite').every(canvas => canvas.dataset.animate === 'false')).toBe(true)
-+  expect(screen.getAllByTestId('sprite').every(canvas => !canvas.closest('.pet-character-wander'))).toBe(true)
++  expect(screen.getAllByTestId('sprite').every(canvas => !canvas.parentElement?.hasAttribute('data-pet-walking'))).toBe(true)
 +})
 +
 +
@@ -28530,7 +28785,22 @@ index 0000000000000000000000000000000000000000..66937f85af7e4bb0259e4304e82b6c43
 +  expect(neighbor.style.cssText).toBe(neighborStyle)
 +})
 +
-+it('walks and turns between work poses, pauses on focus, and ends the shared clock with reduced motion', () => {
++it('leaves the shared movement clock asleep at the start of an idle pause', () => {
++  const interval = vi.spyOn(window, 'setInterval')
++  placeFixturePets()
++  render(<PetOverlayApp />)
++  const area = { x: 0, y: 24, width: 1000, height: 700 }
++  const payload = preview()
++  act(() => emit({ ...payload, characterDesktop: { bounds: area, areas: [area] },
++    characterPreview: { ...payload.characterPreview, characters: [{ ...payload.characterPreview.characters[0], state: 'idle' }] } }))
++
++  expect(interval.mock.calls.filter(([, delay]) => delay === 100)).toEqual([])
++  expect(screen.getByTestId('sprite').dataset.animate).toBe('false')
++})
++
++it('walks between work poses, freezes on focus, and cleans up with reduced motion', () => {
++  forceWalk(-40)
++  const clear = vi.spyOn(window, 'clearInterval')
 +  placeFixturePets()
 +  render(<PetOverlayApp />)
 +  const area = { x: 0, y: 24, width: 1000, height: 700 }
@@ -28540,25 +28810,22 @@ index 0000000000000000000000000000000000000000..66937f85af7e4bb0259e4304e82b6c43
 +  const walker = working.closest('figure')!.firstElementChild as HTMLElement
 +  const offset = () => Number.parseFloat(walker.style.getPropertyValue('--pet-walk-offset'))
 +
-+  act(() => vi.advanceTimersByTime(1700))
++  act(() => vi.advanceTimersByTime(650))
 +  expect(working.dataset.row).toBe('running-left')
-+  expect(working.parentElement!.hasAttribute('data-pet-walking')).toBe(true)
 +  expect(walker.style.getPropertyValue('--pet-walk-shape')).toMatch(/^translateY\(/)
 +  expect(failed.dataset.row).toBeUndefined()
 +  expect(failed.dataset.state).toBe('failed')
 +  const before = offset()
 +  expect(before).toBeLessThan(0)
 +  fireEvent.focus(working.parentElement!)
-+  act(() => vi.advanceTimersByTime(600))
++  act(() => vi.advanceTimersByTime(1000))
 +  expect(offset()).toBe(before)
 +  expect(working.parentElement!.hasAttribute('data-pet-walking')).toBe(false)
 +  expect(working.dataset.row).toBeUndefined()
++  expect(clear).toHaveBeenCalled()
 +  fireEvent.blur(working.parentElement!)
-+  act(() => vi.advanceTimersByTime(2500))
-+  expect(working.dataset.row).toBeUndefined()
-+  expect(working.dataset.state).toBe('run')
-+  act(() => vi.advanceTimersByTime(1600))
-+  expect(working.dataset.row).toBe('running-right')
++  act(() => vi.advanceTimersByTime(650))
++  expect(offset()).toBeLessThan(before)
 +
 +  io.reduced = true
 +  act(() => emit({ ...payload }))
@@ -28568,32 +28835,20 @@ index 0000000000000000000000000000000000000000..66937f85af7e4bb0259e4304e82b6c43
 +  expect(walker.style.getPropertyValue('--pet-walk-shape')).toBe('')
 +})
 +
-+it('walks faster for light packs and slower for heavy packs with the same elapsed ticks', () => {
-+  const travel = (motionWeight?: 'light' | 'standard' | 'heavy') => {
-+    placeFixturePets()
-+    const view = render(<PetOverlayApp />)
-+    const area = { x: 0, y: 24, width: 1000, height: 700 }
-+    const [actor] = preview().characterPreview.characters
-+
-+    act(() => emit({ ...normal, charactersPaused: false, characterDesktop: { bounds: area, areas: [area] },
-+      characterPreview: { expiresAt: Date.now() + 15000, characters: [{ ...actor, sprite: { ...info, motionWeight } }] } }))
-+    act(() => vi.advanceTimersByTime(2200))
-+    const walker = screen.getByRole('figure').firstElementChild as HTMLElement
-+    const distance = Math.abs(Number.parseFloat(walker.style.getPropertyValue('--pet-walk-offset')))
-+
-+    view.unmount()
-+
-+    return distance
-+  }
-+
-+  const standard = travel('standard')
-+
-+  expect(travel()).toBe(standard)
-+  expect(travel('light')).toBeGreaterThan(standard)
-+  expect(travel('heavy')).toBeLessThan(standard)
++it('uses the installed pack weight when choosing a wander action', () => {
++  const next = forceWalk(-24)
++  placeFixturePets()
++  render(<PetOverlayApp />)
++  const area = { x: 0, y: 24, width: 1000, height: 700 }
++  const [actor] = preview().characterPreview.characters
++  act(() => emit({ ...normal, charactersPaused: false, characterDesktop: { bounds: area, areas: [area] },
++    characterPreview: { expiresAt: Date.now() + 15000, characters: [{ ...actor, sprite: { ...info, motionWeight: 'heavy' } }] } }))
++  act(() => vi.advanceTimersByTime(500))
++  expect(next).toHaveBeenCalledWith(0, expect.anything(), 'heavy', true)
 +})
 +
 +it('reads the displayed alpha pixel when a walking row is mirrored', () => {
++  forceWalk(-40)
 +  placeFixturePets()
 +  render(<PetOverlayApp />)
 +  const area = { x: 0, y: 0, width: 1000, height: 700 }
@@ -28602,7 +28857,7 @@ index 0000000000000000000000000000000000000000..66937f85af7e4bb0259e4304e82b6c43
 +    characterDesktop: { bounds: area, areas: [area] } }
 +
 +  act(() => emit(payload))
-+  act(() => vi.advanceTimersByTime(1700))
++  act(() => vi.advanceTimersByTime(650))
 +  const [canvas] = screen.getAllByTestId('sprite') as HTMLCanvasElement[]
 +  expect(canvas.dataset.row).toBe('running-right')
 +  expect(canvas.parentElement!.hasAttribute('data-pet-mirrored')).toBe(true)
@@ -55536,7 +55791,7 @@ index b46d5b4247acbda0b8649e2958b4e8ba1fa01925..1b0cc54843ec80008f3a9ae2926545c4
 +      ))
  
 diff --git a/apps/desktop/src/styles.css b/apps/desktop/src/styles.css
-index 219de061127cb5fcc23b67e1f9f7ceed5777a461..857a21fba7b82f9ea7f6bab4db9a7d01dff6576f 100644
+index 219de061127cb5fcc23b67e1f9f7ceed5777a461..40135690646440fa06aaf82d221afc4c9b2ff91e 100644
 --- a/apps/desktop/src/styles.css
 +++ b/apps/desktop/src/styles.css
 @@ -1433,2 +1433,19 @@ button {
@@ -55559,19 +55814,8 @@ index 219de061127cb5fcc23b67e1f9f7ceed5777a461..857a21fba7b82f9ea7f6bab4db9a7d01
 +}
 +
  [data-slot='dropdown-menu-item']:focus,
-@@ -2773,2 +2790,107 @@ button[data-slot='aui_msg-reactions'] svg {
+@@ -2773,2 +2790,96 @@ button[data-slot='aui_msg-reactions'] svg {
 
-+/* Three 60-step segments in 18 seconds keep wandering at 10 position changes per second. */
-+@keyframes pet-character-wander {
-+  0%, 100% { transform: translateX(0); }
-+  33.333333% { transform: translateX(var(--pet-wander-right, 12px)); }
-+  66.666667% { transform: translateX(var(--pet-wander-left, -12px)); }
-+}
-+
-+.pet-character-wander {
-+  animation: pet-character-wander 18s steps(60, end) infinite;
-+}
-+
 +[data-pet-walking] > canvas {
 +  transform: var(--pet-walk-shape, none);
 +  transform-origin: bottom;
