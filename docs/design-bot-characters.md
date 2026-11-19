@@ -822,3 +822,25 @@ walking RSS fell to 111.97–112.07 MiB. Combined CPU was 3.28 and 1.61 points
 in the two runs. The memory budget still missed, and CPU fell within the
 budget in one run. Compare publisher preparation and storage separately
 from native compositor updates before adopting this presentation path.
+
+### Bound the publisher's atlas decode allocation
+
+Character atlas validation now writes the decoded base64 string directly
+into one sized byte buffer. The PNG chunk walk, WebP screening, 4 MiB
+decoded limit and frozen prepared atlas contract are unchanged.
+
+Four fresh publisher launches alternated the original and updated
+decoders in one signed, network-denied Mac fixture. They shared the
+same five atlases, walking pose and native panel. Median walking
+publisher RSS above the publisher-only baseline fell from 40.62 to
+7.96 MiB. Whole-tree walking RSS fell from 109.09 to 80.17 MiB, and
+physical footprint fell from 76.84 to 47.85 MiB. The two updated
+launches added 79.34 and 81.00 MiB RSS. Preparing all five atlases took
+79.7–90.0 ms before and 18.7–20.8 ms after.
+
+Both decoders accepted and rejected the same PNG, WebP and malformed
+base64 corpus. All four launches painted five moving Characters and
+passed pause/resume, lease, clear and pipe teardown checks. The two
+updated launches measured 2.30 and 2.87 observed CPU points including
+WindowServer. The RSS and CPU budgets still need consistent passes.
+Compare native presentation updates at the same visual cadence next.
