@@ -30,6 +30,12 @@ These are native display components, not an embedded ChatGPT page. Rendering doe
 
 Cards choose stacked or side-by-side content from the space available inside the chat tile, rather than the whole window. Images and supplied text stay inside that tile when a preview is also open. This does not change the pane layout or fetch additional images or metadata.
 
+## Mermaid diagrams
+
+Fenced Mermaid blocks in answers and Markdown previews have a zoom viewer and
+source, SVG, and PNG actions. Cards can also include a Mermaid diagram. See
+the [Desktop Mermaid guide](mermaid-diagrams.md) for syntax and limits.
+
 ## Inline charts and diagram guidance
 
 A `chart` fenced JSON block renders as an accessible inline SVG chart with no new
