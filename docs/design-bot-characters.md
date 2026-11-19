@@ -1279,3 +1279,33 @@ both budgets in one of four early and zero of four late windows.
 Keep the nominal geometry for resource testing. A product size
 control can still serve preference and visibility. Native input
 routing, hardware graphics and consistent CPU acceptance remain open.
+
+### Compare single-cell and atlas layer contents
+
+Ten signed, network-denied Mac launches rendered the same five
+63 × 69 point Characters at 6 Hz. Atlas mode selected a rectangle
+from each 768 × 936 image. Cell mode kept the same decoded atlas
+and cached 22 cropped 96 × 104 images per atlas. It assigned the
+selected crop as the layer contents. Four adjacent pairs reversed
+order. A fifth pair used atlas/atlas. At the early and late sample
+endpoints all traces had 34 and 71 presentations, respectively.
+
+All 1,100 offscreen cell comparisons and 20 fixed-pose layer renders
+matched exactly. The flipped-row control differed as expected.
+Cropping 110 images took 0.034–0.040 ms to create the crop objects.
+Median first CPU-side layer submission was 0.017 ms in each mode.
+Those timings do not measure texture residency or first scanout.
+
+| Added CPU over publisher only | Early walking | Late walking |
+| --- | ---: | ---: |
+| Atlas range | 2.360–2.850 points | 1.300–3.250 points |
+| Cached cell range | 2.245–2.735 points | 1.985–2.385 points |
+| Cell minus atlas, four pairs | +0.345, +0.020, −0.105, −0.485 | +1.085, 0.000, −0.385, −0.275 |
+| Atlas/atlas control difference | +0.490 points | −0.700 points |
+
+CPU combines the process tree and system-wide WindowServer. Walking
+added 63.92–71.54 MiB RSS across both modes. Neither met the CPU
+ceiling in any early window. Each met it in one late window. Cached
+cells did not produce a repeatable CPU saving. Keep atlas rectangles
+as the benchmark baseline. Graphics upload and production acceptance
+remain open.
