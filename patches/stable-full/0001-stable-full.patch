@@ -2618,10 +2618,78 @@ index eecea3149168f6f7a1a56b580d5fd05633138a7b..c86dc87108678b54dafa3fb5d2778d6b
 +            'turn_recovery_attempts', DEFAULT_MAX_RECOVERY_ATTEMPTS)).strip()
      if raw.lower() in _OFF_VALUES:
 diff --git a/agent/managed_worker.py b/agent/managed_worker.py
-index a20db791096ba7565962624028b15eb851786185..4562a1ce90e91f951b83584f276eb162b427efe2 100644
+index a20db791096ba7565962624028b15eb851786185..817c5b58d6977a5416ec35792ef89b6ff7dffaf3 100644
 --- a/agent/managed_worker.py
 +++ b/agent/managed_worker.py
-@@ -433,5 +433,10 @@ def _construct_agent(frame, factory, policy, **kwargs):
+@@ -208,16 +208,3 @@ class WorkerControls:
+                     return
+-                if (set(frame) != {'type', 'prompt_id', 'value'} or frame['type'] not in {'approval', 'clarify'}
+-                        or not isinstance(frame['prompt_id'], str) or not isinstance(frame['value'], str)
+-                        or len(frame['value']) > 16384):
+-                    raise ValueError('invalid_managed_control')
+-                if frame['type'] == 'approval':
+-                    if frame['value'] not in {'once', 'deny', 'session', 'always'}:
+-                        raise ValueError('invalid_managed_control')
+-                    resolve_gateway_approval(self.route, frame['value'], request_id=frame['prompt_id'])
+-                else:
+-                    with self.lock:
+-                        state = self.clarifications.get(frame['prompt_id'])
+-                        if state is not None:
+-                            state['answer'] = frame['value']
+-                            state['event'].set()
++                self._respond(frame, resolve_gateway_approval)
+         except (EOFError, OSError, ValueError) as exc:
+@@ -228,7 +215,37 @@ class WorkerControls:
+
++    def _respond(self, frame, resolve_approval):
++        required = {'type', 'prompt_id', 'value'}
++        if (not required <= set(frame) or set(frame) - (required | {'receipt'})
++                or frame['type'] not in {'approval', 'clarify'} or not isinstance(frame['prompt_id'], str)
++                or not isinstance(frame['value'], str) or len(frame['value']) > 16384
++                or ('receipt' in frame and frame['receipt'] is not True)):
++            raise ValueError('invalid_managed_control')
++        kind, prompt_id, value = (frame[key] for key in ('type', 'prompt_id', 'value'))
++        if kind == 'approval':
++            if value not in {'once', 'deny', 'session', 'always'}:
++                raise ValueError('invalid_managed_control')
++            accepted = bool(resolve_approval(self.route, value, request_id=prompt_id))
++        else:
++            with self.lock:
++                state = self.clarifications.get(prompt_id)
++                accepted = state is not None and not state['event'].is_set()
++                if accepted:
++                    state['answer'] = value
++                    state['event'].set()
++        if frame.get('receipt'):
++            self.channel.send('prompt_response', prompt_id=prompt_id, accepted=accepted)
++
+     def approval(self, data):
+-        from tools.approval import ack_gateway_approval
++        from tools.approval import ack_gateway_approval, register_gateway_settle
+         fields = {'request_id', 'command', 'description', 'allow_session', 'allow_permanent', 'smart_denied', 'edit'}
+         self.channel.send('approval', data={k: v for k, v in data.items() if k in fields})
+-        ack_gateway_approval(self.route, data['request_id'])
++        prompt_id = data['request_id']
++
++        def settled(reason):
++            self.channel.send('prompt_settled', prompt_id=prompt_id)
++
++        if register_gateway_settle(self.route, prompt_id, settled):
++            ack_gateway_approval(self.route, prompt_id)
++        else:
++            settled('resolved')
+
+@@ -269,7 +286,7 @@ class WorkerControls:
+             state['event'].wait(timeout if timeout > 0 else None)
+-            return state['answer']
+         finally:
+             with self.lock:
+-                self.clarifications.pop(prompt_id, None)
++                answer = self.clarifications.pop(prompt_id)['answer']
+             self.channel.send('prompt_settled', prompt_id=prompt_id)
++        return answer
+
+@@ -433,5 +450,10 @@ def _construct_agent(frame, factory, policy, **kwargs):
      try:
 -        if kwargs['api_key'] is None:
 -            from gateway.session_worker_construct import worker_api_key
@@ -5136,6 +5204,168 @@ index 0000000000000000000000000000000000000000..cc044b0a230bba8f19bd5a0616b95350
 +    sandbox.cleanup()
 +  }
 +})
+diff --git a/apps/desktop/e2e/owner-inbox.capture.mjs b/apps/desktop/e2e/owner-inbox.capture.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..2963daebbbd51bf719ad576920e6b33a705e7b19
+--- /dev/null
++++ b/apps/desktop/e2e/owner-inbox.capture.mjs
+@@ -0,0 +1,84 @@
++import { strict as assert } from 'node:assert'
++import { mkdir, writeFile } from 'node:fs/promises'
++import { resolve } from 'node:path'
++
++import { chromium } from '@playwright/test'
++import { createServer } from 'vite'
++
++const [output, executablePath] = process.argv.slice(2)
++if (!output || !executablePath) throw new Error('Expected screenshot directory and Chromium executable')
++const target = resolve(output)
++await mkdir(target, { recursive: true })
++const server = await createServer({ server: { port: 0 }, clearScreen: false })
++let browser
++try {
++  await server.listen()
++  const endpoint = server.resolvedUrls.local[0] + 'e2e/owner-inbox.fixture.html'
++  browser = await chromium.launch({
++    executablePath, headless: true,
++    args: ['--disable-gpu', '--disable-gpu-compositing', '--disable-webgl', '--disable-background-networking']
++  })
++  const context = await browser.newContext({ viewport: { width: 1120, height: 780 }, reducedMotion: 'reduce' })
++  await context.route('**/*', route => route.request().url().startsWith(server.resolvedUrls.local[0])
++    ? route.continue() : route.abort())
++  const page = await context.newPage()
++  await page.goto(endpoint)
++  const badge = page.getByRole('button', { name: 'Waiting for owner 2' })
++  await badge.focus()
++  await page.keyboard.press('Enter')
++  const heading = page.getByRole('heading', { name: 'Waiting for owner' })
++  await heading.waitFor()
++  assert(await heading.evaluate(el => el === document.activeElement))
++  const cdp = await context.newCDPSession(page)
++  const tree = (await cdp.send('Accessibility.getFullAXTree')).nodes
++  assert(tree.some(node => node.role?.value === 'dialog' && node.name?.value === 'Waiting for owner'))
++  assert(tree.some(node => node.role?.value === 'radio' && node.name?.value === 'Fixture B'))
++  await page.screenshot({ path: resolve(target, 'owner-inbox-two-questions.png') })
++  await page.keyboard.press('Tab')
++  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('type')), 'radio')
++  await page.keyboard.press('ArrowDown')
++  assert.equal(await page.evaluate(() => document.activeElement?.closest('label')?.textContent), 'Fixture B')
++  await page.keyboard.press('Tab') // custom answer
++  await page.keyboard.press('Tab') // submit
++  assert.equal(await page.evaluate(() => document.activeElement?.textContent), 'Send answer')
++  await page.keyboard.press('Enter')
++  await page.getByText('The gateway accepted your response.').waitFor()
++  assert(await heading.evaluate(el => el === document.activeElement))
++  await page.screenshot({ path: resolve(target, 'owner-inbox-one-remaining.png') })
++  assert.equal(await page.getByText('Should I deliver the report as Markdown or PDF?').count(), 1)
++  assert.deepEqual(await page.evaluate(() => window.fixtureCalls.filter(([method]) => method === 'owner_inbox.respond')), [
++    ['owner_inbox.respond', { profile: 'tester', session_id: 'fixture-chat', prompt_id: 'fixture-q1',
++      authority_epoch: 1, execution_generation: 4, kind: 'clarify', value: 'Fixture B' }]
++  ])
++  await page.keyboard.press('Escape')
++  await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Waiting for owner 1')
++  await page.close()
++
++  const samples = []
++  for (const baseline of [true, false]) {
++    const idle = await context.newPage()
++    await idle.goto(endpoint + (baseline ? '?idle&baseline' : '?idle'))
++    await idle.getByRole('heading', { name: 'Bots' }).waitFor()
++    if (!baseline) await idle.waitForFunction(() => window.fixtureCalls.length === 1)
++    const client = await context.newCDPSession(idle)
++    await client.send('Performance.enable')
++    const snapshot = async () => {
++      await client.send('HeapProfiler.collectGarbage')
++      const metrics = new Map((await client.send('Performance.getMetrics')).metrics.map(metric => [metric.name, metric.value]))
++      return { jsHeapBytes: metrics.get('JSHeapUsedSize'), taskSeconds: metrics.get('TaskDuration') }
++    }
++    const before = await snapshot()
++    const startingCalls = await idle.evaluate(() => window.fixtureCalls.length)
++    const durationMs = 8000
++    await new Promise(resolve => setTimeout(resolve, durationMs))
++    const idleCalls = await idle.evaluate(() => window.fixtureCalls.length) - startingCalls
++    const after = await snapshot()
++    assert.equal(idleCalls, 0)
++    samples.push({ baseline, durationMs, idleCalls, before, after })
++    await idle.close()
++  }
++  await writeFile(resolve(target, 'owner-inbox-idle.json'), JSON.stringify(samples, null, 2) + '\n')
++} finally {
++  await browser?.close()
++  await server.close()
++}
+diff --git a/apps/desktop/e2e/owner-inbox.fixture.html b/apps/desktop/e2e/owner-inbox.fixture.html
+new file mode 100644
+index 0000000000000000000000000000000000000000..94e08fc3ef95306fa58959d8ee799fdaadb1948a
+--- /dev/null
++++ b/apps/desktop/e2e/owner-inbox.fixture.html
+@@ -0,0 +1,66 @@
++<!doctype html>
++<html lang="en" class="dark">
++  <head>
++    <meta charset="utf-8" />
++    <meta name="viewport" content="width=device-width, initial-scale=1" />
++    <title>Bots · owner inbox fixture</title>
++  </head>
++  <body>
++    <main id="fixture"></main>
++    <script type="module">
++      import '/src/styles.css'
++      import { createElement as h } from 'react'
++      import { createRoot } from 'react-dom/client'
++      import { atom } from 'nanostores'
++      import { Button, host } from '@hermes/plugin-sdk'
++      import { registerPluginLocales } from '/src/i18n/plugin-i18n'
++      import { BOTS_LOCALES, useBots } from '/src/plugins/hermes-bots/i18n'
++      import { OwnerInbox } from '/src/plugins/hermes-bots/owner-inbox'
++
++      const baseline = new URLSearchParams(location.search).has('baseline')
++      const bots = [{ profile: 'tester', label: 'Tester' }, { profile: 'writer', label: 'Writer' }]
++      const now = Date.now() / 1000
++      let items = new URLSearchParams(location.search).has('idle') ? [] : [
++        { kind: 'clarify', profile: 'tester', prompt_id: 'fixture-q1', session_id: 'fixture-chat',
++          authority_epoch: 1, execution_generation: 4, created_at: now - 142, card: 't_fixture-1',
++          question: 'Which fixture should I run for the compatibility check?', choices: ['Fixture A', 'Fixture B'] },
++        { kind: 'clarify', profile: 'writer', prompt_id: 'fixture-q2', session_id: 'fixture-chat',
++          authority_epoch: 1, execution_generation: 6, created_at: now - 73, card: 't_fixture-2',
++          goal: 'Publish the fixture report', question: 'Should I deliver the report as Markdown or PDF?',
++          choices: ['Markdown', 'PDF'] }
++      ]
++      const listeners = new Set()
++      window.fixtureCalls = []
++      Object.assign(host.state, { connectionId: atom('local'), profile: atom('default'), gateway: atom('open') })
++      host.getGateway = () => gateway
++      const gateway = {
++        onEvent(listener) { listeners.add(listener); return () => listeners.delete(listener) },
++        async request(method, params) {
++          window.fixtureCalls.push(JSON.parse(JSON.stringify([method, params])))
++          if (method === 'owner_inbox.list') return { items }
++          if (method === 'owner_inbox.respond') {
++            items = items.filter(item => item.profile !== params.profile || item.prompt_id !== params.prompt_id)
++            for (const listener of listeners) listener({ type: 'owner_inbox.changed' })
++            return { status: 'resolved' }
++          }
++          return { watching: false }
++        }
++      }
++      registerPluginLocales('hermes-bots', BOTS_LOCALES)
++      function Fixture() {
++        const text = useBots()
++        return h('div', {
++        className: 'mx-auto mt-12 max-w-4xl rounded-lg border border-(--ui-stroke-tertiary) bg-background'
++      },
++        h('header', { className: 'flex flex-wrap items-center gap-3 border-b border-(--ui-stroke-tertiary) p-5' },
++          h('h1', { className: 'mr-auto text-xl font-semibold' }, 'Bots'),
++          h(Button, { size: 'sm', variant: 'ghost' }, 'Monitor'),
++          !baseline && h(OwnerInbox, { connection: 'local', bots, text })),
++        h('section', { className: 'grid gap-3 p-5' },
++          ...bots.map(bot => h('div', { key: bot.profile, className: 'border-b border-(--ui-stroke-tertiary) pb-3 text-sm' },
++            bot.label))))
++      }
++      createRoot(document.getElementById('fixture')).render(h(Fixture))
++    </script>
++  </body>
++</html>
 diff --git a/apps/desktop/e2e/unlisted-session-restore.spec.ts b/apps/desktop/e2e/unlisted-session-restore.spec.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..518c89180f98e465795130439c506eda5b61d8ee
@@ -15750,8 +15980,27 @@ index 3a2b475f5adc031ea3776010c05ae50e2a71b8f9..0b1f7c5db984f0be8e83a842bff772ff
 +      assert.equal(nativeTreeComplete(tmp, 'linux', process.arch), false)
 +      put(`native/linux-${process.arch}/pet-overlay-x11`)
        assert.equal(nativeTreeComplete(tmp, 'linux', process.arch), true)
+diff --git a/apps/desktop/src/api/canonical-attach-snapshot.test.ts b/apps/desktop/src/api/canonical-attach-snapshot.test.ts
+index bdfb55234e407eb4301b832cceba7f149ae67118..fe1e1c8680c247e9b39cca554e572073aa56394f 100644
+--- a/apps/desktop/src/api/canonical-attach-snapshot.test.ts
++++ b/apps/desktop/src/api/canonical-attach-snapshot.test.ts
+@@ -21,2 +21,3 @@ test('a cold attach delivers the snapshot prompt and marks the session attached'
+         ? { session_id: 's', stored_session_id: 's', revision: 2, execution_generation: 5, running: true, messages: [],
++            info: { profile_name: 'sibling' },
+             prompts: [{ kind: 'clarify', prompt_id: 'c1', execution_generation: 5, question: 'Which target?', choices: [] }] }
+@@ -40,2 +41,10 @@ test('a cold attach delivers the snapshot prompt and marks the session attached'
+     expect(sent.map(frame => frame.method)).toEqual(['clarify.respond'])
++
++    sent.length = 0
++    const inbox = {
++      profile: 'default', session_id: 's', prompt_id: 'independent-default-prompt',
++      authority_epoch: 3, execution_generation: 5, kind: 'clarify', value: 'B'
++    }
++    await client.request('owner_inbox.respond', inbox)
++    expect(sent.map(frame => [frame.method, frame.params])).toEqual([['owner_inbox.respond', inbox]])
+   } finally {
 diff --git a/apps/desktop/src/api/client.ts b/apps/desktop/src/api/client.ts
-index 68c5a3e1b74856ec19591084e20c681d92984ba5..611d1a2baa53cdd89d6052f9c30747ffa88a1a5e 100644
+index 68c5a3e1b74856ec19591084e20c681d92984ba5..d78adfe778decb11336183fbfe83a4c50d1fd418 100644
 --- a/apps/desktop/src/api/client.ts
 +++ b/apps/desktop/src/api/client.ts
 @@ -7,5 +7,4 @@ import {
@@ -15762,7 +16011,14 @@ index 68c5a3e1b74856ec19591084e20c681d92984ba5..611d1a2baa53cdd89d6052f9c30747ff
 +import type { HermesApiRequest } from '@hermes/shared'
 +import { atom, map, type MapStore } from 'nanostores'
 
-@@ -676,6 +675,6 @@ export function connectionScoped(): { connectionId?: string } {
+@@ -354,2 +353,6 @@ export class HermesGateway extends JsonRpcGatewayClient {
+   private routeCanonicalParams(method: string, params: Record<string, unknown>): Record<string, unknown> {
++    // An inbox row already carries the serving profile. A chat attach can have
++    // learned an alias for the same stored ID under a different profile.
++    if (method === 'owner_inbox.respond') { return params }
++
+     if (method === 'session.events.since' && params.profile === undefined && typeof params.replay_epoch === 'string') {
+@@ -676,6 +679,6 @@ export function connectionScoped(): { connectionId?: string } {
  // through @/hermes.
 -let _apiLocalMode = false
 +export const $apiLocalMode = atom(false)
@@ -15771,7 +16027,7 @@ index 68c5a3e1b74856ec19591084e20c681d92984ba5..611d1a2baa53cdd89d6052f9c30747ff
 -  _apiLocalMode = local
 +  $apiLocalMode.set(local)
  }
-@@ -687,3 +686,3 @@ export function setApiRequestLocalMode(local: boolean): void {
+@@ -687,3 +690,3 @@ export function setApiRequestLocalMode(local: boolean): void {
  export function ambientOwnerConnectionId(): string | undefined {
 -  return $apiRequestScope.get().connectionId ?? (_apiLocalMode ? 'local' : undefined)
 +  return $apiRequestScope.get().connectionId ?? ($apiLocalMode.get() ? 'local' : undefined)
@@ -43918,14 +44174,33 @@ index 0000000000000000000000000000000000000000..b251a357dbcbe547ab5e99aaa0fd4d55
 +  })
 +})
 diff --git a/apps/desktop/src/plugins/hermes-bots/i18n-messages.ts b/apps/desktop/src/plugins/hermes-bots/i18n-messages.ts
-index ba04a09039cdc74ca7919fdbc10afab6a2658157..d560cd537f518260366c83719463224901eeed69 100644
+index ba04a09039cdc74ca7919fdbc10afab6a2658157..dd9ab062ecb78d6dd0f4cda73e2566d1073c854b 100644
 --- a/apps/desktop/src/plugins/hermes-bots/i18n-messages.ts
 +++ b/apps/desktop/src/plugins/hermes-bots/i18n-messages.ts
-@@ -5,4 +5,32 @@
+@@ -5,4 +5,51 @@
  import { type CanonicalGroupMessages } from './canonical-group-locales'
 +import type { MonitorMessages } from './monitor-locales'
 
  export type BotsMessages = {
++  ownerInbox: {
++    title: string
++    scope: string
++    loading: string
++    unavailable: string
++    retry: string
++    empty: string
++    card: (id: string) => string
++    goal: (title: string) => string
++    answer: string
++    otherAnswer: string
++    submit: string
++    approve: string
++    deny: string
++    sent: string
++    expired: string
++    failed: string
++    openFailed: string
++  }
 +  monitor: { [K in keyof MonitorMessages]: MonitorMessages[K] }
 +  workspace: {
 +    configuredRoute: string
@@ -43954,32 +44229,51 @@ index ba04a09039cdc74ca7919fdbc10afab6a2658157..d560cd537f518260366c837194632249
 +    more: string
 +  }
    canonical: { [K in keyof CanonicalGroupMessages]: string }
-@@ -10,2 +38,4 @@ export type BotsMessages = {
+@@ -10,2 +57,4 @@ export type BotsMessages = {
    editor: {
 +    startIntro: string
 +    introHint: string
      fullConfigHint: string
-@@ -77,2 +107,5 @@ export type BotsMessages = {
+@@ -77,2 +126,5 @@ export type BotsMessages = {
    roster: {
 +    workerActivity: string
 +    workerStep: (step: number, max?: null | number) => string
 +    workerTokens: (input: string, output: string) => string
      search: string
-@@ -224,2 +257,3 @@ export type BotsMessages = {
+@@ -224,2 +276,3 @@ export type BotsMessages = {
      manageDesc: string
 +    saveFailed: string
      manageTitle: string
 diff --git a/apps/desktop/src/plugins/hermes-bots/i18n.ts b/apps/desktop/src/plugins/hermes-bots/i18n.ts
-index 786c53778c9f2a14e9500b0430d9a8a596852e66..2b12a84bdc83bc17814f93a61a02f9cbf14b240f 100644
+index 786c53778c9f2a14e9500b0430d9a8a596852e66..a8d6305474e9ed7456140a24fe3bee3b773d7081 100644
 --- a/apps/desktop/src/plugins/hermes-bots/i18n.ts
 +++ b/apps/desktop/src/plugins/hermes-bots/i18n.ts
 @@ -37,2 +37,3 @@ import { bind, type Bound } from './i18n-bind'
  import { type BotsMessages } from './i18n-messages'
 +import { BOT_MONITOR_LOCALES } from './monitor-locales'
  import { getPluginCtx } from './shared'
-@@ -41,3 +42,33 @@ const en: BotsMessages = {
+@@ -41,3 +42,52 @@ const en: BotsMessages = {
    canonical: CANONICAL_GROUP_LOCALES.en,
 +  monitor: BOT_MONITOR_LOCALES.en,
++  ownerInbox: {
++    title: 'Waiting for owner',
++    scope: 'Questions and approvals on the active connection.',
++    loading: 'Loading pending requests…',
++    unavailable: 'Pending requests are unavailable on this connection.',
++    retry: 'Refresh inbox',
++    empty: 'Nothing is waiting for your answer.',
++    card: id => `Card ${id}`,
++    goal: title => `Goal · ${title}`,
++    answer: 'Your answer',
++    otherAnswer: 'Or enter your own answer',
++    submit: 'Send answer',
++    approve: 'Approve once',
++    deny: 'Deny',
++    sent: 'The gateway accepted your response.',
++    expired: 'This request has already closed.',
++    failed: 'Could not confirm your response. Refresh the inbox before trying again.',
++    openFailed: 'Could not open this chat.'
++  },
 +  workspace: {
 +    configuredRoute: 'Configured model and provider; existing chats may keep their own model',
 +    modelUnknown: 'Model not reported',
@@ -44011,88 +44305,112 @@ index 786c53778c9f2a14e9500b0430d9a8a596852e66..2b12a84bdc83bc17814f93a61a02f9cb
 +    introHint:
 +      'Optional: makes a real model call using this bot’s configured route and existing quota. Leave off to create only.',
      fullConfigHint: 'Full configuration needs a newer gateway (restart it after updating Hermes).',
-@@ -134,2 +165,5 @@ const en: BotsMessages = {
+@@ -134,2 +184,5 @@ const en: BotsMessages = {
      needsInput: 'Needs your input',
 +    workerActivity: 'Worker activity',
 +    workerStep: (n, max) => (max ? `step ${n}/${max}` : `step ${n}`),
 +    workerTokens: (i, o) => `${i} in · ${o} out`,
      botsAndGroups: 'Bots and group chats',
-@@ -249,3 +283,4 @@ const en: BotsMessages = {
+@@ -249,3 +302,4 @@ const en: BotsMessages = {
      newTitle: 'New group chat',
 -    manageDesc: 'A bot can join multiple group chats. Memberships sync to every machine.',
 +    manageDesc: 'A bot can join multiple group chats. Memberships saved to Hermes sync to other devices.',
 +    saveFailed: 'Group memberships changed on this device, but could not be saved to Hermes. Try the change again to sync other devices.',
      manageTitle: 'Manage groups',
-@@ -481,3 +516,8 @@ const ja: BotsMessages = {
+@@ -481,3 +535,9 @@ const ja: BotsMessages = {
    canonical: CANONICAL_GROUP_LOCALES.ja,
 +  monitor: BOT_MONITOR_LOCALES.ja,
++  ownerInbox: en.ownerInbox,
 +  workspace: en.workspace,
    editor: {
 +    startIntro: 'Start an introduction after creation',
 +    introHint:
 +      'Optional: makes a real model call using this bot’s configured route and existing quota. Leave off to create only.',
      fullConfigHint: 'すべての設定を使うには新しいゲートウェイが必要です（Hermes 更新後に再起動してください）。',
-@@ -576,2 +616,5 @@ const ja: BotsMessages = {
+@@ -576,2 +636,5 @@ const ja: BotsMessages = {
      needsInput: '入力が必要です',
 +    workerActivity: 'ワーカーの動作',
 +    workerStep: (n, max) => (max ? `ステップ ${n}/${max}` : `ステップ ${n}`),
 +    workerTokens: (i, o) => `入力 ${i} · 出力 ${o}`,
      botsAndGroups: 'ボットとグループチャット',
-@@ -690,3 +733,4 @@ const ja: BotsMessages = {
+@@ -690,3 +753,4 @@ const ja: BotsMessages = {
      newTitle: '新しいグループチャット',
 -    manageDesc: 'ボットは複数のグループチャットに参加できます。メンバーシップはすべてのマシンに同期されます。',
 +    manageDesc: 'ボットは複数のグループチャットに参加できます。Hermesに保存されたメンバーシップは他のデバイスに同期されます。',
 +    saveFailed: 'このデバイスのグループ参加状況は変更されましたが、Hermesに保存できませんでした。他のデバイスに同期するには、変更をもう一度実行してください。',
      manageTitle: 'グループを管理',
-@@ -925,3 +969,8 @@ const zh: BotsMessages = {
+@@ -925,3 +989,9 @@ const zh: BotsMessages = {
    canonical: CANONICAL_GROUP_LOCALES.zh,
 +  monitor: BOT_MONITOR_LOCALES.zh,
++  ownerInbox: en.ownerInbox,
 +  workspace: en.workspace,
    editor: {
 +    startIntro: 'Start an introduction after creation',
 +    introHint:
 +      'Optional: makes a real model call using this bot’s configured route and existing quota. Leave off to create only.',
      fullConfigHint: '完整配置需要更新网关（更新 Hermes 后请重启网关）。',
-@@ -1014,2 +1063,5 @@ const zh: BotsMessages = {
+@@ -1014,2 +1084,5 @@ const zh: BotsMessages = {
      needsInput: '需要你输入',
 +    workerActivity: '工作进程活动',
 +    workerStep: (n, max) => (max ? `第 ${n}/${max} 步` : `第 ${n} 步`),
 +    workerTokens: (i, o) => `输入 ${i} · 输出 ${o}`,
      botsAndGroups: '机器人和群聊',
-@@ -1124,3 +1176,4 @@ const zh: BotsMessages = {
+@@ -1124,3 +1197,4 @@ const zh: BotsMessages = {
      newTitle: '新建群聊',
 -    manageDesc: '一个机器人可以加入多个群聊。成员关系会同步到每台设备。',
 +    manageDesc: '一个机器人可以加入多个群聊。保存到 Hermes 的成员关系会同步到其他设备。',
 +    saveFailed: '此设备上的群组成员关系已更改，但无法保存到 Hermes。请再次执行更改，以同步到其他设备。',
      manageTitle: '管理群组',
-@@ -1352,3 +1405,8 @@ const zhHant: BotsMessages = {
+@@ -1352,3 +1426,9 @@ const zhHant: BotsMessages = {
    canonical: CANONICAL_GROUP_LOCALES['zh-hant'],
 +  monitor: BOT_MONITOR_LOCALES['zh-hant'],
++  ownerInbox: en.ownerInbox,
 +  workspace: en.workspace,
    editor: {
 +    startIntro: 'Start an introduction after creation',
 +    introHint:
 +      'Optional: makes a real model call using this bot’s configured route and existing quota. Leave off to create only.',
      fullConfigHint: '完整設定需要更新閘道（更新 Hermes 後請重新啟動閘道）。',
-@@ -1441,2 +1499,5 @@ const zhHant: BotsMessages = {
+@@ -1441,2 +1521,5 @@ const zhHant: BotsMessages = {
      needsInput: '需要您的輸入',
 +    workerActivity: '工作程序活動',
 +    workerStep: (n, max) => (max ? `第 ${n}/${max} 步` : `第 ${n} 步`),
 +    workerTokens: (i, o) => `輸入 ${i} · 輸出 ${o}`,
      botsAndGroups: '機器人和群組聊天',
-@@ -1551,3 +1612,4 @@ const zhHant: BotsMessages = {
+@@ -1551,3 +1634,4 @@ const zhHant: BotsMessages = {
      newTitle: '新增群組聊天',
 -    manageDesc: '一個機器人可以加入多個群組聊天。成員關係會同步到每台裝置。',
 +    manageDesc: '一個機器人可以加入多個群組聊天。儲存至 Hermes 的成員關係會同步到其他裝置。',
 +    saveFailed: '此裝置上的群組成員關係已變更，但無法儲存至 Hermes。請再次執行變更，以同步至其他裝置。',
      manageTitle: '管理群組',
-@@ -1783,7 +1845,42 @@ export const BOTS_LOCALES: PluginLocaleBundles = {
+@@ -1783,7 +1867,63 @@ export const BOTS_LOCALES: PluginLocaleBundles = {
    'zh-hant': zhHant,
 -  ar: { canonical: CANONICAL_GROUP_LOCALES.ar },
 -  ru: { canonical: CANONICAL_GROUP_LOCALES.ru },
 -  fr: { canonical: CANONICAL_GROUP_LOCALES.fr },
 -  de: { canonical: CANONICAL_GROUP_LOCALES.de },
 -  es: { canonical: CANONICAL_GROUP_LOCALES.es }
++  th: {
++    ownerInbox: {
++      title: 'รอเจ้าของตอบ',
++      scope: 'คำถามและการอนุมัติบนการเชื่อมต่อที่ใช้อยู่',
++      loading: 'กำลังโหลดรายการที่รอคำตอบ…',
++      unavailable: 'การเชื่อมต่อนี้เปิดรายการที่รอคำตอบไม่ได้',
++      retry: 'โหลดรายการใหม่',
++      empty: 'ตอนนี้ไม่มีรายการที่รอคำตอบ',
++      card: (id: string) => `การ์ด ${id}`,
++      goal: (title: string) => `เป้าหมาย · ${title}`,
++      answer: 'คำตอบของคุณ',
++      otherAnswer: 'หรือพิมพ์คำตอบเอง',
++      submit: 'ส่งคำตอบ',
++      approve: 'อนุมัติครั้งนี้',
++      deny: 'ปฏิเสธ',
++      sent: 'เกตเวย์รับคำตอบแล้ว',
++      expired: 'รายการนี้ปิดแล้ว',
++      failed: 'ยืนยันการส่งคำตอบไม่ได้ โหลดรายการใหม่ก่อนลองอีกครั้ง',
++      openFailed: 'เปิดแชตนี้ไม่ได้'
++    }
++  },
 +  ar: {
 +    canonical: CANONICAL_GROUP_LOCALES.ar,
 +  monitor: BOT_MONITOR_LOCALES.ar,
@@ -47740,6 +48058,450 @@ index 0000000000000000000000000000000000000000..76cbbc63cdbcc568bcf3cb88811ef3f2
 +    </section>
 +  )
 +}
+diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox-data.ts b/apps/desktop/src/plugins/hermes-bots/owner-inbox-data.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..6add9934dcfb0c1f2b1d5bc0e5a6fc152664aa28
+--- /dev/null
++++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox-data.ts
+@@ -0,0 +1,118 @@
++import { host, type OwnerInboxItem, type OwnerInboxList, type OwnerInboxResponse, useValue } from '@hermes/plugin-sdk'
++import { useEffect, useState } from 'react'
++
++type Gateway = NonNullable<ReturnType<typeof host.getGateway>>
++
++interface InboxSnapshot {
++  gateway: Gateway | null
++  connection: string | null
++  profile: string
++  items: OwnerInboxItem[]
++  status: 'loading' | 'ready' | 'unavailable'
++}
++
++export function ownerPromptKey(prompt: OwnerInboxItem) {
++  return JSON.stringify([prompt.profile, prompt.session_id, prompt.authority_epoch, prompt.execution_generation, prompt.prompt_id,
++    prompt.kind === 'clarify' ? prompt.question_id : undefined])
++}
++
++export function useOwnerInbox() {
++  const connection = useValue(host.state.connectionId)
++  const profile = useValue(host.state.profile)
++  const socketState = useValue(host.state.gateway)
++  const gateway = socketState === 'open' ? host.getGateway() : null
++  const [snapshot, setSnapshot] = useState<InboxSnapshot | null>(null)
++  const [retry, setRetry] = useState(0)
++
++  useEffect(() => {
++    if (!gateway) {
++      setSnapshot(null)
++
++      return
++    }
++
++    const lifetime = new AbortController()
++    let reading = false, dirty = false
++
++    const refresh = async () => {
++      if (lifetime.signal.aborted) { return }
++
++      if (reading) {
++        dirty = true
++
++        return
++      }
++
++      reading = true
++
++      do {
++        dirty = false
++
++        try {
++          const { items } = await gateway.request<OwnerInboxList>(
++            'owner_inbox.list', {}, undefined, lifetime.signal
++          )
++
++          if (!dirty && !lifetime.signal.aborted && host.getGateway() === gateway) {
++            setSnapshot({ gateway, connection, profile, items, status: 'ready' })
++          }
++        } catch {
++          if (!dirty && !lifetime.signal.aborted && host.getGateway() === gateway) {
++            setSnapshot({ gateway, connection, profile, items: [], status: 'unavailable' })
++          }
++        }
++      } while (dirty && !lifetime.signal.aborted)
++
++      reading = false
++    }
++
++    const off = gateway.onEvent(event => {
++      if (event.type === 'owner_inbox.changed' || event.type === 'gateway.ready') { void refresh() }
++    })
++
++    void refresh()
++
++    return () => {
++      lifetime.abort()
++      off()
++
++      if (host.getGateway() === gateway && host.state.gateway.get() === 'open') {
++        void gateway.request('owner_inbox.unwatch').catch(() => undefined)
++      }
++    }
++  }, [connection, gateway, profile, retry])
++
++  const current = gateway && snapshot?.gateway === gateway &&
++    snapshot.connection === connection && snapshot.profile === profile ? snapshot : null
++
++  return {
++    items: current?.items ?? [],
++    status: current?.status ?? (gateway ? 'loading' : 'unavailable'),
++    retry: () => setRetry(value => value + 1),
++    async respond(prompt: OwnerInboxItem, value: string) {
++      if (!gateway || host.getGateway() !== gateway || host.state.gateway.get() !== 'open' ||
++          host.state.connectionId.get() !== connection || host.state.profile.get() !== profile) {
++        throw new Error('The active connection changed')
++      }
++
++      const { profile: owner, session_id, prompt_id, execution_generation, authority_epoch, kind } = prompt
++
++      const result = await gateway.request<OwnerInboxResponse>(
++        'owner_inbox.respond', {
++          profile: owner, session_id, prompt_id, execution_generation, authority_epoch, kind, value,
++          question_id: kind === 'clarify' ? prompt.question_id : undefined
++        }
++      )
++
++      if (host.getGateway() === gateway && host.state.connectionId.get() === connection &&
++          host.state.profile.get() === profile) {
++        const key = ownerPromptKey(prompt)
++        setSnapshot(current => current?.gateway === gateway
++          ? { ...current, items: current.items.filter(item => ownerPromptKey(item) !== key) }
++          : current)
++      }
++
++      return result.status
++    }
++  }
++}
+diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx b/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..2f0ffa1a49e3aee460c80b11e018611047bd5ff0
+--- /dev/null
++++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx
+@@ -0,0 +1,140 @@
++import { host, type OwnerInboxItem } from '@hermes/plugin-sdk'
++import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
++import { atom } from 'nanostores'
++import { afterEach, expect, it, vi } from 'vitest'
++
++// eslint-disable-next-line no-restricted-imports -- install the real plugin strings in the component fixture.
++import { registerPluginLocales } from '@/i18n/plugin-i18n'
++
++import { BOTS_LOCALES, useBots } from './i18n'
++import { OwnerInbox } from './owner-inbox'
++
++function prompt(profile: string, question: string, fields: Partial<OwnerInboxItem> = {}): OwnerInboxItem {
++  return {
++    profile, question, session_id: 'same-session', prompt_id: `question-${profile}`,
++    execution_generation: 4, authority_epoch: 2, created_at: Date.now() / 1000 - 80,
++    kind: 'clarify', choices: [], ...fields
++  }
++}
++
++function fixture(initial: OwnerInboxItem[]) {
++  const dispose = registerPluginLocales('hermes-bots', BOTS_LOCALES)
++  disposers.push(dispose)
++  let items = initial
++  const listeners = new Set<(event: { type: string }) => void>()
++
++  const emit = (type = 'owner_inbox.changed') => {
++    for (const listener of listeners) { listener({ type }) }
++  }
++
++  const init = {
++    request: vi.fn(async (method: string, params?: { prompt_id: string }) => {
++      if (method === 'owner_inbox.respond') {
++        items = items.filter(item => item.prompt_id !== params?.prompt_id)
++        emit()
++
++        return { status: 'resolved' }
++      }
++
++      return { items }
++    }),
++    onEvent: (listener: (event: { type: string }) => void) => {
++      listeners.add(listener)
++
++      return () => listeners.delete(listener)
++    }
++  }
++
++  const connection = atom<string | null>('local')
++  const gatewayState = atom<string>('open')
++  const saved = { connectionId: host.state.connectionId, profile: host.state.profile, gateway: host.state.gateway }
++  Object.assign(host.state, { connectionId: connection, profile: atom('default'), gateway: gatewayState })
++  disposers.push(() => { Object.assign(host.state, saved) })
++  vi.spyOn(host, 'getGateway').mockReturnValue(init as unknown as NonNullable<ReturnType<typeof host.getGateway>>)
++  const open = vi.spyOn(host, 'openSession').mockResolvedValue(undefined)
++  const bots = [{ profile: 'tester', label: 'Tester' }, { profile: 'writer', label: 'Writer' }]
++  const TestInbox = () => <OwnerInbox bots={bots} connection="local" text={useBots()} />
++  const mount = () => render(<TestInbox />)
++
++  return { ...init, connection, gatewayState, emit, mount, open, change(next: OwnerInboxItem[]) { items = next; emit() } }
++}
++
++const disposers: Array<() => void> = []
++
++afterEach(() => {
++  cleanup()
++
++  for (const dispose of disposers.splice(0)) { dispose() }
++  vi.restoreAllMocks()
++})
++
++it('shows both bot questions, routes the answer exactly once, restores focus and only reloads on events', async () => {
++  const tester = prompt('tester', 'Use fixture A or B?', { card: 't_fixture-test', choices: ['A', 'B'] })
++  const writer = prompt('writer', 'Markdown or PDF?', { goal: 'Publish the fixture report' })
++  const inbox = fixture([tester, writer])
++  const view = inbox.mount()
++  const badge = await screen.findByRole('button', { name: 'Waiting for owner 2' })
++  expect(inbox.request.mock.calls.map(([method]) => method)).toEqual(['owner_inbox.list'])
++  fireEvent.click(badge)
++  const dialog = await screen.findByRole('dialog')
++  const heading = within(dialog).getByRole('heading', { name: 'Waiting for owner' })
++  await waitFor(() => expect(heading.ownerDocument.activeElement).toBe(heading))
++  const rows = within(dialog).getAllByRole('listitem')
++  expect(rows).toHaveLength(2)
++  expect(within(rows[0]).getByText('Tester')).toBeTruthy()
++  expect(within(rows[0]).getByText('Card t_fixture-test')).toBeTruthy()
++  expect(within(rows[1]).getByText('Goal · Publish the fixture report')).toBeTruthy()
++  expect(within(rows[0]).getByText(/ago/).tagName).toBe('TIME')
++  expect(inbox.request.mock.calls.filter(([method]) => method === 'owner_inbox.list')).toHaveLength(1)
++
++  const other = within(rows[0]).getByRole('textbox', { name: 'Or enter your own answer' })
++  other.focus()
++  fireEvent.change(other, { target: { value: 'B' } })
++  fireEvent.submit(other.closest('form')!)
++  await waitFor(() => expect(screen.queryByText('Use fixture A or B?')).toBeNull())
++  expect(heading.ownerDocument.activeElement).toBe(heading)
++  expect(inbox.request.mock.calls.filter(([method]) => method === 'owner_inbox.respond')).toEqual([
++    ['owner_inbox.respond', expect.objectContaining({
++      profile: 'tester', session_id: 'same-session', prompt_id: 'question-tester', execution_generation: 4,
++      authority_epoch: 2, value: 'B'
++    })]
++  ])
++  expect(screen.getByText('Markdown or PDF?')).toBeTruthy()
++  expect(screen.getByText('The gateway accepted your response.')).toBeTruthy()
++  expect(inbox.open).not.toHaveBeenCalled()
++
++  view.unmount()
++  inbox.mount()
++  fireEvent.click(await screen.findByRole('button', { name: 'Waiting for owner 1' }))
++  expect(screen.getAllByText('Markdown or PDF?')).toHaveLength(1)
++  fireEvent.click(screen.getByRole('button', { name: 'Open chat' }))
++  expect(inbox.open).toHaveBeenCalledWith('same-session', expect.objectContaining({
++    route: { connectionId: 'local', mode: 'local', profile: 'writer', targetProfile: 'writer' }
++  }))
++})
++
++it('refreshes a pending approval on an event and hides old connection rows immediately', async () => {
++  const inbox = fixture([])
++  inbox.mount()
++  const control = screen.getByRole('button', { name: 'Waiting for owner' })
++  fireEvent.click(control)
++  await screen.findByText('Nothing is waiting for your answer.')
++  act(() => inbox.change([prompt('writer', '', {
++    kind: 'approval', command: 'fixture-review', description: 'Run the fixture review?',
++    choices: ['once', 'deny', 'always']
++  })]))
++  const button = await screen.findByRole('button', { name: 'Approve once' })
++  expect(screen.getByText('fixture-review')).toBeTruthy()
++  expect(screen.queryByRole('button', { name: 'Always approve' })).toBeNull()
++  fireEvent.click(button)
++  await screen.findByText('Nothing is waiting for your answer.')
++  expect(inbox.request).toHaveBeenCalledWith('owner_inbox.respond', expect.objectContaining({
++    profile: 'writer', kind: 'approval', value: 'once'
++  }))
++
++  act(() => inbox.change([prompt('writer', 'Should I publish?')]))
++  await screen.findByText('Should I publish?')
++  act(() => inbox.gatewayState.set('closed'))
++  expect(screen.queryByText('Should I publish?')).toBeNull()
++  expect(screen.getByText('Pending requests are unavailable on this connection.')).toBeTruthy()
++})
+diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx b/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..b47565fd06b1fc149f90980c927c6706ffe02494
+--- /dev/null
++++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx
+@@ -0,0 +1,168 @@
++import {
++  Button, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, host, type OwnerInboxItem, type PluginProfileRoute, relativeTime
++} from '@hermes/plugin-sdk'
++import { useId, useRef, useState } from 'react'
++
++import type { BotsText } from './i18n'
++import { ownerPromptKey, useOwnerInbox } from './owner-inbox-data'
++
++interface InboxBot {
++  profile: string
++  label: string
++  route?: PluginProfileRoute | null
++}
++
++export function OwnerInbox({ connection, bots, text }: {
++  connection: string | null
++  bots: InboxBot[]
++  text: Pick<BotsText, 'ownerInbox' | 'workspace'>
++}) {
++  const inbox = useOwnerInbox()
++  const t = text.ownerInbox
++  const [open, setOpen] = useState(false)
++  const [notice, setNotice] = useState('')
++  const heading = useRef<HTMLHeadingElement>(null)
++
++  function openChat(prompt: OwnerInboxItem) {
++    if (!connection || host.state.connectionId.get() !== connection) { return }
++
++    const route = bots.find(bot => bot.profile === prompt.profile)?.route ?? {
++      connectionId: connection,
++      profile: prompt.profile,
++      targetProfile: prompt.profile,
++      mode: connection === 'local' ? 'local' as const : 'remote' as const
++    }
++
++    void host.openSession(prompt.chat_session_id || prompt.session_id, { route, forceResume: true, awaitHydration: true })
++      .then(() => setOpen(false), () => setNotice(t.openFailed))
++  }
++
++  return <Dialog onOpenChange={next => {
++    setOpen(next)
++
++    if (!next) { setNotice('') }
++  }} open={open}>
++    <DialogTrigger asChild>
++      <Button aria-label={inbox.items.length ? `${t.title} ${inbox.items.length}` : t.title} size="sm" variant={inbox.items.length ? 'secondary' : 'ghost'}>
++        {t.title}{inbox.items.length > 0 && <span className="tabular-nums">{inbox.items.length}</span>}
++      </Button>
++    </DialogTrigger>
++    <DialogContent className="max-h-[85vh] max-w-xl overflow-y-auto" onOpenAutoFocus={event => {
++      event.preventDefault()
++      heading.current?.focus()
++    }}>
++      <DialogHeader>
++        <DialogTitle ref={heading} tabIndex={-1}>{t.title}</DialogTitle>
++        <DialogDescription>{t.scope}</DialogDescription>
++      </DialogHeader>
++      {inbox.status === 'loading' && <p className="text-sm" role="status">{t.loading}</p>}
++      {inbox.status === 'unavailable' && <div className="space-y-2 text-sm">
++        <p role="status">{t.unavailable}</p>
++        <Button onClick={inbox.retry} size="sm" variant="secondary">{t.retry}</Button>
++      </div>}
++      {inbox.status === 'ready' && inbox.items.length === 0 && <p className="text-sm">{t.empty}</p>}
++      <p className={notice ? "text-sm" : "sr-only"} role="status">{notice}</p>
++      <ul className="grid gap-3">
++        {inbox.items.map(prompt => <OwnerPromptRow
++          bot={bots.find(bot => bot.profile === prompt.profile)?.label || prompt.profile} key={ownerPromptKey(prompt)} onOpen={() => openChat(prompt)} onRespond={async value => {
++            // Keep focus inside the dialog as confirmation removes the focused row.
++            heading.current?.focus()
++
++            try {
++              const status = await inbox.respond(prompt, value)
++              setNotice(status === 'resolved' ? t.sent : t.expired)
++            } catch {
++              throw new Error(t.failed)
++            }
++          }}
++          prompt={prompt} text={text} />)}
++      </ul>
++    </DialogContent>
++  </Dialog>
++}
++
++function OwnerPromptRow({ prompt, bot, onOpen, onRespond, text }: {
++  prompt: OwnerInboxItem
++  bot: string
++  text: Pick<BotsText, 'ownerInbox' | 'workspace'>
++  onOpen: () => void
++  onRespond: (value: string) => Promise<void>
++}) {
++  const t = text.ownerInbox
++  const questionId = useId()
++  const [answer, setAnswer] = useState('')
++  const [selected, setSelected] = useState<string[]>([])
++  const [pending, setPending] = useState(false)
++  const [error, setError] = useState(false)
++  const sending = useRef(false)
++  const createdAt = prompt.created_at * 1000
++
++  async function send(value: string) {
++    if (sending.current) { return }
++    sending.current = true
++    setPending(true)
++    setError(false)
++
++    try {
++      await onRespond(value)
++    } catch {
++      setError(true)
++    } finally {
++      sending.current = false
++      setPending(false)
++    }
++  }
++
++  return <li className="min-w-0 space-y-3 rounded-lg border border-(--ui-stroke-tertiary) px-4 py-3">
++    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
++      <div className="min-w-0 break-words text-sm font-semibold">{bot}
++        {bot !== prompt.profile && <span className="ml-2 font-normal text-muted-foreground">{prompt.profile}</span>}
++      </div>
++      <time className="text-xs text-muted-foreground" dateTime={new Date(createdAt).toISOString()}>{relativeTime(createdAt)}</time>
++    </div>
++    {(prompt.card || prompt.goal || prompt.title) && <div className="whitespace-pre-wrap break-words text-xs text-muted-foreground">
++      {[prompt.card && t.card(prompt.card), prompt.goal && t.goal(prompt.goal),
++        !prompt.card && !prompt.goal && prompt.title].filter(Boolean).join(' · ')}
++    </div>}
++    {prompt.kind === 'clarify' ? <form className="grid gap-2" onSubmit={event => {
++      event.preventDefault()
++      const value = answer.trim()
++      const values = value ? [value] : selected
++
++      if (values.length) { void send(prompt.multi_select ? JSON.stringify(values) : values[0]) }
++    }}>
++      <fieldset className="grid gap-2" disabled={pending}>
++        <legend className="mb-2 whitespace-pre-wrap break-words text-sm font-medium" id={questionId}>{prompt.question}</legend>
++        {prompt.choices.map((choice, index) => <label className="flex items-start gap-2 break-words text-sm" key={index}>
++          <input checked={selected.includes(choice)} className="mt-1" name={questionId}
++            onChange={event => {
++              setAnswer('')
++              const checked = event.currentTarget.checked
++              setSelected(current => prompt.multi_select
++                ? checked ? [...current, choice] : current.filter(item => item !== choice)
++                : [choice])
++            }} type={prompt.multi_select ? 'checkbox' : 'radio'} />
++          <span className="min-w-0">{choice}</span>
++        </label>)}
++        <label className="grid gap-1 text-xs text-muted-foreground">
++          {prompt.choices.length ? t.otherAnswer : t.answer}
++          <input aria-describedby={questionId} className="min-h-9 rounded border border-(--ui-stroke-tertiary) bg-background px-2 text-sm text-foreground"
++            maxLength={16384} onChange={event => { setSelected([]); setAnswer(event.currentTarget.value) }} value={answer} />
++        </label>
++      </fieldset>
++      <div className="flex flex-wrap gap-2">
++        <Button disabled={pending || (!answer.trim() && !selected.length)} size="sm" type="submit" variant="secondary">{t.submit}</Button>
++        <Button onClick={onOpen} size="sm" type="button" variant="ghost">{text.workspace.open}</Button>
++      </div>
++    </form> : <>
++      {prompt.description && <p className="whitespace-pre-wrap break-words text-sm">{prompt.description}</p>}
++      <pre className="whitespace-pre-wrap break-words rounded bg-(--ui-bg-quinary) p-2 text-xs">{prompt.command}</pre>
++      <div className="flex flex-wrap gap-2">
++        {!prompt.chat_only && prompt.choices.includes('once') && <Button disabled={pending} onClick={() => void send('once')} size="sm" variant="secondary">{t.approve}</Button>}
++        {!prompt.chat_only && prompt.choices.includes('deny') && <Button disabled={pending} onClick={() => void send('deny')} size="sm" variant="ghost">{t.deny}</Button>}
++        <Button onClick={onOpen} size="sm" variant="ghost">{text.workspace.open}</Button>
++      </div>
++    </>}
++    {error && <p className="text-sm text-destructive" role="alert">{t.failed}</p>}
++  </li>
++}
 diff --git a/apps/desktop/src/plugins/hermes-bots/pet.test.tsx b/apps/desktop/src/plugins/hermes-bots/pet.test.tsx
 index e89e90fd99a8386e67c1f975c03a504da66c2ea0..a06db4cb013c5cc07b6debd1c4f10a308300ed55 100644
 --- a/apps/desktop/src/plugins/hermes-bots/pet.test.tsx
@@ -48866,10 +49628,10 @@ index 0000000000000000000000000000000000000000..a04002008fa7775f744d2d0418a7353e
 +})
 diff --git a/apps/desktop/src/plugins/hermes-bots/workspace.tsx b/apps/desktop/src/plugins/hermes-bots/workspace.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..215d4d8bc55ded4ab7895837ad5b6f3b72e21584
+index 0000000000000000000000000000000000000000..0a59aa1676260ac106ee0e7cb8d97c860d28ebd0
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/workspace.tsx
-@@ -0,0 +1,324 @@
+@@ -0,0 +1,332 @@
 +import { Button, Codicon, ErrorState, host, Loader, useValue } from '@hermes/plugin-sdk'
 +import { useMemo, useState } from 'react'
 +
@@ -48892,6 +49654,7 @@ index 0000000000000000000000000000000000000000..215d4d8bc55ded4ab7895837ad5b6f3b
 +import { displayName, stripPreviewMarkdown } from './labels'
 +import { $botManagementOpen } from './management'
 +import { BotMonitor } from './monitor'
++import { OwnerInbox } from './owner-inbox'
 +import { openRosterBot } from './roster-actions'
 +import { BotsPane } from './roster-pane'
 +import { botRosterMeta } from './routing'
@@ -49000,6 +49763,13 @@ index 0000000000000000000000000000000000000000..215d4d8bc55ded4ab7895837ad5b6f3b
 +          <Codicon name="pulse" />
 +          {text.monitor.title}
 +        </Button>
++        <OwnerInbox bots={(roster.data?.profiles || [])
++          .filter(bot => !bot.connectionId || bot.connectionId === connection)
++          .map(bot => ({
++            profile: bot.route?.targetProfile || bot.targetProfile || bot.name,
++            route: bot.route?.connectionId === connection ? bot.route : null,
++            label: displayName(bot, botRosterMeta(bot, meta) || bot.ui_meta?.['hermes-bots'])
++          }))} connection={connection} key={connection} text={text} />
 +        <BotWorkspaceActions onNavigate={() => setMonitor(false)} />
 +        <Button onClick={() => {
 +          const connectionId = host.state.connectionId.get(), profile = host.state.profile.get()
@@ -53781,20 +54551,21 @@ index 24bf8b26c27fef8286c4bb1b8ceaa56e3562ea95..1da04ebc77ee47e6f0ece49d7b073ef7
 +    stashSessionDraft('stored-stash', 'runtime-addressed', [], 'default')
 
 diff --git a/apps/desktop/src/sdk/index.ts b/apps/desktop/src/sdk/index.ts
-index 1771079ce633e58b6cc4374d95417cb169b71984..25d85311591f95c31243f4c3b847362ef538b1c1 100644
+index 1771079ce633e58b6cc4374d95417cb169b71984..3d187ba639128309e18f2b2949899b356edbc449 100644
 --- a/apps/desktop/src/sdk/index.ts
 +++ b/apps/desktop/src/sdk/index.ts
 @@ -52,2 +52,3 @@ import { traceIdentityChange } from '@/lib/identity-trace'
  import { completeMcpDesktopOAuth } from '@/lib/mcp-dashboard-oauth'
 +import { $clarifyRequests } from '@/store/clarify'
  import {
-@@ -125,4 +126,4 @@ import { desktopSettings } from './settings'
+@@ -125,4 +126,5 @@ import { desktopSettings } from './settings'
  export { PANES_AREA, STATUSBAR_AREAS, TITLEBAR_AREAS } from './areas'
 -/** The plugin authoring contract (`HermesPlugin`, `PluginContext`, `ctx.*` door types). */
  export type * from './plugin-contract'
++export type { OwnerInboxItem, OwnerInboxList, OwnerInboxResponse } from '@hermes/shared'
 +export type { PluginProfileRequestOptions, PluginProfileRoute } from './profile-request'
 
-@@ -214,2 +215,16 @@ const $focusedSessionOwner = computed(
+@@ -214,2 +216,16 @@ const $focusedSessionOwner = computed(
 
 +// A remembered needsInput bit can survive reconnect. Require the pending
 +// request on this runtime and the same stored session currently in view.
@@ -53811,12 +54582,12 @@ index 1771079ce633e58b6cc4374d95417cb169b71984..25d85311591f95c31243f4c3b847362e
 +)
 +
  const $focusedSessionProfile = computed(
-@@ -595,2 +610,4 @@ export const host = {
+@@ -595,2 +611,4 @@ export const host = {
      cwd: readonlyAtom<string>($currentCwd),
 +    /** Pending clarification on the focused stored chat with a known owner. */
 +    focusedClarification: readonlyAtom($focusedClarification),
      /** Runtime id of the FOCUSED chat session — the interacted tile, else the
-@@ -1264,2 +1281,9 @@ export const host = {
+@@ -1264,2 +1282,9 @@ export const host = {
 
 +  /** Update an open workspace caption without remounting its content or moving focus. */
 +  setWorkspaceTitle: (id: string, title: string): void => {
@@ -53826,38 +54597,38 @@ index 1771079ce633e58b6cc4374d95417cb169b71984..25d85311591f95c31243f4c3b847362e
 +  },
 +
    /** Name a workspace owner on its tabs (a bot's display name). A canonical
-@@ -1574,3 +1598,3 @@ export const host = {
+@@ -1574,3 +1599,3 @@ export const host = {
 
 -export type { PluginProfileRequestOptions, PluginProfileRoute } from './profile-request'
 +export type { DesktopSettingKey, DesktopSettingValues } from './settings'
 
-@@ -1578,3 +1602,2 @@ export type { PluginProfileRequestOptions, PluginProfileRoute } from './profile-
+@@ -1578,3 +1603,2 @@ export type { PluginProfileRequestOptions, PluginProfileRoute } from './profile-
 
 -export type { DesktopSettingKey, DesktopSettingValues } from './settings'
  /** THE whole Capabilities surface (Skills / Tools / MCP tabs, installed
-@@ -1663,3 +1686,2 @@ export {
+@@ -1663,3 +1687,2 @@ export {
  } from '@/app/overlays/panel'
 -
  export {
-@@ -1674,2 +1696,3 @@ export {
+@@ -1674,2 +1697,3 @@ export {
  } from '@/app/routes'
 +
  /** Appearance settings' plugin seam: register a render contribution at
-@@ -1810,2 +1833,4 @@ export type { GatewayEventListener } from '@/contrib/events'
+@@ -1810,2 +1834,4 @@ export type { GatewayEventListener } from '@/contrib/events'
  export { Contribute, type ContributeProps } from '@/contrib/react/contribute'
 +/** Settings ▸ Plugins entries (`ctx.registerSettingsPage`); `pluginSettingsHref` deep-links one. */
 +export { pluginSettingsHref, SETTINGS_PLUGINS_AREA } from '@/contrib/settings-pages'
 
-@@ -1813,4 +1838,2 @@ export { Contribute, type ContributeProps } from '@/contrib/react/contribute'
+@@ -1813,4 +1839,2 @@ export { Contribute, type ContributeProps } from '@/contrib/react/contribute'
 
 -/** Settings ▸ Plugins entries (`ctx.registerSettingsPage`); `pluginSettingsHref` deep-links one. */
 -export { pluginSettingsHref, SETTINGS_PLUGINS_AREA } from '@/contrib/settings-pages'
  export type { Contribution } from '@/contrib/types'
-@@ -1854,2 +1877,3 @@ export { type BudgetedLoop, type BudgetedLoopOptions, createBudgetedLoop } from
+@@ -1854,2 +1878,3 @@ export { type BudgetedLoop, type BudgetedLoopOptions, createBudgetedLoop } from
  export { CHAT_EMPTY_AREA, type ChatEmptyContribution, type ChatEmptyProps } from '@/lib/chat-empty'
 +export { isMissingRpcMethod } from '@/lib/gateway-rpc'
  /** THE confirm flow for guarded model switches — when a gateway model-switch
-@@ -1884,2 +1908,4 @@ export { captureGatewayFileDownload } from '@/lib/media'
+@@ -1884,2 +1909,4 @@ export { captureGatewayFileDownload } from '@/lib/media'
  export { catalogProviderMatches } from '@/lib/model-options'
 +/** The plugin authoring contract (`HermesPlugin`, `PluginContext`, `ctx.*` door types). */
 +export { MAX_PREVIEW_CHARACTERS } from '@/lib/pet-character-sprite'
@@ -57008,7 +57779,7 @@ index 0000000000000000000000000000000000000000..48fb2a357fec113ea6d7fb268b1af5b0
 +  return Object.fromEntries(entries)
 +}
 diff --git a/apps/shared/src/gateway-contract.generated.ts b/apps/shared/src/gateway-contract.generated.ts
-index 57a5f6d6774588963334c22dccc5a7101a80b7ed..5776d322c83f5f764eba509772175d502b4f8256 100644
+index 57a5f6d6774588963334c22dccc5a7101a80b7ed..c50cc04c4d687184dfeaafa4a7a4fd17540f199e 100644
 --- a/apps/shared/src/gateway-contract.generated.ts
 +++ b/apps/shared/src/gateway-contract.generated.ts
 @@ -812,2 +812,26 @@ export interface SharedMetricsDesktopDailyResult {
@@ -57044,16 +57815,59 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..5776d322c83f5f764eba509772175d50
 +  contract?: GoalContractSnapshot | null
 +  expected_revision?: string | null
  }
-@@ -2067,2 +2094,3 @@ export interface ProfileRow {
+@@ -1991,2 +2018,42 @@ export interface MachineInfo {
+ }
++export type OwnerInboxParams = Record<string, never>
++export interface OwnerInboxList {
++  items: OwnerInboxItem[]
++}
++export interface OwnerInboxItem {
++  profile: string
++  session_id: string
++  chat_session_id?: string | null
++  prompt_id: string
++  execution_generation: number
++  authority_epoch?: number | null
++  created_at: number
++  card?: string | null
++  goal?: string | null
++  title?: string | null
++  kind: 'clarify' | 'approval'
++  question_id?: string | null
++  question?: string | null
++  command?: string | null
++  description?: string | null
++  choices: string[]
++  multi_select?: boolean | null
++  chat_only?: boolean | null
++}
++export interface OwnerInboxUnwatch {
++  watching: false
++}
++export interface OwnerInboxRespondParams {
++  profile: string
++  session_id: string
++  prompt_id: string
++  execution_generation: number
++  authority_epoch?: number | null
++  question_id?: string | null
++  kind: 'clarify' | 'approval'
++  value: string
++}
++export interface OwnerInboxResponse {
++  status: 'resolved' | 'expired'
++}
+ /** ``word`` is the token under the cursor (``@`` prefix = context reference); ``cwd`` / ``session_id`` pick the directory the listing resolves against. */
+@@ -2067,2 +2134,3 @@ export interface ProfileRow {
    worker_session?: ProfileWorkerSession | null
 +  worker_sessions?: ProfileWorkerSession[] | null
    canonical_session?: ProfileCanonicalSession | null
-@@ -2082,3 +2110,3 @@ export interface ProfileSessionPreview {
+@@ -2082,3 +2150,3 @@ export interface ProfileSessionPreview {
  }
 -/** Newest kanban/tool worker row, so rosters can show a profile as working. */
 +/** Observed worker metadata, separate from human-facing conversation previews. */
  export interface ProfileWorkerSession {
-@@ -2088,2 +2116,13 @@ export interface ProfileWorkerSession {
+@@ -2088,2 +2156,13 @@ export interface ProfileWorkerSession {
    last_active?: number
 +  last_activity_description?: string
 +  ended_at?: number | null
@@ -57067,7 +57881,7 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..5776d322c83f5f764eba509772175d50
 +  actual_cost_usd?: number | null
 +  model?: string | null
  }
-@@ -2100,2 +2139,18 @@ export interface ProfileCanonicalSession {
+@@ -2100,2 +2179,18 @@ export interface ProfileCanonicalSession {
    live_message_count?: number | null
 +  input_tokens?: number | null
 +  output_tokens?: number | null
@@ -57086,7 +57900,7 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..5776d322c83f5f764eba509772175d50
 +  summary?: string
 +  error?: string
  }
-@@ -2433,2 +2488,41 @@ export interface SubagentTailResult {
+@@ -2433,2 +2528,41 @@ export interface SubagentTailResult {
  }
 +export interface ProfileWorkflowGetParams {
 +  profile?: string | null
@@ -57128,7 +57942,11 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..5776d322c83f5f764eba509772175d50
 +  effort?: string
 +}
  /** ``methods_projects._projects_payload``: every project (archived included) + the active id. */
-@@ -2729,2 +2823,7 @@ export interface PetGalleryEntry {
+@@ -2680,2 +2814,3 @@ export interface PetInfoResult {
+   stateRows?: string[] | null
++  motionWeight?: 'light' | 'standard' | 'heavy' | null
+   [key: string]: unknown
+@@ -2729,2 +2864,7 @@ export interface PetGalleryEntry {
  }
 +export interface PetSpriteParams {
 +  profile?: string | null
@@ -57136,7 +57954,7 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..5776d322c83f5f764eba509772175d50
 +  variant?: 'half' | null
 +}
  export interface PetSlugParams {
-@@ -4574,2 +4673,26 @@ export interface PluginCatalogLookupEntry {
+@@ -4574,2 +4714,26 @@ export interface PluginCatalogLookupEntry {
  }
 +export interface CanonicalSubagentListResult {
 +  subagents?: CanonicalSubagentSnapshot[]
@@ -57163,11 +57981,11 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..5776d322c83f5f764eba509772175d50
 +  child_session_id?: string | null
 +}
  export interface CanonicalShellExecParams {
-@@ -5288,2 +5411,3 @@ export interface CanonicalProfileRow {
+@@ -5288,2 +5452,3 @@ export interface CanonicalProfileRow {
    worker_session?: ProfileWorkerSession | null
 +  worker_sessions?: ProfileWorkerSession[] | null
    canonical_session?: ProfileCanonicalSession | null
-@@ -5293,2 +5417,27 @@ export interface CanonicalProfileRow {
+@@ -5293,2 +5458,27 @@ export interface CanonicalProfileRow {
  }
 +export interface CanonicalBotOutputParams {
 +  profile?: string | null
@@ -57195,38 +58013,59 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..5776d322c83f5f764eba509772175d50
 +  pdf_base64?: string | null
 +}
  export interface CanonicalAttachedImageResult {
-@@ -6057,2 +6206,4 @@ export type ConnectorErrorReason = 'INVALID_PARAMS' | 'NOT_OWNER' | 'UNSUPPORTED
+@@ -6057,2 +6247,4 @@ export type ConnectorErrorReason = 'INVALID_PARAMS' | 'NOT_OWNER' | 'UNSUPPORTED
  export interface RpcMethods {
 +  /** Read per-account quota snapshots. Only refresh=true queries readonly credential-scoped quota endpoints. */
 +  'account.usage': { params: AccountUsageParams; result: AccountUsageResult }
    /** Registry-wide background process summary for ``/agents``. */
-@@ -6323,2 +6474,4 @@ export interface RpcMethods {
+@@ -6291,2 +6483,8 @@ export interface RpcMethods {
+   'onboarding.state': { params: OnboardingStateParams; result: OnboardingRunStateResult }
++  /** Watch and list pending owner questions and approvals on the active gateway. */
++  'owner_inbox.list': { params: OwnerInboxParams; result: OwnerInboxList }
++  /** Settle exactly one still-open question or approval on its owning session. */
++  'owner_inbox.respond': { params: OwnerInboxRespondParams; result: OwnerInboxResponse }
++  /** Stop inbox invalidations on this socket. */
++  'owner_inbox.unwatch': { params: OwnerInboxParams; result: OwnerInboxUnwatch }
+   /** Spill a large paste to a file and hand back the inline placeholder. */
+@@ -6323,2 +6521,4 @@ export interface RpcMethods {
    'pet.select': { params: PetSlugParams; result: PetSlugResult }
 +  /** Read one installed character atlas, optionally at half resolution, without changing selection. */
 +  'pet.sprite': { params: PetSpriteParams; result: PetInfoResult }
    /** Idle-frame PNG data URI for the picker (desktop CSP breaks CDN <img>). */
-@@ -6353,2 +6506,6 @@ export interface RpcMethods {
+@@ -6353,2 +6553,6 @@ export interface RpcMethods {
    'profiles.set_asset': { params: ProfilesSetAssetParams; result: ProfilesSetAssetResult }
 +  /** Role-specific THINK/ACTION configuration; linkage is not dispatch readiness. */
 +  'profiles.workflow.configure': { params: ProfileWorkflowConfigureParams; result: ProfileWorkflowResult }
 +  /** Role-specific THINK/ACTION configuration; linkage is not dispatch readiness. */
 +  'profiles.workflow.get': { params: ProfileWorkflowGetParams; result: ProfileWorkflowResult }
    /** Structured project facts for a cwd so UIs don't re-sniff the workspace. */
-@@ -6576,2 +6733,3 @@ export type RpcMethod = keyof RpcMethods
+@@ -6576,2 +6780,3 @@ export type RpcMethod = keyof RpcMethods
  export const RPC_METHODS = [
 +  'account.usage',
    'agents.list',
-@@ -6709,2 +6867,3 @@ export const RPC_METHODS = [
+@@ -6693,2 +6898,5 @@ export const RPC_METHODS = [
+   'onboarding.state',
++  'owner_inbox.list',
++  'owner_inbox.respond',
++  'owner_inbox.unwatch',
+   'paste.collapse',
+@@ -6709,2 +6917,3 @@ export const RPC_METHODS = [
    'pet.select',
 +  'pet.sprite',
    'pet.thumb',
-@@ -6724,2 +6883,4 @@ export const RPC_METHODS = [
+@@ -6724,2 +6933,4 @@ export const RPC_METHODS = [
    'profiles.set_asset',
 +  'profiles.workflow.configure',
 +  'profiles.workflow.get',
    'project.facts',
-@@ -6871,3 +7032,9 @@ export interface CanonicalRpcMethods {
+@@ -6871,3 +7082,15 @@ export interface CanonicalRpcMethods {
    'kanban.run': { params: KanbanRunParams; result: KanbanRunResult }
++  /** Watch and list pending owner questions and approvals on the active gateway. */
++  'owner_inbox.list': { params: OwnerInboxParams; result: OwnerInboxList }
++  /** Settle exactly one still-open question or approval on its owning session. */
++  'owner_inbox.respond': { params: OwnerInboxRespondParams; result: OwnerInboxResponse }
++  /** Stop inbox invalidations on this socket. */
++  'owner_inbox.unwatch': { params: OwnerInboxParams; result: OwnerInboxUnwatch }
 +  'profiles.latest_output': { params: CanonicalBotOutputParams; result: CanonicalBotOutputResult }
    'profiles.list': { params: CanonicalProfilesParams; result: CanonicalProfilesResult }
 +  'profiles.output_file': { params: CanonicalBotFileParams; result: CanonicalBotFileResult }
@@ -57235,28 +58074,40 @@ index 57a5f6d6774588963334c22dccc5a7101a80b7ed..5776d322c83f5f764eba509772175d50
 +  /** Profile-scoped bot workflow configuration with an expected-revision fence. */
 +  'profiles.workflow.get': { params: ProfileWorkflowGetParams; result: ProfileWorkflowResult }
    /** Retire a still-queued admission; a started one is unaffected. */
-@@ -6910,2 +7077,6 @@ export interface CanonicalRpcMethods {
+@@ -6910,2 +7133,6 @@ export interface CanonicalRpcMethods {
    'shell.exec': { params: CanonicalShellExecParams; result: ShellExecResult }
 +  /** Interrupt one owned worker, optionally matching its child session ID. */
 +  'subagent.interrupt': { params: CanonicalSubagentInterruptParams; result: SubagentInterruptResult }
 +  /** List the session's live workers, with a child session ID for controllable workers. */
 +  'subagent.list': { params: SessionParams; result: CanonicalSubagentListResult }
    /** Adopt a registered execution after verifying the live producer claim. */
-@@ -6940,3 +7111,7 @@ export const CANONICAL_RPC_METHODS = [
+@@ -6940,3 +7167,10 @@ export const CANONICAL_RPC_METHODS = [
    'kanban.run',
++  'owner_inbox.list',
++  'owner_inbox.respond',
++  'owner_inbox.unwatch',
 +  'profiles.latest_output',
    'profiles.list',
 +  'profiles.output_file',
 +  'profiles.workflow.configure',
 +  'profiles.workflow.get',
    'prompt.cancel',
-@@ -6964,2 +7139,4 @@ export const CANONICAL_RPC_METHODS = [
+@@ -6964,2 +7198,4 @@ export const CANONICAL_RPC_METHODS = [
    'shell.exec',
 +  'subagent.interrupt',
 +  'subagent.list',
    'worker.adopt',
+@@ -7092,2 +7328,4 @@ export interface BackendGatewayEventMap {
+   'onboarding.ended': OnboardingEndedPayload
++  /** Content-free invalidation for a socket watching the owner inbox. */
++  'owner_inbox.changed': Record<string, never>
+   /** Pairing state moved; refetch pairing. */
+@@ -7222,2 +7460,3 @@ export const GATEWAY_EVENT_TYPES = [
+   'onboarding.ended',
++  'owner_inbox.changed',
+   'pairing.changed',
 diff --git a/apps/shared/src/gateway-contract.openrpc.json b/apps/shared/src/gateway-contract.openrpc.json
-index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa15617eb06ae 100644
+index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..6571b0f2c3787a854944d3db22eb012b27be82ec 100644
 --- a/apps/shared/src/gateway-contract.openrpc.json
 +++ b/apps/shared/src/gateway-contract.openrpc.json
 @@ -8,2 +8,20 @@
@@ -57280,7 +58131,64 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +      }
 +    },
      {
-@@ -2402,2 +2420,20 @@
+@@ -2114,2 +2132,56 @@
+     },
++    {
++      "name": "owner_inbox.list",
++      "summary": "Watch and list pending owner questions and approvals on the active gateway.",
++      "params": [
++        {
++          "name": "params",
++          "schema": {
++            "$ref": "#/components/schemas/OwnerInboxParams"
++          }
++        }
++      ],
++      "result": {
++        "name": "result",
++        "schema": {
++          "$ref": "#/components/schemas/OwnerInboxList"
++        }
++      }
++    },
++    {
++      "name": "owner_inbox.respond",
++      "summary": "Settle exactly one still-open question or approval on its owning session.",
++      "params": [
++        {
++          "name": "params",
++          "schema": {
++            "$ref": "#/components/schemas/OwnerInboxRespondParams"
++          }
++        }
++      ],
++      "result": {
++        "name": "result",
++        "schema": {
++          "$ref": "#/components/schemas/OwnerInboxResponse"
++        }
++      }
++    },
++    {
++      "name": "owner_inbox.unwatch",
++      "summary": "Stop inbox invalidations on this socket.",
++      "params": [
++        {
++          "name": "params",
++          "schema": {
++            "$ref": "#/components/schemas/OwnerInboxParams"
++          }
++        }
++      ],
++      "result": {
++        "name": "result",
++        "schema": {
++          "$ref": "#/components/schemas/OwnerInboxUnwatch"
++        }
++      }
++    },
+     {
+@@ -2402,2 +2474,20 @@
      },
 +    {
 +      "name": "pet.sprite",
@@ -57301,7 +58209,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +      }
 +    },
      {
-@@ -2672,2 +2708,38 @@
+@@ -2672,2 +2762,38 @@
      },
 +    {
 +      "name": "profiles.workflow.configure",
@@ -57340,7 +58248,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +      }
 +    },
      {
-@@ -4787,2 +4859,160 @@
+@@ -4787,2 +4913,160 @@
        },
 +      "AccountQuotaWindow": {
 +        "additionalProperties": false,
@@ -57501,7 +58409,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +        "type": "object"
 +      },
        "ActiveIdResult": {
-@@ -7283,2 +7513,75 @@
+@@ -7283,2 +7567,75 @@
        },
 +      "BotModelSelection": {
 +        "additionalProperties": false,
@@ -57577,7 +58485,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +        "type": "object"
 +      },
        "BotRelayDeliverParams": {
-@@ -7499,2 +7802,42 @@
+@@ -7499,2 +7856,42 @@
        },
 +      "BotWorkflow": {
 +        "additionalProperties": false,
@@ -57620,7 +58528,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +        "type": "object"
 +      },
        "BrowserAction": {
-@@ -8269,2 +8612,177 @@
+@@ -8269,2 +8666,177 @@
        },
 +      "CanonicalBotFileParams": {
 +        "additionalProperties": false,
@@ -57798,7 +58706,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +        "type": "object"
 +      },
        "CanonicalConfigGetResult": {
-@@ -9474,2 +9992,18 @@
+@@ -9474,2 +10046,18 @@
            },
 +          "worker_sessions": {
 +            "anyOf": [
@@ -57817,7 +58725,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +            "title": "Worker Sessions"
 +          },
            "canonical_session": {
-@@ -11289,2 +11823,215 @@
+@@ -11289,2 +11877,215 @@
        },
 +      "CanonicalSubagentInterruptParams": {
 +        "additionalProperties": false,
@@ -58033,7 +58941,336 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +        "type": "object"
 +      },
        "CanonicalSubmitParams": {
-@@ -27035,2 +27782,41 @@
+@@ -25231,2 +26032,308 @@
+       },
++      "OwnerInboxItem": {
++        "additionalProperties": false,
++        "properties": {
++          "profile": {
++            "title": "Profile",
++            "type": "string"
++          },
++          "session_id": {
++            "title": "Session Id",
++            "type": "string"
++          },
++          "chat_session_id": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Chat Session Id"
++          },
++          "prompt_id": {
++            "title": "Prompt Id",
++            "type": "string"
++          },
++          "execution_generation": {
++            "title": "Execution Generation",
++            "type": "integer"
++          },
++          "authority_epoch": {
++            "anyOf": [
++              {
++                "type": "integer"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Authority Epoch"
++          },
++          "created_at": {
++            "title": "Created At",
++            "type": "number"
++          },
++          "card": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Card"
++          },
++          "goal": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Goal"
++          },
++          "title": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Title"
++          },
++          "kind": {
++            "enum": [
++              "clarify",
++              "approval"
++            ],
++            "title": "Kind",
++            "type": "string"
++          },
++          "question_id": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Question Id"
++          },
++          "question": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Question"
++          },
++          "command": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Command"
++          },
++          "description": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Description"
++          },
++          "choices": {
++            "items": {
++              "type": "string"
++            },
++            "title": "Choices",
++            "type": "array"
++          },
++          "multi_select": {
++            "anyOf": [
++              {
++                "type": "boolean"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Multi Select"
++          },
++          "chat_only": {
++            "anyOf": [
++              {
++                "type": "boolean"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Chat Only"
++          }
++        },
++        "required": [
++          "profile",
++          "session_id",
++          "prompt_id",
++          "execution_generation",
++          "created_at",
++          "kind",
++          "choices"
++        ],
++        "title": "OwnerInboxItem",
++        "type": "object"
++      },
++      "OwnerInboxList": {
++        "additionalProperties": false,
++        "properties": {
++          "items": {
++            "items": {
++              "$ref": "#/components/schemas/OwnerInboxItem"
++            },
++            "title": "Items",
++            "type": "array"
++          }
++        },
++        "required": [
++          "items"
++        ],
++        "title": "OwnerInboxList",
++        "type": "object"
++      },
++      "OwnerInboxParams": {
++        "additionalProperties": false,
++        "properties": {},
++        "title": "OwnerInboxParams",
++        "type": "object"
++      },
++      "OwnerInboxRespondParams": {
++        "additionalProperties": false,
++        "properties": {
++          "profile": {
++            "title": "Profile",
++            "type": "string"
++          },
++          "session_id": {
++            "title": "Session Id",
++            "type": "string"
++          },
++          "prompt_id": {
++            "title": "Prompt Id",
++            "type": "string"
++          },
++          "execution_generation": {
++            "title": "Execution Generation",
++            "type": "integer"
++          },
++          "authority_epoch": {
++            "anyOf": [
++              {
++                "type": "integer"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Authority Epoch"
++          },
++          "question_id": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Question Id"
++          },
++          "kind": {
++            "enum": [
++              "clarify",
++              "approval"
++            ],
++            "title": "Kind",
++            "type": "string"
++          },
++          "value": {
++            "title": "Value",
++            "type": "string"
++          }
++        },
++        "required": [
++          "profile",
++          "session_id",
++          "prompt_id",
++          "execution_generation",
++          "kind",
++          "value"
++        ],
++        "title": "OwnerInboxRespondParams",
++        "type": "object"
++      },
++      "OwnerInboxResponse": {
++        "additionalProperties": false,
++        "properties": {
++          "status": {
++            "enum": [
++              "resolved",
++              "expired"
++            ],
++            "title": "Status",
++            "type": "string"
++          }
++        },
++        "required": [
++          "status"
++        ],
++        "title": "OwnerInboxResponse",
++        "type": "object"
++      },
++      "OwnerInboxUnwatch": {
++        "additionalProperties": false,
++        "properties": {
++          "watching": {
++            "const": false,
++            "title": "Watching",
++            "type": "boolean"
++          }
++        },
++        "required": [
++          "watching"
++        ],
++        "title": "OwnerInboxUnwatch",
++        "type": "object"
++      },
+       "PaneRevealPayload": {
+@@ -26897,2 +28004,19 @@
+             "title": "Staterows"
++          },
++          "motionWeight": {
++            "anyOf": [
++              {
++                "enum": [
++                  "light",
++                  "standard",
++                  "heavy"
++                ],
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Motionweight"
+           }
+@@ -27035,2 +28159,41 @@
        },
 +      "PetSpriteParams": {
 +        "additionalProperties": false,
@@ -58075,7 +59312,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +        "type": "object"
 +      },
        "PetSpritePayload": {
-@@ -29273,2 +30059,81 @@
+@@ -29273,2 +30436,81 @@
              "title": "Live Message Count"
 +          },
 +          "input_tokens": {
@@ -58157,7 +59394,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +            "default": null,
 +            "title": "Delegation Reports"
            }
-@@ -29282,2 +30147,74 @@
+@@ -29282,2 +30524,74 @@
        },
 +      "ProfileDelegationReport": {
 +        "additionalProperties": false,
@@ -58232,7 +59469,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +        "type": "object"
 +      },
        "ProfileMirrored": {
-@@ -29471,2 +30408,18 @@
+@@ -29471,2 +30785,18 @@
            },
 +          "worker_sessions": {
 +            "anyOf": [
@@ -58251,12 +59488,12 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +            "title": "Worker Sessions"
 +          },
            "canonical_session": {
-@@ -29583,3 +30536,3 @@
+@@ -29583,3 +30913,3 @@
          "additionalProperties": false,
 -        "description": "Newest kanban/tool worker row, so rosters can show a profile as working.",
 +        "description": "Observed worker metadata, separate from human-facing conversation previews.",
          "properties": {
-@@ -29610,2 +30563,136 @@
+@@ -29610,2 +30940,136 @@
              "title": "Last Active"
 +          },
 +          "last_activity_description": {
@@ -58393,7 +59630,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +            "default": null,
 +            "title": "Model"
            }
-@@ -29618,2 +30705,145 @@
+@@ -29618,2 +31082,145 @@
        },
 +      "ProfileWorkflowConfigureParams": {
 +        "additionalProperties": false,
@@ -58539,7 +59776,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +        "type": "object"
 +      },
        "ProfilesConfigureApplied": {
-@@ -36096,2 +37326,37 @@
+@@ -36096,2 +37703,37 @@
              "title": "Index"
 +          },
 +          "title": {
@@ -58577,8 +59814,62 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +            "default": null,
 +            "title": "Expected Revision"
            }
-@@ -48113,2 +49378,20 @@
+@@ -48113,2 +49755,74 @@
      },
++    {
++      "name": "owner_inbox.list",
++      "summary": "Watch and list pending owner questions and approvals on the active gateway.",
++      "params": [
++        {
++          "name": "params",
++          "schema": {
++            "$ref": "#/components/schemas/OwnerInboxParams"
++          }
++        }
++      ],
++      "result": {
++        "name": "result",
++        "schema": {
++          "$ref": "#/components/schemas/OwnerInboxList"
++        }
++      }
++    },
++    {
++      "name": "owner_inbox.respond",
++      "summary": "Settle exactly one still-open question or approval on its owning session.",
++      "params": [
++        {
++          "name": "params",
++          "schema": {
++            "$ref": "#/components/schemas/OwnerInboxRespondParams"
++          }
++        }
++      ],
++      "result": {
++        "name": "result",
++        "schema": {
++          "$ref": "#/components/schemas/OwnerInboxResponse"
++        }
++      }
++    },
++    {
++      "name": "owner_inbox.unwatch",
++      "summary": "Stop inbox invalidations on this socket.",
++      "params": [
++        {
++          "name": "params",
++          "schema": {
++            "$ref": "#/components/schemas/OwnerInboxParams"
++          }
++        }
++      ],
++      "result": {
++        "name": "result",
++        "schema": {
++          "$ref": "#/components/schemas/OwnerInboxUnwatch"
++        }
++      }
++    },
 +    {
 +      "name": "profiles.latest_output",
 +      "summary": "",
@@ -58598,7 +59889,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +      }
 +    },
      {
-@@ -48131,2 +49414,56 @@
+@@ -48131,2 +49845,56 @@
      },
 +    {
 +      "name": "profiles.output_file",
@@ -58655,7 +59946,7 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +      }
 +    },
      {
-@@ -48545,2 +49882,38 @@
+@@ -48545,2 +50313,38 @@
      },
 +    {
 +      "name": "subagent.interrupt",
@@ -58694,8 +59985,24 @@ index 0e7e02c8a98f70f44c1d9dd16eb6e46ca23003b4..50626d3121358769478c32b8cc1aa156
 +      }
 +    },
      {
+@@ -49287,2 +51091,15 @@
+     },
++    {
++      "name": "owner_inbox.changed",
++      "summary": "Content-free invalidation for a socket watching the owner inbox.",
++      "params": [
++        {
++          "name": "payload",
++          "schema": {
++            "type": "object",
++            "additionalProperties": false
++          }
++        }
++      ]
++    },
+     {
 diff --git a/apps/shared/src/index.ts b/apps/shared/src/index.ts
-index 3bf687a2663c8a91cef3312c32d06adaf074730b..cb026c35958d7865593e60cf0bc9c8ab33871543 100644
+index 3bf687a2663c8a91cef3312c32d06adaf074730b..70ea97ce552b2968850138e2f9918bd6ab3452ba 100644
 --- a/apps/shared/src/index.ts
 +++ b/apps/shared/src/index.ts
 @@ -1,2 +1,3 @@
@@ -58706,6 +60013,10 @@ index 3bf687a2663c8a91cef3312c32d06adaf074730b..cb026c35958d7865593e60cf0bc9c8ab
  } from './color'
 +export { mergeConfigPatch } from './config-patch'
  export {
+@@ -65,2 +67,3 @@ export { compactNumber } from './format'
+ export { type FuzzyMatch, fuzzyRank, fuzzyScore, fuzzyScoreMulti, type RankedItem } from './fuzzy'
++export type { OwnerInboxItem, OwnerInboxList, OwnerInboxResponse } from './gateway-contract.generated'
+ export * from './gateway-events'
 diff --git a/docs/legion/bounded-retry-policy.md b/docs/legion/bounded-retry-policy.md
 new file mode 100644
 index 0000000000000000000000000000000000000000..f109b3556f0986a3aef44ac3b24d6b90a5129e28
@@ -58985,6 +60296,14 @@ index f5a8122f18c15dee89f7ec5fcbae8803fdabf816..4637ac9e96649f7aa67b83682fbb5e3d
 +        )
 +        return result if result and result.get('idle_only') is True else None
      return query_gateway_control(home, "pause-for-update", timeout=timeout)
+diff --git a/gateway/drain_control.py b/gateway/drain_control.py
+index 3ac3efbab9d968a1a5bd6ac1030fd577bcebe23c..ac4c6108cd80ff2e60b97c77708e960fd966c914 100644
+--- a/gateway/drain_control.py
++++ b/gateway/drain_control.py
+@@ -72,2 +72,3 @@ RESTART_WAIT_WS_METHODS = frozenset({
+     "approval.pending", "approval.received", "approval.respond", "clarify.respond", "clarify.lock",
++    "owner_inbox.list", "owner_inbox.respond", "owner_inbox.unwatch",
+ })
 diff --git a/gateway/kanban_watchers.py b/gateway/kanban_watchers.py
 index 0d2a832290db3197c04c43c25eb6d6c1426d9a83..35341977360068281131753c4a2d808db751937a 100644
 --- a/gateway/kanban_watchers.py
@@ -59767,7 +61086,7 @@ index 54f72c73cf4b9801f18c93cc9614af9094a19a95..57961a7310ca629ce661720587fba7be
 +    return records
 
 diff --git a/gateway/session_authority.py b/gateway/session_authority.py
-index 3bc6c596c77c495c1cf318495a84319c211dd523..95d024cb2bbde15bae57bfa4b814cd445e6c2b13 100644
+index 3bc6c596c77c495c1cf318495a84319c211dd523..a746a7a764ade3a6184f72cf80544de08cf4273f 100644
 --- a/gateway/session_authority.py
 +++ b/gateway/session_authority.py
 @@ -887,6 +887,10 @@ class SessionAuthority:
@@ -59785,18 +61104,28 @@ index 3bc6c596c77c495c1cf318495a84319c211dd523..95d024cb2bbde15bae57bfa4b814cd44
 +            for parent in dict.fromkeys((ref.session_id, self.physical_target(ref))):
 +                interrupt_for_session(session_key=live.route, parent_session_id=parent, reason='user_stop')
          return self._handle(ref)
-@@ -1373,3 +1377,3 @@ def backfill_compression_created_sources(db):
+@@ -982,2 +986,9 @@ class SessionAuthority:
+             live.controls.register(session_id, route, generation, data, timeout_s=timeout_s)
++            prompt_id = data['request_id']
++            if prompt_id not in live.controls.remote_responders:
++                from tools.approval import register_gateway_settle
++                def settled(reason):
++                    live.controls.withdraw(session_id, prompt_id)
++                if not register_gateway_settle(route, prompt_id, settled, append=True):
++                    settled('resolved')
+
+@@ -1373,3 +1384,3 @@ def backfill_compression_created_sources(db):
 
 -async def initialize_session_authority(runner, *, profile_id, instance_id, db=None, register=True):
 +async def initialize_session_authority(runner, *, profile_id, instance_id, db=None, register=True, store_io=None):
      """Call after exclusive profile ownership, before connecting adapters/API.
-@@ -1379,2 +1383,5 @@ async def initialize_session_authority(runner, *, profile_id, instance_id, db=No
+@@ -1379,2 +1390,5 @@ async def initialize_session_authority(runner, *, profile_id, instance_id, db=No
      """
 +    if store_io is None:
 +        from gateway.session_bootstrap_io import profile_store_io
 +        store_io = profile_store_io
      if db is None:
-@@ -1384,11 +1391,11 @@ async def initialize_session_authority(runner, *, profile_id, instance_id, db=No
+@@ -1384,11 +1398,11 @@ async def initialize_session_authority(runner, *, profile_id, instance_id, db=No
      from pathlib import Path
 -    db_key = await asyncio.to_thread(Path(db.db_path).resolve)
 -    epoch = await asyncio.to_thread(begin_runtime_epoch, db, instance_id=instance_id)
@@ -59814,7 +61143,7 @@ index 3bc6c596c77c495c1cf318495a84319c211dd523..95d024cb2bbde15bae57bfa4b814cd44
 +    await store_io(backfill_legacy_session_owners, db)
 +    await store_io(backfill_compression_created_sources, db)
      authority = SessionAuthority(runner, profile_id=profile_id, instance_id=instance_id, db=db, epoch=epoch)
-@@ -1397,3 +1404,3 @@ async def initialize_session_authority(runner, *, profile_id, instance_id, db=No
+@@ -1397,3 +1411,3 @@ async def initialize_session_authority(runner, *, profile_id, instance_id, db=No
      from gateway.session_local_adoption import adopt_local_compressions
 -    await adopt_local_compressions(authority)
 +    await adopt_local_compressions(authority, store_io=store_io)
@@ -60150,7 +61479,7 @@ index 5fdf5536af0b43bd77287c301aede80e7f2811c5..81f8c890d71f52f76b66cb2e0d4bc204
 +
  async def control(connection, ref, params):
 diff --git a/gateway/session_controls.py b/gateway/session_controls.py
-index 65887575dec12b3ddb9f859ebe56156264ea120e..e893e94cd8d03641e6f1b56877ac9d2a354b46c5 100644
+index 65887575dec12b3ddb9f859ebe56156264ea120e..3852d8035ddf69bf1ff2b11cb34a2f95c72dfdeb 100644
 --- a/gateway/session_controls.py
 +++ b/gateway/session_controls.py
 @@ -93,3 +93,4 @@ _PROFILE_IMPLICIT = frozenset({'session.create', 'session.list', 'session.info',
@@ -60159,26 +61488,55 @@ index 65887575dec12b3ddb9f859ebe56156264ea120e..e893e94cd8d03641e6f1b56877ac9d2a
 +                               'approval.respond', 'clarify.respond', 'bot_relay.roster.sync',
 +                               'bot_relay.outbox.drain', 'bot_relay.reply'})
 
-@@ -234,2 +235,4 @@ class AuthorityConnection:
+@@ -234,2 +235,8 @@ class AuthorityConnection:
          handlers.update(onboarding_handlers(self))
 +        from gateway.session_bot_workflow import handlers as workflow_handlers
 +        handlers.update(workflow_handlers(self))
++        from gateway import session_owner_inbox as inbox
++        handlers['owner_inbox.list'] = partial(inbox.list_pending, self)
++        handlers['owner_inbox.unwatch'] = partial(inbox.stop_watching, self)
++        handlers['owner_inbox.respond'] = partial(inbox.respond, self)
          return handlers
-@@ -269,3 +272,3 @@ class AuthorityConnection:
+@@ -269,3 +276,3 @@ class AuthorityConnection:
                  return await routed.dispatch(request)
 -            # Our own home: the scope is implicit for the strict session verbs, which refuse
 +            # Our own home: the scope is implicit for strict session/relay verbs, which refuse
              # unknown keys; every other handler validates ``profile`` itself.
-@@ -295,3 +298,3 @@ class AuthorityConnection:
+@@ -286,3 +293,3 @@ class AuthorityConnection:
+         authority = self.authority
+-        if (isinstance(ref.session_id, str) and ref.session_id and not getattr(authority, 'retiring', False)
++        if (method != 'owner_inbox.respond' and isinstance(ref.session_id, str) and ref.session_id and not getattr(authority, 'retiring', False)
+                 and ref.profile_id == getattr(authority, 'profile_id', None)
+@@ -295,3 +302,3 @@ class AuthorityConnection:
          try:
 -            from gateway.session_group_controls import GROUP_METHODS, dispatch_group_control
 +            from gateway.session_group_controls import GROUP_METHODS, PROFILE_READS, dispatch_group_control
              # Every handler reads config/jobs/policy for the OWNING profile: enter its home so
-@@ -303,3 +306,3 @@ class AuthorityConnection:
+@@ -303,3 +310,3 @@ class AuthorityConnection:
              with owner_scope(self.authority):
 -                if method in GROUP_METHODS or method == 'profiles.list':
 +                if method in GROUP_METHODS or method in PROFILE_READS:
                      result = await dispatch_group_control(self, method, params)
+@@ -854,2 +861,4 @@ class AuthorityConnection:
+     async def close(self):
++        from gateway.session_owner_inbox import unwatch
++        unwatch(self)
+         for sibling in self._siblings.values():
+diff --git a/gateway/session_events.py b/gateway/session_events.py
+index f669acfb44e3acc17058e67981b4cf8569478451..bdad1477a2a8cc1df290bdb5e4d1d84a221bdd9f 100644
+--- a/gateway/session_events.py
++++ b/gateway/session_events.py
+@@ -9,2 +9,4 @@ from tui_gateway.transport import FanoutTransport
+
++_INBOX_EVENTS = frozenset({'clarify.request', 'approval.request', 'clarify.settled', 'approval.settled'})
++
+
+@@ -72,2 +74,5 @@ class SessionEvents:
+                                                         exc_info=True)
++            if event_type in _INBOX_EVENTS:
++                from gateway.session_owner_inbox import notify
++                notify(self, session_id, event_type.split(".", 1)[0])
+             # True when a live viewer or observer took the frame; the replay ring alone is not
 diff --git a/gateway/session_group_controls.py b/gateway/session_group_controls.py
 index 0f0b80d20825e91d16ab0a8d1a60cfcc5b8ca108..68f2f9820f562e7425ed627919858b592b75173b 100644
 --- a/gateway/session_group_controls.py
@@ -60550,16 +61908,324 @@ index 0661918b2156e6a6f8a8d17e92dbdec20a413eb2..4d7e9ef4182149e94a3f9334ae7dbe86
 +    adapter.gateway_runner = authority.runner
      live = authority.sessions.get(sid)
 diff --git a/gateway/session_managed_worker.py b/gateway/session_managed_worker.py
-index 86baeb5c76304465f14e685a5e48828d5cbb695c..73e470de1b0a388861f90b635da91624ad6d2093 100644
+index 86baeb5c76304465f14e685a5e48828d5cbb695c..0b0902bd180a3aa7fae5c567d38bf6c3a4fff64e 100644
 --- a/gateway/session_managed_worker.py
 +++ b/gateway/session_managed_worker.py
-@@ -555,2 +555,6 @@ async def _spawn_registered_worker(authority, ref, row):
+@@ -279,4 +279,7 @@ class ManagedWorker:
+
+-    def respond(self, kind, prompt_id, value):
+-        self.control({'type': kind, 'prompt_id': prompt_id, 'value': value})
++    def respond(self, kind, prompt_id, value, *, receipt=False):
++        frame = {'type': kind, 'prompt_id': prompt_id, 'value': value}
++        if receipt:
++            frame['receipt'] = True
++        self.control(frame)
+
+@@ -358,9 +361,10 @@ def _prompt_frame(authority, ref, row, worker, frame):
+     kind = frame.get('type')
++    if kind == 'prompt_response':
++        if (set(frame) != {'type', 'prompt_id', 'accepted'} or not isinstance(frame['prompt_id'], str)
++                or type(frame['accepted']) is not bool):
++            raise RuntimeStoreError('invalid_worker_frame')
++        controls.ack_inbox_response(ref.session_id, frame['prompt_id'], frame['accepted'])
++        return True
+     if kind == 'prompt_settled' and set(frame) == {'type', 'prompt_id'}:
+-        prompt_id = frame['prompt_id']
+-        controls.remote_responders.pop(prompt_id, None)
+-        saved = controls.pending.pop(prompt_id, None)
+-        if saved:
+-            live.event_stream.publish(ref.session_id, {'prompt_id': prompt_id,
+-                'execution_generation': row['generation']}, event_type=saved[1]['kind'] + '.settled')
++        controls.withdraw(ref.session_id, frame['prompt_id'])
+         return True
+@@ -555,2 +559,6 @@ async def _spawn_registered_worker(authority, ref, row):
          cwd = (await asyncio.to_thread(Path(__file__).resolve)).parents[1]
 +        # This child is Hermes: restore its owner's tree after the routed-profile scrub,
 +        # before an editable/runtime package can bind a stale agent namespace at startup.
 +        from cron.scheduler_worker_env import pin_hermes_tree_on_pythonpath
 +        env = pin_hermes_tree_on_pythonpath(dict(os.environ) if env is None else env, cwd)
          from gateway.session_worker_spawn import acquire_process
+diff --git a/gateway/session_owner_inbox.py b/gateway/session_owner_inbox.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..6134ac51011ff9d7d37eac17258f573a987a4135
+--- /dev/null
++++ b/gateway/session_owner_inbox.py
+@@ -0,0 +1,190 @@
++"""Operator inbox for the active gateway's already-running question and approval waiters."""
++
++import asyncio
++from dataclasses import replace
++import sqlite3
++import threading
++from weakref import WeakKeyDictionary
++
++from gateway.session_authorities import owner_scope, serving_authorities
++from gateway.session_contract import SessionRef
++from hermes_constants import profile_name_for_home
++from hermes_state_runtime import RuntimeStoreError, list_session_admissions
++
++_CAPABILITIES = {'clarify': 'session:respond', 'approval': 'session:approve'}
++_watchers = WeakKeyDictionary()
++_watchers_lock = threading.Lock()
++
++
++def _require_operator(connection):
++    if not {'session:operator', 'session:read'} <= connection.actor.capabilities:
++        raise RuntimeStoreError('permission_denied')
++
++
++def _authorities(connection):
++    if connection.host_scoped:
++        yield from serving_authorities(connection.authority.runner)
++    else:
++        yield connection.authority
++
++
++def _changed(connection, events, sid):
++    # Run on the socket's loop, outside the publisher's session lock. Use stream
++    # identity: even an equal session ID in another profile is a different waiter.
++    with _watchers_lock:
++        if connection not in _watchers:
++            return
++    for authority in _authorities(connection):
++        live = authority.sessions.get(sid)
++        if live is not None and live.event_stream is events:
++            connection.transport.write({'jsonrpc': '2.0', 'method': 'event',
++                                        'params': {'type': 'owner_inbox.changed', 'payload': {}}})
++            break
++
++
++def notify(events, sid, kind):
++    """Send a content-free invalidation only to operators watching this session's gateway."""
++    with _watchers_lock:
++        watchers = tuple(_watchers.items())
++    for connection, loop in watchers:
++        if _CAPABILITIES[kind] not in connection.actor.capabilities:
++            continue
++        # The socket may be closing while a model-thread waiter settles.
++        try:
++            loop.call_soon_threadsafe(_changed, connection, events, sid)
++        except RuntimeError:
++            unwatch(connection)
++
++
++def unwatch(connection):
++    with _watchers_lock:
++        _watchers.pop(connection, None)
++
++
++async def stop_watching(connection, ref, params):
++    unwatch(connection)
++    return {'watching': False}
++
++
++def _metadata(authority, sid, generation):
++    from gateway.run import _redact_approval_command
++    from gateway.session_local_close import _local_target
++    from hermes_cli.goals_metadata import read_goal
++
++    with owner_scope(authority):
++        row = authority.db.get_session_list_row(sid)
++        target = _local_target(authority, sid) or sid
++        goal, _ = read_goal(authority.db, authority.db.get_compression_tip(target) or target)
++        for admission in list_session_admissions(authority.db, session_id=sid):
++            if admission['generation'] == generation and admission['status'] == 'started':
++                card = admission['payload'].get('kanban_card_v1')
++                break
++        else:
++            card = None
++    metadata = {}
++    if row and row.get('title'):
++        metadata['title'] = _redact_approval_command(row['title'])
++    if isinstance(card, dict) and isinstance(card.get('task_id'), str):
++        metadata['card'] = card['task_id']
++    if goal and goal.goal and goal.status in {'active', 'paused'}:
++        metadata['goal'] = _redact_approval_command(goal.goal)
++    return metadata
++
++
++def _items(connection, authority):
++    from gateway.session_server_requests import inbox_questions
++
++    if authority.retired or authority.retiring:
++        return
++    profile = profile_name_for_home(authority.profile_id) or 'default'
++    for sid, generation in tuple(authority.executing.items()):
++        live = authority.sessions.get(sid)
++        if live is None or live.superseded:
++            continue
++        try:
++            actor = connection.actor
++            if authority is not connection.authority:
++                actor = replace(actor, profile_id=authority.profile_id)
++            authority.authorize(actor, SessionRef(authority.profile_id, sid), 'session:read')
++        except RuntimeStoreError as exc:
++            if exc.reason in {'permission_denied', 'not_found', 'runtime_retired'}:
++                continue
++            raise
++        shared = live.controls.inbox_snapshot(sid, generation)
++        batch = inbox_questions(live.event_stream, sid)
++        items = []
++        for prompt in (*shared, *batch):
++            if _CAPABILITIES[prompt['kind']] not in connection.actor.capabilities:
++                continue
++            fields = {key: value for key, value in prompt.items()
++                      if key not in {'edit', 'timeout_s', 'execution_generation'}}
++            if prompt['kind'] == 'approval':
++                fields['chat_only'] = 'edit' in prompt
++            items.append({**fields, 'profile': profile, 'session_id': sid, 'execution_generation': generation,
++                          'authority_epoch': authority.epoch})
++        if items:
++            yield sid, generation, items
++
++
++def _enrich(groups):
++    items = []
++    for authority, sid, generation, prompts in groups:
++        try:
++            metadata = _metadata(authority, sid, generation)
++        except (RuntimeStoreError, sqlite3.Error, ValueError, TypeError):
++            # A metadata read must never hide the existing waiter.
++            metadata = {}
++        items.extend({**prompt, **metadata} for prompt in prompts)
++    return sorted(items, key=lambda item: (item['created_at'], item['profile'], item['prompt_id']))
++
++
++async def list_pending(connection, ref, params):
++    _require_operator(connection)
++    with _watchers_lock:
++        _watchers[connection] = asyncio.get_running_loop()
++    groups = [(authority, sid, generation, prompts) for authority in _authorities(connection)
++              for sid, generation, prompts in _items(connection, authority)]
++    return {'items': await asyncio.to_thread(_enrich, groups) if groups else []}
++
++
++async def respond(connection, ref, params):
++    """Use the existing waiter settlement with an operator grant in place of a chat attachment."""
++    from gateway.session_server_requests import lock_answer, owned_by
++
++    _require_operator(connection)
++    kind, value = params['kind'], params['value']
++    if not value.strip() or len(value) > 16384 or not params['prompt_id']:
++        raise RuntimeStoreError('invalid_params')
++    qid = params.get('question_id')
++    if qid is not None and (kind != 'clarify' or not qid):
++        raise RuntimeStoreError('invalid_params')
++    authority = connection.authority
++    live = authority.sessions.get(ref.session_id)
++    if live is None or params.get('authority_epoch') != authority.epoch:
++        return {'status': 'expired'}
++    generation = params['execution_generation']
++    try:
++        authority.authorize(connection.actor, ref, _CAPABILITIES[kind])
++        with live.event_stream.lock:
++            authority.check_approval_generation(ref.session_id, generation)
++            if qid is not None:
++                def entitled(sid, events):
++                    return sid == ref.session_id and owned_by(authority, sid, events)
++
++                remaining = lock_answer(params['prompt_id'], qid, value, session_ok=entitled, once=True)
++                return {'status': 'resolved' if remaining is not None else 'expired'}
++
++            result = live.controls.respond(ref.session_id, generation, params['prompt_id'],
++                                           {'answer' if kind == 'clarify' else 'choice': value},
++                                           kind=kind, inbox=True)
++        if 'receipt' in result:
++            status = await live.controls.wait_for_inbox_response(params['prompt_id'], result['receipt'])
++        else:
++            status = 'resolved' if result['status'] == 'resolved' else 'expired'
++        return {'status': status}
++    except RuntimeStoreError as exc:
++        if exc.reason in {'stale_generation', 'not_found', 'session_superseded'}:
++            return {'status': 'expired'}
++        raise
++    except ValueError:
++        raise RuntimeStoreError('invalid_params') from None
+diff --git a/gateway/session_pending_controls.py b/gateway/session_pending_controls.py
+index 4ff987908058a1895e24f29f5058a720cd50d7ac..887da16b024f2b171598a3f7f025afdace439782 100644
+--- a/gateway/session_pending_controls.py
++++ b/gateway/session_pending_controls.py
+@@ -5,3 +5,5 @@ Secret/sudo prompts remain native; no response is published or journaled here.
+ """
++import asyncio
+ from copy import deepcopy
++import time
+
+@@ -16,2 +18,4 @@ class PendingControls:
+         self.remote_responders = {}
++        self.opened_at = {}
++        self.inbox_receipts = {}
+
+@@ -36,2 +40,3 @@ class PendingControls:
+                 prompt['timeout_s'] = timeout_s
++            self.opened_at[prompt_id] = time.time()
+             self.pending[prompt_id] = (route, prompt)
+@@ -49,2 +54,3 @@ class PendingControls:
+                 prompt["timeout_s"] = timeout_s
++            self.opened_at[entry.clarify_id] = time.time()
+             self.pending[entry.clarify_id] = (entry, prompt)
+@@ -59,9 +65,35 @@ class PendingControls:
+                 if prompt['execution_generation'] != generation or not active:
+-                    del self.pending[prompt_id]
+-                    self.remote_responders.pop(prompt_id, None)
+-                    self.events.publish(session_id, {'prompt_id': prompt_id,
+-                        'execution_generation': prompt['execution_generation']}, event_type=prompt['kind'] + '.settled')
++                    self.withdraw(session_id, prompt_id)
+             return tuple(deepcopy(prompt) for _, prompt in self.pending.values())
+
+-    def respond(self, session_id, generation, prompt_id, response, *, kind="approval"):
++    def inbox_snapshot(self, session_id, generation):
++        with self.events.lock:
++            return tuple({**prompt, 'created_at': self.opened_at[prompt['prompt_id']]}
++                         for prompt in self.snapshot(session_id, generation))
++
++    def withdraw(self, session_id, prompt_id):
++        with self.events.lock:
++            self.remote_responders.pop(prompt_id, None)
++            self.opened_at.pop(prompt_id, None)
++            saved = self.pending.pop(prompt_id, None)
++            if saved is not None:
++                prompt = saved[1]
++                self.events.publish(session_id, {'prompt_id': prompt_id,
++                    'execution_generation': prompt['execution_generation']}, event_type=prompt['kind'] + '.settled')
++
++    def ack_inbox_response(self, session_id, prompt_id, accepted):
++        self.withdraw(session_id, prompt_id)
++        receipt = self.inbox_receipts.pop(prompt_id, None)
++        if receipt is not None and not receipt.done():
++            receipt.set_result('resolved' if accepted else 'expired')
++
++    async def wait_for_inbox_response(self, prompt_id, receipt):
++        try:
++            return await asyncio.wait_for(receipt, timeout=10)
++        except TimeoutError as exc:
++            raise RuntimeStoreError('response_unconfirmed') from exc
++        finally:
++            self.inbox_receipts.pop(prompt_id, None)
++
++    def respond(self, session_id, generation, prompt_id, response, *, kind="approval", inbox=False):
+         with self.events.lock:
+@@ -74,2 +106,4 @@ class PendingControls:
+                 raise RuntimeStoreError('invalid_params')
++            if inbox and kind == 'approval' and ('edit' in prompt or response['choice'] not in {'once', 'deny'}):
++                raise RuntimeStoreError('invalid_params')
+             if prompt_id in self.remote_responders:
+@@ -80,7 +114,11 @@ class PendingControls:
+                     raise RuntimeStoreError('invalid_params')
++                if inbox:
++                    if prompt_id in self.inbox_receipts:
++                        raise RuntimeStoreError('response_pending')
++                    receipt = asyncio.get_running_loop().create_future()
++                    self.remote_responders[prompt_id](kind, prompt_id, response[field], receipt=True)
++                    self.inbox_receipts[prompt_id] = receipt
++                    return {'receipt': receipt}
+                 self.remote_responders[prompt_id](kind, prompt_id, response[field])
+-                del self.remote_responders[prompt_id]
+-                del self.pending[prompt_id]
+-                self.events.publish(session_id, {'prompt_id': prompt_id, 'execution_generation': generation},
+-                                    event_type=kind + '.settled')
++                self.withdraw(session_id, prompt_id)
+                 return {'status': 'resolved', 'prompt_id': prompt_id}
 diff --git a/gateway/session_policy.py b/gateway/session_policy.py
 index ab3aace258bce8c74b151553153b2bb3d554bf1d..ffd77e68db65a54ca43054f612b2621170c552d8 100644
 --- a/gateway/session_policy.py
@@ -60632,6 +62298,82 @@ index ab3aace258bce8c74b151553153b2bb3d554bf1d..ffd77e68db65a54ca43054f612b26211
 +            with (editor_scope(policy), editor_mcp_scope(authority, policy), aux_scope, policy.client_env_scope()):
 +                yield
      finally:
+diff --git a/gateway/session_server_requests.py b/gateway/session_server_requests.py
+index 56ad7791159447a9b4fbd1ace6c606e82b2f11ef..253a443f6f8600f127baa406af11c05b693c239c 100644
+--- a/gateway/session_server_requests.py
++++ b/gateway/session_server_requests.py
+@@ -15,2 +15,3 @@ import contextlib
+ import threading
++import time
+ import uuid
+@@ -24,3 +25,4 @@ _POLL_S = 0.25
+ class _Pending:
+-    __slots__ = ("event", "events", "locked", "method", "qids", "result", "session_id", "value")
++    __slots__ = ("event", "events", "locked", "method", "qids", "result", "session_id", "value",
++                 "questions", "created_at")
+
+@@ -38,2 +40,4 @@ class _Pending:
+         self.locked = {}
++        self.questions = ()
++        self.created_at = time.time() if qids else 0.0
+
+@@ -92,2 +96,3 @@ def resolve(frame, *, session_ok=lambda session_id, events: True) -> bool:
+     pending.event.set()
++    _notify_inbox(pending)
+     return True
+@@ -127,2 +132,3 @@ def withdraw(events, session_id, method) -> int:
+         pending.event.set()
++        _notify_inbox(pending)
+     return len(settled)
+@@ -130,3 +136,3 @@ def withdraw(events, session_id, method) -> int:
+
+-def lock_answer(request_id, question_id, answer, *, session_ok=lambda session_id, events: False):
++def lock_answer(request_id, question_id, answer, *, session_ok=lambda session_id, events: False, once=False):
+     """Lock one answer of an open batch request (``clarify.lock``; editable until the last lock;
+@@ -142,2 +148,4 @@ def lock_answer(request_id, question_id, answer, *, session_ok=lambda session_id
+             raise ValueError(question_id)
++        if once and question_id in pending.locked:
++            return None
+         pending.locked[question_id] = answer
+@@ -149,2 +157,3 @@ def lock_answer(request_id, question_id, answer, *, session_ok=lambda session_id
+         pending.event.set()
++    _notify_inbox(pending)
+     return remaining
+@@ -152,2 +161,22 @@ def lock_answer(request_id, question_id, answer, *, session_ok=lambda session_id
+
++def _notify_inbox(pending):
++    if pending.questions:
++        from gateway.session_owner_inbox import notify
++        notify(pending.events, pending.session_id, "clarify")
++
++
++def inbox_questions(events, session_id):
++    """Snapshot only unanswered questions on this exact stream. Never project other server requests."""
++    from gateway.run import _redact_approval_command
++    with _lock:
++        questions = [(rid, pending.created_at, question)
++                     for rid, pending in _open.items() if pending.events is events and pending.session_id == session_id
++                     for question in pending.questions if question['qid'] not in pending.locked]
++    return [{'kind': 'clarify', 'prompt_id': rid, 'question_id': question['qid'], 'created_at': created,
++             'question': _redact_approval_command(question['question']),
++             'choices': [_redact_approval_command(choice) for choice in question.get('choices') or []],
++             'multi_select': bool(question.get('multi_select'))}
++            for rid, created, question in questions]
++
++
+ def _ask(events, session_id, method, params, *, cancelled, timeout, qids=None):
+@@ -157,4 +186,7 @@ def _ask(events, session_id, method, params, *, cancelled, timeout, qids=None):
+     pending = _Pending(session_id, qids, events, method)
++    if method == "clarify" and qids:
++        pending.questions = tuple(dict(question) for question in params["questions"])
+     with _lock:
+         _open[request_id] = pending
++    _notify_inbox(pending)
+     events.fanout.write({"jsonrpc": "2.0", "id": request_id, "method": method,
+@@ -178,2 +210,3 @@ def _ask(events, session_id, method, params, *, cancelled, timeout, qids=None):
+     if still_open:
++        _notify_inbox(pending)
+         # The same teardown main's renderers key on (``request.cancel``): the card closes and a
 diff --git a/gateway/session_transcript.py b/gateway/session_transcript.py
 index efdf599d8fe8994cd76923ab566b1fe63706a690..ee808a91e92bba6393b8b2db9cf4fb920382f4c5 100644
 --- a/gateway/session_transcript.py
@@ -89454,6 +91196,172 @@ index 0000000000000000000000000000000000000000..d82c8ccc2426cd9059392e8a8677b63f
 +    assert built.get("api_mode") == wire
 +    assert built["api_key"] == (launch_key or "synthetic-route-key")
 +    assert built["base_url"] == "https://wire.example/api"
+diff --git a/tests/gateway/test_owner_inbox.py b/tests/gateway/test_owner_inbox.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..eae0533cb70cac7f62be4bb9d78ff8e8f18e83fc
+--- /dev/null
++++ b/tests/gateway/test_owner_inbox.py
+@@ -0,0 +1,160 @@
++"""Two real clarification waiters behind the authenticated multiplex dispatcher."""
++import asyncio
++
++import pytest
++
++from tests.gateway.test_session_authorities_multiplex import _reserve_homes, _runner
++
++
++class Peer:
++    def __init__(self):
++        self.events = asyncio.Queue()
++
++    def write(self, frame):
++        self.events.put_nowait(frame)
++        return True
++
++
++async def rpc(connection, method, **params):
++    return await connection.dispatch({'jsonrpc': '2.0', 'id': 1, 'method': method, 'params': params})
++
++
++@pytest.mark.asyncio
++async def test_inbox_routes_equal_session_ids_to_the_exact_profile_and_survives_reconnect(tmp_path, monkeypatch):
++    from gateway.config import Platform
++    from gateway.run_runtime import initialize_gateway_runtime
++    from gateway.runtime_ownership import process_ownership
++    from gateway.session import SessionSource
++    from gateway.session_authority import LiveSession
++    from gateway.session_controls import AuthorityConnection
++    from hermes_cli.goals import GoalState
++    from hermes_state_runtime import admit_session_input, claim_session_input
++    from tools import clarify_gateway
++
++    root, homes = _reserve_homes(tmp_path, monkeypatch)
++    process_ownership.reserve([home for _, home in homes])
++    runner = _runner(root, homes)
++    connections = []
++    entries = {}
++    sid = 'shared-fixture-chat'
++    try:
++        await initialize_gateway_runtime(runner)
++        registry, store = runner.session_authorities, runner.session_ticket_store
++
++        def connect(authority, scope='profile', operator=True):
++            ticket = store.mint(profile_id=authority.profile_id, subject='uid:fixture',
++                                purpose='interactive', scope=scope)
++            grant = store.redeem(ticket, profile_id=None, purpose='interactive')
++            peer = Peer()
++            connection = AuthorityConnection(
++                authority, peer, {'user_id': grant['subject'], 'provider': 'local',
++                                  'profile_id': grant['profile_id'], 'instance_id': grant['instance_id'],
++                                  'capabilities': grant['capabilities'], 'profile_scope': grant['scope']},
++                operator=operator)
++            connections.append(connection)
++            return connection
++
++        for index, (name, home) in enumerate(homes[1:], 1):
++            authority = registry.for_home(home)
++            authority.db.create_session(sid, source='api_server')
++            route = f'fixture-route-{name}'
++            authority.sessions[sid] = LiveSession(
++                SessionSource(platform=Platform.LOCAL, chat_id='local-fixture', user_id='another-viewer'), route)
++            authority.db.set_meta(f'goal:{sid}', GoalState(goal=f'Check fixture {name}').to_json())
++            admit_session_input(authority.db, epoch=authority.epoch, principal_id='fixture', session_id=sid,
++                                request_id='run', payload={'kanban_card_v1': {'task_id': f't_fixture-{index}'}},
++                                intent='queue')
++            row = claim_session_input(authority.db, epoch=authority.epoch, session_id=sid)
++            authority.executing[sid] = row['generation']
++            entries[name] = authority, route
++
++        host = connect(registry.launch, 'host')
++        scoped = connect(entries['alpha'][0])
++        viewer = connect(registry.launch, 'host', operator=False)
++        assert (await rpc(viewer, 'owner_inbox.list'))['error']['data']['reason'] == 'permission_denied'
++        assert (await rpc(host, 'owner_inbox.list'))['result']['items'] == []
++        assert (await rpc(scoped, 'owner_inbox.list'))['result']['items'] == []
++
++        questions = {'alpha': 'Tester: use fixture A or B?', 'beta': 'Writer: Markdown or PDF?'}
++        for name, (authority, route) in entries.items():
++            entry = clarify_gateway.register(f'question-{name}', route, questions[name], ['A', 'B'])
++            await asyncio.to_thread(authority.register_clarify, sid, authority.executing[sid], entry)
++
++        for _ in range(2):
++            event = await asyncio.wait_for(host.transport.events.get(), 2)
++            assert event['params']['type'] == 'owner_inbox.changed'
++            assert not event['params'].get('payload')
++        assert scoped.transport.events.qsize() == 1
++
++        items = (await rpc(host, 'owner_inbox.list'))['result']['items']
++        assert {item['profile']: (item['question'], item['card'], item['goal']) for item in items} == {
++            'alpha': (questions['alpha'], 't_fixture-1', 'Check fixture alpha'),
++            'beta': (questions['beta'], 't_fixture-2', 'Check fixture beta'),
++        }
++        assert all(item['created_at'] > 0 for item in items)
++        assert [item['profile'] for item in (await rpc(scoped, 'owner_inbox.list'))['result']['items']] == ['alpha']
++        row = next(item for item in items if item['profile'] == 'alpha')
++        params = {key: row[key] for key in ('profile', 'session_id', 'authority_epoch',
++                                           'execution_generation', 'prompt_id', 'kind')}
++        assert (await rpc(host, 'owner_inbox.respond', **{**params, 'profile': 'beta'}, value='wrong'))['result'] == {
++            'status': 'expired'}
++        assert (await rpc(host, 'owner_inbox.respond', **{**params, 'execution_generation': 999}, value='old'))['result'] == {
++            'status': 'expired'}
++        assert (await rpc(host, 'owner_inbox.respond', **params, value='B'))['result'] == {'status': 'resolved'}
++        assert await asyncio.to_thread(clarify_gateway.wait_for_response, 'question-alpha', 1) == 'B'
++        assert clarify_gateway.get_pending('question-beta') is not None
++        assert (await rpc(host, 'owner_inbox.respond', **params, value='duplicate'))['result'] == {'status': 'expired'}
++        assert (await asyncio.wait_for(host.transport.events.get(), 2))['params']['type'] == 'owner_inbox.changed'
++
++        await host.close()
++        connections.remove(host)
++        reopened = connect(registry.launch, 'host')
++        assert [item['prompt_id'] for item in (await rpc(reopened, 'owner_inbox.list'))['result']['items']] == ['question-beta']
++        assert all(not live.subscribers for authority, _ in entries.values() for live in authority.sessions.values())
++        assert (await rpc(reopened, 'owner_inbox.unwatch'))['result'] == {'watching': False}
++    finally:
++        for connection in connections:
++            await connection.close()
++        for _, route in entries.values():
++            clarify_gateway.clear_session(route)
++        for authority in list(getattr(runner, 'session_authorities', []) or []):
++            authority.db.close()
++        for _, home in homes:
++            process_ownership.release(home)
++
++
++@pytest.mark.asyncio
++async def test_managed_inbox_reply_waits_for_worker_receipt_and_cannot_replace_the_answer():
++    from types import SimpleNamespace
++
++    from agent.managed_worker import WorkerControls
++    from gateway.session_events import SessionEvents
++    from gateway.session_pending_controls import PendingControls
++    from hermes_state_runtime import RuntimeStoreError
++
++    parent = PendingControls(SessionEvents())
++    frames = asyncio.Queue()
++    child = WorkerControls.__new__(WorkerControls)
++    import threading
++    child.lock = threading.Lock()
++    entry = {'event': threading.Event(), 'answer': None}
++    child.clarifications = {'fixture-prompt': entry}
++    child.channel = SimpleNamespace(send=lambda kind, **data: frames.put_nowait((kind, data)))
++
++    def send(kind, prompt_id, value, *, receipt=False):
++        child._respond({'type': kind, 'prompt_id': prompt_id, 'value': value, 'receipt': receipt}, None)
++
++    parent.remote_responders['fixture-prompt'] = send
++    parent.register_clarify('fixture-chat', 1, SimpleNamespace(
++        clarify_id='fixture-prompt', question='Which fixture?', choices=['A', 'B'], multi_select=False))
++    response = parent.respond('fixture-chat', 1, 'fixture-prompt', {'answer': 'B'}, kind='clarify', inbox=True)
++    assert not response['receipt'].done()
++    assert len(parent.inbox_snapshot('fixture-chat', 1)) == 1
++    with pytest.raises(RuntimeStoreError, match='response_pending'):
++        parent.respond('fixture-chat', 1, 'fixture-prompt', {'answer': 'A'}, kind='clarify', inbox=True)
++    kind, data = await asyncio.wait_for(frames.get(), 1)
++    assert kind == 'prompt_response'
++    parent.ack_inbox_response('fixture-chat', data['prompt_id'], data['accepted'])
++    assert await parent.wait_for_inbox_response('fixture-prompt', response['receipt']) == 'resolved'
++    assert parent.inbox_snapshot('fixture-chat', 1) == ()
++    assert entry['answer'] == 'B'
 diff --git a/tests/gateway/test_owner_loop_writes_a2a_hosted_create.py b/tests/gateway/test_owner_loop_writes_a2a_hosted_create.py
 index 6c03f0c0afe032f40558b862c4fa4bdeff217cec..71592ee759aac162b4069f2f305f0062cc4f097d 100644
 --- a/tests/gateway/test_owner_loop_writes_a2a_hosted_create.py
@@ -117446,6 +119354,136 @@ index 0000000000000000000000000000000000000000..a8596a70c7ef22247afd0e911d160aec
 +
 +    assert get_type_hints(module._shared_nous_store)["return"] == tuple[Path, ...]
 +    assert {"onboarding.state", "onboarding.set_run"} <= module._registry.names()
+diff --git a/tests/tui_gateway/test_owner_inbox_remote.py b/tests/tui_gateway/test_owner_inbox_remote.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..0414031df610fc3c220c9eb989022c57507d31a0
+--- /dev/null
++++ b/tests/tui_gateway/test_owner_inbox_remote.py
+@@ -0,0 +1,124 @@
++"""Legacy dispatcher uses the exact live waiter and requires an authenticated socket."""
++from contextlib import nullcontext
++import queue
++import threading
++from types import SimpleNamespace
++
++import pytest
++
++
++@pytest.fixture
++def dashboard(monkeypatch):
++    from tui_gateway import server, server_requests
++
++    frames = queue.Queue()
++    locked = threading.RLock()
++    session = {'session_key': 'fixture-chat', 'history_lock': locked}
++    monkeypatch.setattr(server, '_sessions', {'fixture-runtime': session})
++    monkeypatch.setattr(server, '_session_db', lambda session: nullcontext())
++    monkeypatch.setattr(server_requests, '_write', frames.put)
++    monkeypatch.setattr(server_requests, '_emit', lambda *args: None)
++    monkeypatch.setattr(server_requests, '_answerable', lambda sid: True)
++    server_requests.reset_for_tests()
++    yield server, frames, session
++    server_requests.cancel()
++    server_requests.reset_for_tests()
++
++
++def call(server, peer, method, **params):
++    return server.dispatch({'jsonrpc': '2.0', 'id': 1, 'method': method, 'params': params}, peer)
++
++
++def test_legacy_dashboard_inbox_locks_only_the_unanswered_question(dashboard):
++    from tui_gateway import server_requests
++
++    server, wire, _ = dashboard
++    peer = SimpleNamespace(owner_inbox_operator=True)
++    questions = [
++        {'qid': 'q0', 'question': 'Use fixture A or B?', 'choices': ['A', 'B'], 'multi_select': False},
++        {'qid': 'q1', 'question': 'Which results should go in the report?', 'choices': [], 'multi_select': False},
++    ]
++    answers = queue.Queue()
++    waiter = threading.Thread(target=lambda: answers.put(server_requests.send(
++        'clarify', 'fixture-runtime', {'questions': questions}, timeout=3, qids=['q0', 'q1'])))
++    waiter.start()
++    try:
++        request = wire.get(timeout=2)
++        assert 'error' in call(server, SimpleNamespace(), 'owner_inbox.list')
++        listed = call(server, peer, 'owner_inbox.list')['result']['items']
++        assert [item['question'] for item in listed] == [q['question'] for q in questions]
++        assert listed[0]['chat_session_id'] == 'fixture-chat'
++        params = dict(profile='default', session_id='fixture-runtime', prompt_id=request['id'],
++                      execution_generation=0, kind='clarify')
++        assert call(server, peer, 'owner_inbox.respond', **params, question_id='q0', value='B')['result'] == {
++            'status': 'resolved'}
++        assert call(server, peer, 'owner_inbox.respond', **params, question_id='q0', value='A')['result'] == {
++            'status': 'expired'}
++        assert [item['question_id'] for item in call(server, peer, 'owner_inbox.list')['result']['items']] == ['q1']
++        assert call(server, peer, 'owner_inbox.respond', **params, question_id='q1', value='Only passed checks')['result'] == {
++            'status': 'resolved'}
++        assert answers.get(timeout=2) == {'answers': {'q0': 'B', 'q1': 'Only passed checks'}, 'outcome': 'submitted'}
++        assert call(server, peer, 'owner_inbox.list')['result']['items'] == []
++    finally:
++        waiter.join(timeout=4)
++
++
++def test_remote_mirror_keeps_the_request_until_the_child_acknowledges(dashboard, monkeypatch):
++    server, _, session = dashboard
++    peer = SimpleNamespace(owner_inbox_operator=True)
++    session['_compute_host_open_request'] = {'id': 'srq-fixture', 'method': 'clarify', 'params': {
++        'session_id': 'fixture-runtime', 'questions': [
++            {'qid': 'q0', 'question': 'Use fixture A?', 'choices': ['A'], 'multi_select': False},
++            {'qid': 'q1', 'question': 'Use fixture C?', 'choices': ['C'], 'multi_select': False},
++        ]}}
++    session['_compute_host_request_created_at'] = 1.0
++    response_mode = iter([queue.Empty(), {'status': 'expired', 'open': True, 'locked': ['q0']},
++                          {'status': 'resolved', 'open': False, 'locked': []}])
++
++    def respond(sid, body):
++        assert sid == 'fixture-runtime'
++        assert body['owner_inbox']['prompt_id'] == 'srq-fixture'
++        result = next(response_mode)
++        if isinstance(result, Exception):
++            raise result
++        return {'type': 'respond.ack', 'response': {'result': result}}
++
++    monkeypatch.setattr(server, '_get_compute_host_supervisor', lambda: SimpleNamespace(respond=respond))
++    params = dict(profile='default', session_id='fixture-runtime', prompt_id='srq-fixture',
++                  execution_generation=0, kind='clarify', value='A')
++    assert call(server, peer, 'owner_inbox.respond', **params, question_id='q0')['error']['code'] == 5019
++    listed = call(server, peer, 'owner_inbox.list')['result']['items']
++    assert [item['question_id'] for item in listed] == ['q0', 'q1']
++    assert all(item['created_at'] == 1 for item in listed)
++    assert call(server, peer, 'owner_inbox.respond', **params, question_id='q0')['result'] == {'status': 'expired'}
++    assert [item['question_id'] for item in call(server, peer, 'owner_inbox.list')['result']['items']] == ['q1']
++    assert call(server, peer, 'owner_inbox.respond', **{**params, 'value': 'C'}, question_id='q1')['result'] == {
++        'status': 'resolved'}
++    assert call(server, peer, 'owner_inbox.list')['result']['items'] == []
++
++
++def test_regular_approval_settles_the_exact_native_queue_entry(dashboard):
++    from tools import approval
++    from tools.approval_gateway_wait import _ApprovalEntry
++
++    server, wire, session = dashboard
++    peer = SimpleNamespace(owner_inbox_operator=True)
++    entry = _ApprovalEntry({'request_id': 'fixture-approval', 'command': 'fixture-check', 'description': 'Run the check?'})
++    with approval._lock:
++        approval._gateway_queues[session['session_key']] = [entry]
++    server._emit_approval_request('fixture-runtime', entry.data)
++    frame = wire.get(timeout=2)
++    params = dict(profile='default', session_id='fixture-runtime', prompt_id=frame['id'],
++                  execution_generation=0, kind='approval')
++    try:
++        listed = call(server, peer, 'owner_inbox.list')['result']['items']
++        assert [item['description'] for item in listed] == ['Run the check?']
++        assert call(server, peer, 'owner_inbox.respond', **params, value='always')['error']['code'] == 4002
++        assert not entry.event.is_set()
++        assert call(server, peer, 'owner_inbox.respond', **params, value='once')['result'] == {'status': 'resolved'}
++        assert entry.event.is_set() and entry.result == 'once'
++        assert call(server, peer, 'owner_inbox.respond', **params, value='deny')['result'] == {'status': 'expired'}
++        entry.settle('resolved')
++        assert call(server, peer, 'owner_inbox.list')['result']['items'] == []
++    finally:
++        approval.unregister_gateway_notify(session['session_key'])
 diff --git a/tests/tui_gateway/test_pet_character_desktop_route.py b/tests/tui_gateway/test_pet_character_desktop_route.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..311135c3b6a927d916f693212ede910ab953ea02
@@ -118390,6 +120428,29 @@ index f389962416e6b0f8116d6d19ec10320173d0f482..7deec3eb8bdcd1df7f7eaffa13696f39
 -    return _ANSI_ESCAPE_RE.sub("", text)
 +    return _ANSI_ESCAPE_RE.sub("", _strip_unterminated_strings(text))
  
+diff --git a/tools/approval.py b/tools/approval.py
+index 8176305c20afb5d2ceb8f0d1febba355f897e666..2a0157c4d71c5529b2849a0fd6702309de05bdb7 100644
+--- a/tools/approval.py
++++ b/tools/approval.py
+@@ -201,3 +201,3 @@ def list_gateway_approvals(session_key: str) -> list[dict]:
+
+-def register_gateway_settle(session_key: str, request_id: str, settle) -> bool:
++def register_gateway_settle(session_key: str, request_id: str, settle, *, append=False) -> bool:
+     """Attach ``settle(reason)`` to one pending approval; it runs once when that wait ends by any path.
+@@ -207,3 +207,12 @@ def register_gateway_settle(session_key: str, request_id: str, settle) -> bool:
+             if entry.data.get("request_id") == request_id:
+-                entry.settle = settle
++                previous = entry.settle if append else None
++                if previous is None:
++                    entry.settle = settle
++                else:
++                    def combined(reason):
++                        try:
++                            previous(reason)
++                        finally:
++                            settle(reason)
++                    entry.settle = combined
+                 return True
 diff --git a/tools/browser_tool_isolation.py b/tools/browser_tool_isolation.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..102225796fdd6f5f52cba9749d35ccb97dd9c96b
@@ -123361,6 +125422,94 @@ index 7572ad12850dde68d70ad0876c10d0a32ff20b16..209cb8dbe9798bcafc95cd2a8436448d
 +    "kanban_unblock", "kanban_reassign", "kanban_unlink", "kanban_extend_runtime", "kanban_continue",
 +    "kanban_archive",  # local patch 24
      "kanban_attach", "kanban_attach_url", "kanban_attachments",
+diff --git a/tui_gateway/compute_host.py b/tui_gateway/compute_host.py
+index c3a3ea05d779e4ac446d8883910eaaa57555477b..6ef47241dc3df0e3375e17350a3a7e5b6d7af7b4 100644
+--- a/tui_gateway/compute_host.py
++++ b/tui_gateway/compute_host.py
+@@ -215,3 +215,16 @@ class ComputeHost:
+             from tui_gateway import server_requests
+-            if isinstance(params.get("lock"), dict):
++            if isinstance(inbox := params.get("owner_inbox"), dict):
++                from tui_gateway.owner_inbox import resolve_native
++                try:
++                    resolved = resolve_native(sid, server._sessions[sid], inbox)
++                except ValueError:
++                    self._reply("respond.error", sid, request_id, message="invalid inbox response")
++                    return
++                pending = next((item for item in server_requests.inbox_requests(sid)
++                                if item['id'] == inbox['prompt_id']), None)
++                locked = list(pending['params'].get('answers', {})) if pending else []
++                response = {"jsonrpc": "2.0", "id": request_id,
++                            "result": {"status": "resolved" if resolved else "expired",
++                                       "open": pending is not None, "locked": locked}}
++            elif isinstance(params.get("lock"), dict):
+                 response = server._methods["clarify.lock"](request_id, params["lock"])
+diff --git a/tui_gateway/compute_host_bridge.py b/tui_gateway/compute_host_bridge.py
+index d57a0096f25af0f4a442038d091c508418938e87..b72976c2e8fbe07f94eb67a37df1fb4a40ae8842 100644
+--- a/tui_gateway/compute_host_bridge.py
++++ b/tui_gateway/compute_host_bridge.py
+@@ -8,2 +8,3 @@ import contextlib
+ import threading
++import time
+
+@@ -130,2 +131,5 @@ def _relay_compute_host_rpc(message: dict) -> bool:
+     reconnecting client gets it back through ``open_requests``."""
++    from tui_gateway.owner_inbox import invalidate
++
++    changed = False
+     params = message.get("params") if isinstance(message, dict) else None
+@@ -151,2 +155,4 @@ def _relay_compute_host_rpc(message: dict) -> bool:
+             with _history_lock(session):
++                session["_compute_host_request_created_at"] = time.time()
++                changed = message["method"] in {"approval", "clarify"}
+                 session["_compute_host_open_request"] = {
+@@ -159,3 +165,5 @@ def _relay_compute_host_rpc(message: dict) -> bool:
+                 if _open_request_matches(session, payload.get("id")):
+-                    session.pop("_compute_host_open_request", None)
++                    changed = session.pop("_compute_host_open_request")["method"] in {"approval", "clarify"}
++    if changed:
++        invalidate()
+     return write_json(message)
+@@ -190,7 +198,16 @@ def _relay_compute_host_response(frame: dict) -> bool:
+     with _history_lock(session):
+-        session.pop("_compute_host_open_request", None)
++        if not _open_request_matches(session, frame.get("id")):
++            return False
+     try:
+-        _get_compute_host_supervisor().respond(sid, {"frame": dict(frame)})
++        ack = _get_compute_host_supervisor().respond(sid, {"frame": dict(frame)})
+     except Exception:
+         logger.debug("compute-host response relay failed sid=%s", sid, exc_info=True)
++        return False
++    if ack.get("type") != "respond.ack":
++        return False
++    with _history_lock(session):
++        saved = session.pop("_compute_host_open_request") if _open_request_matches(session, frame.get("id")) else None
++    if saved and saved["method"] in {"approval", "clarify"}:
++        from tui_gateway.owner_inbox import invalidate
++        invalidate()
+     return True
+@@ -246,2 +263,4 @@ def _lock_compute_host_clarify(rid: str, request_id: str, question_id: str, answ
+                 mirrored["params"]["answers"] = {**(mirrored["params"].get("answers") or {}), question_id: answer}
++    from tui_gateway.owner_inbox import invalidate
++    invalidate()
+     return _ok(rid, result)
+@@ -271,3 +290,6 @@ def _on_compute_host_turn_done(rid: str, sid: str, session: dict, frame: dict) -
+         _clear_inflight_turn(session)
+-        session.pop("_compute_host_open_request", None)
++        saved = session.pop("_compute_host_open_request", None)
++    if saved and saved["method"] in {"approval", "clarify"}:
++        from tui_gateway.owner_inbox import invalidate
++        invalidate()
+     # The isolated turn carried the queued model switch to the compute host, whose
+diff --git a/tui_gateway/contracts/__init__.py b/tui_gateway/contracts/__init__.py
+index 1d03e80d005326fe04bcba625053563403d7e5ed..c4b55a5730bbe2c524a1bc271cd835f7f8735be8 100644
+--- a/tui_gateway/contracts/__init__.py
++++ b/tui_gateway/contracts/__init__.py
+@@ -15,2 +15,3 @@ from . import (
+     machine,
++    owner_inbox,
+     profiles_vault_complete_foreign_subagents,
 diff --git a/tui_gateway/contracts/canonical_projections.py b/tui_gateway/contracts/canonical_projections.py
 index 7b8931440e4299f155949b0e5943f89093dbeeaa..dd905a05ef172c02b73a6ad1d78ace72190230d9 100644
 --- a/tui_gateway/contracts/canonical_projections.py
@@ -123459,6 +125608,76 @@ index a7346e3f0a6d57a6ea1eeb0a05517eb943b737d0..da2738697b6257c235c147bd6f5b3662
 +    contract: GoalContractSnapshot | None = None
 +    expected_revision: str | None = None
  
+diff --git a/tui_gateway/contracts/owner_inbox.py b/tui_gateway/contracts/owner_inbox.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..a23ef6295e5dd96e26cd17a6039960bb4da444d4
+--- /dev/null
++++ b/tui_gateway/contracts/owner_inbox.py
+@@ -0,0 +1,64 @@
++"""Waiting-owner snapshot and exact prompt responses for the Desktop Bots inbox."""
++from typing import Literal
++
++from .base import Params, Result
++from .registry import canonical_method, event, method
++
++
++class OwnerInboxParams(Params):
++    pass
++
++
++class OwnerInboxItem(Result):
++    profile: str
++    session_id: str
++    chat_session_id: str | None = None
++    prompt_id: str
++    execution_generation: int
++    authority_epoch: int | None = None
++    created_at: float
++    card: str | None = None
++    goal: str | None = None
++    title: str | None = None
++    kind: Literal['clarify', 'approval']
++    question_id: str | None = None
++    question: str | None = None
++    command: str | None = None
++    description: str | None = None
++    choices: list[str]
++    multi_select: bool | None = None
++    chat_only: bool | None = None
++
++
++class OwnerInboxList(Result):
++    items: list[OwnerInboxItem]
++
++
++class OwnerInboxUnwatch(Result):
++    watching: Literal[False]
++
++
++class OwnerInboxRespondParams(Params):
++    profile: str
++    session_id: str
++    prompt_id: str
++    execution_generation: int
++    authority_epoch: int | None = None
++    question_id: str | None = None
++    kind: Literal['clarify', 'approval']
++    value: str
++
++
++class OwnerInboxResponse(Result):
++    status: Literal['resolved', 'expired']
++
++
++for register in (method, canonical_method):
++    register('owner_inbox.list', params=OwnerInboxParams, result=OwnerInboxList,
++             doc='Watch and list pending owner questions and approvals on the active gateway.')
++    register('owner_inbox.unwatch', params=OwnerInboxParams, result=OwnerInboxUnwatch,
++             doc='Stop inbox invalidations on this socket.')
++    register('owner_inbox.respond', params=OwnerInboxRespondParams, result=OwnerInboxResponse,
++             doc='Settle exactly one still-open question or approval on its owning session.')
++
++event('owner_inbox.changed', doc='Content-free invalidation for a socket watching the owner inbox.')
 diff --git a/tui_gateway/contracts/profiles_vault_complete_foreign_subagents.py b/tui_gateway/contracts/profiles_vault_complete_foreign_subagents.py
 index 79519693dd5fba61c15cb2f19cfef03bd64f647f..31b7f1151c84a1ee39935ba9e18276fc97aedd16 100644
 --- a/tui_gateway/contracts/profiles_vault_complete_foreign_subagents.py
@@ -123970,6 +126189,31 @@ index 386f5c10702d46453555d4ba037775c9b2391ffb..0da7f32fd3e06c6c34c4fdfe6f9a731d
 +    configure = _lazy("hermes_cli.bot_settings", "configure_settings")
 +    return _ok(rid, configure(profile_dir, params.get("workflow") or {}, params.get("expected_revision"),
 +                              model=params.get("model"), confirm=params.get("confirm", False)))
+diff --git a/tui_gateway/methods_prompt.py b/tui_gateway/methods_prompt.py
+index b0957e335c489fef6b22a03697a03a6daf567526..6275da8dab18de4e3859bc7eecc71f744e278bb2 100644
+--- a/tui_gateway/methods_prompt.py
++++ b/tui_gateway/methods_prompt.py
+@@ -1266,2 +1266,20 @@ def _(rid, params: dict) -> dict:
+
++@method("owner_inbox.list")
++def _(rid, params: dict) -> dict:
++    from tui_gateway.owner_inbox import list_pending
++    return list_pending(rid, params)
++
++
++@method("owner_inbox.unwatch")
++def _(rid, params: dict) -> dict:
++    from tui_gateway.owner_inbox import stop_watching
++    return stop_watching(rid, params)
++
++
++@method("owner_inbox.respond")
++def _(rid, params: dict) -> dict:
++    from tui_gateway.owner_inbox import respond
++    return respond(rid, params)
++
++
+ @method("clarify.lock")
 diff --git a/tui_gateway/methods_session.py b/tui_gateway/methods_session.py
 index 29847639d071e61e8638682e83e2c1a6242ac2ab..1a59ff9187c08567d74b5d473ce1bc6b492282d3 100644
 --- a/tui_gateway/methods_session.py
@@ -124076,6 +126320,176 @@ index 456132b9c00951fccdeee7035e949a0c9101e900..32619a395bfc143daf7e7788932b605b
 +
 +
  def _dispatch_command(rid, *, session_id: str, name: str, arg: str) -> dict:
+diff --git a/tui_gateway/owner_inbox.py b/tui_gateway/owner_inbox.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..8efb1a36b441693202bf3846764fa2cd60530522
+--- /dev/null
++++ b/tui_gateway/owner_inbox.py
+@@ -0,0 +1,164 @@
++"""Owner inbox adapter for the standalone dashboard (Desktop SSH and legacy WebSocket)."""
++import queue
++import sqlite3
++import time
++
++from hermes_constants import profile_name_for_home
++from tui_gateway import server_requests
++from tui_gateway.transport import current_transport
++
++_METHODS = frozenset({'clarify', 'approval'})
++
++
++def invalidate():
++    from tui_gateway import server
++
++    with server._live_transports_lock:
++        peers = tuple(server._live_transports)
++    for peer in peers:
++        if getattr(peer, 'owner_inbox_watching', False):
++            peer.notify_owner_inbox()
++
++
++def _profile(session):
++    from hermes_constants import get_process_hermes_home
++    return profile_name_for_home(session.get('profile_home') or get_process_hermes_home()) or 'default'
++
++
++def _items(sid, session, request):
++    from gateway.run import _redact_approval_command
++    from hermes_cli.goals_metadata import read_goal
++    from tui_gateway import server
++
++    key = str(server._session_lookup_key(session, fallback=sid))
++    base = {'profile': _profile(session), 'session_id': sid, 'chat_session_id': key,
++            'prompt_id': request['id'], 'created_at': request['created_at'],
++            'kind': request['method'], 'execution_generation': 0}
++    params = request['params']
++    if request['method'] == 'clarify':
++        queries = [{
++            **base, 'question_id': question['qid'], 'question': _redact_approval_command(question['question']),
++            'choices': [_redact_approval_command(choice) for choice in question.get('choices') or []],
++            'multi_select': bool(question.get('multi_select')),
++        } for question in params.get('questions', ()) if question['qid'] not in (params.get('answers') or {})]
++    else:
++        queries = [{
++            **base, 'command': _redact_approval_command(params.get('command', '')),
++            'description': _redact_approval_command(params.get('description', '')),
++            'choices': params.get('choices', []), 'chat_only': 'edit' in params,
++        }]
++    if not queries:
++        return []
++    try:
++        with server._session_db(session) as db:
++            if db is None:
++                return queries
++            title = db.get_session_title(key)
++            goal, _ = read_goal(db, db.get_compression_tip(key) or key)
++    except (sqlite3.Error, ValueError, TypeError):
++        return queries
++    return [{**query, 'title': _redact_approval_command(title) if title else None,
++             'goal': _redact_approval_command(goal.goal) if goal and goal.status in {'active', 'paused'} else None}
++            for query in queries]
++
++
++def _mirror(session, request_id=None):
++    from tui_gateway.compute_host_bridge import _history_lock
++    with _history_lock(session):
++        saved = session.get('_compute_host_open_request')
++        if saved and saved['method'] in _METHODS and (request_id is None or saved['id'] == request_id):
++            return {**saved, 'params': dict(saved['params']),
++                    'created_at': session.get('_compute_host_request_created_at') or time.time()}
++    return None
++
++
++def list_pending(rid, params):
++    from tui_gateway import server
++
++    transport = current_transport()
++    if not getattr(transport, 'owner_inbox_operator', False):
++        return server._err(rid, 4003, 'permission_denied')
++    transport.owner_inbox_watching = True
++    with server._sessions_lock:
++        sessions = dict(server._sessions)
++    pending = server_requests.inbox_requests()
++    for sid, session in sessions.items():
++        mirrored = _mirror(session)
++        if mirrored is not None:
++            pending.append(mirrored)
++    items = [item for request in pending
++             if (sid := request['params']['session_id']) in sessions
++             for item in _items(sid, sessions[sid], request)]
++    return server._ok(rid, {'items': sorted(items, key=lambda item: (item['created_at'], item['profile'], item['prompt_id']))})
++
++
++def stop_watching(rid, params):
++    from tui_gateway import server
++
++    transport = current_transport()
++    if not getattr(transport, 'owner_inbox_operator', False):
++        return server._err(rid, 4003, 'permission_denied')
++    transport.owner_inbox_watching = False
++    return server._ok(rid, {'watching': False})
++
++
++def resolve_native(sid, session, params):
++    """Settle the exact local waiter, whether here or in the compute host child."""
++    from tools.approval import resolve_gateway_approval
++
++    request = next((item for item in server_requests.inbox_requests(sid) if item['id'] == params['prompt_id']), None)
++    if request is None or request['method'] != params['kind']:
++        return False
++    if params['kind'] == 'clarify':
++        return server_requests.lock_answer(params['prompt_id'], params['question_id'],
++                                           params['value'], sid=sid, once=True) is not None
++    approval = request['params']
++    if ('edit' in approval or params['value'] not in {'once', 'deny'}
++            or params['value'] not in approval.get('choices', []) or not approval.get('request_id')):
++        raise ValueError('invalid approval choice')
++    return bool(resolve_gateway_approval(session['session_key'], params['value'],
++                                         request_id=approval['request_id']))
++
++
++def _resolve_host(server, sid, session, params):
++    # The parent's mirror is advisory. Only the child's checked response can confirm settlement.
++    ack = server._get_compute_host_supervisor().respond(sid, {'owner_inbox': params})
++    result = (ack.get('response') or {}).get('result') if ack.get('type') == 'respond.ack' else None
++    if not isinstance(result, dict) or result.get('status') not in {'resolved', 'expired'}:
++        raise RuntimeError('compute host did not confirm the response')
++    with server._history_lock(session):
++        if server._open_request_matches(session, params['prompt_id']):
++            if result.get('open') is False:
++                session.pop('_compute_host_open_request', None)
++            elif isinstance(result.get('locked'), list):
++                mirror = session['_compute_host_open_request']['params']
++                mirror['answers'] = {**(mirror.get('answers') or {}), **dict.fromkeys(result['locked'])}
++    invalidate()
++    return result['status']
++
++
++def respond(rid, params):
++    from tui_gateway import server
++
++    if not getattr(current_transport(), 'owner_inbox_operator', False):
++        return server._err(rid, 4003, 'permission_denied')
++    sid, value, kind = params['session_id'], params['value'], params['kind']
++    if (not value.strip() or len(value) > 16384 or params['execution_generation'] != 0
++            or params.get('authority_epoch') is not None or not params['prompt_id']
++            or bool(params.get('question_id')) != (kind == 'clarify')):
++        return server._err(rid, 4002, 'invalid_params')
++    session = server._sessions.get(sid)
++    status = 'expired'
++    if session is not None and params['profile'] == _profile(session):
++        with server._session_profile_runtime_scope(session):
++            try:
++                mirrored = _mirror(session, params['prompt_id'])
++                if mirrored is not None and mirrored['method'] == kind:
++                    status = _resolve_host(server, sid, session, params)
++                elif resolve_native(sid, session, params):
++                    status = 'resolved'
++            except ValueError:
++                return server._err(rid, 4002, 'invalid_params')
++            except (RuntimeError, OSError, queue.Empty):
++                return server._err(rid, 5019, 'compute host did not confirm the response')
++    return server._ok(rid, {'status': status})
 diff --git a/tui_gateway/prompt_turn.py b/tui_gateway/prompt_turn.py
 index 67bf1e3c30a2c8a364db907f3906995972430052..4be689f312fc0c624704ac47599a2dcc2fa1c379 100644
 --- a/tui_gateway/prompt_turn.py
@@ -124087,15 +126501,24 @@ index 67bf1e3c30a2c8a364db907f3906995972430052..4be689f312fc0c624704ac47599a2dcc
 +                after_model_turn=True)
              if verdict_msg := decision.get("message") or "":
 diff --git a/tui_gateway/server.py b/tui_gateway/server.py
-index b9ab08d4b480137f1194aa37831f51e4dfc915f8..d4d5db58fbbf2ad54062d9aab57343542d18a4e1 100644
+index b9ab08d4b480137f1194aa37831f51e4dfc915f8..791f17735a5a05f2ea9c898aa275bf7b87fa5470 100644
 --- a/tui_gateway/server.py
 +++ b/tui_gateway/server.py
-@@ -1792,3 +1792,3 @@ def _clone_pet_payload(payload: dict) -> dict:
+@@ -730,2 +730,3 @@ def _emit(event: str, sid: str, payload: dict | None = None) -> bool:
+ from tui_gateway import server_requests as _server_requests
++from tui_gateway.owner_inbox import invalidate as _invalidate_owner_inbox
+
+@@ -733,3 +734,3 @@ _server_requests.bind_sinks(lambda frame: write_json(frame), lambda event, sid,
+                             lambda sid: _session_client_answers_requests(sid),
+-                            lambda sid: _session_answering_clients(sid))
++                            lambda sid: _session_answering_clients(sid), _invalidate_owner_inbox)
+
+@@ -1792,3 +1793,3 @@ def _clone_pet_payload(payload: dict) -> dict:
 
 -def _pet_row_frame_counts(spritesheet) -> dict:
 +def _pet_row_frame_counts(spritesheet, *, atlas=None) -> dict:
      """Real frame count per concrete spritesheet row name."""
-@@ -1797,7 +1797,7 @@ def _pet_row_frame_counts(spritesheet) -> dict:
+@@ -1797,7 +1798,7 @@ def _pet_row_frame_counts(spritesheet) -> dict:
          from agent.pet import constants, render
 -        with Image.open(spritesheet) as opened:
 -            image = opened.convert("RGBA")
@@ -124107,20 +126530,20 @@ index b9ab08d4b480137f1194aa37831f51e4dfc915f8..d4d5db58fbbf2ad54062d9aab5734354
 +        cols = max(1, alpha.width // W)
 +        row_count = max(1, alpha.height // H)
          rows = constants.state_rows_for_grid(row_count)
-@@ -1806,3 +1806,5 @@ def _pet_row_frame_counts(spritesheet) -> dict:
+@@ -1806,3 +1807,5 @@ def _pet_row_frame_counts(spritesheet) -> dict:
              top = row_idx * H
 -            blank = lambda col: render._frame_is_blank(image.crop((col * W, top, col * W + W, top + H)))
 +            def blank(col):
 +                cell = alpha.crop((col * W, top, (col + 1) * W, top + H))
 +                return cell.getextrema()[1] <= render._BLANK_ALPHA
              out[name] = next((col for col in range(cols) if blank(col)), cols)  # frames before the first blank cell
-@@ -1830,3 +1832,4 @@ def _pet_config_scale() -> float:
+@@ -1830,3 +1833,4 @@ def _pet_config_scale() -> float:
 
 -def _pet_sprite_payload(pet, *, scale: float) -> dict:
 +def _pet_sprite_payload(pet, *, scale: float, atlas=None, atlas_bytes=None, atlas_stat=None,
 +                        half_resolution: bool = False) -> dict:
      """Renderer payload (spritesheet bytes + geometry) for *pet* — one shape for ``pet.info`` (active
-@@ -1835,5 +1838,9 @@ def _pet_sprite_payload(pet, *, scale: float) -> dict:
+@@ -1835,5 +1839,9 @@ def _pet_sprite_payload(pet, *, scale: float) -> dict:
      from agent.pet import constants
 +    if atlas is not None and (atlas_bytes is None or atlas_stat is None):
 +        raise ValueError("character payload requires a validated snapshot")
@@ -124132,7 +126555,7 @@ index b9ab08d4b480137f1194aa37831f51e4dfc915f8..d4d5db58fbbf2ad54062d9aab5734354
 +        cache_key = (str(pet.spritesheet), stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size,
 +                     pet.slug, pet.display_name, round(scale, 4), half_resolution, revision)
      except Exception:
-@@ -1845,9 +1852,40 @@ def _pet_sprite_payload(pet, *, scale: float) -> dict:
+@@ -1845,9 +1853,40 @@ def _pet_sprite_payload(pet, *, scale: float) -> dict:
              return _clone_pet_payload(cached)
 -    try:  # real (padding-trimmed) frame count per state; {} → the canvas uses the static framesPerState
 -        from agent.pet import render
@@ -124180,7 +126603,7 @@ index b9ab08d4b480137f1194aa37831f51e4dfc915f8..d4d5db58fbbf2ad54062d9aab5734354
 +        raw = pet.spritesheet.read_bytes()
 +        mime = "image/png" if pet.spritesheet.suffix.lower() == ".png" else "image/webp"
      payload = {
-@@ -1855,7 +1893,7 @@ def _pet_sprite_payload(pet, *, scale: float) -> dict:
+@@ -1855,7 +1894,7 @@ def _pet_sprite_payload(pet, *, scale: float) -> dict:
          "spritesheetBase64": base64.standard_b64encode(raw).decode("ascii"),
 -        "spritesheetRevision": _pet_sheet_revision(pet.spritesheet), "frameW": constants.FRAME_W,
 -        "frameH": constants.FRAME_H, "framesPerState": constants.FRAMES_PER_STATE,
@@ -124192,16 +126615,91 @@ index b9ab08d4b480137f1194aa37831f51e4dfc915f8..d4d5db58fbbf2ad54062d9aab5734354
 +        "framesByRow": frames_by_row, "loopMs": constants.LOOP_MS,
 +        "scale": scale * divisor, "stateRows": state_rows,
      }
-@@ -2166,3 +2204,3 @@ from . import (
+@@ -2166,3 +2205,3 @@ from . import (
      methods_config_set as _methods_config_set, methods_images as _methods_images,
 -    methods_profiles as _methods_profiles, methods_prompt as _methods_prompt, methods_session as _methods_session,
 +    methods_profiles as _methods_profiles, methods_prompt as _methods_prompt, methods_session as _methods_session, methods_pet_characters as _methods_pet_characters,
      methods_tools as _methods_tools, methods_tools_plugin_servers as _methods_tools_plugin_servers,
-@@ -2182,3 +2220,3 @@ for _m in (
+@@ -2182,3 +2221,3 @@ for _m in (
      _methods_complete_helpers, _methods_slash, _methods_voice, _methods_browser,
 -    _methods_browser_control, _methods_session, _methods_prompt, _methods_config,
 +    _methods_browser_control, _methods_session, _methods_pet_characters, _methods_prompt, _methods_config,
      _methods_config_set, _methods_complete, _methods_tools, _methods_tools_plugin_servers, _methods_profiles, _methods_images,
+diff --git a/tui_gateway/server_requests.py b/tui_gateway/server_requests.py
+index a7ee8e80fe6ac735d03d1f5dad91ee8e8da5681e..5ceaba01868f4339f53def40e1c1e47ae9a0f6ab 100644
+--- a/tui_gateway/server_requests.py
++++ b/tui_gateway/server_requests.py
+@@ -115,2 +115,3 @@ _answerable: Callable[[str], bool] = lambda sid: True
+ _clients: Callable[[str], list] = lambda sid: []
++_inbox_changed: Callable[[], None] = lambda: None
+
+@@ -128,4 +129,5 @@ _answering_clients: set = set()
+ def bind_sinks(write_json: Callable[[dict], Any], emit: Callable[[str, str, dict], Any],
+-               answerable: Callable[[str], bool], clients: Callable[[str], list] | None = None) -> None:
+-    global _write, _emit, _answerable, _clients
++               answerable: Callable[[str], bool], clients: Callable[[str], list] | None = None,
++               inbox_changed: Callable[[], None] | None = None) -> None:
++    global _write, _emit, _answerable, _clients, _inbox_changed
+     _write, _emit, _answerable = write_json, emit, answerable
+@@ -133,2 +135,4 @@ def bind_sinks(write_json: Callable[[dict], Any], emit: Callable[[str, str, dict
+         _clients = clients
++    if inbox_changed is not None:
++        _inbox_changed = inbox_changed
+
+@@ -163,3 +167,9 @@ def _unanswerable(method: str, sid: str) -> bool:
+
++def _notify_inbox(req: ServerRequest) -> None:
++    if req.method in {"approval", "clarify"}:
++        _inbox_changed()
++
++
+ def _emit_cancel(req: ServerRequest, reason: str) -> None:
++    _notify_inbox(req)
+     _emit("request.cancel", req.sid, {"id": req.id, "method": req.method, "reason": reason})
+@@ -185,2 +195,3 @@ def _register(req: ServerRequest) -> None:
+             withdrawn = req.withdrawn
++    _notify_inbox(req)
+     if withdrawn is not None:
+@@ -277,2 +288,3 @@ def _decline(rid: str, transport: Any) -> bool:
+     req.event.set()
++    _notify_inbox(req)
+     return True
+@@ -315,2 +327,3 @@ def resolve_response(frame: dict, transport: Any = None) -> bool:
+     req.event.set()
++    _notify_inbox(req)
+     return True
+@@ -318,3 +331,4 @@ def resolve_response(frame: dict, transport: Any = None) -> bool:
+
+-def lock_answer(request_id: str, question_id: str, answer: str | None) -> list[str] | None:
++def lock_answer(request_id: str, question_id: str, answer: str | None, *,
++                sid: str | None = None, once: bool = False) -> list[str] | None:
+     """Lock one batch-clarify answer (update-in-place; ``None`` = skipped). Returns the question ids
+@@ -324,3 +338,3 @@ def lock_answer(request_id: str, question_id: str, answer: str | None) -> list[s
+         req = _open.get(request_id)
+-        if req is None or req.qids is None:
++        if req is None or req.qids is None or (sid is not None and req.sid != sid):
+             return None
+@@ -328,2 +342,4 @@ def lock_answer(request_id: str, question_id: str, answer: str | None) -> list[s
+             raise ValueError(f"unknown question_id {question_id!r}")
++        if once and question_id in req.locked:
++            return None
+         req.locked[question_id] = answer
+@@ -335,2 +351,6 @@ def lock_answer(request_id: str, question_id: str, answer: str | None) -> list[s
+         req.event.set()
++    if once and not remaining:
++        _emit_cancel(req, "resolved")
++    else:
++        _notify_inbox(req)
+     return remaining
+@@ -338,2 +358,8 @@ def lock_answer(request_id: str, question_id: str, answer: str | None) -> list[s
+
++def inbox_requests(sid: str | None = None) -> list[dict]:
++    with _lock:
++        return [{**req.snapshot(), "created_at": req.created_at} for req in _open.values()
++                if req.method in {"approval", "clarify"} and (sid is None or req.sid == sid)]
++
++
+ def cancel(sid: str | None = None, reason: str = "interrupted", *, method: str | None = None) -> int:
 diff --git a/tui_gateway/session_compression.py b/tui_gateway/session_compression.py
 index 2d10ea89e7c360af409c6443cf58b72d510d9976..e9144e595d1a509be694bf5109f66dfb376176e1 100644
 --- a/tui_gateway/session_compression.py
@@ -124640,6 +127138,30 @@ index 4d96df74c314194dbe40a26402531d1e08c4613e..b5588841252ddcbe836041d8f5e3fd2f
 -    threading.Thread(target=_run, daemon=True).start()
 +    threading.Thread(target=contextvars.copy_context().run, args=(_run,), daemon=True).start()
  
+diff --git a/tui_gateway/ws.py b/tui_gateway/ws.py
+index 7d7cb5a0ff1de0d0b43c05d5160e17b9dff8dd5e..8b6b0df210abfbfa7b027ffaf6f69ad837cd50a0 100644
+--- a/tui_gateway/ws.py
++++ b/tui_gateway/ws.py
+@@ -146,2 +146,4 @@ class WSTransport:
+         self.desktop_local = False
++        self.owner_inbox_operator = False
++        self.owner_inbox_watching = False
+         #: The served profile home whose skin this peer follows (None = the launch home); see change_watcher.
+@@ -159,2 +161,10 @@ class WSTransport:
+
++    def notify_owner_inbox(self) -> None:
++        if not self._closed and not self._loop.is_closed():
++            self._loop.call_soon_threadsafe(self._send_owner_inbox_changed)
++
++    def _send_owner_inbox_changed(self) -> None:
++        if self.owner_inbox_watching:
++            self.write({"jsonrpc": "2.0", "method": "event", "params": {"type": "owner_inbox.changed"}})
++
+     def _on_loop(self) -> bool:
+@@ -542,2 +552,3 @@ async def handle_ws(ws: Any, *, auth_identity: dict | None = None, subprotocol:
+         authority_connection = _authority_connection(ws, transport, auth_identity, operator)
++        transport.owner_inbox_operator = operator and authority_connection is None
+         # resolve_skin() is sync I/O + CPU; pooled so the read loop can drain the frontend's initial RPC burst.
 diff --git a/ui-tui/src/__tests__/agentRowsProgress.test.ts b/ui-tui/src/__tests__/agentRowsProgress.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..70cf7c223dee43a64f2b07533c358a0e66959858
