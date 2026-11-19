@@ -21,6 +21,10 @@ toward that edge of the diagram while the viewer or one of its toolbar buttons
 has focus. Select **Reset** to fit and recenter the diagram. Press **Escape** to
 close the viewer and return focus to **Open diagram**. If a toolbar tooltip is
 open, Escape dismisses the tooltip first.
+
+In Hub's chat file preview, Escape returns from the expanded diagram to
+**Open diagram**. Press Escape again to close the file preview and return to
+the file in the list.
 **Copy** keeps focus and runs one copy at a time in the expanded viewer.
 If the clipboard rejects both image and SVG text, the expanded viewer shows
 **Copy failed** and keeps the Copy button available. Open **Source** below a
