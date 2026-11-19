@@ -61254,10 +61254,10 @@ index 0000000000000000000000000000000000000000..f31f3ad067d0baca2d3949ad027442ea
 +}
 diff --git a/apps/desktop/src/store/composer-draft-owner.ts b/apps/desktop/src/store/composer-draft-owner.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..50205a473420470b016441b69893430afe936e8b
+index 0000000000000000000000000000000000000000..e4ecad1f9e11fe2c660fa9c2c7ff9547fc7f63e7
 --- /dev/null
 +++ b/apps/desktop/src/store/composer-draft-owner.ts
-@@ -0,0 +1,166 @@
+@@ -0,0 +1,172 @@
 +import type { SessionOwnerScope } from './session-request-router'
 +
 +export const OWNED_DRAFT_STORAGE_PREFIX = 'hermes:composer-draft:v4:'
@@ -61388,10 +61388,16 @@ index 0000000000000000000000000000000000000000..50205a473420470b016441b69893430a
 +export function persistOwnedDraftText(
 +  key: string,
 +  text: string,
-+  preserveKeys: readonly string[] = []
++  preserveKeys: readonly string[] = [],
++  onlyIfEmpty = false
 +): { saved: boolean; retired: string[] } {
 +  try {
 +    const existed = window.localStorage.getItem(key) !== null
++
++    // Another renderer's write can arrive before this renderer sees its storage event.
++    if (onlyIfEmpty && existed) {
++      return { saved: false, retired: [] }
++    }
 +
 +    if (!text) {
 +      window.localStorage.removeItem(key)
@@ -62041,7 +62047,7 @@ index 0000000000000000000000000000000000000000..99460ca52cdd9432d5ad710d189e10f1
 +  })
 +}
 diff --git a/apps/desktop/src/store/composer.test.ts b/apps/desktop/src/store/composer.test.ts
-index 2207b4667697f89353c2a7dff37efad1ba658fcf..edfdeba48fff45e9bd2205dc3954cfc723965cdc 100644
+index 2207b4667697f89353c2a7dff37efad1ba658fcf..c15bc8f7eb814eacbd5ae92d4c20f69cdd103bfb 100644
 --- a/apps/desktop/src/store/composer.test.ts
 +++ b/apps/desktop/src/store/composer.test.ts
 @@ -15,2 +15,3 @@ import {
@@ -62052,7 +62058,7 @@ index 2207b4667697f89353c2a7dff37efad1ba658fcf..edfdeba48fff45e9bd2205dc3954cfc7
  } from './composer'
 +import { MAX_PERSISTED_DRAFTS, ownedDraftKey, readOwnedDraftValue } from './composer-draft-owner'
 
-@@ -363,2 +365,75 @@ describe('session drafts', () => {
+@@ -363,2 +365,116 @@ describe('session drafts', () => {
 
 +  it('keeps the original durably saved when draft recovery cannot write the fresh copy', () => {
 +    const owner = { connectionId: 'fixture-local', profile: 'draft-restore' }
@@ -62078,6 +62084,46 @@ index 2207b4667697f89353c2a7dff37efad1ba658fcf..edfdeba48fff45e9bd2205dc3954cfc7
 +      expect(takeSessionDraft(original, owner).text).toBe(text)
 +    } finally {
 +      vi.restoreAllMocks()
++      clearSessionDraft(null, owner)
++      clearSessionDraft(original, owner)
++    }
++  })
++
++  it.each(['another window', 'attachments only'])('keeps both drafts when Undo finds an original from %s', conflict => {
++    const owner = { connectionId: 'fixture-local', profile: 'draft-undo-conflict' }
++    const original = 'gone-session-with-new-draft'
++    const recovered = 'Recovered unsent draft'
++    const newer = 'New work in the original chat'
++    const originalKey = ownedDraftKey(original, owner)!
++    const freshKey = ownedDraftKey(freshDraftScope(), owner)!
++    const files = [attachment({ id: 'file:new' })]
++
++    try {
++      stashSessionDraft(original, recovered, [], owner)
++      announceGoneSessionDraft(original, owner)
++      expect(adoptGoneSessionDraft(owner)).toBe(true)
++
++      if (conflict === 'another window') {
++        // Its storage event has not reached this window yet.
++        localStorage.setItem(originalKey, JSON.stringify({ text: newer, updatedAt: 1 }))
++        expect(takeSessionDraft(original, owner).text).toBe('')
++      } else {
++        stashSessionDraft(original, '', files, owner)
++      }
++      const before = localStorage.getItem(originalKey)
++
++      expect(undoRestoredDraft(recovered, owner)).toBe(false)
++      expect(readOwnedDraftValue(localStorage.getItem(freshKey))?.text).toBe(recovered)
++      expect(localStorage.getItem(originalKey)).toBe(before)
++      expect(takeSessionDraft(null, owner).text).toBe(recovered)
++      expect(takeSessionDraft(original, owner).attachments).toEqual(conflict === 'attachments only' ? files : [])
++      expect($restoredDraftNotice.get()?.text).toBe(recovered)
++
++      clearSessionDraft(original, owner)
++      expect(undoRestoredDraft(recovered, owner)).toBe(true)
++      expect(readOwnedDraftValue(localStorage.getItem(originalKey))?.text).toBe(recovered)
++      expect(localStorage.getItem(freshKey)).toBeNull()
++    } finally {
 +      clearSessionDraft(null, owner)
 +      clearSessionDraft(original, owner)
 +    }
@@ -62111,6 +62157,7 @@ index 2207b4667697f89353c2a7dff37efad1ba658fcf..edfdeba48fff45e9bd2205dc3954cfc7
 +      expect(takeSessionDraft(null, owner).text).toBe(savedText)
 +      expect(persisted(freshKey)).toBe(savedText)
 +      expect(persisted(oldKey)).toBeUndefined()
++      expect(takeSessionDraft(original, owner).text).toBe('')
 +
 +      failures.mockRestore()
 +      const remove = vi.spyOn(Storage.prototype, 'removeItem')
@@ -62129,7 +62176,7 @@ index 2207b4667697f89353c2a7dff37efad1ba658fcf..edfdeba48fff45e9bd2205dc3954cfc7
 +
    it('migrates a tip-keyed draft onto the post-compression tip', () => {
 diff --git a/apps/desktop/src/store/composer.ts b/apps/desktop/src/store/composer.ts
-index 2c4c553b2819455c47ae32e1990358f2039d1835..4c9f6fcc9f9816702d5005c4be9d94c6cff6f7ee 100644
+index 2c4c553b2819455c47ae32e1990358f2039d1835..0855312e7faab37b839b7f3d2007abf8870e6a68 100644
 --- a/apps/desktop/src/store/composer.ts
 +++ b/apps/desktop/src/store/composer.ts
 @@ -6,3 +6,15 @@ import { persistString, storedString } from '@/lib/storage'
@@ -62415,25 +62462,30 @@ index 2c4c553b2819455c47ae32e1990358f2039d1835..4c9f6fcc9f9816702d5005c4be9d94c6
 -    // Best-effort only — quota/private-mode must never break typing.
 +    return false
    }
-@@ -490,13 +633,22 @@ function persistDraftTexts() {
+@@ -490,13 +633,28 @@ function persistDraftTexts() {
 
 -export function stashSessionDraft(scope: string | null | undefined, text: string, attachments: ComposerAttachment[]) {
 -  const key = draftKey(scope)
--
--  // Delete-then-set keeps MRU order for MAX_PERSISTED_DRAFTS eviction.
--  draftsBySession.delete(key)
 +export function stashSessionDraft(
 +  scope: string | null | undefined,
 +  text: string,
 +  attachments: ComposerAttachment[],
 +  owner?: SessionOwnerScope,
-+  preserveScope?: string | readonly string[]
++  preserveScope?: string | readonly string[],
++  { onlyIfEmpty = false } = {}
 +) {
 +  const key = draftKey(scope, owner)
 +  const owned = hasDraftOwner(owner)
 +  const map = draftsFor(owner)
 +  const unsaved = owned ? unsavedOwnedKeys : unsavedLegacyKeys
 +  const persisted = owned ? ownedPersistedKeys : legacyPersistedKeys
++
++  if (onlyIfEmpty && (map.has(key) || (!owned && (loadPersistedDraftTexts()?.some(([scope]) => scope === key) ?? true)))) {
++    return false
++  }
+
+-  // Delete-then-set keeps MRU order for MAX_PERSISTED_DRAFTS eviction.
+-  draftsBySession.delete(key)
 +  map.delete(key)
 
    if (text.trim() || attachments.length > 0) {
@@ -62447,7 +62499,7 @@ index 2c4c553b2819455c47ae32e1990358f2039d1835..4c9f6fcc9f9816702d5005c4be9d94c6
 +    draftOwnerKey($restoredDraftNotice.get()?.owner) === draftOwnerKey(owner)
 +  ) {
      $restoredDraftNotice.set(null)
-@@ -504,21 +656,95 @@ export function stashSessionDraft(scope: string | null | undefined, text: string
+@@ -504,21 +662,102 @@ export function stashSessionDraft(scope: string | null | undefined, text: string
 
 -  persistDraftTexts()
 -  publishDraftTitle(key, deriveDraftTitle(text))
@@ -62455,9 +62507,16 @@ index 2c4c553b2819455c47ae32e1990358f2039d1835..4c9f6fcc9f9816702d5005c4be9d94c6
 +    ? persistOwnedDraftText(
 +        key,
 +        text,
-+        (typeof preserveScope === 'string' ? [preserveScope] : preserveScope)?.map(scope => draftKey(scope, owner))
++        (typeof preserveScope === 'string' ? [preserveScope] : preserveScope)?.map(scope => draftKey(scope, owner)),
++        onlyIfEmpty
 +      )
 +    : { saved: persistDraftTexts(), retired: [] }
++
++  if (!result.saved && onlyIfEmpty) {
++    map.delete(key)
++
++    return false
++  }
 +
 +  if (result.saved) {
 +    unsaved.delete(key)
@@ -62556,7 +62615,7 @@ index 2c4c553b2819455c47ae32e1990358f2039d1835..4c9f6fcc9f9816702d5005c4be9d94c6
 +
 +  return true
  }
-@@ -535,5 +761,10 @@ export function stashedDraftScopes(): string[] {
+@@ -535,5 +774,10 @@ export function stashedDraftScopes(): string[] {
   */
 -export function migrateSessionDraft(fromKey: string | null | undefined, toKey: string | null | undefined): boolean {
 -  const from = draftKey(fromKey)
@@ -62570,19 +62629,19 @@ index 2c4c553b2819455c47ae32e1990358f2039d1835..4c9f6fcc9f9816702d5005c4be9d94c6
 +  const to = draftKey(toKey, owner)
 +  const map = draftsFor(owner)
 
-@@ -543,3 +774,5 @@ export function migrateSessionDraft(fromKey: string | null | undefined, toKey: s
+@@ -543,3 +787,5 @@ export function migrateSessionDraft(fromKey: string | null | undefined, toKey: s
 
 -  const source = draftsBySession.get(from)
 +  publishDraftMutation({ from, to })
 +
 +  const source = map.get(from)
 
-@@ -549,3 +782,3 @@ export function migrateSessionDraft(fromKey: string | null | undefined, toKey: s
+@@ -549,3 +795,3 @@ export function migrateSessionDraft(fromKey: string | null | undefined, toKey: s
 
 -  const dest = draftsBySession.get(to)
 +  const dest = map.get(to)
 
-@@ -555,4 +788,8 @@ export function migrateSessionDraft(fromKey: string | null | undefined, toKey: s
+@@ -555,4 +801,8 @@ export function migrateSessionDraft(fromKey: string | null | undefined, toKey: s
 
 -  stashSessionDraft(toKey, source.text, source.attachments)
 -  clearSessionDraft(fromKey)
@@ -62593,7 +62652,7 @@ index 2c4c553b2819455c47ae32e1990358f2039d1835..4c9f6fcc9f9816702d5005c4be9d94c6
 +  clearSessionDraft(fromKey, owner)
 +  writeDraftRetry(fromKey, undefined, owner)
 
-@@ -561,2 +798,13 @@ export function migrateSessionDraft(fromKey: string | null | undefined, toKey: s
+@@ -561,2 +811,13 @@ export function migrateSessionDraft(fromKey: string | null | undefined, toKey: s
 
 +/** Move a compression lineage's known aliases onto its unchanged raw durable scope. */
 +export function migrateSessionDrafts(
@@ -62607,17 +62666,17 @@ index 2c4c553b2819455c47ae32e1990358f2039d1835..4c9f6fcc9f9816702d5005c4be9d94c6
 +}
 +
  /**
-@@ -571,14 +819,19 @@ export function migrateSessionDraft(fromKey: string | null | undefined, toKey: s
+@@ -571,14 +832,19 @@ export function migrateSessionDraft(fromKey: string | null | undefined, toKey: s
   */
 -let announcedNewSessionDraftKey: string | null = null
 +const announcedNewSessionDraftKeys = new Map<string, string>()
 +const announcementOwner = (owner: SessionOwnerScope) => draftOwnerKey(owner) ?? '__legacy__'
-+
-+export function announceNewSessionDraftKey(toKey: string | null | undefined, owner?: SessionOwnerScope): void {
-+  const key = announcementOwner(owner)
 
 -export function announceNewSessionDraftKey(toKey: string | null | undefined): void {
 -  announcedNewSessionDraftKey = toKey?.trim() || null
++export function announceNewSessionDraftKey(toKey: string | null | undefined, owner?: SessionOwnerScope): void {
++  const key = announcementOwner(owner)
++
 +  if (toKey?.trim()) {
 +    announcedNewSessionDraftKeys.set(key, toKey.trim())
 +  } else {
@@ -62636,12 +62695,12 @@ index 2c4c553b2819455c47ae32e1990358f2039d1835..4c9f6fcc9f9816702d5005c4be9d94c6
 +  const announced = announcedNewSessionDraftKeys.get(key)
 +  announcedNewSessionDraftKeys.delete(key)
 
-@@ -588,3 +841,3 @@ export function adoptNewSessionDraft(toKey: string | null | undefined): boolean
+@@ -588,3 +854,3 @@ export function adoptNewSessionDraft(toKey: string | null | undefined): boolean
 
 -  migrateSessionDraft(null, toKey)
 +  migrateSessionDraft(null, toKey, owner)
 
-@@ -607,25 +860,21 @@ export function adoptNewSessionDraft(toKey: string | null | undefined): boolean
+@@ -607,25 +873,21 @@ export function adoptNewSessionDraft(toKey: string | null | undefined): boolean
   * Offer, don't hijack: the fresh draft is seeded and an inline notice with
 - * Undo is published — no navigation, no focus steal, no toast. Fires once:
 - * the source key is cleared by the move, so re-opening the dead id later
@@ -62651,12 +62710,12 @@ index 2c4c553b2819455c47ae32e1990358f2039d1835..4c9f6fcc9f9816702d5005c4be9d94c6
   */
 -let announcedGoneSessionDraftKey: string | null = null
 +const announcedGoneSessionDraftKeys = new Map<string, string>()
++
++export function announceGoneSessionDraft(fromKey: string | null | undefined, owner?: SessionOwnerScope): void {
++  const key = announcementOwner(owner)
 
 -export function announceGoneSessionDraft(fromKey: string | null | undefined): void {
 -  announcedGoneSessionDraftKey = fromKey?.trim() || null
-+export function announceGoneSessionDraft(fromKey: string | null | undefined, owner?: SessionOwnerScope): void {
-+  const key = announcementOwner(owner)
-+
 +  if (fromKey?.trim()) {
 +    announcedGoneSessionDraftKeys.set(key, fromKey.trim())
 +  } else {
@@ -62682,7 +62741,7 @@ index 2c4c553b2819455c47ae32e1990358f2039d1835..4c9f6fcc9f9816702d5005c4be9d94c6
 +  const announced = announcedGoneSessionDraftKeys.get(key)
 +  announcedGoneSessionDraftKeys.delete(key)
 
-@@ -635,5 +884,6 @@ export function adoptGoneSessionDraft(): boolean {
+@@ -635,5 +897,6 @@ export function adoptGoneSessionDraft(): boolean {
 
 -  const source = draftsBySession.get(draftKey(announced))
 +  const source = takeSessionDraft(announced, owner)
@@ -62691,7 +62750,7 @@ index 2c4c553b2819455c47ae32e1990358f2039d1835..4c9f6fcc9f9816702d5005c4be9d94c6
 -  if (!source?.text.trim()) {
 +  if (!source.text.trim() || dest.text.trim() || dest.attachments.length) {
      return false
-@@ -641,12 +891,7 @@ export function adoptGoneSessionDraft(): boolean {
+@@ -641,12 +904,7 @@ export function adoptGoneSessionDraft(): boolean {
 
 -  const dest = draftsBySession.get(freshDraftScope())
 -
@@ -62707,7 +62766,7 @@ index 2c4c553b2819455c47ae32e1990358f2039d1835..4c9f6fcc9f9816702d5005c4be9d94c6
 -  $restoredDraftNotice.set({ fromKey: announced, text })
 +  $restoredDraftNotice.set({ fromKey: announced, text: source.text, ...(hasDraftOwner(owner) ? { owner } : {}) })
 
-@@ -655,3 +900,7 @@ export function adoptGoneSessionDraft(): boolean {
+@@ -655,3 +913,7 @@ export function adoptGoneSessionDraft(): boolean {
 
 -export function dismissRestoredDraftNotice(): void {
 +export function dismissRestoredDraftNotice(owner?: SessionOwnerScope): void {
@@ -62716,9 +62775,9 @@ index 2c4c553b2819455c47ae32e1990358f2039d1835..4c9f6fcc9f9816702d5005c4be9d94c6
 +  }
 +
    recordFriction('notice_dismissed', 'restored_draft')
-@@ -665,9 +914,22 @@ export function dismissRestoredDraftNotice(): void {
+@@ -665,9 +927,22 @@ export function dismissRestoredDraftNotice(): void {
   * edited it, Undo would destroy their work, so it only dismisses the notice.
-+ * If the saved copy cannot be written, keep the fresh draft and its notice.
++ * If the original key is occupied or the save fails, keep the fresh draft and its notice.
   * Returns whether the fresh draft was emptied (the caller repaints).
   */
 -export function undoRestoredDraft(liveText: string): boolean {
@@ -62739,9 +62798,9 @@ index 2c4c553b2819455c47ae32e1990358f2039d1835..4c9f6fcc9f9816702d5005c4be9d94c6
 +  const freshScope = freshDraftScope()
 +  const current = takeSessionDraft(freshScope, owner)
 +
-+  if (!stashSessionDraft(notice.fromKey, notice.text, current.attachments, owner, freshScope)) {
++  if (!stashSessionDraft(notice.fromKey, notice.text, current.attachments, owner, freshScope, { onlyIfEmpty: true })) {
      return false
-@@ -675,5 +937,3 @@ export function undoRestoredDraft(liveText: string): boolean {
+@@ -675,5 +950,3 @@ export function undoRestoredDraft(liveText: string): boolean {
 
 -  const current = draftsBySession.get(freshDraftScope())
 -  stashSessionDraft(notice.fromKey, notice.text, current?.attachments ?? [])
