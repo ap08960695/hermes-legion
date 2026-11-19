@@ -10,6 +10,8 @@ In Hub, **Back** returns through the actual file/folder navigation history. At t
 
 A collection search names its scope. No matches are distinct from an empty collection. Use **Clear search and filters** to recover the collection or **Search all Hub** to keep the query and expand its scope. Searching does not grant bot membership or share a private chat file.
 
+When Hermes recovers an unsent draft from a deleted chat, it keeps the original saved copy until the new chat saves its copy. If **Undo** cannot save the draft back, an error appears beside the button and the draft stays in the editor for retry.
+
 ## Reading Workflow
 
 **Fit graph** fits both dimensions. Large graphs may need small overview text; select a destination to highlight its recorded ancestry and use **Focus selected card** to return that task to readable size. Focusing scrolls after the scaled layout is committed. Bot journeys remain based on recorded runs and dependencies. No animation fabricates progress or dispatches work.
