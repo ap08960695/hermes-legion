@@ -34153,10 +34153,10 @@ index 7d1c2ea4b9ff9f1908bdb750a838cf1f6f1d2e47..2df76c02c22201edfd89371857f2fb7d
    )
 diff --git a/apps/desktop/src/contrib/plugin-characters.test.ts b/apps/desktop/src/contrib/plugin-characters.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..11b0058d9d60872f65c1a5b67673803f3b98bce8
+index 0000000000000000000000000000000000000000..76ca5178cd48faf42672c22cccf82e3d87c70766
 --- /dev/null
 +++ b/apps/desktop/src/contrib/plugin-characters.test.ts
-@@ -0,0 +1,559 @@
+@@ -0,0 +1,640 @@
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 +
 +import { setPetInfo } from '@/store/pet'
@@ -34196,6 +34196,87 @@ index 0000000000000000000000000000000000000000..11b0058d9d60872f65c1a5b67673803f
 +  current.update([{ id: 'revive', name: 'Wrong revival', source: '', detail: '', state: 'run' }])
 +  expect($petCharacterPreview.get()).toBeNull()
 +  expect(vi.getTimerCount()).toBe(0)
++})
++
++it('coalesces equivalent renewals and publishes the last observed expiry even when updates stop', () => {
++  const publisher = createPetCharacterPublisher('renewal')
++  const started = Date.now()
++
++  try {
++    publisher.update([previewActor])
++    const first = $petCharacterPreview.get()
++    vi.advanceTimersByTime(1000)
++    publisher.update([{ ...previewActor }])
++    expect($petCharacterPreview.get()).toBe(first)
++    vi.advanceTimersByTime(1000)
++    publisher.update([{ ...previewActor }])
++    expect($petCharacterPreview.get()).toBe(first)
++
++    vi.advanceTimersByTime(1999)
++    expect($petCharacterPreview.get()).toBe(first)
++    vi.advanceTimersByTime(1)
++    expect($petCharacterPreview.get()?.expiresAt).toBe(started + 17_000)
++    vi.advanceTimersByTime(12_999)
++    expect($petCharacterPreview.get()?.characters).toHaveLength(1)
++    vi.advanceTimersByTime(1)
++    expect($petCharacterPreview.get()).toEqual({ characters: [], expiresAt: 0 })
++  } finally {
++    publisher.dispose()
++  }
++})
++
++it('publishes changes and shorter deadlines immediately and cancels queued renewals on replacement', () => {
++  const publisher = createPetCharacterPublisher('first')
++  const started = Date.now()
++
++  try {
++    publisher.update([previewActor])
++    vi.advanceTimersByTime(1000)
++    publisher.update([previewActor])
++    publisher.update([{ ...previewActor, state: 'waiting' }])
++    expect($petCharacterPreview.get()?.characters[0]?.state).toBe('waiting')
++
++    vi.advanceTimersByTime(1000)
++    publisher.update([{ ...previewActor, state: 'waiting' }], started - 5_000)
++    expect($petCharacterPreview.get()?.expiresAt).toBe(started + 10_000)
++    publisher.update([{ ...previewActor, state: 'waiting' }])
++    const replacement = createPetCharacterPublisher('first')
++
++    try {
++      replacement.update([{ ...previewActor, name: 'Replacement' }])
++      publisher.dispose()
++      vi.advanceTimersByTime(5000)
++      expect($petCharacterPreview.get()?.characters[0]?.name).toBe('Replacement')
++    } finally {
++      replacement.dispose()
++    }
++  } finally {
++    publisher.dispose()
++  }
++})
++
++it('drops expired and cleared renewals when their scheduled work arrives late', () => {
++  const publisher = createPetCharacterPublisher('expired-renewal')
++  const started = Date.now()
++
++  try {
++    publisher.update([previewActor])
++    vi.advanceTimersByTime(1000)
++    publisher.update([previewActor])
++    vi.setSystemTime(started + 13_000)
++    vi.advanceTimersByTime(3000)
++    expect(Date.now()).toBe(started + 16_000)
++    expect($petCharacterPreview.get()).toEqual({ characters: [], expiresAt: 0 })
++
++    publisher.update([previewActor])
++    vi.advanceTimersByTime(1000)
++    publisher.update([previewActor])
++    publisher.update([])
++    vi.advanceTimersByTime(4000)
++    expect($petCharacterPreview.get()).toEqual({ characters: [], expiresAt: 0 })
++  } finally {
++    publisher.dispose()
++  }
 +})
 +
 +it('keeps only unique bounded identities, with neutral unknown poses and empty replacement', () => {
@@ -51897,10 +51978,10 @@ index b0eb473252b6e6e149f1f0711a6d8de535e87d8e..ad1ef8e2c1e29ef4fed05dc9d0fac09d
  
 diff --git a/apps/desktop/src/store/pet-characters.ts b/apps/desktop/src/store/pet-characters.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..9fca689765d725946eb8b98e9ede777b660aa245
+index 0000000000000000000000000000000000000000..c2923caf5dbe48466f14ffac69c35d4ccb84fa37
 --- /dev/null
 +++ b/apps/desktop/src/store/pet-characters.ts
-@@ -0,0 +1,275 @@
+@@ -0,0 +1,312 @@
 +import { atom } from 'nanostores'
 +
 +import { mediaTagValues } from '@/lib/chat-messages/parts'
@@ -52089,6 +52170,16 @@ index 0000000000000000000000000000000000000000..9fca689765d725946eb8b98e9ede777b
 +  await binding.open(() => popoverCurrent() && currentOutputBinding(id) === binding)
 +}
 +
++const CHARACTER_RENEWAL_INTERVAL_MS = 4000
++
++function sameCharacters(previous: PetCharacter[], next: PetCharacter[]): boolean {
++  return previous.length === next.length && next.every(({ sprite, ...actor }, index) => {
++    const { sprite: previousSprite, ...previousActor } = previous[index]
++
++    return sprite === previousSprite && JSON.stringify(actor) === JSON.stringify(previousActor)
++  })
++}
++
 +/** One replaceable preview owns the shared overlay; old publishers cannot revive it. */
 +export function createPetCharacterPublisher(pluginId: string) {
 +  const token = Symbol(pluginId)
@@ -52096,6 +52187,28 @@ index 0000000000000000000000000000000000000000..9fca689765d725946eb8b98e9ede777b
 +  clearTimeout(timer)
 +  outputBindings.clear()
 +  $petCharacterPreview.set({ characters: [], expiresAt: 0 })
++
++  let publishedAt = 0
++
++  const expire = () => {
++    if (owner !== token) {return}
++    outputBindings.clear()
++    $petCharacterPreview.set({ characters: [], expiresAt: 0 })
++  }
++
++  const publish = (snapshot: PetCharacterPreview) => {
++    if (owner !== token) {return}
++    publishedAt = Date.now()
++
++    if (snapshot.expiresAt <= publishedAt) {
++      expire()
++
++      return
++    }
++
++    timer = setTimeout(expire, snapshot.expiresAt - publishedAt)
++    $petCharacterPreview.set(snapshot)
++  }
 +
 +  return {
 +    prepareSprite: boundedCharacterSprite,
@@ -52156,16 +52269,21 @@ index 0000000000000000000000000000000000000000..9fca689765d725946eb8b98e9ede777b
 +
 +      clearTimeout(timer)
 +      outputBindings = bindings
-+      $petCharacterPreview.set({ characters, expiresAt: characters.length ? expiresAt : 0 })
++      const previous = $petCharacterPreview.get()
++      const snapshot = { characters, expiresAt: characters.length ? expiresAt : 0 }
 +
-+      if (characters.length) {
-+        timer = setTimeout(() => {
-+          if (owner === token) {
-+            outputBindings.clear()
-+            $petCharacterPreview.set({ characters: [], expiresAt: 0 })
-+          }
-+        }, expiresAt - now)
++      if (previous && characters.length && expiresAt >= previous.expiresAt) {
++        // Keep a fixed trailing deadline, with headroom before the currently displayed lease expires.
++        const renewAt = Math.min(publishedAt + CHARACTER_RENEWAL_INTERVAL_MS, previous.expiresAt - CHARACTER_RENEWAL_INTERVAL_MS)
++
++        if (renewAt > now && sameCharacters(previous.characters, characters)) {
++          timer = setTimeout(() => publish(snapshot), renewAt - now)
++
++          return
++        }
 +      }
++
++      publish(snapshot)
 +    },
 +    dispose: () => {
 +      if (owner !== token) {return}

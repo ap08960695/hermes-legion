@@ -698,3 +698,15 @@ real atlas changes, and document reload. Neither produced a repeatable
 CPU saving, so both stayed out of the runtime patch. The next comparison
 should isolate publisher, IPC and React commit work while preserving
 snapshot expiry and updates to status, output and display geometry.
+
+The Round 351 fixture supplied raw sprite inputs on every refresh, so
+its CPU comparison includes repeated image-header and base64 validation.
+Monitor prepares immutable atlases once and reuses them. Use prepared
+atlases when measuring equivalent Monitor updates.
+
+The Character publisher now coalesces equivalent lease renewals before
+IPC. It sends the latest observed expiry at a fixed trailing deadline,
+normally every four seconds, with headroom before the visible lease
+expires. Roster, status, cue, output identity, sprite identity and
+shorter expiry changes publish immediately. Clearing, replacement and
+disposal revoke pending renewal work.
