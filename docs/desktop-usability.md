@@ -27,7 +27,9 @@ When you discard a saved message with the keyboard, focus returns to the recover
 
 When Hermes recovers an unsent draft from a deleted chat, it keeps the original saved copy until it saves the draft in the new chat. If **Undo** cannot save a restored draft back to its original chat, an error appears beside Undo. The draft stays in the editor and you can retry.
 
-When you select **Restore draft** on an unassigned draft, focus returns to the current composer so you can keep typing.
+When **Restore draft** copies an unassigned draft, focus returns to the composer.
+If the copy fails or the chat already has a saved draft, the notice explains
+the failure and keeps **Restore draft** available.
 
 ![Failed-message recovery fixture before and after parking the current draft.](images/draft-recovery-fixture.webp)
 
