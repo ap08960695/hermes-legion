@@ -35596,10 +35596,10 @@ index 7d1c2ea4b9ff9f1908bdb750a838cf1f6f1d2e47..2df76c02c22201edfd89371857f2fb7d
    )
 diff --git a/apps/desktop/src/contrib/plugin-characters.test.ts b/apps/desktop/src/contrib/plugin-characters.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..dfff20d171d50a9ceccabc809c1a0cf6774fb2da
+index 0000000000000000000000000000000000000000..7c7b8df7a4c034db79bf082e7888e749112c4b50
 --- /dev/null
 +++ b/apps/desktop/src/contrib/plugin-characters.test.ts
-@@ -0,0 +1,703 @@
+@@ -0,0 +1,754 @@
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 +
 +import { setPetInfo } from '@/store/pet'
@@ -35856,6 +35856,57 @@ index 0000000000000000000000000000000000000000..dfff20d171d50a9ceccabc809c1a0cf6
 +
 +  expect($petOverlayActive.get()).toBe(true)
 +  expect(close).toHaveBeenCalledTimes(3)
++})
++
++it.each(['refusal', 'rejection', 'explicit close', 'success'])('handles a publisher handoff during a pending open followed by %s', async outcome => {
++  let finish!: (reply: { ok: boolean }) => void
++  let fail!: (error: Error) => void
++  const pending = new Promise<{ ok: boolean }>((resolve, reject) => {
++    finish = resolve
++    fail = reject
++  })
++  const open = vi.fn(async () => ({ ok: true })).mockReturnValueOnce(pending)
++  const close = vi.fn(async () => ({})), pushState = vi.fn()
++  Object.defineProperty(window, 'hermesDesktop', { configurable: true, value: { petOverlay: { open, close, pushState } } })
++  const anchor = { x: 0, y: 0, width: 40, height: 40 }
++  const first = createPluginContext('first').pet.previewCharacters!(anchor, true)!
++  first.update([previewActor])
++  const current = createPluginContext('current').pet.previewCharacters!(anchor, true)!
++  current.update([previewActor])
++  first.dispose()
++
++  try {
++    expect(open).toHaveBeenCalledOnce()
++    expect(close).not.toHaveBeenCalled()
++    if (outcome === 'explicit close') {popInPet()}
++    if (outcome === 'rejection') {fail(new Error('fixture open rejected'))}
++    else {finish({ ok: outcome === 'success' })}
++    await Promise.resolve()
++
++    const retry = outcome === 'rejection' || outcome === 'refusal'
++    expect($petOverlayActive.get()).toBe(outcome === 'success')
++    first.update([{ ...previewActor, name: 'Superseded' }])
++    expect(open).toHaveBeenCalledOnce()
++
++    current.update([])
++    expect(open).toHaveBeenCalledOnce()
++    current.update([previewActor])
++    expect(open).toHaveBeenCalledTimes(retry ? 2 : 1)
++    if (retry) {
++      current.update([{ ...previewActor, name: 'Known current publisher' }])
++      expect(open).toHaveBeenCalledTimes(2)
++      expect(pushState.mock.lastCall?.[0].characterPreview.characters[0].id)
++        .toBe(JSON.stringify(['current', previewActor.id]))
++    }
++    await Promise.resolve()
++  } finally {
++    current.dispose()
++  }
++
++  if (outcome !== 'success') {
++    expect(close).toHaveBeenCalledOnce()
++    expect($petOverlayActive.get()).toBe(false)
++  }
 +})
 +
 +it.each(['success', 'refusal', 'rejection'])('ignores a superseded panel open %s after reopening', async outcome => {
@@ -36304,7 +36355,7 @@ index 0000000000000000000000000000000000000000..dfff20d171d50a9ceccabc809c1a0cf6
 +  expect($petOverlayActive.get()).toBe(false)
 +})
 diff --git a/apps/desktop/src/contrib/plugin.ts b/apps/desktop/src/contrib/plugin.ts
-index d487729ac19e2c5d823d0437d4882b3400114822..9ee087f1301fd22caaef8f3cd15cd15012a7ebb3 100644
+index d487729ac19e2c5d823d0437d4882b3400114822..e635102fc2ab14932d6b726e9b1877400464989b 100644
 --- a/apps/desktop/src/contrib/plugin.ts
 +++ b/apps/desktop/src/contrib/plugin.ts
 @@ -25,2 +25,3 @@ import {
@@ -36327,7 +36378,12 @@ index d487729ac19e2c5d823d0437d4882b3400114822..9ee087f1301fd22caaef8f3cd15cd150
 +   * scene. Returns null when the native Characters overlay is unavailable. */
 +  previewCharacters?: (anchor: PetOverlayBounds, independent?: boolean) => PetCharacterPublisher | null
    /** Show one plain-text line (no HTML; control characters stripped, capped
-@@ -275,4 +283,92 @@ function createPluginPet(pluginId: string, track: (dispose: () => void) => () =>
+@@ -270,2 +278,4 @@ function createPluginOs(pluginId: string): PluginOs {
+
++let rearmCharacterOverlay: (() => void) | undefined
++
+ // Lines are attributed by the inventory name the loader published before
+@@ -275,4 +285,103 @@ function createPluginPet(pluginId: string, track: (dispose: () => void) => () =>
    let tracked = false
 +  let preview: PetCharacterPublisher | null = null
 +  let previewTracked = false
@@ -36364,7 +36420,11 @@ index d487729ac19e2c5d823d0437d4882b3400114822..9ee087f1301fd22caaef8f3cd15cd150
 +        stopWatchingOverlay = undefined
 +      }
 +
-+      const stopWatchingPreview = $petCharacterPreview.listen(snapshot => {
++      const rearmOverlay = () => {
++        if (publisher.isCurrent()) {mayOpen = true}
++      }
++
++      const unsubscribePreview = $petCharacterPreview.listen(snapshot => {
 +        if (!publisher.isCurrent()) {
 +          releaseOwnership()
 +          stopWatchingPreview()
@@ -36394,7 +36454,8 @@ index d487729ac19e2c5d823d0437d4882b3400114822..9ee087f1301fd22caaef8f3cd15cd150
 +        mayOpen = false
 +
 +        if ($petOverlayActive.get()) {return}
-+        popOutPet(anchor, () => {mayOpen = publisher.isCurrent()})
++        // The pending native open can outlive this publisher.
++        popOutPet(anchor, () => rearmCharacterOverlay?.())
 +
 +        if ($petOverlayActive.get()) {
 +          stopWatchingOverlay = $petOverlayActive.listen(active => {
@@ -36403,6 +36464,12 @@ index d487729ac19e2c5d823d0437d4882b3400114822..9ee087f1301fd22caaef8f3cd15cd150
 +        }
 +      })
 +
++      const stopWatchingPreview = () => {
++        if (rearmCharacterOverlay === rearmOverlay) {rearmCharacterOverlay = undefined}
++        unsubscribePreview()
++      }
++
++      rearmCharacterOverlay = rearmOverlay
 +      preview = {
 +        ...(isMacPlatform() ? { atlasVariant: 'half' as const } : {}),
 +        prepareSprite: publisher.prepareSprite,
