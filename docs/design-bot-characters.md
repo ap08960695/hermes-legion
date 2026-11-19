@@ -844,3 +844,35 @@ passed pause/resume, lease, clear and pipe teardown checks. The two
 updated launches measured 2.30 and 2.87 observed CPU points including
 WindowServer. The RSS and CPU budgets still need consistent passes.
 Compare native presentation updates at the same visual cadence next.
+
+### Attribute native animation cost to presentation
+
+The network-denied Mac fixture measured five visible Characters in the
+same full-size native panel at 2× with a 10 Hz timer. Each launch used
+adjacent timed pairs in balanced orders. Still sprites kept the same
+timer and layer writes while holding both positions and atlas cells
+fixed. Atlas-only and translation-only changed one property each.
+A second walking mode wrote a layer property only when its value
+changed. The still/still control measured short-term variation in the
+system-wide WindowServer counter.
+
+| Comparison | Median WindowServer CPU difference | Four observed differences |
+| --- | ---: | --- |
+| Still versus still | −0.17 points | −0.49, −0.31, +0.02, −0.02 |
+| Walking over still | +3.81 points | +3.30, +4.07, +3.58, +4.04 |
+| Atlas only over same-launch still | +2.83 points | +2.99, +3.39, +1.71, +2.66 |
+| Translation only over same-launch still | +2.73 points | +3.15, +3.55, +1.98, +2.30 |
+| Changed-only writes versus normal walking | +0.07 points | −0.03, −0.63, +0.16, +1.06 |
+
+Walking exceeded the still-control variation in both sample orders.
+Either animation axis cost appreciably more than a still scene.
+Skipping writes with unchanged values cut position writes by 40% and
+atlas writes by 26%, with eight pixel-identical walking crop pairs.
+WindowServer savings were inconsistent, so the candidate stays in the
+fixture.
+
+Normal walking added 65.70–79.82 MiB RSS across the process tree and
+3.65–4.47 observed CPU points including WindowServer above the
+publisher-only baseline. This fixture met the RSS ceiling in all four
+walking samples and exceeded the CPU ceiling. Compare less frequent
+presentation while preserving the motion path and elapsed timing.
