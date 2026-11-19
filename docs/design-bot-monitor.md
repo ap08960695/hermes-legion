@@ -75,8 +75,9 @@ opening, the inbox shows progress and waits before accepting another open.
 If you reopen the inbox or switch connection or profile while an answer
 is sending, the old confirmation stays hidden. The row still clears
 when the gateway resolves the request.
-Sending another answer clears the previous confirmation. If sending fails,
-the row keeps the answer so you can retry.
+Sending another answer clears the previous confirmation. When answers
+overlap, only the most recent submission shows a shared confirmation.
+If sending fails, the row keeps the answer so you can retry.
 The same request stays pending if you close and reopen the inbox while
 it sends. Other questions and approvals are still available.
 
