@@ -19463,18 +19463,22 @@ index b43a453ce927f76bdc0a7b9b96a463247982aaa1..23f32b4e6b23aa8c862aebee4853d1b7
 +  expect(onSubmit).toHaveBeenCalledTimes(1)
 +})
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.test.tsx b/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.test.tsx
-index d929e041de641a0d5ef8afe59196e3c00467c280..f116452e93bc96b7af3915fded76443903324b2c 100644
+index d929e041de641a0d5ef8afe59196e3c00467c280..f33f0505db5ada8d08d16f8a102cd3fb7401a718 100644
 --- a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.test.tsx
 +++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.test.tsx
-@@ -4,5 +4,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
+@@ -4,5 +4,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 +import { GATEWAY_CONNECTION_CLOSED_MESSAGE } from '@/api/client'
++import { handleToolEvent } from '@/app/session/hooks/use-message-stream/gateway-event/tools'
++import type { GatewayEventContext } from '@/app/session/hooks/use-message-stream/gateway-event/types'
  import * as sessionOwnerUtils from '@/app/session/hooks/use-session-actions/utils'
  import { PaneVisibleContext } from '@/components/pane-shell/pane-visibility'
 -import { $clarifyRequests } from '@/store/clarify'
++import { restorePendingClarifyToolCall, upsertToolPart } from '@/lib/chat-messages'
++import { createClientSessionState } from '@/lib/chat-runtime'
 +import { $clarifyRequests, setClarifyRequest } from '@/store/clarify'
  import {
-@@ -13,4 +14,7 @@ import {
+@@ -13,4 +18,7 @@ import {
  import { $queuedPromptsBySession, clearQueuedPrompts, getQueuedPrompts } from '@/store/composer-queue'
 +import { type ComposerDraftRetry, draftRetry, matchingDraftRetry } from '@/store/composer-draft-retry'
 +import { $confirmRequest, settleConfirm } from '@/store/confirm'
@@ -19482,20 +19486,22 @@ index d929e041de641a0d5ef8afe59196e3c00467c280..f116452e93bc96b7af3915fded764439
  import { $gateway } from '@/store/gateway'
 +import * as notifications from '@/store/notifications'
  import { $onboardingPhase } from '@/store/onboarding-phase'
-@@ -24,3 +28,3 @@ import {
+@@ -24,4 +32,5 @@ import {
  } from '@/store/prompts'
 -import { hasOpenServerRequest, rememberServerRequest, resetServerRequestsForTests } from '@/store/server-requests'
 +import { forgetServerRequest, hasOpenServerRequest, rememberServerRequest, resetServerRequestsForTests } from '@/store/server-requests'
  import { $connection } from '@/store/session'
-@@ -38,2 +42,3 @@ interface SubmitHarnessOptions {
++import { $sessionStates } from '@/store/session-states'
+ import { $setupBeatRequests, parkSetupBeat } from '@/store/setup-beat'
+@@ -38,2 +47,3 @@ interface SubmitHarnessOptions {
    inputDisabled?: boolean
 +  recovered?: ComposerDraftRetry
    scopeTarget?: ComposerTarget
-@@ -53,2 +58,3 @@ function renderSubmitHook({
+@@ -53,2 +63,3 @@ function renderSubmitHook({
    inputDisabled = false,
 +  recovered,
    scopeTarget = 'main',
-@@ -124,2 +130,8 @@ function renderSubmitHook({
+@@ -124,2 +135,8 @@ function renderSubmitHook({
          focusInput: vi.fn(),
 +        getDraftRetry: () => recovered,
 +        takeDraftRetry: (value, files) => {
@@ -19504,7 +19510,7 @@ index d929e041de641a0d5ef8afe59196e3c00467c280..f116452e93bc96b7af3915fded764439
 +          return matched
 +        },
          inputDisabled,
-@@ -681,2 +693,77 @@ describe('useComposerSubmit with a clarify parked on the session', () => {
+@@ -681,2 +698,150 @@ describe('useComposerSubmit with a clarify parked on the session', () => {
 
 +  it.each(['same', 'replacement', 'settled'] as const)('scopes a disconnected final answer when the prompt is %s', async replay => {
 +    parkClarify('runtime-session')
@@ -19581,8 +19587,81 @@ index d929e041de641a0d5ef8afe59196e3c00467c280..f116452e93bc96b7af3915fded764439
 +    expect(request).toHaveBeenCalledTimes(1)
 +  })
 +
++  it.each([
++    { toolId: 'provider-call', outcome: 'submitted', proved: true },
++    { toolId: 'different-call', outcome: 'submitted', proved: false },
++    { toolId: 'provider-call', outcome: 'cancelled', proved: false }
++  ])('handles a lost typed receipt after $toolId reports $outcome', async ({ toolId, outcome, proved }) => {
++    const sessionId = 'runtime-session'
++    const requestId = 'req-runtime-session'
++    parkClarify(sessionId)
++    let loseReceipt!: (error: Error) => void
++    const request = vi.fn(() => new Promise((_resolve, reject) => (loseReceipt = reject)))
++    setGateway(request)
++    const toast = vi.spyOn(notifications, 'notifyError')
++    const answer = 'the typed answer'
++    const { hook, loadIntoComposer, onSubmit } = renderSubmitHook({ text: answer })
++    const args = { questions: [{ question: 'which one?', choices: ['a', 'b'] }] }
++    const message = {
++      id: 'owner-message',
++      role: 'assistant' as const,
++      parts: upsertToolPart([], { name: 'clarify', tool_id: 'provider-call', args }, 'running')
++    }
++    const projection = restorePendingClarifyToolCall([message], { tool_id: requestId, args })
++    const state = { ...createClientSessionState(), ...projection }
++    const previous = $sessionStates.get()
++    $sessionStates.set({ ...previous, [sessionId]: state })
++
++    try {
++      act(() => hook.result.current.submitDraft())
++      await waitFor(() => expect(request).toHaveBeenCalledTimes(1))
++      expect(hasOpenServerRequest(requestId)).toBe(true)
++
++      const payload = {
++        name: 'clarify',
++        tool_id: toolId,
++        args,
++        result: JSON.stringify({ outcome, responses: [{ status: 'answered', user_response: answer }] })
++      }
++      handleToolEvent({
++        event: { type: 'tool.complete', session_id: sessionId, seq: 1, payload },
++        payload,
++        sessionId,
++        occurredAt: 2,
++        isActiveEvent: false,
++        deps: {
++          flushQueuedDeltas: vi.fn(),
++          sessionInterrupted: () => false,
++          updateSessionState: vi.fn(),
++          upsertToolCall: () => {
++            const parts = upsertToolPart(projection.messages[0].parts, payload, 'complete')
++            $sessionStates.set({ ...previous, [sessionId]: { ...state, messages: [{ ...message, parts }] } })
++          }
++        }
++      } as unknown as GatewayEventContext)
++
++      // Post-turn history hydration replaces the live rows before the receipt times out.
++      $sessionStates.set(previous)
++      const timeout = new Error('request timed out after 30s: clarify.respond')
++      await act(async () => loseReceipt(timeout))
++
++      expect(hasOpenServerRequest(requestId)).toBe(!proved)
++      if (proved) {
++        expect(toast).not.toHaveBeenCalled()
++        expect(loadIntoComposer).not.toHaveBeenCalled()
++      } else {
++        expect(toast).toHaveBeenCalledWith(timeout, expect.any(String))
++        expect(loadIntoComposer).toHaveBeenCalledWith(answer, [])
++      }
++      expect(onSubmit).not.toHaveBeenCalled()
++      expect(request).toHaveBeenCalledTimes(1)
++    } finally {
++      $sessionStates.set(previous)
++    }
++  })
++
    it('answers one question per submit while a busy turn waits, matching a choice label', async () => {
-@@ -1027 +1114,57 @@ describe('useComposerSubmit with a setup card waiting in the onboarding chat', (
+@@ -1027 +1192,57 @@ describe('useComposerSubmit with a setup card waiting in the onboarding chat', (
  })
 +
 +
@@ -34246,33 +34325,52 @@ index 994389b8ee5d33e1d14a2b6c3e33312deaaacb0f..c82e1a9bb500f08e45fa616034ea3d5a
 -
      dispatchNativeNotification({
 diff --git a/apps/desktop/src/app/session/hooks/use-message-stream/gateway-event/tools.ts b/apps/desktop/src/app/session/hooks/use-message-stream/gateway-event/tools.ts
-index 1498670c86a84b39d6bcd2375a030aaeba442911..5c7e2a81f1fa9000aa77bef97c5dee5d475a5cb3 100644
+index 1498670c86a84b39d6bcd2375a030aaeba442911..862f0d6b950638ab50ae2280de77ffe5eded06ee 100644
 --- a/apps/desktop/src/app/session/hooks/use-message-stream/gateway-event/tools.ts
 +++ b/apps/desktop/src/app/session/hooks/use-message-stream/gateway-event/tools.ts
-@@ -8,3 +8,2 @@ import { invalidateSlashCompletions } from '@/lib/slash-completion-cache'
+@@ -5,6 +5,7 @@ import { leaveIntroOnLayout } from '@/components/onboarding/first-run/intro'
+ import { toolCallOwnerMessageId } from '@/lib/chat-messages'
++import { submittedClarifyRequestId } from '@/lib/chat-messages/tool-parts'
+ import { connectorText, recordOf } from '@/lib/connector-tools'
+ import { invalidateSlashCompletions } from '@/lib/slash-completion-cache'
++import { noteTypedClarifyCompletion } from '@/store/clarify'
  import { refreshBackgroundProcesses } from '@/store/composer-status'
 -import { flashPetActivity, setPetActivity } from '@/store/pet'
  import { recordPreviewArtifact, reofferPreviewArtifact } from '@/store/preview-status'
-@@ -110,3 +109,3 @@ export function retireTurnToolProgress(eventType: string, sessionId: string): vo
+@@ -110,3 +111,3 @@ export function retireTurnToolProgress(eventType: string, sessionId: string): vo
  export function handleToolEvent(ctx: GatewayEventContext): boolean {
 -  const { deps, event, payload, sessionId, isActiveEvent, occurredAt } = ctx
 +  const { deps, event, payload, sessionId, occurredAt } = ctx
    const { flushQueuedDeltas, nativeSubagentSessionsRef, sessionInterrupted, updateSessionState, upsertToolCall } = deps
-@@ -137,6 +136,2 @@ export function handleToolEvent(ctx: GatewayEventContext): boolean {
+@@ -137,6 +138,2 @@ export function handleToolEvent(ctx: GatewayEventContext): boolean {
 
 -    if (isActiveEvent) {
 -      setPetActivity({ reasoning: false, toolRunning: true })
 -    }
 -
      return true
-@@ -152,6 +147,2 @@ export function handleToolEvent(ctx: GatewayEventContext): boolean {
+@@ -152,6 +149,2 @@ export function handleToolEvent(ctx: GatewayEventContext): boolean {
 
 -    if (isActiveEvent) {
 -      setPetActivity({ reasoning: false, toolRunning: true })
 -    }
 -
      return true
-@@ -173,13 +164,2 @@ export function handleToolEvent(ctx: GatewayEventContext): boolean {
+@@ -167,3 +160,12 @@ export function handleToolEvent(ctx: GatewayEventContext): boolean {
+       // completion may never re-offer a dismissed target.
+-      const pendingProduction = !event.replayed && Boolean(toolCallOwnerMessageId(state?.messages ?? [], payload))
++      const ownerMessageId = event.replayed ? null : toolCallOwnerMessageId(state?.messages ?? [], payload)
++      const pendingProduction = ownerMessageId !== null
++
++      if (ownerMessageId && payload?.name === 'clarify' && !sessionInterrupted(sessionId)) {
++        const owner = state?.messages.find(message => message.id === ownerMessageId)
++        const requestId = submittedClarifyRequestId(owner?.parts ?? [], payload)
++        if (requestId) {
++          noteTypedClarifyCompletion(requestId)
++        }
++      }
+
+@@ -173,13 +175,2 @@ export function handleToolEvent(ctx: GatewayEventContext): boolean {
 
 -      if (isActiveEvent) {
 -        setPetActivity({ toolRunning: false })
@@ -45161,16 +45259,70 @@ index 57a7883e26b7d824533e0901f317235de790f943..8061e3caa3bb865b31207acb49745819
 +          ? { asyncResultKind: 'delegation' as const }
 +          : {}),
        timestamp: earliestTimestamp(message.timestamp, ...parts.map(part => part.timestamp)),
+diff --git a/apps/desktop/src/lib/chat-messages/tool-parts.ts b/apps/desktop/src/lib/chat-messages/tool-parts.ts
+index ebb7651f9e4dfeed9379dc6b2be2ad9817fb3af3..e70d89b69b5739acf211fc6db2c0c2415a3bd756 100644
+--- a/apps/desktop/src/lib/chat-messages/tool-parts.ts
++++ b/apps/desktop/src/lib/chat-messages/tool-parts.ts
+@@ -374,2 +374,6 @@ export function upsertToolPart(
+     timestamp: prev?.timestamp ?? occurredAt,
++    // A row can be reused by context, but that does not prove the original request resolved.
++    ...(prev?.type === 'tool-call' &&
++      prev.clarifyRequestId &&
++      stableId !== prev.toolCallId && { clarifyRequestId: undefined }),
+     ...(phase === 'complete' && {
+@@ -636,2 +640,3 @@ export function restorePendingBlockingToolCall(
+   const location = findPendingClarifyLocation(messages, clarifyPayload, new Set([clarifyPayload.name]))
++  const clarifyRequestId = clarifyPayload.name === 'clarify' ? clarifyPayload.tool_id : undefined
+
+@@ -657,3 +662,4 @@ export function restorePendingBlockingToolCall(
+       args: args as never,
+-      argsText: JSON.stringify(args)
++      argsText: JSON.stringify(args),
++      ...(clarifyRequestId && { clarifyRequestId })
+     } as ChatMessagePart
+@@ -667,2 +673,6 @@ export function restorePendingBlockingToolCall(
+   const parts = upsertToolPart([], clarifyPayload, 'running', occurredAt)
++  if (clarifyRequestId) {
++    parts[0] = { ...parts[0], clarifyRequestId }
++  }
++
+   const tailIndex = messages.findLastIndex(message => !message.hidden)
+@@ -698,2 +708,21 @@ export function restorePendingBlockingToolCall(
+
++export function submittedClarifyRequestId(
++  parts: readonly ChatMessagePart[],
++  payload: GatewayEventPayload
++): string | undefined {
++  const stableId = toolId(payload)
++
++  if (!stableId || payload.error || parseMaybeJsonObject(payload.result).outcome !== 'submitted') {
++    return undefined
++  }
++
++  return parts.find(
++    part =>
++      part.type === 'tool-call' &&
++      part.toolName === 'clarify' &&
++      part.toolCallId === stableId &&
++      !Object.hasOwn(part, 'result')
++  )?.clarifyRequestId
++}
++
+ /**
 diff --git a/apps/desktop/src/lib/chat-messages/types.ts b/apps/desktop/src/lib/chat-messages/types.ts
-index 2473f0ce2a5023aa2ca7a1d6c6efb3bd0ad394bc..3dc09aeb27856aa978e70fa624b24d2a7bc0b63a 100644
+index 2473f0ce2a5023aa2ca7a1d6c6efb3bd0ad394bc..34038168349ac0c348505b506e362cae59e3186a 100644
 --- a/apps/desktop/src/lib/chat-messages/types.ts
 +++ b/apps/desktop/src/lib/chat-messages/types.ts
-@@ -36,3 +36,3 @@ export type ChatMessage = {
+@@ -8,2 +8,3 @@ import type { MessageReaction, SessionMessage, UsageStats } from '@/types/hermes
+ export interface TimelinePartMetadata {
++  clarifyRequestId?: string
+   toolResultMetadata?: ToolResultMetadata
+@@ -36,3 +37,3 @@ export type ChatMessage = {
    asyncResult?: string
 -  asyncResultKind?: 'process'
 +  asyncResultKind?: 'process' | 'delegation'
    timestamp?: number
-@@ -82,2 +82,3 @@ export type GatewayEventPayload = {
+@@ -82,2 +83,3 @@ export type GatewayEventPayload = {
    text?: string
 +  display_kind?: string
    rendered?: string
@@ -63941,7 +64093,7 @@ index 0000000000000000000000000000000000000000..71b71b92e0fd355937e54fb30d21e8df
 +  dropCharacterSettings(from)
 +}
 diff --git a/apps/desktop/src/store/clarify.ts b/apps/desktop/src/store/clarify.ts
-index f4becc2eb75f2dd4bfb32540b3d4dfca78e24a7d..2492f092afe1f2161488acf32650dc078b477dce 100644
+index f4becc2eb75f2dd4bfb32540b3d4dfca78e24a7d..c9d7afcc950acc1d2cc3393126fedcca2aae5b01 100644
 --- a/apps/desktop/src/store/clarify.ts
 +++ b/apps/desktop/src/store/clarify.ts
 @@ -2,2 +2,3 @@ import { atom, computed } from 'nanostores'
@@ -63979,7 +64131,20 @@ index f4becc2eb75f2dd4bfb32540b3d4dfca78e24a7d..2492f092afe1f2161488acf32650dc07
 -}
 -
  /**
-@@ -301,5 +303,8 @@ function lockTypedAnswer(request: ClarifyRequest, text: string): null | Promise<
+@@ -291,3 +293,11 @@ function typedAnswer(question: ClarifyQuestion, text: string): string {
+  */
+-const lockChains = new Map<string, Promise<boolean>>()
++const lockChains = new Map<string, { saved: Promise<boolean>; toolCompleted?: boolean }>()
++
++export function noteTypedClarifyCompletion(requestId: string): void {
++  const chain = lockChains.get(requestId)
++
++  if (chain) {
++    chain.toolCompleted = true
++  }
++}
+
+@@ -301,5 +311,8 @@ function lockTypedAnswer(request: ClarifyRequest, text: string): null | Promise<
 
 -  const answer = typedAnswer(question, text)
 +  const choice = question.choices?.find(entry => bareChoice(entry).toLowerCase() === text.toLowerCase())
@@ -63989,16 +64154,19 @@ index f4becc2eb75f2dd4bfb32540b3d4dfca78e24a7d..2492f092afe1f2161488acf32650dc07
    const last = request.questions.every(entry => lockedAnswers[entry.qid] !== undefined)
 +  const trackedFinal = last && hasOpenServerRequest(request.requestId)
 
-@@ -323,2 +328,3 @@ function lockTypedAnswer(request: ClarifyRequest, text: string): null | Promise<
-   const previous = lockChains.get(request.requestId) ?? Promise.resolve(true)
+@@ -322,3 +335,4 @@ function lockTypedAnswer(request: ClarifyRequest, text: string): null | Promise<
+
+-  const previous = lockChains.get(request.requestId) ?? Promise.resolve(true)
++  const previous = lockChains.get(request.requestId)?.saved ?? Promise.resolve(true)
 +  let handledByClarification = false
 
-@@ -344,2 +350,31 @@ function lockTypedAnswer(request: ClarifyRequest, text: string): null | Promise<
+@@ -344,2 +358,32 @@ function lockTypedAnswer(request: ClarifyRequest, text: string): null | Promise<
        } catch (error) {
 +        const stillOpen = hasOpenServerRequest(request.requestId)
 +
-+        // The authority can close the prompt before the RPC receipt reaches this composer.
-+        if (trackedFinal && !stillOpen) {
++        // The turn can report the result even if the prompt's settlement event and RPC receipt were lost.
++        if (trackedFinal && (!stillOpen || chain.toolCompleted)) {
++          forgetServerRequest(request.requestId)
 +          forgetSettledClarify(request.requestId)
 +          handledByClarification = true
 +          return false
@@ -64025,7 +64193,17 @@ index f4becc2eb75f2dd4bfb32540b3d4dfca78e24a7d..2492f092afe1f2161488acf32650dc07
 +        }
 +
          notifyError(error, translateNow('assistant.clarify.sendFailed'))
-@@ -362,3 +397,3 @@ function lockTypedAnswer(request: ClarifyRequest, text: string): null | Promise<
+@@ -354,6 +398,7 @@ function lockTypedAnswer(request: ClarifyRequest, text: string): null | Promise<
+
+-  lockChains.set(request.requestId, sent)
++  const chain: { saved: Promise<boolean>; toolCompleted?: boolean } = { saved: sent }
++  lockChains.set(request.requestId, chain)
+
+   void sent.then(() => {
+-    if (lockChains.get(request.requestId) === sent) {
++    if (lockChains.get(request.requestId) === chain) {
+       lockChains.delete(request.requestId)
+@@ -362,3 +407,3 @@ function lockTypedAnswer(request: ClarifyRequest, text: string): null | Promise<
 
 -  return sent
 +  return sent.then(saved => saved || handledByClarification)
