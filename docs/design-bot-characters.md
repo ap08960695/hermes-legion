@@ -1147,3 +1147,33 @@ queued pipe bytes at 0.45 MiB. Reusing a skipped atlas sent its
 definition. Clear preceded reload and EOF. A separate held
 acknowledgment triggered timeout and helper teardown in 1.51 seconds.
 Next test the bounded sender through the packaged preview lifecycle.
+
+### Bound the sender through the packaged preview lifecycle
+
+Four network-denied Mac fixture launches sent real renderer publisher
+updates through the main preview IPC to one owned helper. Both incremental
+JSON and binary ran the same bounded sender and five sprites at 6 Hz.
+A snapshot can reference only the atlas cache of the last acknowledged
+state. Expiry invalidates that cache. A stale cache claim is refused
+before applying the scene and can trigger one full resend of live state.
+
+Each launch expired the helper cache twice while suppressing renderer
+clear. In one case the sender's expiry notice was withheld to reproduce
+the stale-reference race. Each recovery resent five atlases. Clear and
+immediate reopen waited for the draining helper's EOF. A stalled ACK
+then triggered timeout in 1.509–1.511 seconds. The queued state
+stayed discarded. A fresh renderer update reopened with full atlases
+and matched the original pixels. All launches used three sequential
+helper generations and at most one unacknowledged state.
+
+| Renewed walking window | Incremental JSON | Binary |
+| --- | ---: | ---: |
+| Added tree RSS | 74.48–82.14 MiB | 68.00–73.94 MiB |
+| Added tree physical footprint | 47.35–49.77 MiB | 40.86–41.59 MiB |
+| Added combined CPU | 1.75–2.00 points | 1.83–1.95 points |
+
+Binary saved 6.48–8.20 MiB paired warm RSS and met both targets in
+the renewed windows. Its initial walking windows used 2.13–2.43 CPU
+points. All eight paired crops and four recovery crops matched.
+Production adoption still needs startup-to-first-pixel and native
+interaction checks.
