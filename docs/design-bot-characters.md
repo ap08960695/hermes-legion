@@ -1309,3 +1309,33 @@ ceiling in any early window. Each met it in one late window. Cached
 cells did not produce a repeatable CPU saving. Keep atlas rectangles
 as the benchmark baseline. Graphics upload and production acceptance
 remain open.
+
+### Compare shared compositor motion with manual layer writes
+
+Ten signed, network-denied Mac launches used the same five atlas
+sprites, geometry and 6 Hz slots. Grouped mode scheduled discrete
+position and contents-rectangle tracks with one shared future epoch
+and an explicit terminal key at nine seconds. The helper made zero
+timed layer writes in that mode. Manual mode made 330 writes by the
+early endpoint and 700 by the late endpoint.
+
+Separate proof launches produced 2,327 coherent presentation-tree
+reads, including both sides of the wrap. Four matching frame
+re-renders agreed pixel for pixel. A wrong atlas row at the correct
+position failed the oracle. An atlas swap preserved the epoch and
+changed only the intended actor in the subsequent fixed pose.
+Stopping removed the groups. Restoration used a fresh epoch.
+
+| Group minus manual | Early walking | Late walking |
+| --- | ---: | ---: |
+| Four paired combined CPU differences | −1.680, +2.350, +9.865, +9.790 | +12.010, +24.160, +9.485, +9.060 |
+| Manual/manual control difference | +0.860 points | +5.540 points |
+
+Grouped helper CPU was 0.00–0.01 points. Walking added
+65.47–70.25 MiB RSS across both modes. Combined CPU includes
+system-wide WindowServer. Publisher-only WindowServer drift reached
+23.06 points, so the noisy pairs provide weak effect estimates.
+The last two pairs had smaller baseline drift and still added
+9.06–9.87 combined CPU points with grouped motion. No grouped
+window met the CPU ceiling. Retain manual atlas updates. Physical
+scanout, graphics attribution and production acceptance remain open.
