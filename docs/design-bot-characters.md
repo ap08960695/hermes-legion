@@ -1251,3 +1251,31 @@ windows. Each renewal sent 440 bytes and decoded zero atlases.
 Sixteen fixed-pose crops matched across arms and the two poses
 differed. Keep the existing bounded sender in the fixture. The
 initial CPU ceiling remains open.
+
+### Compare full and half rendered Character size
+
+Ten signed, network-denied Mac launches used the same full-screen
+clear panel, bounded binary transfer, five atlases and 6 Hz motion.
+Four adjacent full/half pairs reversed order. A fifth pair used
+full/full to observe same-size variation. Layer geometry changed
+from 63 × 69 points to 31.5 × 34.5 points. The horizontal ground
+anchors, atlas bytes and selected cells matched. Each trace had 34
+and 71 presentations at the early and late sample endpoints. All
+100 actor crops passed, with half-size alpha-weighted coverage at
+24.96–25.00% of full size.
+
+| Added CPU over publisher only | Early walking | Late walking |
+| --- | ---: | ---: |
+| Full-size range | 1.845–2.665 points | 0.935–2.890 points |
+| Half-size range | 1.760–2.965 points | 2.030–2.735 points |
+| Half minus full, four pairs | +0.380, −0.890, +0.300, −0.215 | +1.670, −0.860, +0.180, +1.295 |
+| Full/full control difference | +0.235 points | +0.615 points |
+
+CPU combines the fixture process tree and system-wide WindowServer.
+The measurements do not establish a CPU saving from smaller sprites.
+Walking added 63.84–69.84 MiB RSS at full size and 69.73–71.70 MiB at
+half size. Both sizes stayed below the RSS ceiling. Half size met
+both budgets in one of four early and zero of four late windows.
+Keep the nominal geometry for resource testing. A product size
+control can still serve preference and visibility. Native input
+routing, hardware graphics and consistent CPU acceptance remain open.
