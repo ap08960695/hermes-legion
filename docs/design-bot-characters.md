@@ -1177,3 +1177,46 @@ the renewed windows. Its initial walking windows used 2.13–2.43 CPU
 points. All eight paired crops and four recovery crops matched.
 Production adoption still needs startup-to-first-pixel and native
 interaction checks.
+
+### Measure first presented sprites separately from walking CPU
+
+ScreenCaptureKit observed only the native helper's owned panel in
+four signed, network-denied packaged launches. Each run began with
+a transparent baseline and published five sprites through the pinned
+renderer and main preview IPC. Main-process dispatch and IPC bounded
+publication time. Five round trips bounded the helper clock. The
+first nonblank sample contained all five sprites and all four crops
+matched.
+
+| Atlas encoding | Publish-to-first-capture upper bounds |
+| --- | ---: |
+| Incremental JSON | 50.12 and 52.91 ms |
+| Binary | 44.35 and 45.40 ms |
+
+All four intervals begin at zero because the last blank capture was
+requested before publication. Their overlap precludes a latency
+speedup claim. The result covers a pre-mounted panel from publication
+to compositor capture. It leaves cold launch, input handling and
+physical display latency open.
+
+Four separate launches measured the same five actors at 6 Hz with
+ScreenCaptureKit inactive. The first walking window began after the
+first atlas acknowledgment and a 700 ms settle delay. Combined CPU
+uses publisher-only samples before and after panel retirement.
+Added RSS uses the initial publisher-only baseline.
+
+| Walking window | Incremental JSON | Binary |
+| --- | ---: | ---: |
+| Initial added combined CPU | 2.085–2.540 points | 2.300–2.385 points |
+| Renewed added combined CPU | 1.865–2.310 points | 1.470–1.725 points |
+| Initial added tree RSS | 76.86–76.94 MiB | 70.98–71.08 MiB |
+| Renewed added tree RSS | 76.89–77.01 MiB | 68.62–70.78 MiB |
+
+Binary met the 80 MiB ceiling in both windows and exceeded 2 CPU points
+in both initial windows. Its initial WindowServer increase was
+2.45–2.53 points, while the helper used 0.14–0.15 points. WindowServer
+is system-wide. Publisher-only WindowServer samples drifted by up to
+0.17 points. The first and renewed windows also differ in elapsed
+time. Compare renewal with no renewal at matched times before
+attributing the difference. Keep the binary path in the fixture
+while the initial CPU target and native integration remain open.
