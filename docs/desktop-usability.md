@@ -248,3 +248,7 @@ was used more recently.
 If a waiting Bot Chat moves into the main pane, it stays in **Needs
 attention** while you use another split. **Open chat** brings back
 the question in the main pane.
+
+When **Open chat** returns to a live question, keyboard focus moves
+to its first choice or answer field. Tab continues through the form.
+Opening the chat leaves the answer unsubmitted.
