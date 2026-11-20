@@ -28800,7 +28800,7 @@ index edfc854e2e8b1b81c01a5c4c36e68c6ed85ad7a1..58b4f471e929101f494c98683b432750
 +    sessionsLoading
    ])
 diff --git a/apps/desktop/src/app/contrib/hooks/use-session-tile-delegate.test.ts b/apps/desktop/src/app/contrib/hooks/use-session-tile-delegate.test.ts
-index b3fa07674db36bcaa03b4a1515818b64cc06a7c3..8e10b38546d4797e9419037da618358e84fc08b6 100644
+index b3fa07674db36bcaa03b4a1515818b64cc06a7c3..a48a9874b92d9dc7275155239ab1d682378dd502 100644
 --- a/apps/desktop/src/app/contrib/hooks/use-session-tile-delegate.test.ts
 +++ b/apps/desktop/src/app/contrib/hooks/use-session-tile-delegate.test.ts
 @@ -3,2 +3,4 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -28909,9 +28909,9 @@ index b3fa07674db36bcaa03b4a1515818b64cc06a7c3..8e10b38546d4797e9419037da618358e
 +  })
 +
    it('reuses a warm binding that still carries a transcript', async () => {
-@@ -653,2 +728,61 @@ describe('useSessionTileDelegate resumeTile', () => {
+@@ -653,2 +728,75 @@ describe('useSessionTileDelegate resumeTile', () => {
 
-+  it.each(['closed', 'other input', 'still pending', 'missing snapshot', 'newer question'] as const)(
++  it.each(['closed', 'other input', 'still pending', 'missing snapshot', 'newer question', 'warm closed', 'warm newer question', 'warm reassigned'] as const)(
 +    'reconciles an exact Local question on tile reconnect (%s)', async result => {
 +      const storedSessionId = 'stored-clarify'
 +      const runtimeId = 'runtime-clarify'
@@ -28931,7 +28931,7 @@ index b3fa07674db36bcaa03b4a1515818b64cc06a7c3..8e10b38546d4797e9419037da618358e
 +        needsInput: true, streamId: projected.streamId
 +      }
 +      const updateSessionState = vi.fn((_id, update) => { state = update(state) })
-+      const cleared = result === 'closed' || result === 'other input'
++      const cleared = result === 'closed' || result === 'other input' || result === 'warm closed'
 +      const openRequests = result === 'missing snapshot' ? undefined
 +        : result === 'still pending' ? [{ id: request.requestId, method: 'clarify', params: {} }]
 +          : result === 'other input' ? [{ id: 'approval', method: 'approval', params: {} }] : []
@@ -28941,8 +28941,12 @@ index b3fa07674db36bcaa03b4a1515818b64cc06a7c3..8e10b38546d4797e9419037da618358e
 +      rememberServerRequest({ id: request.requestId, method: 'clarify', params: {}, respond: vi.fn(), fail: vi.fn() })
 +      $sessionTiles.set([tile])
 +      vi.mocked(requestGatewayForAgent).mockImplementationOnce(async () => {
-+        if (result === 'newer question') {
++        if (result === 'newer question' || result === 'warm newer question') {
 +          setClarifyRequest({ ...request, receivedAt: Date.now() / 1000 + 1, requestId: 'new-question' })
++        }
++
++        if (result === 'warm reassigned') {
++          $sessionTiles.set([{ ...tile, ownerRoute: { ...tile.ownerRoute, profile: 'other' } }])
 +        }
 +
 +        return { session_id: runtimeId, open_requests: openRequests, messages: [], running: false } as never
@@ -28950,13 +28954,23 @@ index b3fa07674db36bcaa03b4a1515818b64cc06a7c3..8e10b38546d4797e9419037da618358e
 +
 +      try {
 +        renderTile(vi.fn(), { updateSessionState })
-+        resetTileRuntimeBindings({ connectionId: 'local' }, true)
-+        expect($sessionTiles.get()[0]).toMatchObject({ localReconnect: { runtimeId } })
-+        expect(await sessionTileDelegate()!.resumeTile(storedSessionId)).toBe(runtimeId)
++        if (result.startsWith('warm ')) {
++          const snapshot = sessionTileDelegate()!.resumeTile(storedSessionId, { authoritativeSnapshot: true })
++          if (result === 'warm reassigned') {
++            await expect(snapshot).rejects.toThrow('binding changed')
++            expect(updateSessionState).not.toHaveBeenCalled()
++          } else {
++            expect(await snapshot).toBe(runtimeId)
++          }
++        } else {
++          resetTileRuntimeBindings({ connectionId: 'local' }, true)
++          expect($sessionTiles.get()[0]).toMatchObject({ localReconnect: { runtimeId } })
++          expect(await sessionTileDelegate()!.resumeTile(storedSessionId)).toBe(runtimeId)
++        }
 +
 +        expect($clarifyRequests.get()[runtimeId]?.requestId).toBe(cleared ? undefined
-+          : result === 'newer question' ? 'new-question' : request.requestId)
-+        expect(state.needsInput).toBe(result !== 'closed')
++          : (result === 'newer question' || result === 'warm newer question') ? 'new-question' : request.requestId)
++        expect(state.needsInput).toBe(result !== 'closed' && result !== 'warm closed')
 +        expect(state.messages).toEqual(cleared ? [saved] : projected.messages)
 +        expect(state.streamId).toBe(cleared ? null : projected.streamId)
 +        expect(hasOpenServerRequest(request.requestId)).toBe(!cleared)
@@ -28972,7 +28986,7 @@ index b3fa07674db36bcaa03b4a1515818b64cc06a7c3..8e10b38546d4797e9419037da618358e
 +
    it('branches a tile from the live message array that rendered the clicked action', async () => {
 diff --git a/apps/desktop/src/app/contrib/hooks/use-session-tile-delegate.ts b/apps/desktop/src/app/contrib/hooks/use-session-tile-delegate.ts
-index a1effde9c31c6fba4aa8fe91885aa39e1014493a..11f080f9bd6489ffbd26669e24022ab0a09f38ff 100644
+index a1effde9c31c6fba4aa8fe91885aa39e1014493a..a32f66aeb53a2aca5af75b19f35ee3c96af595ae 100644
 --- a/apps/desktop/src/app/contrib/hooks/use-session-tile-delegate.ts
 +++ b/apps/desktop/src/app/contrib/hooks/use-session-tile-delegate.ts
 @@ -1 +1,2 @@
@@ -29006,31 +29020,40 @@ index a1effde9c31c6fba4aa8fe91885aa39e1014493a..11f080f9bd6489ffbd26669e24022ab0
 -      },
 +      executeSlash: (rawCommand, sessionId, options) => executeSlashCommand(rawCommand, { ...options, sessionId }),
        // The picker's wire (config.set model), always --session (never the profile default), with a
-@@ -459,2 +463,5 @@ export function useSessionTileDelegate({
+@@ -459,2 +463,9 @@ export function useSessionTileDelegate({
          // REST read routes no live session at all.
-+        const reconnect = $sessionTiles.get().find(tile => tile.storedSessionId === storedSessionId)?.localReconnect
-+        const clarifyAtStart = reconnect && $clarifyRequests.get()[reconnect.runtimeId]
++        const tileAtStart = $sessionTiles.get().find(tile => tile.storedSessionId === storedSessionId)
++        const reconnect = tileAtStart?.localReconnect
++        const warmSnapshot = authoritativeSnapshot && tileAtStart?.runtimeId && tileAtStart.ownerRoute === owner &&
++          isSessionOwnerRoute(owner) && owner.connectionId === LOCAL_CONNECTION_ID && owner.mode !== 'remote'
++        const clarifyRuntime = reconnect?.runtimeId ?? (warmSnapshot ? tileAtStart.runtimeId : null)
++        const clarifyAtStart = clarifyRuntime ? $clarifyRequests.get()[clarifyRuntime] : undefined
 +        const resumeStartedAt = Date.now() / 1000
          const outcome = await resumeWithStoredTranscriptFallback(
-@@ -532,2 +539,12 @@ export function useSessionTileDelegate({
+@@ -532,2 +543,17 @@ export function useSessionTileDelegate({
          const info = resumed?.info
 +        const openRequests = resumed.open_requests
-+        // Only the same Local reconnect can retire the question it had before the resume.
++        const currentTile = $sessionTiles.get().find(tile => tile.storedSessionId === storedSessionId)
++        if (warmSnapshot && (currentTile?.runtimeId !== tileAtStart.runtimeId || currentTile?.ownerRoute !== owner)) {
++          throw new Error('The split chat binding changed during snapshot refresh.')
++        }
++
++        // A snapshot can retire only the question parked on this binding when it began.
 +        const clearedClarify = clarifyAtStart?.sessionId === runtimeId &&
 +          $clarifyRequests.get()[runtimeId]?.requestId === clarifyAtStart.requestId &&
-+          $sessionTiles.get().some(tile => tile.storedSessionId === storedSessionId && tile.localReconnect === reconnect) &&
++          currentTile && currentTile.localReconnect === reconnect &&
 +          Array.isArray(openRequests)
 +          ? restorePendingClarifyFromSnapshot(resumed, runtimeId, resumeStartedAt, clarifyAtStart.requestId).cleared
 +          : null
 +
 +        if (clearedClarify) forgetServerRequest(clearedClarify.requestId)
 
-@@ -538,3 +555,3 @@ export function useSessionTileDelegate({
+@@ -538,3 +564,3 @@ export function useSessionTileDelegate({
 
 -            const messages = authoritativeSnapshot
 +            const resumedMessages = authoritativeSnapshot
                ? resumed.messages.length > 0
-@@ -553,2 +570,17 @@ export function useSessionTileDelegate({
+@@ -553,2 +579,17 @@ export function useSessionTileDelegate({
                  : toChatMessages(prefetch?.messages ?? resumed.messages ?? [])
 +            const messages = clearedClarify
 +              ? stripPendingClarifyProjectionForCache(resumedMessages, clearedClarify.requestId)
@@ -29048,7 +29071,7 @@ index a1effde9c31c6fba4aa8fe91885aa39e1014493a..11f080f9bd6489ffbd26669e24022ab0
 +                ? state.transcriptProvenance
 +                : undefined
 
-@@ -576,3 +608,10 @@ export function useSessionTileDelegate({
+@@ -576,3 +617,10 @@ export function useSessionTileDelegate({
                busy: running,
 -              messages
 +              messages,
@@ -62759,7 +62782,7 @@ index 0000000000000000000000000000000000000000..89b69a2fad6529a5503b8d56d88fdba4
 +}
 diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx b/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..f70906204f5858d213b8c5f880d7a2d1c9c34808
+index 0000000000000000000000000000000000000000..b933b20564eafb1e0c585323bfb12dc1f9d6666d
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx
 @@ -0,0 +1,905 @@
@@ -63109,7 +63132,7 @@ index 0000000000000000000000000000000000000000..f70906204f5858d213b8c5f880d7a2d1
 +    fireEvent.click(open)
 +    expect(inbox.open).toHaveBeenCalledExactlyOnceWith('saved-writer', {
 +      route: { connectionId: 'local', profile: 'writer', targetProfile: 'writer', mode: 'local' },
-+      forceResume: true, awaitHydration: true
++      forceResume: true, awaitHydration: true, expectedClarificationId: question.prompt_id
 +    })
 +    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
 +  }
@@ -63175,7 +63198,7 @@ index 0000000000000000000000000000000000000000..f70906204f5858d213b8c5f880d7a2d1
 +    await waitFor(() => expect(document.activeElement).toBe(scenario === 'matching question' ? answer : badge))
 +    expect(inbox.open).toHaveBeenCalledExactlyOnceWith('saved-writer', {
 +      route: { connectionId: 'local', profile: 'writer', targetProfile: 'writer', mode: 'local' },
-+      forceResume: true, awaitHydration: true
++      forceResume: true, awaitHydration: true, expectedClarificationId: question.prompt_id
 +    })
 +    if (scenario === 'matching question' || scenario === 'no answer control') {
 +      expect(focusChat).toHaveBeenCalledExactlyOnceWith('saved-writer')
@@ -63670,10 +63693,10 @@ index 0000000000000000000000000000000000000000..f70906204f5858d213b8c5f880d7a2d1
 +)
 diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx b/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..8d0b34c2c102e7c72756ea0747e2e9d0a418cb4e
+index 0000000000000000000000000000000000000000..35be1d33e16cb6a412379cd4a49b9ec4c8b0d739
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx
-@@ -0,0 +1,364 @@
+@@ -0,0 +1,367 @@
 +import {
 +  Button, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, host, type OwnerInboxItem, type PluginProfileRoute, relativeTime
 +} from '@hermes/plugin-sdk'
@@ -63819,7 +63842,10 @@ index 0000000000000000000000000000000000000000..8d0b34c2c102e7c72756ea0747e2e9d0
 +    const doc = action.ownerDocument
 +
 +    try {
-+      await host.openSession(storedId, { route, forceResume: true, awaitHydration: true })
++      await host.openSession(storedId, {
++        route, forceResume: true, awaitHydration: true,
++        ...(connection === 'local' && prompt.kind === 'clarify' && { expectedClarificationId: prompt.prompt_id })
++      })
 +
 +      if (dialogGeneration.current === generation && isCurrentScope()) {
 +        changeOpen(false, prompt.kind === 'clarify' && doc.activeElement === action ? event => {
@@ -72811,10 +72837,61 @@ index d8b9185feafc444a121334f59a46cfc131171ef2..0a641cb265aaff277bde28e943f7f408
 +
    it('fails closed when duplicate stored or lineage ids resolve to different connections', async () => {
 diff --git a/apps/desktop/src/sdk/index.test.ts b/apps/desktop/src/sdk/index.test.ts
-index 24bf8b26c27fef8286c4bb1b8ceaa56e3562ea95..1da04ebc77ee47e6f0ece49d7b073ef71bfec2b1 100644
+index 24bf8b26c27fef8286c4bb1b8ceaa56e3562ea95..4b30065cc511a4e5d3f775e0f4e15b900a5fde79 100644
 --- a/apps/desktop/src/sdk/index.test.ts
 +++ b/apps/desktop/src/sdk/index.test.ts
-@@ -237,2 +237,20 @@ describe('host workspace scope', () => {
+@@ -145,2 +145,50 @@ describe('host.state turn flags', () => {
+
++it.each(['stale', 'missing', 'matching', 'other owner', 'read failed'])(
++  'refreshes the exact Local Inbox split pending question (%s)', async mode => {
++    const states = await import('@/store/session-states')
++    const tree = await import('@/components/pane-shell/tree/store')
++    const { group, split } = await import('@/components/pane-shell/tree/model')
++    const { registry } = await import('@/contrib/registry')
++    const { clearClarifyRequest, setClarifyRequest } = await import('@/store/clarify')
++    const storedId = 'inbox-tile'
++    const runtimeId = 'runtime-bot-chat'
++    const route = { connectionId: 'local', mode: 'local' as const, profile: 'writer', targetProfile: 'writer' }
++    const resumeTile = vi.fn(async () => runtimeId)
++    if (mode === 'read failed') resumeTile.mockRejectedValueOnce(new Error('Snapshot failed'))
++
++    const delegate = vi.spyOn(states, 'sessionTileDelegate').mockReturnValue({ resumeTile } as never)
++    const paneId = 'session-tile:' + storedId
++    registry.register({ area: 'panes', id: paneId, title: paneId, data: { placement: 'main' }, render: () => null })
++    const previousTree = tree.$layoutTree.get()
++    const previousTiles = states.$sessionTiles.get()
++    states.$sessionTiles.set([{ storedSessionId: storedId, runtimeId, dir: 'center',
++      ownerRoute: mode === 'other owner' ? { ...route, profile: 'other', targetProfile: 'other' } : route }])
++    tree.$layoutTree.set(split('row', [group(['workspace'], { id: 'main' }), group([paneId], { id: 'side' })]))
++    publishSessionState(runtimeId, { ...createClientSessionState(storedId), needsInput: true })
++    if (mode !== 'missing') {
++      setClarifyRequest({ sessionId: runtimeId, questions: [], requestId: mode === 'matching' ? 'new-q' : 'old-q' })
++    }
++
++    try {
++      const opening = host.openSession(storedId, {
++        route, awaitHydration: true, forceResume: true, expectedClarificationId: 'new-q', hydrationTimeoutMs: 1_000
++      })
++      if (mode === 'read failed') {
++        await expect(opening).rejects.toThrow('Snapshot failed')
++      } else {
++        await opening
++      }
++
++      expect(resumeTile).toHaveBeenCalledExactlyOnceWith(storedId,
++        mode === 'matching' || mode === 'other owner' ? { refreshTranscript: true } : { authoritativeSnapshot: true })
++    } finally {
++      delegate.mockRestore()
++      clearClarifyRequest(undefined, runtimeId)
++      clearAllSessionStates()
++      states.$sessionTiles.set(previousTiles)
++      tree.$layoutTree.set(previousTree)
++    }
++  }
++)
++
+ describe('host.connections', () => {
+@@ -237,2 +285,20 @@ describe('host workspace scope', () => {
    })
 +
 +  it('changes an existing workspace caption without replacing its render or recreating a closed pane', async () => {
@@ -72835,57 +72912,65 @@ index 24bf8b26c27fef8286c4bb1b8ceaa56e3562ea95..1da04ebc77ee47e6f0ece49d7b073ef7
 +    expect(pane()).toBeUndefined()
 +  })
  })
-@@ -322,3 +340,3 @@ describe('host.composer draft facade', () => {
+@@ -322,3 +388,3 @@ describe('host.composer draft facade', () => {
 
 -    stashSessionDraft('sess-stash', 'stashed draft', [])
 +    stashSessionDraft('sess-stash', 'stashed draft', [], 'default')
      // The stash is keyed by the durable id; a plugin holding the runtime id
-@@ -326,3 +344,3 @@ describe('host.composer draft facade', () => {
+@@ -326,3 +392,3 @@ describe('host.composer draft facade', () => {
      publishSessionState('rt-stash', createClientSessionState('stored-stash'))
 -    stashSessionDraft('stored-stash', 'runtime-addressed', [])
 +    stashSessionDraft('stored-stash', 'runtime-addressed', [], 'default')
 
 diff --git a/apps/desktop/src/sdk/index.ts b/apps/desktop/src/sdk/index.ts
-index 1771079ce633e58b6cc4374d95417cb169b71984..27dcd398210ffec66e5c1a725bdfb1734245b409 100644
+index 1771079ce633e58b6cc4374d95417cb169b71984..c9288dc8421d90a907cc4c420468bc6438fb6838 100644
 --- a/apps/desktop/src/sdk/index.ts
 +++ b/apps/desktop/src/sdk/index.ts
-@@ -27,3 +27,3 @@ import { PRIMARY_SESSION_VIEW } from '@/app/chat/session-view'
+@@ -20,2 +20,3 @@
+
++import { LOCAL_CONNECTION_ID } from '@hermes/shared'
+ import { atom, computed, type ReadableAtom } from 'nanostores'
+@@ -27,3 +28,3 @@ import { PRIMARY_SESSION_VIEW } from '@/app/chat/session-view'
  import { openSession, type OpenSessionIntent } from '@/app/open-session'
 -import { syncWorkspaceRoute } from '@/app/routes'
 +import { $workspaceIsPage, sessionRoute, syncWorkspaceRoute } from '@/app/routes'
  import type { ClientSessionState } from '@/app/types'
-@@ -34,2 +34,3 @@ import {
+@@ -34,2 +35,3 @@ import {
    adoptContributedPanes,
 +  isPaneVisible,
    registerPaneCloser,
-@@ -52,2 +53,3 @@ import { traceIdentityChange } from '@/lib/identity-trace'
+@@ -52,2 +54,3 @@ import { traceIdentityChange } from '@/lib/identity-trace'
  import { completeMcpDesktopOAuth } from '@/lib/mcp-dashboard-oauth'
 +import { $clarifyRequests, type ClarifyRequest, requestClarificationFocus } from '@/store/clarify'
  import {
-@@ -96,3 +98,5 @@ import {
+@@ -79,2 +82,3 @@ import {
+ } from '@/store/profile'
++import { isReadOnlyRuntimeId } from '@/store/read-only-transcript'
+ import {
+@@ -96,3 +100,5 @@ import {
  import { $focusedStoredSessionId } from '@/store/session-focus'
 +import type { SessionOwnerRoute } from '@/store/session-request-router'
  import {
 +  $botChatScopes,
    $focusedRuntimeId,
-@@ -103,2 +107,4 @@ import {
+@@ -103,2 +109,4 @@ import {
    focusWorkspaceOwnerSessionTile,
 +  frontMainIfSelected,
 +  runtimeSessionOwner,
    sessionTileDelegate
-@@ -106,3 +112,3 @@ import {
+@@ -106,3 +114,3 @@ import {
  import { runGatewayRestart } from '@/store/system-actions'
 -import type { PaginatedSessions, UsageStats } from '@/types/hermes'
 +import type { PaginatedSessions, SessionInfo, UsageStats } from '@/types/hermes'
 
-@@ -125,4 +131,5 @@ import { desktopSettings } from './settings'
+@@ -125,4 +133,5 @@ import { desktopSettings } from './settings'
  export { PANES_AREA, STATUSBAR_AREAS, TITLEBAR_AREAS } from './areas'
 -/** The plugin authoring contract (`HermesPlugin`, `PluginContext`, `ctx.*` door types). */
  export type * from './plugin-contract'
 +export type { OwnerInboxItem, OwnerInboxList, OwnerInboxResponse } from '@hermes/shared'
 +export type { PluginProfileRequestOptions, PluginProfileRoute } from './profile-request'
 
-@@ -161,2 +168,30 @@ export interface PluginFocusedSessionOwner {
+@@ -161,2 +170,30 @@ export interface PluginFocusedSessionOwner {
 
 +function storedSessionOwner(storedId: string, sessions: readonly SessionInfo[]): PluginFocusedSessionOwner | null {
 +  const hints = getSessionOwnerHints(storedId)
@@ -72916,7 +73001,7 @@ index 1771079ce633e58b6cc4374d95417cb169b71984..27dcd398210ffec66e5c1a725bdfb173
 +}
 +
  /**
-@@ -186,23 +221,78 @@ const $focusedSessionOwner = computed(
+@@ -186,23 +223,78 @@ const $focusedSessionOwner = computed(
 
 -    const hints = getSessionOwnerHints(focused)
 +    return storedSessionOwner(focused, sessions)
@@ -72933,9 +73018,7 @@ index 1771079ce633e58b6cc4374d95417cb169b71984..27dcd398210ffec66e5c1a725bdfb173
 +  storedSessionId: string
 +  requestId: string
 +}
-
--    if (hints.length > 1) {
--      return null
++
 +// A remembered needsInput bit can survive reconnect. Require the pending
 +// request on this runtime and the exact stored session bound to it.
 +function pendingClarificationId(
@@ -72965,7 +73048,9 @@ index 1771079ce633e58b6cc4374d95417cb169b71984..27dcd398210ffec66e5c1a725bdfb173
 +    (profile === normalizeProfileKey(route.profile) ||
 +      profile === normalizeProfileKey(route.targetProfile ?? route.profile))
 +}
-+
+
+-    if (hints.length > 1) {
+-      return null
 +const $primaryBotClarification = computed(
 +  [$selectedStoredSessionId, $activeSessionId, $botChatScopes, $sessionStates, $clarifyRequests, $sessions],
 +  (storedSessionId, runtimeId, scopes, states, requests, sessions) => {
@@ -72991,26 +73076,26 @@ index 1771079ce633e58b6cc4374d95417cb169b71984..27dcd398210ffec66e5c1a725bdfb173
 +  [$sessionTiles, $sessionStates, $clarifyRequests, $primaryBotClarification],
 +  (tiles, states, requests, primary) => {
 +    const next: PluginSessionClarification[] = primary ? [primary.clarification] : []
-
--    const owners = new Map<string, PluginFocusedSessionOwner>()
++
 +    if (Object.keys(requests).length) {
 +      for (const { workspaceMode, workspaceOwnerKey, storedSessionId, runtimeId, ownerRoute } of tiles) {
 +        if (workspaceMode !== 'bots' || !workspaceOwnerKey || !runtimeId || !ownerRoute?.connectionId) continue
 
--    for (const row of sessions.filter(session => sessionMatchesStoredId(session, focused))) {
--      const connectionId = String(row.connection_id || '').trim()
--      const profile = normalizeProfileKey(row.profile)
+-    const owners = new Map<string, PluginFocusedSessionOwner>()
 +        const requestId = pendingClarificationId(runtimeId, storedSessionId, states[runtimeId], requests)
 +        if (!requestId) continue
 
--      if (connectionId) {
--        owners.set(`${connectionId}::${profile}`, { connectionId, profile })
+-    for (const row of sessions.filter(session => sessionMatchesStoredId(session, focused))) {
+-      const connectionId = String(row.connection_id || '').trim()
+-      const profile = normalizeProfileKey(row.profile)
 +        const eventOwner = runtimeSessionOwner(runtimeId)
 +        if (eventOwner && typeof eventOwner !== 'string' && !matchesBotRoute(eventOwner, ownerRoute)) continue
-+
+
+-      if (connectionId) {
+-        owners.set(`${connectionId}::${profile}`, { connectionId, profile })
 +        next.push({ connectionId: ownerRoute.connectionId, profile: normalizeProfileKey(ownerRoute.profile), storedSessionId, requestId })
        }
-@@ -210,3 +300,12 @@ const $focusedSessionOwner = computed(
+@@ -210,3 +302,12 @@ const $focusedSessionOwner = computed(
 
 -    return owners.size === 1 ? [...owners.values()][0] : null
 +    // Transcript updates shouldn't redraw Monitor while the pending set is unchanged.
@@ -73024,14 +73109,52 @@ index 1771079ce633e58b6cc4374d95417cb169b71984..27dcd398210ffec66e5c1a725bdfb173
 +
 +    return openBotClarifications
    }
-@@ -595,2 +694,6 @@ export const host = {
+@@ -294,2 +395,4 @@ export interface PluginOpenSessionOptions {
+   expectHistory?: boolean
++  /** Owner Inbox's prompt hint for an explicit open of a warm Local split. */
++  expectedClarificationId?: string
+   /** Always request a sequenced session.resume after the open, even when the
+@@ -595,2 +698,6 @@ export const host = {
      cwd: readonlyAtom<string>($currentCwd),
 +    /** Pending clarification on the focused stored chat with a known owner. */
 +    focusedClarification: readonlyAtom($focusedClarification),
 +    /** Pending questions still bound to owner-scoped Bot chats in tiles or the main pane. */
 +    openBotClarifications: readonlyAtom($openBotClarifications),
      /** Runtime id of the FOCUSED chat session — the interacted tile, else the
-@@ -1264,2 +1367,9 @@ export const host = {
+@@ -1105,3 +1212,3 @@ export const host = {
+           if (options.awaitHydration && (options.forceResume || !surfaceHealthy)) {
+-            const existingTile = $sessionTiles.get().some(tile => tile.storedSessionId === storedSessionId)
++            const existingTile = $sessionTiles.get().find(tile => tile.storedSessionId === storedSessionId)
+             const tileDelegate = existingTile ? sessionTileDelegate() : null
+@@ -1109,5 +1216,25 @@ export const host = {
+             if (tileDelegate) {
++              const runtimeId = existingTile?.runtimeId
++              const tileOwner = existingTile?.ownerRoute
++              // A transcript merge cannot recover a missed clarification event.
++              const needsPromptSnapshot = runtimeId && !isReadOnlyRuntimeId(runtimeId) && options.expectedClarificationId &&
++                explicitRoute?.connectionId === LOCAL_CONNECTION_ID && explicitRoute.mode === 'local' &&
++                tileOwner?.connectionId === LOCAL_CONNECTION_ID && tileOwner.mode !== 'remote' &&
++                normalizeProfileKey(tileOwner.profile) === targetProfile &&
++                normalizeProfileKey(tileOwner.targetProfile ?? tileOwner.profile) ===
++                  normalizeProfileKey(explicitRoute.targetProfile ?? explicitRoute.profile) &&
++                pendingClarificationId(runtimeId, storedSessionId, $sessionStates.get()[runtimeId], $clarifyRequests.get()) !==
++                  options.expectedClarificationId
++
+               try {
+-                await tileDelegate.resumeTile(storedSessionId, { refreshTranscript: true })
+-              } catch {
++                const resumedId = await tileDelegate.resumeTile(storedSessionId,
++                  needsPromptSnapshot ? { authoritativeSnapshot: true } : { refreshTranscript: true })
++                if (needsPromptSnapshot && resumedId !== runtimeId) {
++                  throw new Error('The split chat binding changed during clarification refresh.')
++                }
++              } catch (error) {
++                if (needsPromptSnapshot) {
++                  throw error
++                }
++
+                 requestSessionResume(storedSessionId, ownerRoute || undefined)
+@@ -1264,2 +1391,9 @@ export const host = {
 
 +  /** Update an open workspace caption without remounting its content or moving focus. */
 +  setWorkspaceTitle: (id: string, title: string): void => {
@@ -73041,13 +73164,13 @@ index 1771079ce633e58b6cc4374d95417cb169b71984..27dcd398210ffec66e5c1a725bdfb173
 +  },
 +
    /** Name a workspace owner on its tabs (a bot's display name). A canonical
-@@ -1323,3 +1433,4 @@ export const host = {
+@@ -1323,3 +1457,4 @@ export const host = {
     *  forever. Tiles the probe rejects are discarded (never fronted), so the
 -   *  caller falls through to its authoritative open path. */
 +   *  caller falls through to its authoritative open path. A waiting chat
 +   *  promoted to the main pane is eligible for an explicit stored-id match. */
    focusOpenWorkspaceSession: (
-@@ -1328,3 +1439,26 @@ export const host = {
+@@ -1328,3 +1463,26 @@ export const host = {
      onlyStoredIds?: readonly string[]
 -  ): null | string => focusWorkspaceOwnerSessionTile(workspaceOwnerKey, isStaleTile, onlyStoredIds),
 +  ): null | string => {
@@ -73075,38 +73198,38 @@ index 1771079ce633e58b6cc4374d95417cb169b71984..27dcd398210ffec66e5c1a725bdfb173
 +    if (requestId) requestClarificationFocus(runtimeId, requestId)
 +  },
 
-@@ -1574,3 +1708,3 @@ export const host = {
+@@ -1574,3 +1732,3 @@ export const host = {
 
 -export type { PluginProfileRequestOptions, PluginProfileRoute } from './profile-request'
 +export type { DesktopSettingKey, DesktopSettingValues } from './settings'
 
-@@ -1578,3 +1712,2 @@ export type { PluginProfileRequestOptions, PluginProfileRoute } from './profile-
+@@ -1578,3 +1736,2 @@ export type { PluginProfileRequestOptions, PluginProfileRoute } from './profile-
 
 -export type { DesktopSettingKey, DesktopSettingValues } from './settings'
  /** THE whole Capabilities surface (Skills / Tools / MCP tabs, installed
-@@ -1663,3 +1796,2 @@ export {
+@@ -1663,3 +1820,2 @@ export {
  } from '@/app/overlays/panel'
 -
  export {
-@@ -1674,2 +1806,3 @@ export {
+@@ -1674,2 +1830,3 @@ export {
  } from '@/app/routes'
 +
  /** Appearance settings' plugin seam: register a render contribution at
-@@ -1810,2 +1943,4 @@ export type { GatewayEventListener } from '@/contrib/events'
+@@ -1810,2 +1967,4 @@ export type { GatewayEventListener } from '@/contrib/events'
  export { Contribute, type ContributeProps } from '@/contrib/react/contribute'
 +/** Settings ▸ Plugins entries (`ctx.registerSettingsPage`); `pluginSettingsHref` deep-links one. */
 +export { pluginSettingsHref, SETTINGS_PLUGINS_AREA } from '@/contrib/settings-pages'
 
-@@ -1813,4 +1948,2 @@ export { Contribute, type ContributeProps } from '@/contrib/react/contribute'
+@@ -1813,4 +1972,2 @@ export { Contribute, type ContributeProps } from '@/contrib/react/contribute'
 
 -/** Settings ▸ Plugins entries (`ctx.registerSettingsPage`); `pluginSettingsHref` deep-links one. */
 -export { pluginSettingsHref, SETTINGS_PLUGINS_AREA } from '@/contrib/settings-pages'
  export type { Contribution } from '@/contrib/types'
-@@ -1854,2 +1987,3 @@ export { type BudgetedLoop, type BudgetedLoopOptions, createBudgetedLoop } from
+@@ -1854,2 +2011,3 @@ export { type BudgetedLoop, type BudgetedLoopOptions, createBudgetedLoop } from
  export { CHAT_EMPTY_AREA, type ChatEmptyContribution, type ChatEmptyProps } from '@/lib/chat-empty'
 +export { isMissingRpcMethod } from '@/lib/gateway-rpc'
  /** THE confirm flow for guarded model switches — when a gateway model-switch
-@@ -1884,2 +2018,4 @@ export { captureGatewayFileDownload } from '@/lib/media'
+@@ -1884,2 +2042,4 @@ export { captureGatewayFileDownload } from '@/lib/media'
  export { catalogProviderMatches } from '@/lib/model-options'
 +/** The plugin authoring contract (`HermesPlugin`, `PluginContext`, `ctx.*` door types). */
 +export { MAX_PREVIEW_CHARACTERS } from '@/lib/pet-character-sprite'

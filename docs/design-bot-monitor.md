@@ -82,7 +82,9 @@ While a chat is opening, **Opening chat…** stays beside that item's
 The inbox waits before accepting another open. If it fails, the error
 appears by the same button and you can retry there.
 If you keep keyboard focus on **Open chat**, opening a live question moves
-focus to its first answer control once the inbox closes.
+focus to its first answer control once the inbox closes. If an open Local
+split missed that question, **Open chat** asks the gateway for the current
+question before moving focus.
 If the connection, profile, or gateway state changes meanwhile, the earlier
 open leaves the current inbox alone when it finishes.
 If you reopen the inbox or switch connection or profile while an answer
