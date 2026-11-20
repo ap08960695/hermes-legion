@@ -14,8 +14,8 @@ If that other chat is already open, Desktop opens the result in a separate windo
 so the existing chat keeps its owner.
 If the main tab holds an unsent new-chat draft, History opens a different
 saved chat in another tab. Select the main tab to continue your draft.
-Press Enter or Space on a result to move keyboard focus into the saved
-chat while it loads. Use Back to return to the same History search.
+Press Enter or Space on a History result to move focus into the saved
+chat while it loads, including when it opens in an empty main tab. Use Back to return to the same History search.
 During Local reconnect, message search waits for the gateway. You can
 edit the query or choose a result already shown for that same search.
 If the result opens in a split tab, focus moves to that chat while it waits
