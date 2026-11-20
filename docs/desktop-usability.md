@@ -84,7 +84,8 @@ uses the existing reconnect status. A split Chat waiting to resume shows its
 connection status until the gateway is ready, then returns to its session
 loader. If the Local gateway reports no startup result, the recovery
 dialog keeps the original startup error under **Details**. Background
-requests reuse that failure. Choose **Retry** to start a new attempt.
+requests reuse that failure. Choose **Retry** to start a new attempt. Once
+the Local gateway comes up, the chat composer is available again.
 If the Local runtime refuses to start because it needs repair,
 its error explains why automatic retries stop. After fixing the reported
 issue, choose **Reconnect now** on the error to retry that Local connection.
