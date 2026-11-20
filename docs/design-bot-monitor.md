@@ -88,7 +88,8 @@ is sending, the old confirmation stays hidden. The row still clears
 when the gateway resolves the request.
 Sending another answer clears the previous confirmation. When answers
 overlap, only the most recent submission shows a shared confirmation.
-If sending fails, the row keeps the answer so you can retry.
+If sending fails, the error appears below the controls. The row keeps
+your answer so you can retry with the same button.
 The same request stays pending if you close and reopen the inbox while
 it sends. Other questions and approvals are still available.
 
