@@ -97,11 +97,13 @@ your answer so you can retry with the same button.
 The same request stays pending if you close and reopen the inbox while
 it sends. Other questions and approvals are still available.
 
-If the inbox cannot load requests from the active gateway, **Refresh inbox**
-retries the list once at a time. A failed refresh keeps the open rows and
-unsent answers visible and pauses submissions. While the inbox stays open,
-a question that temporarily leaves the list can restore its unsent answer or
-choices when the same request returns. A new request starts blank. Closing
+If a refresh fails while requests are still listed and the gateway is connected,
+**Waiting for owner** shows **Refresh needed** in place of the count.
+Open the inbox and choose **Refresh inbox** to retry the list.
+The failed refresh keeps the rows and unsent answers visible and pauses
+submissions. While the inbox stays open, a question that temporarily leaves
+the list can restore its unsent answer or choices when the same request
+returns. A new request starts blank. Closing
 the inbox or changing the active connection or profile clears these drafts. The
 button stays focused while it loads. If the inbox recovers while the button still has focus, focus moves to the
 inbox heading so you can tab into the list.
