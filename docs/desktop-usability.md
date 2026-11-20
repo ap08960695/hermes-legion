@@ -88,6 +88,8 @@ issue, choose **Reconnect now** on the error to retry that Local connection.
 Open split Chats on the shared Local gateway reattach across profiles.
 While a split Chat restores its runtime, it can show a read-only excerpt
 of recent saved messages. The composer returns when the Chat reattaches.
+If you were typing in that split, keyboard focus returns to its draft
+unless you moved focus elsewhere during recovery.
 
 ## Verification boundaries
 
