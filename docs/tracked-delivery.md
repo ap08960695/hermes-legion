@@ -30,9 +30,11 @@ Acceptance describes recorded evidence at handoff, not a new execution of checks
 In **Track work**, open **Compare with the round that asked for changes**.
 Track Work opens the latest request for changes. Use **Revision round** to
 compare an earlier request on the same card. The five most recent requests
-are shown. Each comparison pairs the handoff before that request with the last
-handoff before the next request. The latest round shows a waiting state until
-a revised handoff is available.
+are shown. The comparison disclosure and round picker show a focus outline
+when you reach them with Tab and stay inside a narrow card. Each comparison
+pairs the handoff before that request with the last handoff before the next
+request. The latest round
+shows a waiting state until a revised handoff is available.
 
 The comparison shows recorded artifact changes and labels check evidence by
 run. Earlier rounds use recorded check IDs if the card brief has since changed.
