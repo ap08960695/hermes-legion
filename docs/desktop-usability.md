@@ -82,6 +82,11 @@ Switching devices or active profiles returns the picker to **default**.
 
 **Fit graph** fits both dimensions. Large graphs may need small overview text; select a destination to highlight its recorded ancestry and use **Focus selected card** to return that task to readable size. Focusing scrolls after the scaled layout is committed. Bot journeys remain based on recorded runs and dependencies. No animation fabricates progress or dispatches work.
 
+In **Track work**, open the comparison for a reviewed card. When several
+rounds are available, the **Revision round** picker shows the run number
+and a preview of what the reviewer asked to change. Select a round to
+read the full request and open the text diff for that round's handoffs.
+
 ## Choosing and creating bots
 
 Use **New bot** or **New group chat** in the Bots workspace header. In **Manage team**, the roster toolbar has a separate **New section** button. The standalone Bots roster keeps its creation menu.
