@@ -160,6 +160,8 @@ Activating the focused **Retry** button puts focus on the chat panel
 while it loads. If it fails again, press Tab to reach **Retry**.
 If you were typing in that split, keyboard focus returns to its draft
 unless you moved focus elsewhere during recovery.
+A queued skill in a split Chat stays in its queue if its send is refused.
+Use **Send** again from that split to retry the same queued entry.
 
 ## Verification boundaries
 
