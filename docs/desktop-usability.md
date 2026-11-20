@@ -85,6 +85,8 @@ connection status until the gateway is ready, then returns to its session
 loader. If the Local runtime refuses to start because it needs repair,
 its error explains why automatic retries stop. After fixing the reported
 issue, choose **Reconnect now** on the error to retry that Local connection.
+If the Local gateway is incompatible, open **Details** for the specific
+repair instructions before reconnecting.
 When you activate it by keyboard, focus moves to the Local connection
 status and stays there while the retry completes.
 If the retry is refused again and focus is still on the status, focus
