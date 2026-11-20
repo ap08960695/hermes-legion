@@ -54769,10 +54769,10 @@ index 0000000000000000000000000000000000000000..09462de6ef92a8af84f07b51893d9ea5
 +}
 diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx b/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..3b2fe793162504dc2c7e32db99cc69cc8272d5f2
+index 0000000000000000000000000000000000000000..ecee80aadd9290c9e92d04045519c51dbb382bfe
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx
-@@ -0,0 +1,684 @@
+@@ -0,0 +1,718 @@
 +import { host, type OwnerInboxItem } from '@hermes/plugin-sdk'
 +import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 +import { atom } from 'nanostores'
@@ -55014,6 +55014,40 @@ index 0000000000000000000000000000000000000000..3b2fe793162504dc2c7e32db99cc69cc
 +  expect(screen.getByText('Opening chat…').getAttribute('role')).toBe('status')
 +  await act(async () => finish())
 +  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
++})
++
++it('shows an open failure on its row and keeps the action focused for retry', async () => {
++  const inbox = fixture([prompt('tester', 'First question?'), prompt('writer', 'Second question?')])
++  inbox.open.mockRejectedValueOnce(new Error('fixture activation failed'))
++  inbox.mount()
++  const badge = await screen.findByRole('button', { name: 'Waiting for owner 2' })
++  fireEvent.click(badge)
++  const dialog = screen.getByRole('dialog')
++  const [first, second] = within(dialog).getAllByRole('listitem')
++  const action = within(second).getByRole('button', { name: 'Open chat' })
++  action.focus()
++  fireEvent.click(action)
++
++  const alert = await within(second).findByRole('alert')
++  expect(alert.textContent).toBe('Could not open this chat.')
++  expect(within(first).queryByRole('alert')).toBeNull()
++  expect(document.activeElement).toBe(action)
++
++  let rejectRetry!: () => void
++  inbox.open.mockImplementationOnce(() => new Promise<void>((_, reject) => {
++    rejectRetry = () => reject(new Error('fixture retry failed'))
++  }))
++  fireEvent.click(action)
++  expect(within(second).queryByRole('alert')).toBeNull()
++  fireEvent.click(action)
++  expect(inbox.open).toHaveBeenCalledTimes(2)
++  await act(async () => rejectRetry())
++  expect(within(second).getAllByRole('alert')).toHaveLength(1)
++
++  fireEvent.keyDown(dialog, { key: 'Escape' })
++  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
++  fireEvent.click(badge)
++  expect(screen.queryByText('Could not open this chat.')).toBeNull()
 +})
 +
 +it.each([false, true])('ignores a chat open result from a dismissed inbox (reject: %s)', async reject => {
@@ -55459,10 +55493,10 @@ index 0000000000000000000000000000000000000000..3b2fe793162504dc2c7e32db99cc69cc
 +)
 diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx b/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..e8fa203ef7a2e5358224b6ac4544eab5861b5049
+index 0000000000000000000000000000000000000000..45ece44f6ef1278d11300559be0e9e60593d016e
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx
-@@ -0,0 +1,250 @@
+@@ -0,0 +1,258 @@
 +import {
 +  Button, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, host, type OwnerInboxItem, type PluginProfileRoute, relativeTime
 +} from '@hermes/plugin-sdk'
@@ -55486,6 +55520,7 @@ index 0000000000000000000000000000000000000000..e8fa203ef7a2e5358224b6ac4544eab5
 +  const [open, setOpen] = useState(false)
 +  const [notice, setNotice] = useState('')
 +  const [openingChat, setOpeningChat] = useState(false)
++  const [openErrorKey, setOpenErrorKey] = useState<string | null>(null)
 +  const opening = useRef(false)
 +  const dialogGeneration = useRef(0)
 +  const scopeGeneration = useRef(0)
@@ -55514,6 +55549,7 @@ index 0000000000000000000000000000000000000000..e8fa203ef7a2e5358224b6ac4544eab5
 +    const invalidateScope = () => {
 +      scopeGeneration.current += 1
 +      setNotice('')
++      setOpenErrorKey(null)
 +    }
 +    const stop = [host.state.connectionId, host.state.gateway, host.state.profile]
 +      .map(store => store.listen(invalidateScope))
@@ -55528,6 +55564,7 @@ index 0000000000000000000000000000000000000000..e8fa203ef7a2e5358224b6ac4544eab5
 +    if (!next) {
 +      dialogGeneration.current += 1
 +      setNotice('')
++      setOpenErrorKey(null)
 +    }
 +    setOpen(next)
 +  }
@@ -55539,6 +55576,7 @@ index 0000000000000000000000000000000000000000..e8fa203ef7a2e5358224b6ac4544eab5
 +    opening.current = true
 +    setOpeningChat(true)
 +    setNotice('')
++    setOpenErrorKey(null)
 +    const generation = dialogGeneration.current
 +    const scope = scopeGeneration.current
 +    const gateway = host.getGateway()
@@ -55557,7 +55595,7 @@ index 0000000000000000000000000000000000000000..e8fa203ef7a2e5358224b6ac4544eab5
 +      await host.openSession(prompt.chat_session_id || prompt.session_id, { route, forceResume: true, awaitHydration: true })
 +      if (isCurrent()) { changeOpen(false) }
 +    } catch {
-+      if (isCurrent()) { setNotice(t.openFailed) }
++      if (isCurrent()) { setOpenErrorKey(ownerPromptKey(prompt)) }
 +    } finally {
 +      opening.current = false
 +      setOpeningChat(false)
@@ -55572,6 +55610,7 @@ index 0000000000000000000000000000000000000000..e8fa203ef7a2e5358224b6ac4544eab5
 +      scopeGeneration.current === scope && host.getGateway() === gateway
 +
 +    setNotice('')
++    setOpenErrorKey(null)
 +
 +    try {
 +      const result = await inbox.respond(prompt, value)
@@ -55605,7 +55644,8 @@ index 0000000000000000000000000000000000000000..e8fa203ef7a2e5358224b6ac4544eab5
 +      <p className={status ? "text-sm" : "sr-only"} role="status">{status}</p>
 +      <ul className="grid gap-3" ref={list}>
 +        {inbox.items.map(prompt => <OwnerPromptRow
-+          bot={bots.find(bot => bot.profile === prompt.profile)?.label || prompt.profile} key={ownerPromptKey(prompt)} onOpen={() => void openChat(prompt)} openingChat={openingChat} onRespond={value => respond(prompt, value)}
++          bot={bots.find(bot => bot.profile === prompt.profile)?.label || prompt.profile} key={ownerPromptKey(prompt)} onOpen={() => void openChat(prompt)} openFailed={openErrorKey === ownerPromptKey(prompt)}
++          openingChat={openingChat} onRespond={value => respond(prompt, value)}
 +          pending={inbox.isResponding(prompt)} prompt={prompt} stale={inbox.status !== 'ready'} text={text} />)}
 +      </ul>
 +    </DialogContent>
@@ -55618,12 +55658,13 @@ index 0000000000000000000000000000000000000000..e8fa203ef7a2e5358224b6ac4544eab5
 +  }
 +}
 +
-+function OwnerPromptRow({ prompt, bot, onOpen, onRespond, openingChat, pending, stale, text }: {
++function OwnerPromptRow({ prompt, bot, onOpen, onRespond, openFailed, openingChat, pending, stale, text }: {
 +  prompt: OwnerInboxItem
 +  bot: string
 +  text: Pick<BotsText, 'ownerInbox' | 'workspace'>
 +  onOpen: () => void
 +  onRespond: (value: string) => Promise<void>
++  openFailed: boolean
 +  openingChat: boolean
 +  pending: boolean
 +  stale: boolean
@@ -55710,6 +55751,7 @@ index 0000000000000000000000000000000000000000..e8fa203ef7a2e5358224b6ac4544eab5
 +      </div>
 +    </>}
 +    {pending && <p className="text-sm text-muted-foreground" role="status">{t.sending}</p>}
++    {openFailed && <p className="text-sm text-destructive" ref={revealFocusedError} role="alert">{t.openFailed}</p>}
 +    {error && <p className="text-sm text-destructive" ref={revealFocusedError} role="alert">{t.failed}</p>}
 +  </li>
 +}

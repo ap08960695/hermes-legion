@@ -76,6 +76,8 @@ prompt, and its age. A row shows its card or goal when the gateway can
 identify one. Answer inline, approve once, deny, or open the exact chat
 for the full context and any additional approval options. While a chat is
 opening, the inbox shows progress and waits before accepting another open.
+If it fails, the message appears next to that item's **Open chat** button,
+and you can retry from the same button.
 If the connection, profile, or gateway state changes meanwhile, the earlier
 open leaves the current inbox alone when it finishes.
 If you reopen the inbox or switch connection or profile while an answer
