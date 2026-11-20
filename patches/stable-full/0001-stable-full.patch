@@ -20382,8 +20382,207 @@ index 72f891f6dac0bcf3e9638b2f5aefa926405cb34b..c2b5b3d84a9b5e84b1a63da989e3956f
 +  useLayoutEffect(() => history.reset(), [history, scopeKey])
 +
    const snapshot = useCallback((): ComposerSnapshot => {
+diff --git a/apps/desktop/src/app/chat/composer/hooks/use-live-completion-adapter.ts b/apps/desktop/src/app/chat/composer/hooks/use-live-completion-adapter.ts
+index 8fb19d378db0d3bb6a744fb2e2f3b85d4e0d0330..5f657f7c07a34fcc81ce56d14274bd1d36c356ab 100644
+--- a/apps/desktop/src/app/chat/composer/hooks/use-live-completion-adapter.ts
++++ b/apps/desktop/src/app/chat/composer/hooks/use-live-completion-adapter.ts
+@@ -82,5 +82,8 @@ export function useLiveCompletionAdapter(options: {
+     // On mount this is already the state, so the first run is a no-op.
++    cancelTimer()
+     pendingQueryRef.current = null
++    tokenRef.current += 1
++    setLoading(false)
+     setState(current => (current.query === EMPTY_QUERY ? current : { ...current, query: EMPTY_QUERY }))
+-  }, [epoch])
++  }, [cancelTimer, epoch])
+
+diff --git a/apps/desktop/src/app/chat/composer/hooks/use-slash-completions.test.tsx b/apps/desktop/src/app/chat/composer/hooks/use-slash-completions.test.tsx
+index aad05c65b2a0badc5125d341913e3ef80861ad94..16259c0f02b9b6934ebdb2d38afef872611c80b0 100644
+--- a/apps/desktop/src/app/chat/composer/hooks/use-slash-completions.test.tsx
++++ b/apps/desktop/src/app/chat/composer/hooks/use-slash-completions.test.tsx
+@@ -7,2 +7,3 @@ import { queryClient } from '@/lib/query-client'
+ import { invalidateSlashCompletions } from '@/lib/slash-completion-cache'
++import { deferred } from '@/test/deferred'
+
+@@ -43,7 +44,7 @@ const commandsOf = (items: readonly Unstable_TriggerItem[]) =>
+
+-function harness(gateway: HermesGateway, options: { profile?: string } = {}) {
++function harness(gateway: HermesGateway, options: { profile?: string; gatewayReady?: boolean } = {}) {
+   const api: { search?: (query: string) => readonly Unstable_TriggerItem[] } = {}
+
+-  function Probe() {
+-    const { adapter } = useSlashCompletions({ gateway, ...options })
++  function Probe({ gatewayReady }: { gatewayReady?: boolean }) {
++    const { adapter } = useSlashCompletions({ gateway, ...options, gatewayReady })
+     api.search = adapter.search
+@@ -53,5 +54,8 @@ function harness(gateway: HermesGateway, options: { profile?: string } = {}) {
+
+-  render(<Probe />)
++  const view = render(<Probe gatewayReady={options.gatewayReady} />)
+
+-  return api as { search: (query: string) => readonly Unstable_TriggerItem[] }
++  return {
++    search: (query: string) => api.search!(query),
++    setGatewayReady: (gatewayReady: boolean) => view.rerender(<Probe gatewayReady={gatewayReady} />)
++  }
+ }
+@@ -79,2 +83,53 @@ afterEach(() => {
+ describe('useSlashCompletions', () => {
++  it('uses local and fresh cached results while reconnecting, then searches when ready', async () => {
++    const request = vi.fn(async (method: string) =>
++      method === 'commands.catalog' ? CATALOG : { items: [{ text: '/new' }] }
++    )
++
++    const api = harness({ request } as unknown as HermesGateway, { gatewayReady: false })
++
++    expect(await completions(api, '')).toEqual([])
++    expect(await completions(api, 'ne')).toEqual([])
++    expect(commandsOf(await completions(api, 'resume '))).toContain('/resume')
++    expect(request).not.toHaveBeenCalled()
++
++    api.setGatewayReady(true)
++    expect(commandsOf(await completions(api, 'ne'))).toEqual(['/new'])
++    expect(request.mock.calls.map(([method]) => method)).toEqual(['commands.catalog', 'complete.slash'])
++
++    api.setGatewayReady(false)
++    expect(commandsOf(await completions(api, 'ne'))).toEqual(['/new'])
++    expect(commandsOf(await completions(api, ''))).toContain('/new')
++    expect(request).toHaveBeenCalledTimes(2)
++
++    await act(async () => invalidateSlashCompletions())
++    expect(await completions(api, '')).toEqual([])
++    expect(request).toHaveBeenCalledTimes(2)
++  })
++
++  it('ignores a reply invalidated during reconnect and searches again when ready', async () => {
++    const late = deferred<{ items: { text: string }[] }>()
++    const lookup = vi.fn().mockReturnValueOnce(late.promise).mockResolvedValue({ items: [{ text: '/new' }] })
++
++    const request = vi.fn((method: string) =>
++      method === 'commands.catalog' ? Promise.resolve(CATALOG) : lookup()
++    )
++
++    const api = harness({ request } as unknown as HermesGateway)
++
++    await completions(api, 'ne')
++    expect(lookup).toHaveBeenCalledOnce()
++
++    api.setGatewayReady(false)
++    await act(async () => invalidateSlashCompletions())
++    expect(await completions(api, 'ne')).toEqual([])
++    await act(async () => late.resolve({ items: [{ text: '/help' }] }))
++    expect(await completions(api, 'ne')).toEqual([])
++    expect(lookup).toHaveBeenCalledOnce()
++
++    api.setGatewayReady(true)
++    expect(commandsOf(await completions(api, 'ne'))).toEqual(['/new'])
++    expect(lookup).toHaveBeenCalledTimes(2)
++  })
++
+   it('serves the bare-slash catalog from cache instead of re-requesting it', async () => {
+diff --git a/apps/desktop/src/app/chat/composer/hooks/use-slash-completions.ts b/apps/desktop/src/app/chat/composer/hooks/use-slash-completions.ts
+index a6102dfde21bc0bfcd5885140282de3e7d761ff4..af6f340296f8fefccb427782af277ad9dee77126 100644
+--- a/apps/desktop/src/app/chat/composer/hooks/use-slash-completions.ts
++++ b/apps/desktop/src/app/chat/composer/hooks/use-slash-completions.ts
+@@ -19,3 +19,8 @@ import {
+ } from '@/lib/desktop-slash-commands'
+-import { $slashCompletionsEpoch, cachedSlashCompletion, hasCachedSlashCompletion } from '@/lib/slash-completion-cache'
++import {
++  $slashCompletionsEpoch,
++  cachedSlashCompletion,
++  hasCachedSlashCompletion,
++  peekCachedSlashCompletion
++} from '@/lib/slash-completion-cache'
+ import { normalize } from '@/lib/text'
+@@ -62,2 +67,3 @@ export function useSlashCompletions(options: {
+   gateway: HermesGateway | null
++  gatewayReady?: boolean
+   /** Skill completions are per session: project-local skills follow the
+@@ -76,3 +82,3 @@ export function useSlashCompletions(options: {
+ } {
+-  const { gateway, sessionId, profile, skinThemes, activeSkin } = options
++  const { gateway, gatewayReady = true, sessionId, profile, skinThemes, activeSkin } = options
+   const { locale } = useI18n()
+@@ -98,3 +104,3 @@ export function useSlashCompletions(options: {
+   useEffect(() => {
+-    if (!gateway) {
++    if (!gateway || !gatewayReady) {
+       return
+@@ -103,2 +109,3 @@ export function useSlashCompletions(options: {
+     const { catalogKey, owner } = keysFor()
++    let current = true
+
+@@ -108,3 +115,5 @@ export function useSlashCompletions(options: {
+       .then(catalog => {
+-        filterDesktopCommandsCatalog(catalog)
++        if (current && keysFor().catalogKey === catalogKey) {
++          filterDesktopCommandsCatalog(catalog)
++        }
+       })
+@@ -113,3 +122,7 @@ export function useSlashCompletions(options: {
+       })
+-  }, [gateway, epoch, keysFor, sessionParams])
++
++    return () => {
++      current = false
++    }
++  }, [gateway, gatewayReady, epoch, keysFor, sessionParams])
+
+@@ -184,10 +197,17 @@ export function useSlashCompletions(options: {
+
++      const lookup = <T>(key: string, request: () => Promise<T>) =>
++        gatewayReady ? cachedSlashCompletion(key, request) : peekCachedSlashCompletion<T>(key)
++
+       try {
+         if (!query) {
+-          const catalog = filterDesktopCommandsCatalog(
+-            await cachedSlashCompletion(catalogKey, () =>
+-              requestCompletion<CommandsCatalogLike>(gateway, owner, 'commands.catalog', sessionParams)
+-            )
++          const response = await lookup(catalogKey, () =>
++            requestCompletion<CommandsCatalogLike>(gateway, owner, 'commands.catalog', sessionParams)
+           )
+
++          if (!response || keysFor().catalogKey !== catalogKey) {
++            return { items: [], query }
++          }
++
++          const catalog = filterDesktopCommandsCatalog(response)
++
+           // Prefer the categorized layout so the popover renders section headers
+@@ -229,3 +249,3 @@ export function useSlashCompletions(options: {
+
+-        const result = await cachedSlashCompletion(`slash:${scopeKey}:${text.toLowerCase()}`, () =>
++        const result = await lookup(`slash:${scopeKey}:${text.toLowerCase()}`, () =>
+           requestCompletion<{ items?: CompletionEntry[]; replace_from?: number }>(gateway, owner, 'complete.slash', {
+@@ -236,2 +256,6 @@ export function useSlashCompletions(options: {
+
++        if (!result || keysFor().scopeKey !== scopeKey) {
++          return { items: [], query }
++        }
++
+         // Arg-completion items (replace_from > 1) carry just the arg stub —
+@@ -303,3 +327,3 @@ export function useSlashCompletions(options: {
+     },
+-    [gateway, skinThemes, activeSkin, keysFor, sessionParams]
++    [gateway, gatewayReady, skinThemes, activeSkin, keysFor, sessionParams]
+   )
+@@ -341,3 +365,3 @@ export function useSlashCompletions(options: {
+
+-      if ((skinThemes && /^\/skin\s+/is.test(text)) || /^\/(?:resume|sessions|switch)\s+/is.test(text)) {
++      if (!gatewayReady || (skinThemes && /^\/skin\s+/is.test(text)) || /^\/(?:resume|sessions|switch)\s+/is.test(text)) {
+         return true
+@@ -349,6 +373,6 @@ export function useSlashCompletions(options: {
+     },
+-    [skinThemes, keysFor]
++    [gatewayReady, skinThemes, keysFor]
+   )
+
+-  return useLiveCompletionAdapter({ enabled, epoch: `${epoch}:${locale}`, fetcher, isCached, toItem })
++  return useLiveCompletionAdapter({ enabled, epoch: `${epoch}:${locale}:${gatewayReady}`, fetcher, isCached, toItem })
+ }
 diff --git a/apps/desktop/src/app/chat/composer/index.tsx b/apps/desktop/src/app/chat/composer/index.tsx
-index aee9bf96c50cee698de0c72fff94dc22f26a541f..695f6f7ee5629ba199f9f17876848d2519ba5420 100644
+index aee9bf96c50cee698de0c72fff94dc22f26a541f..f6b2ab468da5f731734239ad1046109bdb84d79e 100644
 --- a/apps/desktop/src/app/chat/composer/index.tsx
 +++ b/apps/desktop/src/app/chat/composer/index.tsx
 @@ -29,2 +29,3 @@ import { useStoreSelector, useStoresSelector } from '@/lib/use-session-slice'
@@ -20426,11 +20625,15 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..695f6f7ee5629ba199f9f17876848d25
    const statusSessionId = sessionId ?? null
 +  const backgroundResume = useStore(useMemo(() => sessionBackgroundResume(statusSessionId), [statusSessionId]))
 
-@@ -273,3 +277,2 @@ export function ChatBar({
+@@ -264,2 +268,3 @@ export function ChatBar({
+     gateway: gateway ?? null,
++    gatewayReady: !disabled,
+     profile: profile ?? null,
+@@ -273,3 +278,2 @@ export function ChatBar({
    const gatewayState = useStore($gatewayState)
 -  const reconnecting = gatewayState !== 'open'
    const inputDisabled = shouldDisableComposerInput(disabled, gatewayState)
-@@ -279,2 +282,11 @@ export function ChatBar({
+@@ -279,2 +283,11 @@ export function ChatBar({
    // and threads it in so the draft↔queue coupling is an explicit dep, not a tangle.
 +  const draft = useComposerDraft({
 +    activeQueueSessionKey,
@@ -20442,11 +20645,11 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..695f6f7ee5629ba199f9f17876848d25
 +  })
 +
    const {
-@@ -282,3 +294,2 @@ export function ChatBar({
+@@ -282,3 +295,2 @@ export function ChatBar({
      clearDraft,
 -    draftScopeRef,
      draftRef,
-@@ -296,8 +307,15 @@ export function ChatBar({
+@@ -296,8 +308,15 @@ export function ChatBar({
      setComposerText,
 -    stashAt,
 -    syncDraftFromEditor,
@@ -20466,14 +20669,14 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..695f6f7ee5629ba199f9f17876848d25
    useComposerScreenshot({ sessionKey: activeQueueSessionKey, focusKey, onAttachImageBlob })
 +  const pasteFiles = useComposerFilePaste({ disabled: inputDisabled, onAttachDroppedItems, target: scope.target })
 
-@@ -306,4 +324,5 @@ export function ChatBar({
+@@ -306,4 +325,5 @@ export function ChatBar({
    // path below banks its pre-edit state through `recordUndoPoint`.
 -  const { recordUndoPoint, redo, resetUndoHistory, undo, withUndoPoint } = useComposerUndo({
 +  const { recordUndoPoint, redo, undo, withUndoPoint } = useComposerUndo({
      editorRef,
 +    scopeKey: JSON.stringify([activeQueueSessionKey, draft.ownerIdentity]),
      syncDraftFromEditor
-@@ -332,8 +351,2 @@ export function ChatBar({
+@@ -332,8 +352,2 @@ export function ChatBar({
 
 -  // Prior history belongs to the draft that just left — undoing into another
 -  // conversation's text is worse than having none.
@@ -20482,7 +20685,7 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..695f6f7ee5629ba199f9f17876848d25
 -  }, [activeQueueSessionKey, resetUndoHistory])
 -
    // "Add URL" dialog — open/value state, autofocus, and submit (host onAddUrl or
-@@ -417,17 +430,11 @@ export function ChatBar({
+@@ -417,17 +431,11 @@ export function ChatBar({
    const { queueDraft, steerDraft, submitDraft } = useComposerSubmit({
 +    ...draft,
      busyInputMode,
@@ -20501,7 +20704,7 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..695f6f7ee5629ba199f9f17876848d25
      inputDisabled,
 -    loadIntoComposer,
      // The submit engine's only cancel call is the Stop-button branch (busy +
-@@ -441,16 +448,12 @@ export function ChatBar({
+@@ -441,16 +449,12 @@ export function ChatBar({
      queuedPrompts,
 -    sessionId,
 -    setComposerText,
@@ -20525,7 +20728,7 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..695f6f7ee5629ba199f9f17876848d25
 -  // this API; keyup uses triggerKeyConsumedRef to skip its refresh.
 +  // Shared completion engine; keyup skips refresh for keys its keydown handler consumed.
    const {
-@@ -563,2 +566,8 @@ export function ChatBar({
+@@ -563,2 +567,8 @@ export function ChatBar({
    const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
 +    if (pasteFiles(event.clipboardData)) {
 +      event.preventDefault()
@@ -20534,11 +20737,11 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..695f6f7ee5629ba199f9f17876848d25
 +    }
 +
      const imageBlobs = extractClipboardImageBlobs(event.clipboardData)
-@@ -1141,2 +1150,3 @@ export function ChatBar({
+@@ -1141,2 +1151,3 @@ export function ChatBar({
        foldVoice={foldVoice}
 +      hasBackgroundWork={Boolean(backgroundResume)}
        hasComposerPayload={hasComposerPayload}
-@@ -1147,3 +1157,21 @@ export function ChatBar({
+@@ -1147,3 +1158,21 @@ export function ChatBar({
        onSteer={canSteer ? () => steerDraft('steer') : undefined}
 +      onStop={haltRun}
        onToggleAutoSpeak={handleToggleAutoSpeak}
@@ -20560,15 +20763,15 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..695f6f7ee5629ba199f9f17876848d25
 +        />
 +      }
        state={state}
-@@ -1158,2 +1186,3 @@ export function ChatBar({
+@@ -1158,2 +1187,3 @@ export function ChatBar({
        <div
 +        aria-describedby={blockedConnectionStatus ? connectionStatusId : undefined}
          aria-disabled={inputDisabled ? true : undefined}
-@@ -1231,2 +1260,3 @@ export function ChatBar({
+@@ -1231,2 +1261,3 @@ export function ChatBar({
        <ComposerDirectiveActions editorRef={editorRef} />
 +
        {/* assistant-ui requires ComposerPrimitive.Input somewhere in the tree
-@@ -1302,7 +1332,8 @@ export function ChatBar({
+@@ -1302,7 +1333,8 @@ export function ChatBar({
              <PreparedImageRecovery
 -              occupied={hasText || attachments.length > 0 || busy || disabled}
 +              occupied={hasText || attachments.length > 0 || Boolean(draft.recovery) || busy || disabled}
@@ -20579,7 +20782,7 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..695f6f7ee5629ba199f9f17876848d25
                }}
 +              owner={draftOwner}
                request={requestBusyConfig}
-@@ -1487,6 +1518,15 @@ export function ChatBar({
+@@ -1487,6 +1519,15 @@ export function ChatBar({
                    <ContribSlot area={COMPOSER_AREAS.top} />
 -                  <RestoredDraftNotice
 -                    freshDraft={activeQueueSessionKey === null}
@@ -48836,6 +49039,22 @@ index 3ec9fbc62be5925f22453e17c53e251ae2b6344b..a8d1a748896af11d1064ae8bf9170672
 + *  Bare values stop at quotes so enclosing prose/JSON cannot become the id. */
 +export const SESSION_REF_RE = /(?<![\w/])(?<!]\()@session:(`[^`\n]+`|"[^"\n]+"|'[^'\n]+'|[^\s"'`]+)/g
  
+diff --git a/apps/desktop/src/lib/slash-completion-cache.ts b/apps/desktop/src/lib/slash-completion-cache.ts
+index 7b87c4c746f2f5aa55aab1a58be7f5a0f6c529f8..e6cd237ed4c2a27a8e341d0a36d90abe65d49893 100644
+--- a/apps/desktop/src/lib/slash-completion-cache.ts
++++ b/apps/desktop/src/lib/slash-completion-cache.ts
+@@ -36,3 +36,3 @@ export function hasCachedSlashCompletion(key: string): boolean {
+
+-  return state?.data !== undefined && Date.now() - state.dataUpdatedAt < SLASH_COMPLETIONS_TTL_MS
++  return state?.data !== undefined && !state.isInvalidated && Date.now() - state.dataUpdatedAt < SLASH_COMPLETIONS_TTL_MS
+ }
+@@ -89,3 +89,5 @@ export const $slashCompletionsEpoch = atom(0)
+ export function invalidateSlashCompletions(): void {
+-  void queryClient.invalidateQueries({ queryKey: [SLASH_COMPLETIONS_KEY] })
++  const queryKey = [SLASH_COMPLETIONS_KEY]
++  void queryClient.cancelQueries({ queryKey })
++  void queryClient.invalidateQueries({ queryKey })
+   $slashCompletionsEpoch.set($slashCompletionsEpoch.get() + 1)
 diff --git a/apps/desktop/src/lib/svg-image.ts b/apps/desktop/src/lib/svg-image.ts
 index d5e8d759b1d41509fee852ba019b030a75e208f4..fadfd595500b464cd53a474ef2fa13be508c62bd 100644
 --- a/apps/desktop/src/lib/svg-image.ts

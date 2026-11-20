@@ -81,7 +81,9 @@ assistive technology. It shows Disconnected when retries have stopped
 and clears the status when the connection is ready. You can edit the draft
 while reconnecting. **Suggest prompt** becomes available again when the
 gateway is ready. Any suggestion still pending when the connection dropped
-is discarded. When reconnect interrupts the open Chat, it tries to resume
+is discarded. The slash menu can use cached commands and local choices
+while reconnecting. An open search resumes when the gateway is ready.
+When reconnect interrupts the open Chat, it tries to resume
 after the Local gateway returns. During recovery, a closed socket or
 shutdown refusal uses the existing reconnect status. A split Chat shows its
 connection status until the gateway is ready, then returns to its session
