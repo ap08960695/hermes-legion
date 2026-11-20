@@ -753,6 +753,9 @@ its connection. The report dialog wraps long names and saved text. Its
 status filter and Close button show keyboard focus.
 If a roster refresh removes the report button, focus returns to
 Monitor search or to the Monitor heading when the roster is empty.
+An empty current roster says “No bots yet.” A search or filter that
+excludes every available row keeps the no-matches message. Waiting or
+failed refresh without rows shows the connection status.
 In a character report without a status filter, Tab reaches the report
 body when it overflows. Page Down and End reveal the remaining text.
 After closing a report opened from a character, focus returns to the
