@@ -26,8 +26,9 @@ opens and active chats whose saved ID changes during auto-compression.
 If more than one profile claims the same saved chat, queued messages
 without a confirmed destination stay queued. New renderer queue entries
 remember their Local profile when the chat list confirms it. They stay
-queued if the current owner differs. Use Back to return to the same
-History search.
+queued if the current owner differs. If Send cannot confirm the
+chat’s profile, Hermes tells you the message is still in the queue.
+Use Back to return to the same History search.
 During Local reconnect, message search waits for the gateway. You can
 edit the query or choose a result already shown for that same search.
 If the result opens in a split tab, focus moves to that chat while it waits
