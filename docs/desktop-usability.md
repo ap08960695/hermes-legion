@@ -75,10 +75,10 @@ and waits with jittered backoff capped at 15 seconds between attempts.
 while the Local backend and fresh ticket are being prepared. Tabs and drafts
 stay open. After initial startup, the automatic provider setup screen waits
 for the connection to return, keeping saved Chat visible in the meantime.
-The composer shows the connection status in the empty editor or next to a
-draft. Assistive technology can read the status in either case. It shows
-Disconnected when retries have stopped and clears the status
-when the connection is ready. When
+The composer shows the connection status above the message field, including
+when it is empty. The status wraps in narrow panes and is available to
+assistive technology. It shows Disconnected when retries have stopped
+and clears the status when the connection is ready. When
 reconnect interrupts the open Chat, it tries to resume again after the
 Local gateway returns. During recovery, a closed socket or shutdown refusal
 uses the existing reconnect status. A split Chat waiting to resume shows its
