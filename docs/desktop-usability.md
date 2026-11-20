@@ -149,6 +149,9 @@ connection restarting**.
 If the Local reconnect request fails, the error appears next to that button.
 Keyboard focus stays on **Save and reconnect** while the request is pending
 unless you move it, so you can press Enter again after a refusal.
+You can go back and reopen Gateway settings during the request.
+The same request stays in progress. If it fails, the error remains
+available when you return to Gateway settings.
 If the Local runtime refuses to start because it needs repair,
 its error explains why automatic retries stop. After fixing the reported
 issue, choose **Reconnect now** on the error to retry that Local connection.
