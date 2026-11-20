@@ -34984,18 +34984,76 @@ index b504be19559ad3a91439f14fdfb6ff85c69aeee1..f88ef5f71e21e258404a966196a661f1
 +  requireIdempotentSubmit?: boolean
    attachments?: ComposerAttachment[]
 diff --git a/apps/desktop/src/app/session/hooks/use-session-actions.test.tsx b/apps/desktop/src/app/session/hooks/use-session-actions.test.tsx
-index c680caa29188fef832912e202eceb2f84d6d972e..092a4aa2c5f850eaddea9ea2a2c082a557fef542 100644
+index c680caa29188fef832912e202eceb2f84d6d972e..ebc6bb90ecae116e43252368337865dda3e50409 100644
 --- a/apps/desktop/src/app/session/hooks/use-session-actions.test.tsx
 +++ b/apps/desktop/src/app/session/hooks/use-session-actions.test.tsx
-@@ -60,2 +60,3 @@ import {
+@@ -1,2 +1,2 @@
+-import { registryBackendScopeKey } from '@hermes/shared'
++import { JsonRpcGatewayError, registryBackendScopeKey } from '@hermes/shared'
+ import { useStore } from '@nanostores/react'
+@@ -7,2 +7,3 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
++import { GATEWAY_CONNECTION_CLOSED_MESSAGE, GATEWAY_NOT_CONNECTED_MESSAGE } from '@/api/client'
+ import { PRIMARY_SESSION_VIEW } from '@/app/chat/session-view'
+@@ -57,2 +58,3 @@ import {
+   $freshDraftKey,
++  $gatewayState,
+   $messages,
+@@ -60,2 +62,3 @@ import {
    $newChatWorkspaceTarget,
 +  $primaryClarifyReattach,
    $resumeFailedSessionId,
-@@ -1849,2 +1850,3 @@ describe('resumeSession failure recovery', () => {
+@@ -1849,2 +1852,6 @@ describe('resumeSession failure recovery', () => {
      cleanup()
++    $gatewayState.set('idle')
++    $activeGatewayProfile.set('default')
++    setConnection(null)
 +    $primaryClarifyReattach.set(null)
      setActiveSessionId(null)
-@@ -2134,2 +2136,44 @@ describe('resumeSession failure recovery', () => {
+@@ -2047,2 +2054,42 @@ describe('resumeSession failure recovery', () => {
+
++  it.each([
++    { error: new Error(GATEWAY_CONNECTION_CLOSED_MESSAGE), state: 'connecting', readable: true, toast: false },
++    { error: new Error(GATEWAY_NOT_CONNECTED_MESSAGE), state: 'closed', readable: false, toast: false },
++    { error: new Error(GATEWAY_CONNECTION_CLOSED_MESSAGE), state: 'open', readable: false, toast: true },
++    { error: new JsonRpcGatewayError(GATEWAY_CONNECTION_CLOSED_MESSAGE, { code: -32000 }), state: 'connecting', readable: false, toast: true },
++    { error: new Error('Could not resume session'), state: 'connecting', readable: false, toast: true },
++    { error: new Error(GATEWAY_CONNECTION_CLOSED_MESSAGE), state: 'connecting', readable: false, switchProfile: true, toast: true }
++  ] as const)('keeps local resume recovery and scopes the toast ($state, $readable, $toast, $switchProfile)', async test => {
++    const { error, state, readable, toast } = test
++    setConnection({ mode: 'local', connectionId: 'local' } as never)
++    $activeGatewayProfile.set('default')
++    $gatewayState.set(state)
++    const requestGateway = vi.fn(async (method: string) => {
++      if (method === 'session.resume') {
++        if ('switchProfile' in test) {
++          $activeGatewayProfile.set('different-profile')
++        }
++        throw error
++      }
++
++      return {} as never
++    })
++
++    if (readable) {
++      vi.mocked(getLatestSessionMessages).mockResolvedValue({
++        messages: [{ role: 'user', content: 'Kept Local transcript' }]
++      } as never)
++    } else {
++      vi.mocked(getLatestSessionMessages).mockRejectedValue(new Error('Fixture history unavailable'))
++    }
++
++    await runResume(requestGateway)
++
++    expect($resumeFailedSessionId.get()).toBe(readable ? null : 'stored-1')
++    if (readable) {
++      expect($messages.get()).toHaveLength(1)
++    }
++    expect($notifications.get().some(item => item.title === 'Resume failed')).toBe(toast)
++  })
++
+   it('arms $resumeFailedSessionId when resume RPC and REST fallback both fail', async () => {
+@@ -2134,2 +2181,44 @@ describe('resumeSession failure recovery', () => {
 
 +  it('keeps clarification Retry when prefetched history survived and the fallback read failed', async () => {
 +    const runtimeResume = deferred<never>()
@@ -35041,38 +35099,54 @@ index c680caa29188fef832912e202eceb2f84d6d972e..092a4aa2c5f850eaddea9ea2a2c082a5
 +
    it('preserves an optimistic user message during a same-session reconnect', async () => {
 diff --git a/apps/desktop/src/app/session/hooks/use-session-actions/index.ts b/apps/desktop/src/app/session/hooks/use-session-actions/index.ts
-index 75a4e608afbc77db7c82d1f02264e62690139620..c01965200c060954f2b6211301b7dbf378b148aa 100644
+index 75a4e608afbc77db7c82d1f02264e62690139620..285e98dc95249168f9179460e612bc293a0056ef 100644
 --- a/apps/desktop/src/app/session/hooks/use-session-actions/index.ts
 +++ b/apps/desktop/src/app/session/hooks/use-session-actions/index.ts
-@@ -38,3 +38,3 @@ import { setSessionYolo } from '@/lib/yolo-session'
+@@ -1,2 +1,2 @@
+-import { mergeUsage } from '@hermes/shared'
++import { JsonRpcGatewayError, LOCAL_CONNECTION_ID, mergeUsage } from '@hermes/shared'
+ import { useStore } from '@nanostores/react'
+@@ -5,2 +5,3 @@ import type { NavigateFunction } from 'react-router'
+
++import { GATEWAY_CONNECTION_CLOSED_MESSAGE, GATEWAY_NOT_CONNECTED_MESSAGE } from '@/api/client'
+ import { NO_PROJECT_ID } from '@/app/chat/sidebar/projects/workspace-groups'
+@@ -38,3 +39,3 @@ import { setSessionYolo } from '@/lib/yolo-session'
  import { $clarifyRequests, clearClarifyRequest } from '@/store/clarify'
 -import { announceGoneSessionDraft, announceNewSessionDraftKey, migrateSessionDraft } from '@/store/composer'
 +import { announceGoneSessionDraft, announceNewSessionDraftKey, migrateSessionDrafts } from '@/store/composer'
  import { clearQueuedPrompts, migrateQueuedPrompts } from '@/store/composer-queue'
-@@ -71,2 +71,3 @@ import {
+@@ -42,3 +43,3 @@ import { resetSessionBackground } from '@/store/composer-status'
+ import { $connectionRequests } from '@/store/connection-request'
+-import { pendingSessionReplay, requestGatewayForAgent, retainGatewayForAgent } from '@/store/gateway'
++import { gatewayActivationEpoch, isActivePrimary, pendingSessionReplay, requestGatewayForAgent, retainGatewayForAgent } from '@/store/gateway'
+ import { $gatewaySwitching } from '@/store/gateway-switch'
+@@ -69,4 +70,6 @@ import {
+   $currentCwd,
++  $gatewayState,
+   $messages,
    $newChatWorkspaceTarget,
 +  $primaryClarifyReattach,
    $sessions,
-@@ -101,2 +102,3 @@ import {
+@@ -101,2 +104,3 @@ import {
  import { clearSessionControl } from '@/store/session-control'
 +import { createdDraftOwner, sessionDraftOwner } from '@/store/session-draft-owner'
  import { $focusedStoredSessionId } from '@/store/session-focus'
-@@ -111,2 +113,3 @@ import {
+@@ -111,2 +115,3 @@ import {
  import {
 +  isSessionOwnerRoute,
    requestForSessionProfile,
-@@ -532,4 +535,3 @@ export function useSessionActions({
+@@ -532,4 +537,3 @@ export function useSessionActions({
 
 -    migrateSessionDraft(previousId, durableKey)
 -    migrateSessionDraft(nextId, durableKey)
 +    migrateSessionDrafts([previousId, nextId], durableKey, sessionDraftOwner(activeSessionId))
      migrateQueuedPrompts(previousId, durableKey)
-@@ -791,3 +793,3 @@ export function useSessionActions({
+@@ -791,3 +795,3 @@ export function useSessionActions({
            // to this chat now (#114122); the composer moves it on scope swap.
 -          announceNewSessionDraftKey(stored)
 +          announceNewSessionDraftKey(stored, createdDraftOwner(capturedRoute, capturedProfile))
            // The draft's preview tabs follow it the same way (#73890).
-@@ -2027,2 +2029,8 @@ export function useSessionActions({
+@@ -2027,2 +2031,8 @@ export function useSessionActions({
 
 +      const previousRuntimeId = viewRuntimeId ?? runtimeIdByStoredSessionIdRef.current.get(storedSessionId)
 +      const pendingQuestion = $clarifyRequests.get()[previousRuntimeId ?? storedSessionId]
@@ -35081,16 +35155,29 @@ index 75a4e608afbc77db7c82d1f02264e62690139620..c01965200c060954f2b6211301b7dbf3
 +      $primaryClarifyReattach.set(clarifyReattach)
 +
        let resumedRunning = false
-@@ -2438,2 +2446,3 @@ export function useSessionActions({
+@@ -2033,2 +2043,12 @@ export function useSessionActions({
+
++      const resumeConnection = $connection.get()
++      const resumeConnectionId = resumeConnection?.connectionId || LOCAL_CONNECTION_ID
++      const resumeProfile = normalizeProfileKey($activeGatewayProfile.get())
++      const resumeEpoch = gatewayActivationEpoch()
++      const resumesForegroundLocal =
++        isActivePrimary() &&
++        resumeConnection?.mode === 'local' &&
++        (!resolvedConnectionId || resolvedConnectionId === resumeConnectionId) &&
++        normalizeProfileKey(ownerRoute?.profile || sessionProfile || resumeProfile) === resumeProfile
++
+       try {
+@@ -2438,2 +2458,3 @@ export function useSessionActions({
          let fallbackError: unknown = null
 +        let hasReadableHistory = viewMessagesForReconcile().length > 0
 
-@@ -2461,2 +2470,4 @@ export function useSessionActions({
+@@ -2461,2 +2482,4 @@ export function useSessionActions({
            }
 +
 +          hasReadableHistory = fallback.messages.length > 0
          } catch (e) {
-@@ -2473,2 +2484,22 @@ export function useSessionActions({
+@@ -2473,2 +2496,22 @@ export function useSessionActions({
 
 +        // A completed prefetch can leave readable history even if the fallback read failed.
 +        const currentQuestion = $clarifyRequests.get()[previousRuntimeId ?? storedSessionId]
@@ -35113,12 +35200,34 @@ index 75a4e608afbc77db7c82d1f02264e62690139620..c01965200c060954f2b6211301b7dbf3
 +        }
 +
          // #94724 no-owner recovery: the owner ladder failed closed — which is
-@@ -2563,3 +2594,3 @@ export function useSessionActions({
+@@ -2563,3 +2606,3 @@ export function useSessionActions({
            // inline, undoable notice instead of leaving it stranded.
 -          announceGoneSessionDraft(storedSessionId)
 +          announceGoneSessionDraft(storedSessionId, sessionDraftOwner(storedSessionId, ownerRoute))
            startFreshSessionDraft(true)
-@@ -2588,2 +2619,6 @@ export function useSessionActions({
+@@ -2584,3 +2627,20 @@ export function useSessionActions({
+
+-        notifyError(err, copy.resumeFailed)
++        // The route already resumes again when its Local gateway reopens.
++        const connection = $connection.get()
++        const localTransportInterrupted =
++          err instanceof Error &&
++          !(err instanceof JsonRpcGatewayError) &&
++          (err.message === GATEWAY_CONNECTION_CLOSED_MESSAGE || err.message === GATEWAY_NOT_CONNECTED_MESSAGE) &&
++          resumesForegroundLocal &&
++          resumeEpoch === gatewayActivationEpoch() &&
++          resumeProfile === normalizeProfileKey($activeGatewayProfile.get()) &&
++          connection?.mode === 'local' &&
++          resumeConnectionId === (connection.connectionId || LOCAL_CONNECTION_ID) &&
++          isActivePrimary() &&
++          !$gatewaySwitching.get() &&
++          $gatewayState.get() !== 'open'
++
++        if (!localTransportInterrupted) {
++          notifyError(err, copy.resumeFailed)
++        }
+       } finally {
+@@ -2588,2 +2648,6 @@ export function useSessionActions({
 
 +        if (clarifyReattach && $primaryClarifyReattach.get() === clarifyReattach) {
 +          $primaryClarifyReattach.set(null)
