@@ -35066,7 +35066,7 @@ index b504be19559ad3a91439f14fdfb6ff85c69aeee1..f88ef5f71e21e258404a966196a661f1
 +  requireIdempotentSubmit?: boolean
    attachments?: ComposerAttachment[]
 diff --git a/apps/desktop/src/app/session/hooks/use-session-actions.test.tsx b/apps/desktop/src/app/session/hooks/use-session-actions.test.tsx
-index c680caa29188fef832912e202eceb2f84d6d972e..ebc6bb90ecae116e43252368337865dda3e50409 100644
+index c680caa29188fef832912e202eceb2f84d6d972e..26b10f935193e016d267b91c555ba2a412fc49b5 100644
 --- a/apps/desktop/src/app/session/hooks/use-session-actions.test.tsx
 +++ b/apps/desktop/src/app/session/hooks/use-session-actions.test.tsx
 @@ -1,2 +1,2 @@
@@ -35092,9 +35092,27 @@ index c680caa29188fef832912e202eceb2f84d6d972e..ebc6bb90ecae116e43252368337865dd
 +    setConnection(null)
 +    $primaryClarifyReattach.set(null)
      setActiveSessionId(null)
-@@ -2047,2 +2054,42 @@ describe('resumeSession failure recovery', () => {
+@@ -2047,2 +2054,60 @@ describe('resumeSession failure recovery', () => {
 
++  const drainRefusal = new JsonRpcGatewayError('runtime_draining', {
++    code: 4001, data: { reason: 'runtime_draining' }
++  })
++
 +  it.each([
++    { error: drainRefusal, state: 'connecting', readable: true, toast: false },
++    { error: drainRefusal, state: 'closed', readable: false, toast: false },
++    { error: drainRefusal, state: 'open', readable: false, toast: true },
++    { error: drainRefusal, state: 'connecting', readable: false, switchProfile: true, toast: true },
++    {
++      error: new JsonRpcGatewayError('runtime_draining', {
++        code: 4001, data: { reason: 'runtime_draining', field: 'profile', detail: 'the routed profile is parked' }
++      }),
++      state: 'connecting', readable: false, toast: true
++    },
++    {
++      error: new JsonRpcGatewayError('runtime_draining', { code: 4001, data: { reason: 'permission_denied' } }),
++      state: 'connecting', readable: false, toast: true
++    },
 +    { error: new Error(GATEWAY_CONNECTION_CLOSED_MESSAGE), state: 'connecting', readable: true, toast: false },
 +    { error: new Error(GATEWAY_NOT_CONNECTED_MESSAGE), state: 'closed', readable: false, toast: false },
 +    { error: new Error(GATEWAY_CONNECTION_CLOSED_MESSAGE), state: 'open', readable: false, toast: true },
@@ -35135,7 +35153,7 @@ index c680caa29188fef832912e202eceb2f84d6d972e..ebc6bb90ecae116e43252368337865dd
 +  })
 +
    it('arms $resumeFailedSessionId when resume RPC and REST fallback both fail', async () => {
-@@ -2134,2 +2181,44 @@ describe('resumeSession failure recovery', () => {
+@@ -2134,2 +2199,44 @@ describe('resumeSession failure recovery', () => {
 
 +  it('keeps clarification Retry when prefetched history survived and the fallback read failed', async () => {
 +    const runtimeResume = deferred<never>()
@@ -35181,7 +35199,7 @@ index c680caa29188fef832912e202eceb2f84d6d972e..ebc6bb90ecae116e43252368337865dd
 +
    it('preserves an optimistic user message during a same-session reconnect', async () => {
 diff --git a/apps/desktop/src/app/session/hooks/use-session-actions/index.ts b/apps/desktop/src/app/session/hooks/use-session-actions/index.ts
-index 75a4e608afbc77db7c82d1f02264e62690139620..285e98dc95249168f9179460e612bc293a0056ef 100644
+index 75a4e608afbc77db7c82d1f02264e62690139620..4b2396d2b609c49e69d29b84c20e98fddadb7762 100644
 --- a/apps/desktop/src/app/session/hooks/use-session-actions/index.ts
 +++ b/apps/desktop/src/app/session/hooks/use-session-actions/index.ts
 @@ -1,2 +1,2 @@
@@ -35287,15 +35305,25 @@ index 75a4e608afbc77db7c82d1f02264e62690139620..285e98dc95249168f9179460e612bc29
 -          announceGoneSessionDraft(storedSessionId)
 +          announceGoneSessionDraft(storedSessionId, sessionDraftOwner(storedSessionId, ownerRoute))
            startFreshSessionDraft(true)
-@@ -2584,3 +2627,20 @@ export function useSessionActions({
+@@ -2584,3 +2627,30 @@ export function useSessionActions({
 
 -        notifyError(err, copy.resumeFailed)
 +        // The route already resumes again when its Local gateway reopens.
 +        const connection = $connection.get()
-+        const localTransportInterrupted =
-+          err instanceof Error &&
-+          !(err instanceof JsonRpcGatewayError) &&
-+          (err.message === GATEWAY_CONNECTION_CLOSED_MESSAGE || err.message === GATEWAY_NOT_CONNECTED_MESSAGE) &&
++        const refusal = (err instanceof JsonRpcGatewayError ? err.data : null) as
++          | { detail?: unknown; field?: unknown; reason?: unknown }
++          | null
++          | undefined
++        const resumeInterrupted =
++          err instanceof JsonRpcGatewayError
++            ? err.code === 4001 &&
++              refusal?.reason === 'runtime_draining' &&
++              refusal.field === undefined &&
++              refusal.detail === undefined
++            : err instanceof Error &&
++              (err.message === GATEWAY_CONNECTION_CLOSED_MESSAGE || err.message === GATEWAY_NOT_CONNECTED_MESSAGE)
++        const localReconnectOwnsResume =
++          resumeInterrupted &&
 +          resumesForegroundLocal &&
 +          resumeEpoch === gatewayActivationEpoch() &&
 +          resumeProfile === normalizeProfileKey($activeGatewayProfile.get()) &&
@@ -35305,11 +35333,11 @@ index 75a4e608afbc77db7c82d1f02264e62690139620..285e98dc95249168f9179460e612bc29
 +          !$gatewaySwitching.get() &&
 +          $gatewayState.get() !== 'open'
 +
-+        if (!localTransportInterrupted) {
++        if (!localReconnectOwnsResume) {
 +          notifyError(err, copy.resumeFailed)
 +        }
        } finally {
-@@ -2588,2 +2648,6 @@ export function useSessionActions({
+@@ -2588,2 +2658,6 @@ export function useSessionActions({
 
 +        if (clarifyReattach && $primaryClarifyReattach.get() === clarifyReattach) {
 +          $primaryClarifyReattach.set(null)

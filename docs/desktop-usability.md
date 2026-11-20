@@ -76,10 +76,10 @@ while the Local backend and fresh ticket are being prepared. Tabs and drafts
 stay open. A status next to a draft explains why Send is disabled, even while
 you keep typing. The status clears when the connection is ready. When
 reconnect interrupts the open Chat, it tries to resume again after the
-Local gateway returns. A temporary socket closure does not raise a
-second error over the reconnect status. A split Chat waiting to resume shows
-its connection status until the gateway is ready, then returns to its
-session loader. If the Local runtime refuses to start because it needs repair,
+Local gateway returns. During recovery, a closed socket or shutdown refusal
+uses the existing reconnect status. A split Chat waiting to resume shows its
+connection status until the gateway is ready, then returns to its session
+loader. If the Local runtime refuses to start because it needs repair,
 its error explains why automatic retries stop. After fixing the reported
 issue, choose **Reconnect now** on the error to retry that Local connection.
 
