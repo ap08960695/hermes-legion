@@ -261,3 +261,7 @@ If you have moved to another pane, focus stays there.
 If Local disconnects while you are drafting a clarification answer,
 your selections and text reappear when the same pending question
 returns in that chat. Review the draft and confirm when you are ready.
+
+When Monitor refreshes after Local reconnect, a pending question
+can appear alongside a provider warning for the same bot. **Open chat**
+returns to the question, and the warning stays in the Attention column.
