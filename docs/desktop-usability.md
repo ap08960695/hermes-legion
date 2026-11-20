@@ -85,6 +85,7 @@ connection status until the gateway is ready, then returns to its session
 loader. If the Local runtime refuses to start because it needs repair,
 its error explains why automatic retries stop. After fixing the reported
 issue, choose **Reconnect now** on the error to retry that Local connection.
+Open split Chats on the shared Local gateway reattach across profiles.
 
 ## Verification boundaries
 
