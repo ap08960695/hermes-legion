@@ -152,8 +152,9 @@ unless you move it, so you can press Enter again after a refusal.
 You can go back and reopen Gateway settings during the request.
 The recovery screen shows **Gateway connection restarting** while the
 same request is pending. **Retry** becomes available again when it
-finishes. If the request fails, the error remains available when you
-return to Gateway settings.
+finishes. If the request fails after Back, the recovery screen shows
+**Could not apply gateway settings**. Gateway settings still shows the
+reason. A fresh **Retry** clears the previous notice.
 If the Local runtime refuses to start because it needs repair,
 its error explains why automatic retries stop. After fixing the reported
 issue, choose **Reconnect now** on the error to retry that Local connection.
