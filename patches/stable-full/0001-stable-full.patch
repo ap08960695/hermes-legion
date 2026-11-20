@@ -32264,7 +32264,7 @@ index 0000000000000000000000000000000000000000..ff3b0cf782467a04c2132b64a01a21d2
 +  return true
 +}
 diff --git a/apps/desktop/src/app/open-session.test.ts b/apps/desktop/src/app/open-session.test.ts
-index 0396d9d2ea307c34440c0269579c6172ee3543b7..baabe0c35aff5fb2023448a2778160beed4b2d6b 100644
+index 0396d9d2ea307c34440c0269579c6172ee3543b7..2c17bfbf47dd602d11f8e53e783453d4f67d3052 100644
 --- a/apps/desktop/src/app/open-session.test.ts
 +++ b/apps/desktop/src/app/open-session.test.ts
 @@ -2,2 +2,3 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -32430,7 +32430,7 @@ index 0396d9d2ea307c34440c0269579c6172ee3543b7..baabe0c35aff5fb2023448a2778160be
 +  })
 +
    // #62045: picking the session this window already shows must still be an
-@@ -287,5 +403,73 @@ describe('openSession', () => {
+@@ -287,5 +403,113 @@ describe('openSession', () => {
 
 +  it.each(['main', 'tile', 'no window bridge'])('isolates a different owner when a same-ID chat is open (%s)', placement => {
 +    const id = 'same-history-id'
@@ -32459,6 +32459,46 @@ index 0396d9d2ea307c34440c0269579c6172ee3543b7..baabe0c35aff5fb2023448a2778160be
 +      expect(getSessionOwnerHints(id)).toEqual([currentOwner])
 +      expect(focusOpenSession).not.toHaveBeenCalled()
 +      expect(navigate).not.toHaveBeenCalled()
++    } finally {
++      forgetSessionOwnerHintsForSession(id)
++    }
++  })
++
++  it.each(['stash', 'queue', 'legacy stash'])('keeps a fresh main draft when opening a saved row (%s)', payload => {
++    const id = 'history-row-with-fresh-draft'
++    const owner = sessionDraftOwner(null)
++    const ownerRoute = { connectionId: 'local', profile: 'research' }
++    const legacy = payload === 'legacy stash'
++    const row = makeSessionInfo({ id, ...(legacy ? {} : { connection_id: 'local', profile: 'research' }) })
++
++    if (payload === 'queue') {
++      enqueueQueuedPrompt(freshDraftScope(), { attachments: [], text: 'queued checklist' })
++    } else {
++      stashSessionDraft(null, 'unsent checklist', [], owner)
++    }
++
++    try {
++      openSessionFromRow(id, navigate, row)
++
++      expect(navigate).not.toHaveBeenCalled()
++      expect(openSessionTile).toHaveBeenCalledExactlyOnceWith(
++        id, 'center', undefined, undefined, legacy ? undefined : { workspaceMode: 'sessions', ownerRoute }
++      )
++      expect($sessionResumeRequest.get()?.ownerRoute).toEqual(legacy ? undefined : ownerRoute)
++    } finally {
++      clearSessionDraft(null, owner)
++      forgetSessionOwnerHintsForSession(id)
++    }
++  })
++
++  it('uses the main tab for a saved row when its fresh draft is empty', () => {
++    const id = 'history-row-empty-main'
++
++    try {
++      openSessionFromRow(id, navigate, makeSessionInfo({ id, connection_id: 'local', profile: 'research' }))
++
++      expect(navigate).toHaveBeenCalledExactlyOnceWith('/c/history-row-empty-main')
++      expect(openSessionTile).not.toHaveBeenCalled()
 +    } finally {
 +      forgetSessionOwnerHintsForSession(id)
 +    }
@@ -32505,13 +32545,13 @@ index 0396d9d2ea307c34440c0269579c6172ee3543b7..baabe0c35aff5fb2023448a2778160be
 -    expect(openSessionInNewWindow).toHaveBeenCalledWith('s1')
 +    expect(openSessionInNewWindow).toHaveBeenCalledWith('s1', { workspaceMode: 'sessions' })
      expect(openSessionTile).not.toHaveBeenCalled()
-@@ -298,3 +482,3 @@ describe('openSession', () => {
+@@ -298,3 +522,3 @@ describe('openSession', () => {
      expect(openSessionInNewWindow).not.toHaveBeenCalled()
 -    expect(openSessionTile).toHaveBeenCalledWith('s1', 'center')
 +    expect(openSessionTile).toHaveBeenCalledWith('s1', 'center', undefined, undefined, undefined)
    })
 diff --git a/apps/desktop/src/app/open-session.ts b/apps/desktop/src/app/open-session.ts
-index b4da7a42c45061d676c88b5b49f77b66aabcf4a7..678ec1eee22ad7499939ff0149affd402d4867c6 100644
+index b4da7a42c45061d676c88b5b49f77b66aabcf4a7..a6006cd1c8859cf6ede4fac468c8e968024b1540 100644
 --- a/apps/desktop/src/app/open-session.ts
 +++ b/apps/desktop/src/app/open-session.ts
 @@ -17,4 +17,13 @@
@@ -32559,7 +32599,7 @@ index b4da7a42c45061d676c88b5b49f77b66aabcf4a7..678ec1eee22ad7499939ff0149affd40
 +}
 +
  /** Read modifiers the way session rows do — meta OR ctrl for tab, +shift for
-@@ -88,20 +116,34 @@ export function openSessionFromPicker(
+@@ -88,20 +116,36 @@ export function openSessionFromPicker(
    navigate: OpenSessionNavigate,
 -  intent: OpenSessionIntent = 'in-place'
 +  intent: OpenSessionIntent = 'in-place',
@@ -32596,9 +32636,11 @@ index b4da7a42c45061d676c88b5b49f77b66aabcf4a7..678ec1eee22ad7499939ff0149affd40
 +  session?: SessionInfo
 +): void {
 +  const ownerRoute = sessionOwnerRouteFromRow(session)
++  const freshMain = !mainChatOccupied($activeSessionId.get(), $selectedStoredSessionId.get())
++  const intent = freshMain && mainDraftHasPayload() ? 'tab' : 'in-place'
 +
 +  if (ownerRoute) {
-+    openSessionFromPicker(storedSessionId, navigate, 'in-place', ownerRoute)
++    openSessionFromPicker(storedSessionId, navigate, intent, ownerRoute)
 +
 +    return
 +  }
@@ -32606,15 +32648,15 @@ index b4da7a42c45061d676c88b5b49f77b66aabcf4a7..678ec1eee22ad7499939ff0149affd40
 +  // Untagged rows use ambient routing. A stale hint can pin them to another device.
 +  forgetSessionOwnerHintsForSession(storedSessionId)
 +  requestSessionResume(storedSessionId)
-+  openSession(storedSessionId, navigate)
++  openSession(storedSessionId, navigate, intent)
  }
-@@ -116,3 +158,4 @@ export function openSession(
+@@ -116,3 +160,4 @@ export function openSession(
    intent: OpenSessionIntent = 'in-place',
 -  workspaceScope: OpenSessionWorkspaceScope = { workspaceMode: 'sessions' }
 +  workspaceScope: OpenSessionWorkspaceScope = { workspaceMode: 'sessions' },
 +  beforePlacement?: () => void
  ): void {
-@@ -122,2 +165,8 @@ export function openSession(
+@@ -122,2 +167,8 @@ export function openSession(
 
 +  if (openConflictingSessionInWindow(storedSessionId, workspaceScope)) {
 +    return
@@ -32623,23 +32665,23 @@ index b4da7a42c45061d676c88b5b49f77b66aabcf4a7..678ec1eee22ad7499939ff0149affd40
 +  beforePlacement?.()
 +
    // Any explicit open/focus means the user has seen the finished-turn marker.
-@@ -130,2 +179,5 @@ export function openSession(
+@@ -130,2 +181,5 @@ export function openSession(
 
 +  const tileScope =
 +    botWorkspaceScope || workspaceScope.ownerRoute || workspaceScope.ownerProfile ? workspaceScope : undefined
 +
    let resolved: OpenSessionIntent = intent
-@@ -134,3 +186,3 @@ export function openSession(
+@@ -134,3 +188,3 @@ export function openSession(
      if (canOpenSessionWindow()) {
 -      void openSessionInNewWindow(storedSessionId)
 +      void openSessionInNewWindow(storedSessionId, workspaceScope)
 
-@@ -167,3 +219,3 @@ export function openSession(
+@@ -167,3 +221,3 @@ export function openSession(
        Boolean(botWorkspaceScope) || mainChatOccupied($activeSessionId.get(), $selectedStoredSessionId.get())
 -    resolved = spendBlankDraft ? 'tab' : 'in-place'
 +    resolved = spendBlankDraft || mainDraftHasPayload() ? 'tab' : 'in-place'
    }
-@@ -187,8 +239,3 @@ export function openSession(
+@@ -187,8 +241,3 @@ export function openSession(
      // stacking a second blank one beside it.
 -    if (
 -      spendBlankDraft &&
@@ -32649,7 +32691,7 @@ index b4da7a42c45061d676c88b5b49f77b66aabcf4a7..678ec1eee22ad7499939ff0149affd40
 -    ) {
 +    if (spendBlankDraft && reuseBlankDraftTile(storedSessionId, tileScope)) {
        return
-@@ -196,7 +243,3 @@ export function openSession(
+@@ -196,7 +245,3 @@ export function openSession(
 
 -    if (botWorkspaceScope) {
 -      openSessionTile(storedSessionId, 'center', undefined, undefined, botWorkspaceScope)
