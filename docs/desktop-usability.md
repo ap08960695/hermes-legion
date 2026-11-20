@@ -90,7 +90,9 @@ can’t confirm the reset, the dialog keeps its open diagnostics and lets you
 choose **Retry** again. Keyboard focus stays on **Retry** while Desktop waits
 unless you move it.
 In a small window, scroll the recovery dialog to read **Details** and recent
-logs while keeping the recovery buttons reachable.
+logs while keeping the recovery buttons reachable. Opening **Gateway settings**
+from recovery moves keyboard focus to **Back**. Going back returns focus to
+**Gateway settings**.
 If the Local runtime refuses to start because it needs repair,
 its error explains why automatic retries stop. After fixing the reported
 issue, choose **Reconnect now** on the error to retry that Local connection.
