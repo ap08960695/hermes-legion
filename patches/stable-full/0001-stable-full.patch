@@ -62595,10 +62595,10 @@ index 0000000000000000000000000000000000000000..9da7826ee789e78c331d8f560234fa23
 +}
 diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox-data.ts b/apps/desktop/src/plugins/hermes-bots/owner-inbox-data.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..89b69a2fad6529a5503b8d56d88fdba43e0094d0
+index 0000000000000000000000000000000000000000..b52daa0825bb668536b7b4e67aadfe696957df46
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox-data.ts
-@@ -0,0 +1,181 @@
+@@ -0,0 +1,182 @@
 +import { host, type OwnerInboxItem, type OwnerInboxList, type OwnerInboxResponse, useValue } from '@hermes/plugin-sdk'
 +import { atom } from 'nanostores'
 +import { useEffect, useRef, useState } from 'react'
@@ -62631,7 +62631,7 @@ index 0000000000000000000000000000000000000000..89b69a2fad6529a5503b8d56d88fdba4
 +  const socketState = useValue(host.state.gateway)
 +  const gateway = socketState === 'open' ? host.getGateway() : null
 +  const [snapshot, setSnapshot] = useState<InboxSnapshot | null>(null)
-+  const retryRead = useRef<(() => void) | null>(null)
++  const refreshRead = useRef<((manual?: boolean) => void) | null>(null)
 +  const readyScope = useRef<(() => boolean) | null>(null)
 +  const invalidateRead = useRef<(() => void) | null>(null)
 +  const [pending] = useState(() => atom<PendingResponse[]>([]))
@@ -62704,9 +62704,9 @@ index 0000000000000000000000000000000000000000..89b69a2fad6529a5503b8d56d88fdba4
 +      reading = false
 +    }
 +
-+    retryRead.current = () => {
++    refreshRead.current = manual => {
 +      if (isCurrentScope()) {
-+        void refresh(true)
++        void refresh(manual)
 +      }
 +    }
 +    const off = gateway.onEvent(event => {
@@ -62718,7 +62718,7 @@ index 0000000000000000000000000000000000000000..89b69a2fad6529a5503b8d56d88fdba4
 +    return () => {
 +      readyScope.current = null
 +      invalidateRead.current = null
-+      retryRead.current = null
++      refreshRead.current = null
 +      lifetime.abort()
 +      off()
 +
@@ -62735,7 +62735,8 @@ index 0000000000000000000000000000000000000000..89b69a2fad6529a5503b8d56d88fdba4
 +    connected: Boolean(gateway),
 +    items: (connection === 'local' ? scoped : current)?.items ?? [],
 +    status: current?.status ?? (gateway ? 'loading' : 'unavailable'),
-+    retry: () => retryRead.current?.(),
++    refresh: () => refreshRead.current?.(),
++    retry: () => refreshRead.current?.(true),
 +    retrying: current?.retrying ?? false,
 +    isResponding: (prompt: OwnerInboxItem) => includesResponse(responses, ownerPromptKey(prompt)),
 +    async respond(prompt: OwnerInboxItem, value: string) {
@@ -62782,10 +62783,10 @@ index 0000000000000000000000000000000000000000..89b69a2fad6529a5503b8d56d88fdba4
 +}
 diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx b/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..b933b20564eafb1e0c585323bfb12dc1f9d6666d
+index 0000000000000000000000000000000000000000..751559c3f5fec2f13f525a15ea6b0367905a2935
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx
-@@ -0,0 +1,905 @@
+@@ -0,0 +1,955 @@
 +import { host, type OwnerInboxItem } from '@hermes/plugin-sdk'
 +import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 +import { atom } from 'nanostores'
@@ -63139,6 +63140,56 @@ index 0000000000000000000000000000000000000000..b933b20564eafb1e0c585323bfb12dc1
 +
 +  expect(inbox.request.mock.calls.some(([method]) => method === 'owner_inbox.respond')).toBe(false)
 +})
++
++it.each(['expired', 'matching', 'another owner', 'failed', 'dismissed'])(
++  'rechecks the inbox only after a current Local open loses its listed question (%s)',
++  async scenario => {
++    const question = prompt('writer', 'Old pending question?', { chat_session_id: 'saved-writer' })
++    const peer = prompt('tester', 'Still pending?')
++    const inbox = fixture([question, peer])
++    vi.spyOn(host.state.focusedStoredSessionId, 'get').mockReturnValue('saved-writer')
++    vi.spyOn(host.state.focusedSessionOwner, 'get').mockReturnValue({
++      connectionId: 'local', profile: scenario === 'another owner' ? 'tester' : 'writer'
++    })
++    vi.spyOn(host.state.focusedClarification, 'get').mockReturnValue(scenario === 'matching'
++      ? { connectionId: 'local', profile: 'writer', storedSessionId: 'saved-writer', requestId: question.prompt_id }
++      : null)
++    let finish!: () => void
++    inbox.open.mockImplementationOnce(() => new Promise<void>((resolve, reject) => {
++      finish = () => scenario === 'failed' ? reject(new Error('Fixture snapshot failed')) : resolve()
++    }))
++    inbox.mount()
++    const badge = await screen.findByRole('button', { name: 'Waiting for owner 2' })
++    fireEvent.click(badge)
++
++    let stale!: () => void
++    let fresh!: () => void
++    inbox.request.mockImplementationOnce(() => new Promise(resolve => {
++      stale = () => resolve({ items: [question, peer] })
++    })).mockImplementationOnce(() => new Promise(resolve => {
++      fresh = () => resolve({ items: [peer] })
++    }))
++    act(() => inbox.emit())
++    const action = within(screen.getByText(question.question!).closest('li')!).getByRole('button', { name: 'Open chat' })
++    action.focus()
++    fireEvent.click(action)
++    if (scenario === 'dismissed') fireEvent.click(screen.getByRole('button', { name: 'Close' }))
++    await act(async () => finish())
++    expect(inbox.request.mock.calls.map(([method]) => method)).toEqual(Array(2).fill('owner_inbox.list'))
++
++    await act(async () => stale())
++    expect(inbox.request.mock.calls.map(([method]) => method)).toEqual(
++      Array(scenario === 'expired' ? 3 : 2).fill('owner_inbox.list')
++    )
++    expect(screen.getByRole('button', { name: 'Waiting for owner 2', hidden: true })).toBe(badge)
++    if (scenario === 'expired') {
++      await act(async () => fresh())
++      fireEvent.click(await screen.findByRole('button', { name: 'Waiting for owner 1' }))
++      expect(screen.getByText(peer.question!)).toBeTruthy()
++      expect(screen.queryByText(question.question!)).toBeNull()
++    }
++  }
++)
 +
 +it('opens one chat at a time and keeps focus on the busy action', async () => {
 +  const inbox = fixture([prompt('tester', 'First question?'), prompt('writer', 'Second question?')])
@@ -63693,10 +63744,10 @@ index 0000000000000000000000000000000000000000..b933b20564eafb1e0c585323bfb12dc1
 +)
 diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx b/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..35be1d33e16cb6a412379cd4a49b9ec4c8b0d739
+index 0000000000000000000000000000000000000000..baca7b9ecf28e77f003e89f7f52f8838710104f4
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx
-@@ -0,0 +1,367 @@
+@@ -0,0 +1,376 @@
 +import {
 +  Button, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, host, type OwnerInboxItem, type PluginProfileRoute, relativeTime
 +} from '@hermes/plugin-sdk'
@@ -63848,6 +63899,15 @@ index 0000000000000000000000000000000000000000..35be1d33e16cb6a412379cd4a49b9ec4
 +      })
 +
 +      if (dialogGeneration.current === generation && isCurrentScope()) {
++        const owner = host.state.focusedSessionOwner?.get()
++
++        if (connection === 'local' && prompt.kind === 'clarify' &&
++          host.state.focusedStoredSessionId?.get() === storedId &&
++          owner?.connectionId === connection && owner.profile === prompt.profile &&
++          host.state.focusedClarification?.get()?.requestId !== prompt.prompt_id) {
++          inbox.refresh()
++        }
++
 +        changeOpen(false, prompt.kind === 'clarify' && doc.activeElement === action ? event => {
 +          const live = host.state.focusedClarification?.get()
 +
