@@ -19827,7 +19827,7 @@ index 8d1bf8c1ee56b9b2e8c3ccf91691adf4885577f0..72b6e95dcef349230c3cbde959184e72
 +  return override ?? restingPlaceholder
  }
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-queue.test.tsx b/apps/desktop/src/app/chat/composer/hooks/use-composer-queue.test.tsx
-index 52a543154a6db1f4fd4e4ddaa9b1c789214a346e..e014444df3e2a056a7ea90754be93ccee616e605 100644
+index 52a543154a6db1f4fd4e4ddaa9b1c789214a346e..ab35cd1d41e0ff9ebd385c5ba256e2a0d02fb5f0 100644
 --- a/apps/desktop/src/app/chat/composer/hooks/use-composer-queue.test.tsx
 +++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-queue.test.tsx
 @@ -51,2 +51,3 @@ function renderQueueHook(
@@ -19854,7 +19854,7 @@ index 52a543154a6db1f4fd4e4ddaa9b1c789214a346e..e014444df3e2a056a7ea90754be93cce
 -    { initialProps: { busy: overrides.busy ?? false } }
 +    { initialProps }
    )
-@@ -234,2 +241,87 @@ describe('useComposerQueue park integration', () => {
+@@ -234,2 +241,177 @@ describe('useComposerQueue park integration', () => {
 
 +  it('keeps the automatic retry budget while disconnected and sends once ready', async () => {
 +    vi.useFakeTimers()
@@ -19941,9 +19941,99 @@ index 52a543154a6db1f4fd4e4ddaa9b1c789214a346e..e014444df3e2a056a7ea90754be93cce
 +    }
 +  })
 +
++  it('keeps manual queue delivery inert offline and waits for explicit delivery on Ready', async () => {
++    const first = enqueueQueuedPrompt(SESSION_KEY, { attachments: [], text: 'first' })!
++    const second = enqueueQueuedPrompt(SESSION_KEY, { attachments: [], text: 'second' })!
++    parkQueuedPrompts(SESSION_KEY)
++
++    const onSteer = vi.fn(async () => true)
++    const { hook, onCancel, onSubmit } = renderQueueHook({ busy: true, gatewayReady: false, onSteer })
++
++    await act(async () => {
++      expect(await hook.result.current.sendQueuedNow(second.id)).toBe(false)
++      expect(await hook.result.current.steerQueuedNow(second.id)).toBe(false)
++    })
++    hook.rerender({ busy: false, gatewayReady: false })
++    await act(async () => {
++      expect(await hook.result.current.drainNextQueued()).toBe(false)
++    })
++
++    expect(onSubmit).not.toHaveBeenCalled()
++    expect(onSteer).not.toHaveBeenCalled()
++    expect(onCancel).not.toHaveBeenCalled()
++    expect(isQueueParked(SESSION_KEY)).toBe(true)
++    expect(getQueuedPrompts(SESSION_KEY).map(entry => entry.id)).toEqual([first.id, second.id])
++
++    hook.rerender({ busy: false, gatewayReady: true })
++    expect(onSubmit).not.toHaveBeenCalled()
++    hook.rerender({ busy: true, gatewayReady: true })
++    await act(async () => {
++      expect(await hook.result.current.steerQueuedNow(first.id)).toBe(true)
++    })
++    expect(onSteer).toHaveBeenCalledExactlyOnceWith(first.text)
++  })
++
++  it('keeps a steer that failed after disconnect from falling back to an interrupt', async () => {
++    const entry = enqueueQueuedPrompt(SESSION_KEY, { attachments: [], text: 'held steer' })!
++    parkQueuedPrompts(SESSION_KEY)
++
++    const held = deferred()
++    const onSteer = vi.fn(async () => (await held.promise) === true)
++    const { hook, onCancel } = renderQueueHook({ busy: true, gatewayReady: true, onSteer })
++    const delivery = hook.result.current.deliverQueuedNow(entry.id)
++
++    expect(onSteer).toHaveBeenCalledOnce()
++    hook.rerender({ busy: true, gatewayReady: false })
++    await act(async () => {
++      held.resolve(false)
++      expect(await delivery).toBe(false)
++    })
++
++    expect(onCancel).not.toHaveBeenCalled()
++    expect(isQueueParked(SESSION_KEY)).toBe(true)
++    expect(getQueuedPrompts(SESSION_KEY)).toHaveLength(1)
++  })
++
++  it('keeps the queued row when a manual send acquires its Web Lock offline', async () => {
++    const originalLocks = Object.getOwnPropertyDescriptor(navigator, 'locks')
++    const held = deferred()
++
++    const request = vi.fn(async (_name: string, claim: () => Promise<unknown>) => {
++      await held.promise
++
++      return claim()
++    })
++
++    Object.defineProperty(navigator, 'locks', { configurable: true, value: { request } })
++
++    try {
++      const entry = enqueueQueuedPrompt(SESSION_KEY, { attachments: [], text: 'manual lock' })!
++      parkQueuedPrompts(SESSION_KEY)
++
++      const { hook, onSubmit } = renderQueueHook({ gatewayReady: true })
++      const delivery = hook.result.current.drainNextQueued()
++      expect(request).toHaveBeenCalledOnce()
++      hook.rerender({ busy: false, gatewayReady: false })
++      await act(async () => {
++        held.resolve(true)
++        expect(await delivery).toBe(false)
++      })
++
++      expect(onSubmit).not.toHaveBeenCalled()
++      expect(isQueueParked(SESSION_KEY)).toBe(true)
++      expect(getQueuedPrompts(SESSION_KEY).map(item => item.id)).toEqual([entry.id])
++    } finally {
++      if (originalLocks) {
++        Object.defineProperty(navigator, 'locks', originalLocks)
++      } else {
++        Reflect.deleteProperty(navigator, 'locks')
++      }
++    }
++  })
++
    it('holds a parked queue at the idle settle (the Stop edge)', async () => {
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-queue.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-queue.ts
-index 88de17bec644218de7c6aa6a7893dbe358790d2d..7d07168228ec201603e35aff298fd5901230b4db 100644
+index 88de17bec644218de7c6aa6a7893dbe358790d2d..71a3c232de6670eb542174db00352396857b306f 100644
 --- a/apps/desktop/src/app/chat/composer/hooks/use-composer-queue.ts
 +++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-queue.ts
 @@ -81,2 +81,3 @@ interface UseComposerQueueArgs {
@@ -19954,26 +20044,32 @@ index 88de17bec644218de7c6aa6a7893dbe358790d2d..7d07168228ec201603e35aff298fd590
    focusInput,
 +  gatewayReady = true,
    loadIntoComposer,
-@@ -194,2 +196,3 @@ export function useComposerQueue({
+@@ -192,4 +194,7 @@ export function useComposerQueue({
+   currentQueueKeyRef.current = activeQueueSessionKey
++  const gatewayReadyRef = useRef(gatewayReady)
++  gatewayReadyRef.current = gatewayReady
+   const prevQueueKeyRef = useRef(activeQueueSessionKey)
    const drainingQueueRef = useRef(false)
 +  const reconnectDuringDrainRef = useRef(false)
    const drainFailuresRef = useRef(new Map<string, number>())
-@@ -484,3 +487,6 @@ export function useComposerQueue({
+@@ -484,4 +489,7 @@ export function useComposerQueue({
    const runDrain = useCallback(
 -    async (pickEntry: (entries: QueuedPromptEntry[]) => QueuedPromptEntry | undefined): Promise<boolean | null> => {
+-      if (drainingQueueRef.current || !activeQueueSessionKey) {
 +    async (
 +      pickEntry: (entries: QueuedPromptEntry[]) => QueuedPromptEntry | undefined,
 +      isCurrent?: () => boolean
 +    ): Promise<boolean | null> => {
-       if (drainingQueueRef.current || !activeQueueSessionKey) {
-@@ -496,2 +502,6 @@ export function useComposerQueue({
++      if (!gatewayReadyRef.current || drainingQueueRef.current || !activeQueueSessionKey) {
+         return false
+@@ -496,2 +504,6 @@ export function useComposerQueue({
          return await withQueueDrainClaim(drainQueueSessionKey, async queue => {
-+          if (isCurrent && !isCurrent()) {
++          if (!gatewayReadyRef.current || (isCurrent && !isCurrent())) {
 +            return null
 +          }
 +
            // Server-owned rows already sit in the gateway FIFO; never re-send them.
-@@ -546,2 +556,7 @@ export function useComposerQueue({
+@@ -546,2 +558,7 @@ export function useComposerQueue({
          drainingQueueRef.current = false
 +
 +        if (reconnectDuringDrainRef.current) {
@@ -19981,12 +20077,35 @@ index 88de17bec644218de7c6aa6a7893dbe358790d2d..7d07168228ec201603e35aff298fd590
 +          setDrainRetryTick(tick => tick + 1)
 +        }
        }
-@@ -720,3 +735,3 @@ export function useComposerQueue({
+@@ -564,3 +581,3 @@ export function useComposerQueue({
+     (id: string) => {
+-      if (!activeQueueSessionKey || id === queueEdit?.entryId) {
++      if (!gatewayReadyRef.current || !activeQueueSessionKey || id === queueEdit?.entryId) {
+         return false
+@@ -602,3 +619,9 @@ export function useComposerQueue({
+     async (id: string): Promise<boolean> => {
+-      if (!onSteer || !busy || !activeQueueSessionKey || id === queueEditRef.current?.entryId) {
++      if (
++        !gatewayReadyRef.current ||
++        !onSteer ||
++        !busy ||
++        !activeQueueSessionKey ||
++        id === queueEditRef.current?.entryId
++      ) {
+         return false
+@@ -657,2 +680,6 @@ export function useComposerQueue({
+     async (id: string) => {
++      if (!gatewayReadyRef.current) {
++        return false
++      }
++
+       const entry = activeQueueSessionKey ? getQueuedPrompts(activeQueueSessionKey).find(e => e.id === id) : undefined
+@@ -720,3 +747,3 @@ export function useComposerQueue({
      // window — which is not a failed send.
 -    void runDrain(entries => entries.find(e => e.id === entry.id))
 +    void runDrain(entries => entries.find(e => e.id === entry.id), () => !cancelled)
        .then(sent => {
-@@ -760,7 +775,14 @@ export function useComposerQueue({
+@@ -760,7 +787,14 @@ export function useComposerQueue({
    // edge, on mount/reconnect, and after a re-key — so a swallowed edge can't
 -  // strand them. A park (explicit Stop/Esc) is the one gate: those entries wait
 -  // for the user. To cancel queued turns, the user deletes them from the panel.
@@ -20005,7 +20124,7 @@ index 88de17bec644218de7c6aa6a7893dbe358790d2d..7d07168228ec201603e35aff298fd590
 +
 +    // Match the background drainer: preserve the retry budget during session discovery.
      if (sessionsLoading) {
-@@ -772,3 +794,3 @@ export function useComposerQueue({
+@@ -772,3 +806,3 @@ export function useComposerQueue({
      }
 -  }, [autoDrainNext, busy, drainRetryTick, queueParked, queuedPrompts.length, sessionsLoading])
 +  }, [autoDrainNext, busy, drainRetryTick, gatewayReady, queueParked, queuedPrompts.length, sessionsLoading])
@@ -20857,7 +20976,7 @@ index a6102dfde21bc0bfcd5885140282de3e7d761ff4..af6f340296f8fefccb427782af277ad9
 +  return useLiveCompletionAdapter({ enabled, epoch: `${epoch}:${locale}:${gatewayReady}`, fetcher, isCached, toItem })
  }
 diff --git a/apps/desktop/src/app/chat/composer/index.tsx b/apps/desktop/src/app/chat/composer/index.tsx
-index aee9bf96c50cee698de0c72fff94dc22f26a541f..9c09dbef2ad21b4b2d265997641dcb114d4e21db 100644
+index aee9bf96c50cee698de0c72fff94dc22f26a541f..ce5c6bfe572031afe2be75c6b11291dc00cfba0c 100644
 --- a/apps/desktop/src/app/chat/composer/index.tsx
 +++ b/apps/desktop/src/app/chat/composer/index.tsx
 @@ -29,2 +29,3 @@ import { useStoreSelector, useStoresSelector } from '@/lib/use-session-slice'
@@ -21072,7 +21191,11 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..9c09dbef2ad21b4b2d265997641dcb11
                }}
 +              owner={draftOwner}
                request={requestBusyConfig}
-@@ -1487,6 +1526,15 @@ export function ChatBar({
+@@ -1323,2 +1362,3 @@ export function ChatBar({
+                 busy,
++                deliveryDisabled: disabled,
+                 drainNextQueued,
+@@ -1487,6 +1527,15 @@ export function ChatBar({
                    <ContribSlot area={COMPOSER_AREAS.top} />
 -                  <RestoredDraftNotice
 -                    freshDraft={activeQueueSessionKey === null}
@@ -21948,6 +22071,126 @@ index 0000000000000000000000000000000000000000..a1e8ca3227d14a2334c3903b4a2c4b8e
 +    </Popover>
 +  )
 +}
+diff --git a/apps/desktop/src/app/chat/composer/queue-panel.tsx b/apps/desktop/src/app/chat/composer/queue-panel.tsx
+index 0a1f5fdf858d735cc8752d9cca4b68903b6d74c8..1e73f03e3c545c8879275d1fadbd94cdd46656a2 100644
+--- a/apps/desktop/src/app/chat/composer/queue-panel.tsx
++++ b/apps/desktop/src/app/chat/composer/queue-panel.tsx
+@@ -14,2 +14,3 @@ interface QueuePanelProps {
+   busy: boolean
++  deliveryDisabled?: boolean
+   editingId: null | string
+@@ -42,2 +43,3 @@ export function QueuePanel({
+   busy,
++  deliveryDisabled = false,
+   editingId,
+@@ -126,2 +128,3 @@ export function QueuePanel({
+               c,
++              deliveryDisabled,
+               editingId,
+@@ -177,2 +180,3 @@ export function QueuePanel({
+               className="text-muted-foreground/75 hover:text-foreground/90"
++              disabled={deliveryDisabled}
+               onClick={onResume}
+@@ -200,2 +204,3 @@ interface EntryActionsArgs {
+   canSteer: boolean
++  deliveryDisabled: boolean
+   editingId: null | string
+@@ -217,2 +222,3 @@ function renderEntryActions({
+   canSteer,
++  deliveryDisabled,
+   editingId,
+@@ -262,3 +268,3 @@ function renderEntryActions({
+             className="size-5 rounded-md"
+-            disabled={isEditing}
++            disabled={deliveryDisabled || isEditing}
+             onClick={() => onSteerNow?.(entry.id)}
+@@ -277,3 +283,3 @@ function renderEntryActions({
+             className="size-5 rounded-md"
+-            disabled={isEditing}
++            disabled={deliveryDisabled || isEditing}
+             onClick={() => onSendNow(entry.id)}
+diff --git a/apps/desktop/src/app/chat/composer/queue-slot.test.tsx b/apps/desktop/src/app/chat/composer/queue-slot.test.tsx
+index 26e625be6cfe732706a31cd6539dacaf1cad50d9..b603eb02e1e9f706a9086123fcc8d489d22cad6a 100644
+--- a/apps/desktop/src/app/chat/composer/queue-slot.test.tsx
++++ b/apps/desktop/src/app/chat/composer/queue-slot.test.tsx
+@@ -6,3 +6,3 @@ import { I18nProvider } from '@/i18n/context'
+ import { en } from '@/i18n/en'
+-import { $queuedPromptsBySession, enqueueQueuedPrompt, getQueuedPrompts } from '@/store/composer-queue'
++import { $queuedPromptsBySession, enqueueQueuedPrompt, getQueuedPrompts, isQueueParked, parkQueuedPrompts } from '@/store/composer-queue'
+ import { reconcilePendingSubmissions } from '@/store/pending-submissions'
+@@ -21,2 +21,3 @@ function renderSlot(
+     busy: true,
++    deliveryDisabled: false,
+     drainNextQueued: vi.fn(async () => undefined),
+@@ -74,2 +75,38 @@ it('Delete on a server-queued card cancels its admission at the authority', asyn
+
++it('disables queue delivery during reconnect while local editing and removal stay available', async () => {
++  reconcilePendingSubmissions('stored', [
++    { admission_id: 'adm-1', status: 'queued', user: 'owner words', controls: ['steer'] }
++  ])
++  const local = enqueueQueuedPrompt('stored', { text: 'local words', attachments: [] })!
++  parkQueuedPrompts('stored')
++
++  const request = vi.fn(async () => ({}))
++  const inputs = renderSlot(request, { deliveryDisabled: true, queueParked: true })
++
++  await expand()
++  const localRow = rowButtons(local.text)
++
++  const buttons = [
++    screen.getByRole('button', { name: en.composer.queueResume }),
++    localRow.getByRole('button', { name: en.composer.queueSendNext }),
++    localRow.getByRole('button', { name: en.composer.queueSteer }),
++    rowButtons('owner words').getByRole('button', { name: en.composer.queueSteer })
++  ]
++
++  for (const button of buttons) {
++    expect((button as HTMLButtonElement).disabled).toBe(true)
++    fireEvent.click(button)
++  }
++
++  expect(isQueueParked('stored')).toBe(true)
++  expect(request).not.toHaveBeenCalled()
++  expect(inputs.sendQueuedNow).not.toHaveBeenCalled()
++  expect(inputs.steerQueuedNow).not.toHaveBeenCalled()
++
++  fireEvent.click(localRow.getByRole('button', { name: en.composer.queueEdit }))
++  expect(inputs.beginQueuedEdit).toHaveBeenCalledWith(local)
++  fireEvent.click(localRow.getByRole('button', { name: en.composer.queueDelete }))
++  expect(getQueuedPrompts('stored').map(entry => entry.id)).toEqual(['adm-1'])
++})
++
+ it('a server-queued card shows the Steer and Edit its owner serves, and never Next (RT-35)', async () => {
+diff --git a/apps/desktop/src/app/chat/composer/queue-slot.tsx b/apps/desktop/src/app/chat/composer/queue-slot.tsx
+index 2bc9eab4fadbbd3deeaa9c82b8e9e5951fa4d574..3b5899669b8c8bac07e3d74e5fab9620bbb9579e 100644
+--- a/apps/desktop/src/app/chat/composer/queue-slot.tsx
++++ b/apps/desktop/src/app/chat/composer/queue-slot.tsx
+@@ -18,2 +18,3 @@ export interface ComposerQueueSlotInputs {
+   busy: boolean
++  deliveryDisabled: boolean
+   drainNextQueued: () => Promise<unknown>
+@@ -74,2 +75,3 @@ export function renderComposerQueueSlot({
+   busy,
++  deliveryDisabled,
+   drainNextQueued,
+@@ -88,2 +90,3 @@ export function renderComposerQueueSlot({
+       busy={busy}
++      deliveryDisabled={deliveryDisabled}
+       editingId={queueEdit?.entryId ?? null}
+@@ -125,2 +128,6 @@ export function renderComposerQueueSlot({
+       onResume={() => {
++        if (deliveryDisabled) {
++          return
++        }
++
+         unparkQueuedPrompts(activeQueueSessionKey)
+@@ -135,2 +142,6 @@ export function renderComposerQueueSlot({
+       onSteerNow={id => {
++        if (deliveryDisabled) {
++          return
++        }
++
+         // A server row is steered by its owner, which consumes the admission so it never also runs;
 diff --git a/apps/desktop/src/app/chat/composer/reconnect-focus.test.tsx b/apps/desktop/src/app/chat/composer/reconnect-focus.test.tsx
 new file mode 100644
 index 0000000000000000000000000000000000000000..571c58e5668ea349808b8bbaef2e1e1eedf81690
