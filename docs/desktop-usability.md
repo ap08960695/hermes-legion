@@ -73,8 +73,9 @@ sidebar loading. The reconnect uses a fresh ticket from the canonical gateway
 and waits with jittered backoff capped at 15 seconds between attempts.
 **Device & profile** shows **Connecting** during an active attempt, including
 while the Local backend and fresh ticket are being prepared. Tabs and drafts
-stay open. If the runtime refuses to start because it needs repair,
-use **Reconnect gateway** after resolving the reported reason.
+stay open. If the Local runtime refuses to start because it needs repair,
+its error explains why automatic retries stop. After fixing the reported
+issue, choose **Reconnect now** on the error to retry that Local connection.
 
 ## Verification boundaries
 
