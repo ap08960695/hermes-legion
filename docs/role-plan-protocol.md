@@ -186,9 +186,11 @@ successful ACTION still appears on the board without changing your view.
 
 **Proceed** confirms the current preview. **Sequence after conflicting cards**
 adds those cards as native prerequisites. These buttons keep keyboard focus
-while confirmation is pending. If a new preview removes the focused
-**Sequence after conflicting cards** button, focus moves to **Check declared
-writes**. **Re-scope** leaves the step
+while confirmation is pending. A changed preview places the warning before
+the revised overlaps and confirmation buttons. If focus is on a confirmation
+choice, it returns to **Check declared writes**. Pressing Enter there
+rechecks the paths. To create the ACTION, select a confirmation choice again.
+**Re-scope** leaves the step
 uncreated so THINK can submit a new plan. After activating **Re-scope** with
 the keyboard, focus returns to **Check declared writes**. A changed conflict
 set requires a fresh confirmation. A direct `kanban_create` with a confirmed overlap returns
