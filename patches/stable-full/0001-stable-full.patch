@@ -62759,10 +62759,10 @@ index 0000000000000000000000000000000000000000..89b69a2fad6529a5503b8d56d88fdba4
 +}
 diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx b/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..396f522634e733731aeb6497db3309f76367e3e2
+index 0000000000000000000000000000000000000000..f70906204f5858d213b8c5f880d7a2d1c9c34808
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx
-@@ -0,0 +1,865 @@
+@@ -0,0 +1,905 @@
 +import { host, type OwnerInboxItem } from '@hermes/plugin-sdk'
 +import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 +import { atom } from 'nanostores'
@@ -63145,6 +63145,46 @@ index 0000000000000000000000000000000000000000..396f522634e733731aeb6497db3309f7
 +  await act(async () => finish())
 +  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
 +})
++
++it.each(['matching question', 'another owner', 'another prompt', 'focus moved', 'no answer control'])(
++  'hands off focus only for a current clarification open (%s)',
++  async scenario => {
++    const question = prompt('writer', 'Open my question?', { chat_session_id: 'saved-writer' })
++    const inbox = fixture([question])
++    let finish!: () => void
++    inbox.open.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve }))
++    vi.spyOn(host.state.focusedClarification, 'get').mockReturnValue({
++      storedSessionId: 'saved-writer',
++      connectionId: 'local',
++      profile: scenario === 'another owner' ? 'writer-copy' : 'writer',
++      requestId: scenario === 'another prompt' ? 'newer-question' : question.prompt_id
++    })
++    const { container } = inbox.mount()
++    const answer = container.appendChild(document.createElement('button'))
++    const focusChat = vi.spyOn(host, 'focusPendingClarification').mockImplementation(() => {
++      if (scenario !== 'no answer control') answer.focus()
++    })
++    const badge = await screen.findByRole('button', { name: 'Waiting for owner 1' })
++    fireEvent.click(badge)
++    const action = screen.getByRole('button', { name: 'Open chat' })
++    action.focus()
++    fireEvent.click(action)
++    if (scenario === 'focus moved') screen.getByRole('textbox').focus()
++    await act(async () => finish())
++    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
++    await waitFor(() => expect(document.activeElement).toBe(scenario === 'matching question' ? answer : badge))
++    expect(inbox.open).toHaveBeenCalledExactlyOnceWith('saved-writer', {
++      route: { connectionId: 'local', profile: 'writer', targetProfile: 'writer', mode: 'local' },
++      forceResume: true, awaitHydration: true
++    })
++    if (scenario === 'matching question' || scenario === 'no answer control') {
++      expect(focusChat).toHaveBeenCalledExactlyOnceWith('saved-writer')
++    } else {
++      expect(focusChat).not.toHaveBeenCalled()
++    }
++    expect(inbox.request.mock.calls.some(([method]) => method === 'owner_inbox.respond')).toBe(false)
++  }
++)
 +
 +it('shows an open failure on its row and keeps the action focused for retry', async () => {
 +  const inbox = fixture([prompt('tester', 'First question?'), prompt('writer', 'Second question?')])
@@ -63630,14 +63670,15 @@ index 0000000000000000000000000000000000000000..396f522634e733731aeb6497db3309f7
 +)
 diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx b/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..9ee173bc185a0f56cb8dd33a8dc40c9f2385c7a6
+index 0000000000000000000000000000000000000000..8d0b34c2c102e7c72756ea0747e2e9d0a418cb4e
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx
-@@ -0,0 +1,334 @@
+@@ -0,0 +1,364 @@
 +import {
 +  Button, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, host, type OwnerInboxItem, type PluginProfileRoute, relativeTime
 +} from '@hermes/plugin-sdk'
 +import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
++import { flushSync } from 'react-dom'
 +
 +import type { BotsText } from './i18n'
 +import { ownerPromptKey, useOwnerInbox } from './owner-inbox-data'
@@ -63663,6 +63704,7 @@ index 0000000000000000000000000000000000000000..9ee173bc185a0f56cb8dd33a8dc40c9f
 +  const [openingRowKey, setOpeningRowKey] = useState<string | null>(null)
 +  const [openErrorKey, setOpenErrorKey] = useState<string | null>(null)
 +  const opening = useRef(false)
++  const focusAfterClose = useRef<((event: Event) => void) | null>(null)
 +  const dialogGeneration = useRef(0)
 +  const scopeGeneration = useRef(0)
 +  const heading = useRef<HTMLHeadingElement>(null)
@@ -63736,7 +63778,9 @@ index 0000000000000000000000000000000000000000..9ee173bc185a0f56cb8dd33a8dc40c9f
 +    }
 +  }, [drafts])
 +
-+  function changeOpen(next: boolean) {
++  function changeOpen(next: boolean, handoff: ((event: Event) => void) | null = null) {
++    focusAfterClose.current = handoff
++
 +    if (!next) {
 +      dialogGeneration.current += 1
 +      drafts.clear()
@@ -63747,7 +63791,7 @@ index 0000000000000000000000000000000000000000..9ee173bc185a0f56cb8dd33a8dc40c9f
 +    setOpen(next)
 +  }
 +
-+  async function openChat(prompt: OwnerInboxItem) {
++  async function openChat(prompt: OwnerInboxItem, action: HTMLButtonElement) {
 +    if (opening.current || inbox.status !== 'ready' || !connection || host.state.connectionId.get() !== connection ||
 +        host.state.gateway.get() !== 'open') { return }
 +
@@ -63759,7 +63803,8 @@ index 0000000000000000000000000000000000000000..9ee173bc185a0f56cb8dd33a8dc40c9f
 +    const generation = dialogGeneration.current
 +    const scope = scopeGeneration.current
 +    const gateway = host.getGateway()
-+    const isCurrent = () => dialogGeneration.current === generation && scopeGeneration.current === scope &&
++
++    const isCurrentScope = () => scopeGeneration.current === scope &&
 +      host.state.connectionId.get() === connection && host.getGateway() === gateway &&
 +      host.state.gateway.get() === 'open'
 +
@@ -63770,11 +63815,32 @@ index 0000000000000000000000000000000000000000..9ee173bc185a0f56cb8dd33a8dc40c9f
 +      mode: connection === 'local' ? 'local' as const : 'remote' as const
 +    }
 +
++    const storedId = prompt.chat_session_id || prompt.session_id
++    const doc = action.ownerDocument
++
 +    try {
-+      await host.openSession(prompt.chat_session_id || prompt.session_id, { route, forceResume: true, awaitHydration: true })
-+      if (isCurrent()) { changeOpen(false) }
++      await host.openSession(storedId, { route, forceResume: true, awaitHydration: true })
++
++      if (dialogGeneration.current === generation && isCurrentScope()) {
++        changeOpen(false, prompt.kind === 'clarify' && doc.activeElement === action ? event => {
++          const live = host.state.focusedClarification?.get()
++
++          if (!isCurrentScope() || doc.activeElement !== doc.body ||
++            live?.storedSessionId !== storedId || live.connectionId !== connection ||
++            live.profile !== prompt.profile || live.requestId !== prompt.prompt_id) {
++            return
++          }
++
++          // Let Radix restore its trigger if the live answer control can't take focus.
++          flushSync(() => host.focusPendingClarification?.(storedId))
++
++          if (doc.activeElement !== doc.body) {
++            event.preventDefault()
++          }
++        } : null)
++      }
 +    } catch {
-+      if (isCurrent()) { setOpenErrorKey(ownerPromptKey(prompt)) }
++      if (dialogGeneration.current === generation && isCurrentScope()) { setOpenErrorKey(ownerPromptKey(prompt)) }
 +    } finally {
 +      opening.current = false
 +      setOpeningChat(false)
@@ -63810,7 +63876,11 @@ index 0000000000000000000000000000000000000000..9ee173bc185a0f56cb8dd33a8dc40c9f
 +        {t.title}{count > 0 && <span className="tabular-nums">{count}</span>}
 +      </Button>
 +    </DialogTrigger>
-+    <DialogContent data-owner-inbox="" className="max-h-[85vh] max-w-xl overflow-y-auto" onOpenAutoFocus={event => {
++    <DialogContent className="max-h-[85vh] max-w-xl overflow-y-auto" data-owner-inbox="" onCloseAutoFocus={event => {
++      const handoff = focusAfterClose.current
++      focusAfterClose.current = null
++      handoff?.(event)
++    }} onOpenAutoFocus={event => {
 +      event.preventDefault()
 +      heading.current?.focus()
 +    }}>
@@ -63828,7 +63898,7 @@ index 0000000000000000000000000000000000000000..9ee173bc185a0f56cb8dd33a8dc40c9f
 +      <p className={status ? "text-sm" : "sr-only"} role="status">{status}</p>
 +      <ul className="grid gap-3" ref={list}>
 +        {inbox.items.map(prompt => <OwnerPromptRow
-+          bot={bots.find(bot => bot.profile === prompt.profile)?.label || prompt.profile} drafts={drafts} key={ownerPromptKey(prompt)} onOpen={() => void openChat(prompt)} openFailed={openErrorKey === ownerPromptKey(prompt)}
++          bot={bots.find(bot => bot.profile === prompt.profile)?.label || prompt.profile} drafts={drafts} key={ownerPromptKey(prompt)} onOpen={action => void openChat(prompt, action)} openFailed={openErrorKey === ownerPromptKey(prompt)}
 +          openingChat={openingChat} openingStatus={openingRowKey === ownerPromptKey(prompt) ? text.bot.openingChat : ''}
 +          onRespond={value => respond(prompt, value)}
 +          pending={inbox.isResponding(prompt)} prompt={prompt} stale={inbox.status !== 'ready'} text={text} />)}
@@ -63857,7 +63927,7 @@ index 0000000000000000000000000000000000000000..9ee173bc185a0f56cb8dd33a8dc40c9f
 +  bot: string
 +  drafts: Map<string, OwnerReplyDraft>
 +  text: Pick<BotsText, 'ownerInbox' | 'workspace'>
-+  onOpen: () => void
++  onOpen: (action: HTMLButtonElement) => void
 +  onRespond: (value: string) => Promise<void>
 +  openFailed: boolean
 +  openingChat: boolean
@@ -63878,7 +63948,7 @@ index 0000000000000000000000000000000000000000..9ee173bc185a0f56cb8dd33a8dc40c9f
 +  const createdAt = prompt.created_at * 1000
 +  const openAction = <>
 +    <Button aria-disabled={openingChat || stale} className="aria-disabled:cursor-default aria-disabled:opacity-50"
-+      onClick={onOpen} size="sm" type="button" variant="ghost">{text.workspace.open}</Button>
++      onClick={event => onOpen(event.currentTarget)} size="sm" type="button" variant="ghost">{text.workspace.open}</Button>
 +    <span className={openingStatus ? "self-center text-sm text-muted-foreground" : "sr-only"} role="status">
 +      {openingStatus}
 +    </span>
