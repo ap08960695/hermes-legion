@@ -23961,23 +23961,24 @@ index 9881c1aa7c9fafffe39158a23186b68063d219db..65ff3573152d4ac5eafac8a5e1f66e4c
 +    expect(tileStoredRow(STORED)?.title).toBe('Owned history')
    })
 diff --git a/apps/desktop/src/app/chat/session-tile.test.ts b/apps/desktop/src/app/chat/session-tile.test.ts
-index 225c6355982412f3fca3a7db4c62493693516bd1..514c5fb934219b46fcdf6dc3354c36e26ec4c50a 100644
+index 225c6355982412f3fca3a7db4c62493693516bd1..4925af945dc3249afaf686bc3394603a26414ecf 100644
 --- a/apps/desktop/src/app/chat/session-tile.test.ts
 +++ b/apps/desktop/src/app/chat/session-tile.test.ts
 @@ -1 +1,3 @@
 +import { act, cleanup, render, screen } from '@testing-library/react'
 +import { createElement } from 'react'
  import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-@@ -8,5 +10,7 @@ import { $activeGatewayProfile, $profiles } from '@/store/profile'
+@@ -8,5 +10,8 @@ import { $activeGatewayProfile, $profiles } from '@/store/profile'
  import { $connection, $gatewayState, $sessions, setSessions } from '@/store/session'
 -import { $sessionTiles, openSessionTile, reopenLastClosedTile, type SessionTile } from '@/store/session-states'
 +import { $sessionTiles, openSessionTile, reopenLastClosedTile, type SessionTile, type SessionTileDelegate } from '@/store/session-states'
 +import * as sessionStates from '@/store/session-states'
++import { deferred } from '@/test/deferred'
 
  import {
 +  SessionTilePane,
    sessionTileResumeFailure,
-@@ -293 +297,36 @@ describe('startUnrestoredTileTitleBackfill retires dead tiles (#125678)', () =>
+@@ -293 +298,95 @@ describe('startUnrestoredTileTitleBackfill retires dead tiles (#125678)', () =>
  })
 +
 +it('shows the connection state while a split tile is waiting to resume', () => {
@@ -24014,10 +24015,74 @@ index 225c6355982412f3fca3a7db4c62493693516bd1..514c5fb934219b46fcdf6dc3354c36e2
 +    $sessionTiles.set(originalTiles)
 +  }
 +})
++
++it.each(['before resume rejection', 'during its 404 lookup'])(
++  'automatically reattempts a saved split after a gateway flap %s',
++  async timing => {
++    const originalTiles = $sessionTiles.get()
++    const originalGatewayState = $gatewayState.get()
++    const storedSessionId = 'fixture-saved-split'
++    const ownerRoute = { connectionId: 'local', profile: 'default' }
++    const first = deferred<string>()
++    const second = deferred<string>()
++    const lookup = deferred<Awaited<ReturnType<typeof getSession>>>()
++    const get = vi.mocked(getSession).mockReturnValueOnce(lookup.promise)
++    const resumeTile = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
++
++    const mockDelegate = vi.spyOn(sessionStates, 'sessionTileDelegate')
++      .mockReturnValue({ resumeTile } as unknown as SessionTileDelegate)
++
++    try {
++      $sessionTiles.set([{ storedSessionId, ownerRoute }])
++      $gatewayState.set('open')
++      render(createElement(SessionTilePane, { storedSessionId }))
++      expect(resumeTile).toHaveBeenCalledExactlyOnceWith(storedSessionId)
++
++      if (timing === 'during its 404 lookup') {
++        await act(async () => first.reject(new Error('404: Session not found')))
++        expect(get).toHaveBeenCalled()
++      }
++
++      act(() => $gatewayState.set('connecting'))
++      expect(screen.getByRole('status').textContent).toBe('Reconnecting to Hermes…')
++      expect(resumeTile).toHaveBeenCalledTimes(1)
++      act(() => $gatewayState.set('open'))
++      expect(resumeTile).toHaveBeenCalledTimes(1)
++
++      await act(async () => {
++        if (timing === 'during its 404 lookup') {
++          lookup.reject(new Error('404: Session not found'))
++        } else {
++          first.reject(new Error('Gateway connection closed'))
++        }
++      })
++
++      expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
++      expect(resumeTile.mock.calls).toEqual([[storedSessionId], [storedSessionId]])
++      expect($sessionTiles.get()).toEqual([{ storedSessionId, ownerRoute }])
++
++      await act(async () => second.reject(new Error('Session resume denied')))
++      expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
++      expect(screen.getByText('Session resume denied')).toBeTruthy()
++      expect(resumeTile).toHaveBeenCalledTimes(2)
++    } finally {
++      cleanup()
++      mockDelegate.mockRestore()
++      get.mockReset()
++      $gatewayState.set(originalGatewayState)
++      $sessionTiles.set(originalTiles)
++    }
++  }
++)
 diff --git a/apps/desktop/src/app/chat/session-tile.tsx b/apps/desktop/src/app/chat/session-tile.tsx
-index 845144445fd8f466496e33277c744e8db375a704..cc8203f388ffeec3e56f68a4224b7d6c99d7d1aa 100644
+index 845144445fd8f466496e33277c744e8db375a704..1524c57bb4dcc80ebccb739590a54da9a3222ce4 100644
 --- a/apps/desktop/src/app/chat/session-tile.tsx
 +++ b/apps/desktop/src/app/chat/session-tile.tsx
+@@ -19,3 +19,3 @@ import { useQueryClient } from '@tanstack/react-query'
+ import { atom, computed } from 'nanostores'
+-import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
++import { useCallback, useEffect, useMemo, useReducer, useRef, useSyncExternalStore } from 'react'
+
 @@ -46,3 +46,3 @@ import { $gatewaySwitching } from '@/store/gateway-switch'
  import { $pinnedSessionIds, pinSession, unpinSession } from '@/store/layout'
 -import { $activeGatewayProfile, $gatewaySwapTarget, $profiles } from '@/store/profile'
@@ -24063,14 +24128,16 @@ index 845144445fd8f466496e33277c744e8db375a704..cc8203f388ffeec3e56f68a4224b7d6c
  export function SessionTilePane({ storedSessionId }: { storedSessionId: string }) {
 +  const { t } = useI18n()
    const tiles = useStore($sessionTiles)
-@@ -442,3 +441,5 @@ export function SessionTilePane({ storedSessionId }: { storedSessionId: string }
+@@ -442,11 +441,11 @@ export function SessionTilePane({ storedSessionId }: { storedSessionId: string }
    const runtimeId = tile?.runtimeId ?? null
 -  const gatewayOpen = useStore($gatewayState) === 'open'
 +  useSplitReconnectFocus(storedSessionId)
 +  const gatewayState = useStore($gatewayState)
 +  const gatewayOpen = gatewayState === 'open'
    const delegateRevision = useStore($sessionTileDelegateRevision)
-@@ -447,6 +448,3 @@ export function SessionTilePane({ storedSessionId }: { storedSessionId: string }
+   const resumingRef = useRef(false)
++  const [resumeRetry, reconsiderResume] = useReducer((attempt: number) => attempt + 1, 0)
+   const view = useMemo(() => buildTileView(storedSessionId), [storedSessionId])
 
 -  const storedSessionStillExists = useCallback(
 -    () => $sessions.get().some(s => sessionMatchesStoredId(s, storedSessionId)),
@@ -24078,7 +24145,67 @@ index 845144445fd8f466496e33277c744e8db375a704..cc8203f388ffeec3e56f68a4224b7d6c
 -  )
 +  const storedSessionStillExists = useCallback(() => Boolean(tileStoredRow(storedSessionId)), [storedSessionId])
 
-@@ -585,4 +583,34 @@ export function SessionTilePane({ storedSessionId }: { storedSessionId: string }
+@@ -522,2 +521,23 @@ export function SessionTilePane({ storedSessionId }: { storedSessionId: string }
+
++    let interrupted = false
++    let failed = false
++    const localOwner = ownerRoute ? ownerRoute.connectionId === 'local' : $connection.get()?.mode === 'local'
++
++    const stopWatchingGateway = localOwner
++      ? $gatewayState.listen(state => {
++          if (state !== 'open') {
++            interrupted = true
++          }
++        })
++      : undefined
++
++    const stillUnbound = () => {
++      const current = $sessionTiles.get().find(candidate => candidate.storedSessionId === storedSessionId)
++
++      return Boolean(
++        current && !current.runtimeId && current.ownerRoute === ownerRoute &&
++        !isSessionRemovalPending(storedSessionId)
++      )
++    }
++
+     delegate
+@@ -526,2 +546,8 @@ export function SessionTilePane({ storedSessionId }: { storedSessionId: string }
+       .catch(async (err: unknown) => {
++        failed = true
++
++        if (interrupted || !stillUnbound()) {
++          return
++        }
++
+         const message = err instanceof Error ? err.message : String(err)
+@@ -540,3 +566,2 @@ export function SessionTilePane({ storedSessionId }: { storedSessionId: string }
+         const durableSession = await resolveStoredSession(storedSessionId, ownerRoute).catch(() => undefined)
+-        const current = $sessionTiles.get().find(candidate => candidate.storedSessionId === storedSessionId)
+         const identityChanged = tileBackendIdentityChanged(ownerRoute?.connectionId, $connection.get())
+@@ -546,3 +571,3 @@ export function SessionTilePane({ storedSessionId }: { storedSessionId: string }
+           Boolean(durableSession),
+-          Boolean(current && !current.runtimeId),
++          stillUnbound(),
+           identityChanged
+@@ -550,3 +575,3 @@ export function SessionTilePane({ storedSessionId }: { storedSessionId: string }
+
+-        if (error) {
++        if (error && !interrupted) {
+           patchSessionTile(storedSessionId, { error })
+@@ -555,5 +580,11 @@ export function SessionTilePane({ storedSessionId }: { storedSessionId: string }
+       .finally(() => {
++        stopWatchingGateway?.()
+         resumingRef.current = false
++
++        // Ready may have returned while the original resume still held the lock.
++        if (failed && interrupted && $gatewayState.get() === 'open' && stillUnbound()) {
++          reconsiderResume()
++        }
+       })
+-  }, [delegateRevision, gatewayOpen, ownerRoute, runtimeId, storedSessionId, tile?.error])
++  }, [delegateRevision, gatewayOpen, ownerRoute, resumeRetry, runtimeId, storedSessionId, tile?.error])
+
+@@ -585,4 +616,34 @@ export function SessionTilePane({ storedSessionId }: { storedSessionId: string }
    if (!runtimeId) {
 -    // The SAME session loader the primary thread shows (Thread's
 -    // loading === 'session' branch) — one loading language everywhere.
@@ -24115,12 +24242,12 @@ index 845144445fd8f466496e33277c744e8db375a704..cc8203f388ffeec3e56f68a4224b7d6c
 +    }
 +
      return (
-@@ -594,3 +622,3 @@ export function SessionTilePane({ storedSessionId }: { storedSessionId: string }
+@@ -594,3 +655,3 @@ export function SessionTilePane({ storedSessionId }: { storedSessionId: string }
 
 -  return <TileChat runtimeId={runtimeId} storedSessionId={storedSessionId} view={view} />
 +  return <TileChat localReconnect={Boolean(tile?.localReconnect)} runtimeId={runtimeId} storedSessionId={storedSessionId} view={view} />
  }
-@@ -614,3 +642,10 @@ export function SessionTilePane({ storedSessionId }: { storedSessionId: string }
+@@ -614,3 +675,10 @@ export function SessionTilePane({ storedSessionId }: { storedSessionId: string }
  export function tileStoredRow(storedSessionId: string): SessionInfo | undefined {
 -  const match = (s: SessionInfo) => sessionMatchesStoredId(s, storedSessionId)
 +  const tile = $sessionTiles.get().find(candidate => candidate.storedSessionId === storedSessionId)
@@ -24132,19 +24259,19 @@ index 845144445fd8f466496e33277c744e8db375a704..cc8203f388ffeec3e56f68a4224b7d6c
 +    (!profile || normalizeProfileKey(s.profile) === normalizeProfileKey(profile)) &&
 +    (!owner || s.connection_id === owner.connectionId)
 
-@@ -663,3 +698,3 @@ export function startUnrestoredTileTitleBackfill(lookup = probeStoredSession): (
+@@ -663,3 +731,3 @@ export function startUnrestoredTileTitleBackfill(lookup = probeStoredSession): (
            .then(result => {
 -            const draft = takeSessionDraft(tile.storedSessionId)
 +            const draft = takeSessionDraft(tile.storedSessionId, tile.ownerRoute ?? tile.ownerProfile)
              const current = $sessionTiles.get().find(candidate => candidate.storedSessionId === tile.storedSessionId)
-@@ -756,3 +791,5 @@ function tileDragPayload(storedSessionId: string): SessionDragPayload {
+@@ -756,3 +824,5 @@ function tileDragPayload(storedSessionId: string): SessionDragPayload {
      ? sessionTitle(stored)
 -    : tile?.workspaceTabTitle || draftTitleFor(storedSessionId) || NEW_SESSION_TITLE
 +    : tile?.workspaceTabTitle ||
 +      draftTitleFor(storedSessionId, tile?.ownerRoute ?? tile?.ownerProfile) ||
 +      NEW_SESSION_TITLE
 
-@@ -982,3 +1019,6 @@ export const watchSessionTiles = paneMirror<SessionTile>({
+@@ -982,3 +1052,6 @@ export const watchSessionTiles = paneMirror<SessionTile>({
      $sessionTiles.get().some(tile => tile.storedSessionId === storedSessionId && tile.workspaceTabTitle) ? null : (
 -      <SessionDraftTitle scope={storedSessionId} />
 +      <SessionDraftTitle

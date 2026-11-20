@@ -131,6 +131,8 @@ returns to **Reconnect now**.
 Open split Chats on the shared Local gateway reattach across profiles.
 While a split Chat restores its runtime, it can show a read-only excerpt
 of recent saved messages. The composer returns when the Chat reattaches.
+If a dropped Local connection interrupts the open, the split tries again
+when Local is ready. If the new attempt fails, use **Retry** in the tab.
 If you were typing in that split, keyboard focus returns to its draft
 unless you moved focus elsewhere during recovery.
 
