@@ -751,6 +751,8 @@ reveal more columns. The table and its controls show a focus outline,
 including in high-contrast palettes. Report buttons name the bot and
 its connection. The report dialog wraps long names and saved text. Its
 status filter and Close button show keyboard focus.
+In a character report without a status filter, Tab reaches the report
+body when it overflows. Page Down and End reveal the remaining text.
 
 ## Native query-cache acceptance
 
