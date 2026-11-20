@@ -37636,6 +37636,135 @@ index fa2b1996b102517262ac337612b8ec226dd54399..9fd3e55fdb92c9cce8da85aff04d17b4
  import type { DelegationRouting } from '@/api/delegation'
 -import type { HermesApiRequest } from '@/global'
  import { queryClient } from '@/lib/query-client'
+diff --git a/apps/desktop/src/app/settings/gateway-settings.test.tsx b/apps/desktop/src/app/settings/gateway-settings.test.tsx
+index 4872c1de0ba987f5352169d4aaf0120d78d6a39e..338256d6f8206d5d42ae397962de5ce5602cbff9 100644
+--- a/apps/desktop/src/app/settings/gateway-settings.test.tsx
++++ b/apps/desktop/src/app/settings/gateway-settings.test.tsx
+@@ -4,3 +4,3 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
+
+-import { $notifications } from '@/store/notifications'
++import { $notifications, clearNotifications } from '@/store/notifications'
+ import { deferred } from '@/test/deferred'
+@@ -82,2 +82,53 @@ afterEach(() => {
+ describe('GatewaySettings', () => {
++  it('shows a Local reconnect refusal inline in recovery and clears it when retry begins', async () => {
++    const reason = 'The Local gateway could not restart.'
++    const pendingRetry = deferred<typeof localConnection>()
++    const applyConnectionConfig = vi.fn().mockRejectedValueOnce(new Error(reason)).mockReturnValueOnce(pendingRetry.promise)
++    const logLine = vi.fn()
++    Object.assign(window.hermesDesktop, { applyConnectionConfig, logLine })
++    clearNotifications()
++
++    try {
++      render(<GatewaySettings embedded />)
++      const save = await screen.findByRole<HTMLButtonElement>('button', { name: 'Save and reconnect' })
++      fireEvent.click(save)
++
++      const error = await screen.findByRole('alert')
++
++      expect(error.textContent).toContain('Could not apply gateway settings')
++      expect(error.textContent).toContain(reason)
++      expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: 'center' })
++      expect($notifications.get()).toEqual([])
++      expect(logLine).toHaveBeenCalledOnce()
++      expect(applyConnectionConfig).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ mode: 'local' }))
++      expect(save.disabled).toBe(false)
++
++      fireEvent.click(save)
++      expect(screen.queryByRole('alert')).toBeNull()
++      expect(save.disabled).toBe(true)
++      await act(async () => pendingRetry.resolve(localConnection))
++      expect(screen.queryByRole('alert')).toBeNull()
++      expect(save.disabled).toBe(false)
++      expect(applyConnectionConfig).toHaveBeenCalledTimes(2)
++    } finally {
++      clearNotifications()
++    }
++  })
++
++  it('keeps Local reconnect refusals in the notification stack on the full Settings page', async () => {
++    const applyConnectionConfig = vi.fn().mockRejectedValueOnce(new Error('The Local gateway could not restart.'))
++    Object.assign(window.hermesDesktop, { applyConnectionConfig })
++    clearNotifications()
++
++    try {
++      render(<GatewaySettings />)
++      fireEvent.click(await screen.findByRole('button', { name: 'Save and reconnect' }))
++
++      await waitFor(() => expect($notifications.get()[0]?.title).toBe('Could not apply gateway settings'))
++      expect(screen.queryByRole('alert')).toBeNull()
++    } finally {
++      clearNotifications()
++    }
++  })
++
+   it('releases a pending save after a late probe invalidates its response', async () => {
+diff --git a/apps/desktop/src/app/settings/gateway-settings.tsx b/apps/desktop/src/app/settings/gateway-settings.tsx
+index b0ff82366380a3f5968be4b50cba9ce1639ae2ed..6bf3c0c77a37ada27aa866c73c357607ad3efb53 100644
+--- a/apps/desktop/src/app/settings/gateway-settings.tsx
++++ b/apps/desktop/src/app/settings/gateway-settings.tsx
+@@ -2,3 +2,3 @@ import { isGatewayReauthRequired } from '@hermes/shared'
+ import { useStore } from '@nanostores/react'
+-import { useEffect, useRef, useState } from 'react'
++import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+
+@@ -43,3 +43,3 @@ import {
+ import { managedUpdatesSupported } from '@/store/managed-updates'
+-import { notify, notifyError, readableError } from '@/store/notifications'
++import { logErrorToDesktopLog, notify, notifyError, readableError } from '@/store/notifications'
+
+@@ -258,2 +258,3 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
+   const [saving, setSaving] = useState(false)
++  const [localApplyError, setLocalApplyError] = useState<string | null>(null)
+   const [testing, setTesting] = useState(false)
+@@ -273,2 +274,3 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
+   const [sshCustomHost, setSshCustomHost] = useState(false)
++  const saveActions = useRef<HTMLDivElement>(null)
+   const sshResolveSeq = useRef(0)
+@@ -284,2 +286,8 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
+
++  useLayoutEffect(() => {
++    if (localApplyError) {
++      saveActions.current?.scrollIntoView({ block: 'center' })
++    }
++  }, [localApplyError])
++
+   useEffect(() => {
+@@ -522,2 +530,3 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
+     setLastTest(null)
++    setLocalApplyError(null)
+   }, [
+@@ -573,2 +582,3 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
+     setSaving(true)
++    setLocalApplyError(null)
+
+@@ -601,2 +611,9 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
+
++      if (embedded && apply && state.mode === 'local') {
++        logErrorToDesktopLog(err, g.applyFailed)
++        setLocalApplyError(readableError(err, g.applyFailed).message)
++
++        return
++      }
++
+       const sshError = err && typeof err === 'object' && 'sshError' in err ? String(err.sshError) : ''
+@@ -1441,3 +1458,3 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
+       {state.mode !== 'cloud' ? (
+-        <div className="mt-6 flex flex-wrap items-center justify-end gap-4">
++        <div className="mt-6 flex flex-wrap items-center justify-end gap-4" ref={saveActions}>
+           {state.mode === 'remote' ? (
+@@ -1475,2 +1492,11 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
+           )}
++          {localApplyError ? (
++            <div
++              className="basis-full wrap-anywhere rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
++              role="alert"
++            >
++              <div className="font-medium">{g.applyFailed}</div>
++              {localApplyError !== g.applyFailed ? <div className="mt-1">{localApplyError}</div> : null}
++            </div>
++          ) : null}
+           <Button disabled={state.envOverride || saving} onClick={() => void save(true)} size="sm">
 diff --git a/apps/desktop/src/app/settings/index.tsx b/apps/desktop/src/app/settings/index.tsx
 index f550dae314b58ea3089a8570be6b5a8335db1aff..ae2c2922fc4dd38b6ef2e2198745f238c218ac37 100644
 --- a/apps/desktop/src/app/settings/index.tsx
@@ -68253,7 +68382,7 @@ index 4d406b71848cf8964230bdd9c73d5cd0e965a521..c6e2edb473c87492b7cc166b3d7b01e4
 +
  test('provider invalid_api_key error maps to the OpenAI summary and deep-links to Keys', () => {
 diff --git a/apps/desktop/src/store/notifications.ts b/apps/desktop/src/store/notifications.ts
-index 6655e8270357315361ca7f233bccf4f60fbade36..776ddcd4fa36fcd5c30d160a1220748261ac1c08 100644
+index 6655e8270357315361ca7f233bccf4f60fbade36..c1cd147a47ff35c247221264a2156ff715ccfdca 100644
 --- a/apps/desktop/src/store/notifications.ts
 +++ b/apps/desktop/src/store/notifications.ts
 @@ -13,2 +13,4 @@ export interface NotificationAction {
@@ -68281,6 +68410,11 @@ index 6655e8270357315361ca7f233bccf4f60fbade36..776ddcd4fa36fcd5c30d160a12207482
 +  }
 +
    const detail = cleaned.match(/"detail"\s*:\s*"([^"]+)"/)?.[1] ?? cleaned
+@@ -327,3 +343,3 @@ function showNotification(input: NotificationInput, errorCategory: ErrorToastCat
+ // Toast copy can omit the stack or shorten the message. Keep both in desktop.log.
+-function logErrorToDesktopLog(error: unknown, fallback: string): void {
++export function logErrorToDesktopLog(error: unknown, fallback: string): void {
+   try {
 diff --git a/apps/desktop/src/store/onboarding-owner.test.ts b/apps/desktop/src/store/onboarding-owner.test.ts
 index 0df45f0d2fa39cb7b448ee5258dd655616ad0168..c65a93aba142f98bb7d3dc484e2454ab8cb6268e 100644
 --- a/apps/desktop/src/store/onboarding-owner.test.ts
