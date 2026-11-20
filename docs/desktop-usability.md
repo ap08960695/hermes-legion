@@ -73,7 +73,9 @@ sidebar loading. The reconnect uses a fresh ticket from the canonical gateway
 and waits with jittered backoff capped at 15 seconds between attempts.
 **Device & profile** shows **Connecting** during an active attempt, including
 while the Local backend and fresh ticket are being prepared. Tabs and drafts
-stay open. A status next to a draft explains why Send is disabled, even while
+stay open. After initial startup, the automatic provider setup screen waits
+for the connection to return, keeping saved Chat visible in the meantime.
+A status next to a draft explains why Send is disabled, even while
 you keep typing. The status clears when the connection is ready. When
 reconnect interrupts the open Chat, it tries to resume again after the
 Local gateway returns. During recovery, a closed socket or shutdown refusal
