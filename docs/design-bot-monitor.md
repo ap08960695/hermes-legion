@@ -744,6 +744,13 @@ types. No new store, hook, API or poller. Native degraded paint after this
 correction and canonical navigation/report/terminal progress remain open.
 
 
+## Keyboard access to the wide table
+
+Press Tab to reach the scrollable Monitor table. Use Left and Right to
+reveal more columns. The table and its controls show a focus outline,
+including in high-contrast palettes. Report buttons name the bot and
+its connection.
+
 ## Native query-cache acceptance
 
 A fresh production build of the query-owned guard now passes the standalone
