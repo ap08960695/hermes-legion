@@ -17,7 +17,8 @@ title, unit and legend. Below the inline chart, open **Chart values** to read
 every category, series and parsed value. Full labels, repeated category names,
 decimals, zero and negative values stay distinct. Press Tab after opening the
 disclosure to focus the table area, then use the arrow keys or Page Up and Page
-Down to scroll. Closing the disclosure removes the table until you reopen it.
+Down to scroll. In Chat, focus stays in the disclosure or table when you move
+the pointer. Closing the disclosure removes the table until you reopen it.
 
 Dense Cartesian axes show at most four category ticks; all plotted data and the
 full table remain. Existing parser bounds and text escaping stay in place.
