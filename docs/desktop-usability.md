@@ -8,6 +8,8 @@ The rail offers **New chat**, **History** and **Search**. New chat opens a nativ
 
 When you switch devices, History and message search pause until the switch
 settles. Your query stays in place, and results refresh on the active device.
+History opens a saved-message match under the device and profile that
+returned it, even if a loaded chat in another profile has the same ID.
 During Local reconnect, message search waits for the gateway. You can
 edit the query or choose a result already shown for that same search.
 If the result opens in a split tab, focus moves to that chat while it waits
