@@ -166,6 +166,12 @@ Use **Send** again from that split to retry the same queued entry.
 
 ## Verification boundaries
 
+For a Local split reconnect check, start with different unsent drafts
+in two panes. Select part of the split draft before reconnecting.
+Verify the selection returns when you stay in that pane. Repeat
+while moving focus to the other pane during reconnect. Check both
+drafts, and confirm focus stays where you moved it.
+
 Regression tests and real isolated Electron interactions use disposable conversations, files, bot profiles and paused controls. Provider inference is denied and counted. Production source adoption, package preparation, graceful activation and isolated visual acceptance are separate evidence. No remote Screen transport, provider authorization, allowance or production worker execution is certified by these checks.
 
 
