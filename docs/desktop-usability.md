@@ -83,6 +83,8 @@ while reconnecting. **Suggest prompt** becomes available again when the
 gateway is ready. Any suggestion still pending when the connection dropped
 is discarded. The slash and **@** menus use local choices and fresh cached
 results while reconnecting. An open search resumes when the gateway is ready.
+Automatic sending of queued messages in the open Chat waits for the gateway.
+Queued messages stay visible, and a queue paused with Stop stays paused.
 When reconnect interrupts the open Chat, it tries to resume
 after the Local gateway returns. During recovery, a closed socket or
 shutdown refusal uses the existing reconnect status. A split Chat shows its

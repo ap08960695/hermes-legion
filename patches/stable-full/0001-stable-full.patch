@@ -19826,6 +19826,190 @@ index 8d1bf8c1ee56b9b2e8c3ccf91691adf4885577f0..72b6e95dcef349230c3cbde959184e72
 +
 +  return override ?? restingPlaceholder
  }
+diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-queue.test.tsx b/apps/desktop/src/app/chat/composer/hooks/use-composer-queue.test.tsx
+index 52a543154a6db1f4fd4e4ddaa9b1c789214a346e..e014444df3e2a056a7ea90754be93ccee616e605 100644
+--- a/apps/desktop/src/app/chat/composer/hooks/use-composer-queue.test.tsx
++++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-queue.test.tsx
+@@ -51,2 +51,3 @@ function renderQueueHook(
+     draft?: string
++    gatewayReady?: boolean
+     onCancel?: () => void
+@@ -62,4 +63,9 @@ function renderQueueHook(
+
++  const initialProps: { busy: boolean; gatewayReady?: boolean } = {
++    busy: overrides.busy ?? false,
++    gatewayReady: overrides.gatewayReady
++  }
++
+   const hook = renderHook(
+-    ({ busy }: { busy: boolean }) =>
++    ({ busy, gatewayReady }) =>
+       useComposerQueue({
+@@ -73,2 +79,3 @@ function renderQueueHook(
+         focusInput: () => undefined,
++        gatewayReady,
+         loadIntoComposer: (text: string) => {
+@@ -84,3 +91,3 @@ function renderQueueHook(
+       }),
+-    { initialProps: { busy: overrides.busy ?? false } }
++    { initialProps }
+   )
+@@ -234,2 +241,87 @@ describe('useComposerQueue park integration', () => {
+
++  it('keeps the automatic retry budget while disconnected and sends once ready', async () => {
++    vi.useFakeTimers()
++
++    try {
++      const entry = enqueueQueuedPrompt(SESSION_KEY, { attachments: [], text: 'wait for Ready' })!
++      const { hook, onSubmit } = renderQueueHook({ busy: true, gatewayReady: false })
++      onSubmit.mockResolvedValue(false)
++      hook.rerender({ busy: false, gatewayReady: false })
++      await act(async () => {
++        await vi.advanceTimersByTimeAsync(30_000)
++      })
++      expect(onSubmit).not.toHaveBeenCalled()
++      expect(getQueuedPrompts(SESSION_KEY).map(item => item.id)).toEqual([entry.id])
++
++      onSubmit.mockResolvedValue(true)
++      hook.rerender({ busy: false, gatewayReady: true })
++      await act(async () => {
++        await Promise.resolve()
++      })
++      expect(onSubmit).toHaveBeenCalledExactlyOnceWith('wait for Ready', expect.objectContaining({ submission_id: entry.id }))
++      expect(getQueuedPrompts(SESSION_KEY)).toEqual([])
++    } finally {
++      vi.useRealTimers()
++    }
++  })
++
++  it('rechecks the current queue after a held submit fails across repeated reconnects', async () => {
++    const entry = enqueueQueuedPrompt(SESSION_KEY, { attachments: [], text: 'held until Ready' })!
++    const held = deferred()
++    const { hook, onSubmit } = renderQueueHook({ busy: true })
++    onSubmit.mockImplementationOnce(async () => (await held.promise) === true)
++    hook.rerender({ busy: false, gatewayReady: true })
++    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
++
++    for (const gatewayReady of [false, true, false, true]) {
++      hook.rerender({ busy: false, gatewayReady })
++    }
++
++    expect(onSubmit).toHaveBeenCalledTimes(1)
++    await act(async () => {
++      held.resolve(false)
++      await held.promise
++    })
++
++    expect(getQueuedPrompts(SESSION_KEY)).toEqual([])
++    expect(onSubmit).toHaveBeenCalledTimes(2)
++    expect(onSubmit.mock.calls.map(([, options]) => options?.submission_id)).toEqual([entry.id, entry.id])
++  })
++
++  it('does not submit an obsolete auto-drain after acquiring the Web Lock offline', async () => {
++    const originalLocks = Object.getOwnPropertyDescriptor(navigator, 'locks')
++    const held = deferred()
++
++    const request = vi.fn(async (_name: string, claim: () => Promise<unknown>) => {
++      await held.promise
++
++      return claim()
++    })
++
++    Object.defineProperty(navigator, 'locks', { configurable: true, value: { request } })
++
++    try {
++      enqueueQueuedPrompt(SESSION_KEY, { attachments: [], text: 'waiting for lock' })
++      const { hook, onSubmit } = renderQueueHook()
++      expect(request).toHaveBeenCalledTimes(1)
++      hook.rerender({ busy: false, gatewayReady: false })
++      await act(async () => {
++        held.resolve(true)
++        await held.promise
++      })
++
++      expect(onSubmit).not.toHaveBeenCalled()
++      expect(getQueuedPrompts(SESSION_KEY).map(item => item.text)).toEqual(['waiting for lock'])
++      hook.rerender({ busy: false, gatewayReady: true })
++      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
++      expect(getQueuedPrompts(SESSION_KEY)).toEqual([])
++    } finally {
++      if (originalLocks) {
++        Object.defineProperty(navigator, 'locks', originalLocks)
++      } else {
++        Reflect.deleteProperty(navigator, 'locks')
++      }
++    }
++  })
++
+   it('holds a parked queue at the idle settle (the Stop edge)', async () => {
+diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-queue.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-queue.ts
+index 88de17bec644218de7c6aa6a7893dbe358790d2d..7d07168228ec201603e35aff298fd5901230b4db 100644
+--- a/apps/desktop/src/app/chat/composer/hooks/use-composer-queue.ts
++++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-queue.ts
+@@ -81,2 +81,3 @@ interface UseComposerQueueArgs {
+   focusInput: () => void
++  gatewayReady?: boolean
+   loadIntoComposer: (text: string, attachments: ComposerAttachment[]) => void
+@@ -116,2 +117,3 @@ export function useComposerQueue({
+   focusInput,
++  gatewayReady = true,
+   loadIntoComposer,
+@@ -194,2 +196,3 @@ export function useComposerQueue({
+   const drainingQueueRef = useRef(false)
++  const reconnectDuringDrainRef = useRef(false)
+   const drainFailuresRef = useRef(new Map<string, number>())
+@@ -484,3 +487,6 @@ export function useComposerQueue({
+   const runDrain = useCallback(
+-    async (pickEntry: (entries: QueuedPromptEntry[]) => QueuedPromptEntry | undefined): Promise<boolean | null> => {
++    async (
++      pickEntry: (entries: QueuedPromptEntry[]) => QueuedPromptEntry | undefined,
++      isCurrent?: () => boolean
++    ): Promise<boolean | null> => {
+       if (drainingQueueRef.current || !activeQueueSessionKey) {
+@@ -496,2 +502,6 @@ export function useComposerQueue({
+         return await withQueueDrainClaim(drainQueueSessionKey, async queue => {
++          if (isCurrent && !isCurrent()) {
++            return null
++          }
++
+           // Server-owned rows already sit in the gateway FIFO; never re-send them.
+@@ -546,2 +556,7 @@ export function useComposerQueue({
+         drainingQueueRef.current = false
++
++        if (reconnectDuringDrainRef.current) {
++          reconnectDuringDrainRef.current = false
++          setDrainRetryTick(tick => tick + 1)
++        }
+       }
+@@ -720,3 +735,3 @@ export function useComposerQueue({
+     // window — which is not a failed send.
+-    void runDrain(entries => entries.find(e => e.id === entry.id))
++    void runDrain(entries => entries.find(e => e.id === entry.id), () => !cancelled)
+       .then(sent => {
+@@ -760,7 +775,14 @@ export function useComposerQueue({
+   // edge, on mount/reconnect, and after a re-key — so a swallowed edge can't
+-  // strand them. A park (explicit Stop/Esc) is the one gate: those entries wait
+-  // for the user. To cancel queued turns, the user deletes them from the panel.
++  // strand them. A park (explicit Stop/Esc) keeps entries waiting for the user.
++  // To cancel queued turns, the user deletes them from the panel.
++  // eslint-disable-next-line no-restricted-syntax -- latch an interruption for the in-flight claim
+   useEffect(() => {
+-    // Match the background drainer: preserve the retry budget while session
+-    // discovery runs at boot, on a gateway/profile switch, or over an empty list.
++    if (!gatewayReady) {
++      // Ready can arrive before this claim settles. Recheck when it releases.
++      reconnectDuringDrainRef.current = drainingQueueRef.current
++
++      return
++    }
++
++    // Match the background drainer: preserve the retry budget during session discovery.
+     if (sessionsLoading) {
+@@ -772,3 +794,3 @@ export function useComposerQueue({
+     }
+-  }, [autoDrainNext, busy, drainRetryTick, queueParked, queuedPrompts.length, sessionsLoading])
++  }, [autoDrainNext, busy, drainRetryTick, gatewayReady, queueParked, queuedPrompts.length, sessionsLoading])
+
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.restore-scoping.test.tsx b/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.restore-scoping.test.tsx
 index b43a453ce927f76bdc0a7b9b96a463247982aaa1..23f32b4e6b23aa8c862aebee4853d1b79e8f97aa 100644
 --- a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.restore-scoping.test.tsx
@@ -20673,7 +20857,7 @@ index a6102dfde21bc0bfcd5885140282de3e7d761ff4..af6f340296f8fefccb427782af277ad9
 +  return useLiveCompletionAdapter({ enabled, epoch: `${epoch}:${locale}:${gatewayReady}`, fetcher, isCached, toItem })
  }
 diff --git a/apps/desktop/src/app/chat/composer/index.tsx b/apps/desktop/src/app/chat/composer/index.tsx
-index aee9bf96c50cee698de0c72fff94dc22f26a541f..9386acf5cb1047d0d37010a14b6639bd73c86bee 100644
+index aee9bf96c50cee698de0c72fff94dc22f26a541f..9c09dbef2ad21b4b2d265997641dcb114d4e21db 100644
 --- a/apps/desktop/src/app/chat/composer/index.tsx
 +++ b/apps/desktop/src/app/chat/composer/index.tsx
 @@ -29,2 +29,3 @@ import { useStoreSelector, useStoresSelector } from '@/lib/use-session-slice'
@@ -20787,7 +20971,11 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..9386acf5cb1047d0d37010a14b6639bd
 -  }, [activeQueueSessionKey, resetUndoHistory])
 -
    // "Add URL" dialog — open/value state, autofocus, and submit (host onAddUrl or
-@@ -417,17 +437,11 @@ export function ChatBar({
+@@ -367,2 +387,3 @@ export function ChatBar({
+     focusInput,
++    gatewayReady: !disabled,
+     loadIntoComposer,
+@@ -417,17 +438,11 @@ export function ChatBar({
    const { queueDraft, steerDraft, submitDraft } = useComposerSubmit({
 +    ...draft,
      busyInputMode,
@@ -20806,7 +20994,7 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..9386acf5cb1047d0d37010a14b6639bd
      inputDisabled,
 -    loadIntoComposer,
      // The submit engine's only cancel call is the Stop-button branch (busy +
-@@ -441,16 +455,12 @@ export function ChatBar({
+@@ -441,16 +456,12 @@ export function ChatBar({
      queuedPrompts,
 -    sessionId,
 -    setComposerText,
@@ -20830,7 +21018,7 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..9386acf5cb1047d0d37010a14b6639bd
 -  // this API; keyup uses triggerKeyConsumedRef to skip its refresh.
 +  // Shared completion engine; keyup skips refresh for keys its keydown handler consumed.
    const {
-@@ -563,2 +573,8 @@ export function ChatBar({
+@@ -563,2 +574,8 @@ export function ChatBar({
    const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
 +    if (pasteFiles(event.clipboardData)) {
 +      event.preventDefault()
@@ -20839,11 +21027,11 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..9386acf5cb1047d0d37010a14b6639bd
 +    }
 +
      const imageBlobs = extractClipboardImageBlobs(event.clipboardData)
-@@ -1141,2 +1157,3 @@ export function ChatBar({
+@@ -1141,2 +1158,3 @@ export function ChatBar({
        foldVoice={foldVoice}
 +      hasBackgroundWork={Boolean(backgroundResume)}
        hasComposerPayload={hasComposerPayload}
-@@ -1147,3 +1164,21 @@ export function ChatBar({
+@@ -1147,3 +1165,21 @@ export function ChatBar({
        onSteer={canSteer ? () => steerDraft('steer') : undefined}
 +      onStop={haltRun}
        onToggleAutoSpeak={handleToggleAutoSpeak}
@@ -20865,15 +21053,15 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..9386acf5cb1047d0d37010a14b6639bd
 +        />
 +      }
        state={state}
-@@ -1158,2 +1193,3 @@ export function ChatBar({
+@@ -1158,2 +1194,3 @@ export function ChatBar({
        <div
 +        aria-describedby={blockedConnectionStatus ? connectionStatusId : undefined}
          aria-disabled={inputDisabled ? true : undefined}
-@@ -1231,2 +1267,3 @@ export function ChatBar({
+@@ -1231,2 +1268,3 @@ export function ChatBar({
        <ComposerDirectiveActions editorRef={editorRef} />
 +
        {/* assistant-ui requires ComposerPrimitive.Input somewhere in the tree
-@@ -1302,7 +1339,8 @@ export function ChatBar({
+@@ -1302,7 +1340,8 @@ export function ChatBar({
              <PreparedImageRecovery
 -              occupied={hasText || attachments.length > 0 || busy || disabled}
 +              occupied={hasText || attachments.length > 0 || Boolean(draft.recovery) || busy || disabled}
@@ -20884,7 +21072,7 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..9386acf5cb1047d0d37010a14b6639bd
                }}
 +              owner={draftOwner}
                request={requestBusyConfig}
-@@ -1487,6 +1525,15 @@ export function ChatBar({
+@@ -1487,6 +1526,15 @@ export function ChatBar({
                    <ContribSlot area={COMPOSER_AREAS.top} />
 -                  <RestoredDraftNotice
 -                    freshDraft={activeQueueSessionKey === null}
