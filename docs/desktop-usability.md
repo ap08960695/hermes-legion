@@ -144,6 +144,8 @@ from recovery moves keyboard focus to **Back**. Choose **Back** or press Escape
 in Gateway settings to return to recovery and focus **Gateway settings**.
 **Details** keeps its open or closed state when you return to the same startup error.
 In a short window, scroll the settings panel to reach **Save and reconnect**.
+While Local applies the settings, the recovery panel shows **Gateway
+connection restarting**.
 If the Local reconnect request fails, the error appears next to that button.
 Keyboard focus stays on **Save and reconnect** while the request is pending
 unless you move it, so you can press Enter again after a refusal.
