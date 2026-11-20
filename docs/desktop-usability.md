@@ -250,8 +250,9 @@ attention** while you use another split. **Open chat** brings back
 the question in the main pane.
 
 When **Open chat** returns to a live question, keyboard focus moves
-to its first choice or answer field. Tab continues through the form.
-Opening the chat leaves the answer unsubmitted.
+to its first choice or answer field, including after Local reconnect.
+Tab continues through the form. Opening the chat leaves the answer
+unsubmitted.
 
 If the question closes while you are still using its form, keyboard
 focus returns to that chat's message box so you can continue typing
