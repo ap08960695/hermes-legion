@@ -60744,10 +60744,10 @@ index 0000000000000000000000000000000000000000..09462de6ef92a8af84f07b51893d9ea5
 +}
 diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx b/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..10b3df3c86746bb0a1f523281f0e949885586707
+index 0000000000000000000000000000000000000000..5b78288449adea1fb73410157b5ed7378aa2a158
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx
-@@ -0,0 +1,723 @@
+@@ -0,0 +1,777 @@
 +import { host, type OwnerInboxItem } from '@hermes/plugin-sdk'
 +import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 +import { atom } from 'nanostores'
@@ -60927,6 +60927,60 @@ index 0000000000000000000000000000000000000000..10b3df3c86746bb0a1f523281f0e9498
 +    ])
 +  }
 +})
++
++it.each(['same prompt', 'same choices', 'new generation', 'profile switch', 'dialog closed'])(
++  'restores a reply only to the same question in the open inbox (%s)',
++  async scenario => {
++    const testerQuestion = 'What should Tester review?'
++    const writerQuestion = 'What should Writer document?'
++    const tester = prompt('tester', testerQuestion, { choices: ['Setup', 'Tests'], multi_select: true })
++    const writer = { ...tester, profile: 'writer', question: writerQuestion, choices: [] }
++    const inbox = fixture([tester, writer])
++
++    const open = async (count: number) => fireEvent.click(
++      await screen.findByRole('button', { name: `Waiting for owner ${count}` })
++    )
++
++    const row = (question: string) => within(screen.getByText(question).closest('li')!)
++    const answer = (question: string) => row(question).getByRole<HTMLInputElement>('textbox')
++    const choice = (name: string) => row(testerQuestion).getByRole<HTMLInputElement>('checkbox', { name })
++    inbox.mount()
++    await open(2)
++
++    if (scenario === 'same choices') {
++      fireEvent.click(choice('Setup'))
++      fireEvent.click(choice('Tests'))
++    } else {
++      fireEvent.change(answer(testerQuestion), { target: { value: 'Review the failing cases' } })
++    }
++
++    await act(async () => inbox.change([writer]))
++    expect(screen.queryByText(testerQuestion)).toBeNull()
++    expect(answer(writerQuestion).value).toBe('')
++
++    if (scenario === 'profile switch') {
++      await act(async () => inbox.profile.set('alternate'))
++      await act(async () => inbox.profile.set('default'))
++    } else if (scenario === 'dialog closed') {
++      fireEvent.click(screen.getByRole('button', { name: 'Close' }))
++      await open(1)
++    }
++
++    const other = answer(writerQuestion)
++    other.focus()
++    fireEvent.change(other, { target: { value: 'Document the setup' } })
++    await act(async () => inbox.change([
++      writer, scenario === 'new generation' ? { ...tester, execution_generation: 5 } : tester
++    ]))
++
++    expect(answer(testerQuestion).value).toBe(scenario === 'same prompt' ? 'Review the failing cases' : '')
++    expect(choice('Setup').checked).toBe(scenario === 'same choices')
++    expect(choice('Tests').checked).toBe(scenario === 'same choices')
++    expect(other.value).toBe('Document the setup')
++    expect(other.ownerDocument.activeElement).toBe(other)
++    expect(inbox.request.mock.calls.some(([method]) => method === 'owner_inbox.respond')).toBe(false)
++  }
++)
 +
 +it.each([false, true])('gates Open chat until the Local inbox confirms the row (%s)', async removed => {
 +  const question = prompt('writer', 'Can you review this?', {
@@ -61473,10 +61527,10 @@ index 0000000000000000000000000000000000000000..10b3df3c86746bb0a1f523281f0e9498
 +)
 diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx b/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..5deac1062decd7222077d3d55eb12757548668ec
+index 0000000000000000000000000000000000000000..2409078ec95890126eeda0e2ab96b48845245142
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx
-@@ -0,0 +1,268 @@
+@@ -0,0 +1,300 @@
 +import {
 +  Button, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, host, type OwnerInboxItem, type PluginProfileRoute, relativeTime
 +} from '@hermes/plugin-sdk'
@@ -61491,6 +61545,8 @@ index 0000000000000000000000000000000000000000..5deac1062decd7222077d3d55eb12757
 +  route?: PluginProfileRoute | null
 +}
 +
++type OwnerReplyDraft = { answer: string; selected: string[] }
++
 +export function OwnerInbox({ connection, bots, text }: {
 +  connection: string | null
 +  bots: InboxBot[]
@@ -61498,6 +61554,7 @@ index 0000000000000000000000000000000000000000..5deac1062decd7222077d3d55eb12757
 +}) {
 +  const t = text.ownerInbox
 +  const [open, setOpen] = useState(false)
++  const [drafts] = useState(() => new Map<string, OwnerReplyDraft>())
 +  const [notice, setNotice] = useState('')
 +  const [openingChat, setOpeningChat] = useState(false)
 +  const [openingRowKey, setOpeningRowKey] = useState<string | null>(null)
@@ -61533,18 +61590,28 @@ index 0000000000000000000000000000000000000000..5deac1062decd7222077d3d55eb12757
 +      setOpenErrorKey(null)
 +      setOpeningRowKey(null)
 +    }
-+    const stop = [host.state.connectionId, host.state.gateway, host.state.profile]
-+      .map(store => store.listen(invalidateScope))
++
++    const changeScope = () => {
++      drafts.clear()
++      invalidateScope()
++    }
++
++    const stop = [
++      host.state.connectionId.listen(changeScope),
++      host.state.profile.listen(changeScope),
++      host.state.gateway.listen(invalidateScope)
++    ]
 +
 +    return () => {
 +      scopeGeneration.current += 1
 +      stop.forEach(unsubscribe => unsubscribe())
 +    }
-+  }, [])
++  }, [drafts])
 +
 +  function changeOpen(next: boolean) {
 +    if (!next) {
 +      dialogGeneration.current += 1
++      drafts.clear()
 +      setNotice('')
 +      setOpenErrorKey(null)
 +      setOpeningRowKey(null)
@@ -61599,7 +61666,11 @@ index 0000000000000000000000000000000000000000..5deac1062decd7222077d3d55eb12757
 +
 +    try {
 +      const result = await inbox.respond(prompt, value)
-+      if (result && isCurrent()) { setNotice(result === 'resolved' ? t.sent : t.expired) }
++
++      if (result && isCurrent()) {
++        drafts.delete(ownerPromptKey(prompt))
++        setNotice(result === 'resolved' ? t.sent : t.expired)
++      }
 +    } catch {
 +      if (isCurrent()) { throw new Error(t.failed) }
 +    }
@@ -61629,7 +61700,7 @@ index 0000000000000000000000000000000000000000..5deac1062decd7222077d3d55eb12757
 +      <p className={status ? "text-sm" : "sr-only"} role="status">{status}</p>
 +      <ul className="grid gap-3" ref={list}>
 +        {inbox.items.map(prompt => <OwnerPromptRow
-+          bot={bots.find(bot => bot.profile === prompt.profile)?.label || prompt.profile} key={ownerPromptKey(prompt)} onOpen={() => void openChat(prompt)} openFailed={openErrorKey === ownerPromptKey(prompt)}
++          bot={bots.find(bot => bot.profile === prompt.profile)?.label || prompt.profile} drafts={drafts} key={ownerPromptKey(prompt)} onOpen={() => void openChat(prompt)} openFailed={openErrorKey === ownerPromptKey(prompt)}
 +          openingChat={openingChat} openingStatus={openingRowKey === ownerPromptKey(prompt) ? text.bot.openingChat : ''}
 +          onRespond={value => respond(prompt, value)}
 +          pending={inbox.isResponding(prompt)} prompt={prompt} stale={inbox.status !== 'ready'} text={text} />)}
@@ -61644,9 +61715,10 @@ index 0000000000000000000000000000000000000000..5deac1062decd7222077d3d55eb12757
 +  }
 +}
 +
-+function OwnerPromptRow({ prompt, bot, onOpen, onRespond, openFailed, openingChat, openingStatus, pending, stale, text }: {
++function OwnerPromptRow({ prompt, bot, drafts, onOpen, onRespond, openFailed, openingChat, openingStatus, pending, stale, text }: {
 +  prompt: OwnerInboxItem
 +  bot: string
++  drafts: Map<string, OwnerReplyDraft>
 +  text: Pick<BotsText, 'ownerInbox' | 'workspace'>
 +  onOpen: () => void
 +  onRespond: (value: string) => Promise<void>
@@ -61658,8 +61730,12 @@ index 0000000000000000000000000000000000000000..5deac1062decd7222077d3d55eb12757
 +}) {
 +  const t = text.ownerInbox
 +  const questionId = useId()
-+  const [answer, setAnswer] = useState('')
-+  const [selected, setSelected] = useState<string[]>([])
++  const key = ownerPromptKey(prompt)
++
++  const [{ answer, selected }, setDraft] = useState<OwnerReplyDraft>(() => drafts.get(key) ?? {
++    answer: '', selected: []
++  })
++
 +  const selectedChoices = selected.filter(choice => prompt.choices.includes(choice))
 +  const [error, setError] = useState(false)
 +  const createdAt = prompt.created_at * 1000
@@ -61670,6 +61746,16 @@ index 0000000000000000000000000000000000000000..5deac1062decd7222077d3d55eb12757
 +      {openingStatus}
 +    </span>
 +  </>
++
++  function updateDraft(next: OwnerReplyDraft) {
++    if (next.answer || next.selected.length) {
++      drafts.set(key, next)
++    } else {
++      drafts.delete(key)
++    }
++
++    setDraft(next)
++  }
 +
 +  async function send(value: string) {
 +    if (pending || stale) { return }
@@ -61682,7 +61768,7 @@ index 0000000000000000000000000000000000000000..5deac1062decd7222077d3d55eb12757
 +    }
 +  }
 +
-+  return <li className="min-w-0 space-y-3 rounded-lg border border-(--ui-stroke-tertiary) px-4 py-3" data-owner-prompt-key={ownerPromptKey(prompt)}>
++  return <li className="min-w-0 space-y-3 rounded-lg border border-(--ui-stroke-tertiary) px-4 py-3" data-owner-prompt-key={key}>
 +    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
 +      <div className="min-w-0 break-words text-sm font-semibold">{bot}
 +        {bot !== prompt.profile && <span className="ml-2 font-normal text-muted-foreground">{prompt.profile}</span>}
@@ -61706,18 +61792,18 @@ index 0000000000000000000000000000000000000000..5deac1062decd7222077d3d55eb12757
 +          <input aria-disabled={pending || undefined} checked={selected.includes(choice)} className="mt-1" name={questionId}
 +            onChange={event => {
 +              if (pending) { return }
-+              setAnswer('')
-+              const checked = event.currentTarget.checked
-+              setSelected(current => prompt.multi_select
-+                ? checked ? [...current, choice] : current.filter(item => item !== choice)
-+                : [choice])
++              const next = prompt.multi_select
++                ? event.currentTarget.checked ? [...selected, choice] : selected.filter(item => item !== choice)
++                : [choice]
++
++              updateDraft({ answer: '', selected: next })
 +            }} type={prompt.multi_select ? 'checkbox' : 'radio'} />
 +          <span className="min-w-0">{choice}</span>
 +        </label>)}
 +        <label className="grid gap-1 text-xs text-muted-foreground">
 +          {prompt.choices.length ? t.otherAnswer : t.answer}
 +          <input aria-describedby={questionId} className="min-h-9 rounded border border-(--ui-stroke-tertiary) bg-background px-2 text-sm text-foreground"
-+            maxLength={16384} onChange={event => { setSelected([]); setAnswer(event.currentTarget.value) }} readOnly={pending} value={answer} />
++            maxLength={16384} onChange={event => updateDraft({ answer: event.currentTarget.value, selected: [] })} readOnly={pending} value={answer} />
 +        </label>
 +      </fieldset>
 +      <div className="flex flex-wrap gap-2">
