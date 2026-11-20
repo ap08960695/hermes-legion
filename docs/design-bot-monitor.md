@@ -86,7 +86,8 @@ focus to its first answer control once the inbox closes. If an open Local
 split missed that question, **Open chat** asks the gateway for the current
 question before moving focus.
 When a Local split missed an approval, **Open chat** checks the gateway
-for the request so you can review it in the chat.
+for the request so you can review it in the chat. The same check clears
+expired approval cards that would otherwise cover the current request.
 If the connection, profile, or gateway state changes meanwhile, the earlier
 open leaves the current inbox alone when it finishes.
 If you reopen the inbox or switch connection or profile while an answer
