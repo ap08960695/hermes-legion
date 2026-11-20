@@ -244,3 +244,7 @@ separately.
 Choose **Open chat** on the waiting bot to return to the open tab
 that holds the question, even if another tab from that Bot Chat
 was used more recently.
+
+If a waiting Bot Chat moves into the main pane, it stays in **Needs
+attention** while you use another split. **Open chat** brings back
+the question in the main pane.
