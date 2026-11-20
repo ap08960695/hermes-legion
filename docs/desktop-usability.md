@@ -252,14 +252,16 @@ the question in the main pane.
 When **Open chat** returns to a live question, keyboard focus moves
 to its first choice or answer field, including after Local reconnect.
 Tab continues through the form. Opening the chat leaves the answer
-unsubmitted.
+unsubmitted. If a new question replaces the one you are using,
+focus moves to the new question's first choice or answer field.
+Your previous selection stays unsent.
 
 After you confirm or skip in the question form, focus returns to
 the message box. A failed confirmation lets you retry from the question.
 If the question expires or is answered elsewhere while you are still
-using its form, focus stays on the chat pane. Enter leaves your draft
-in place until you return to the message box. If you have moved to
-another pane, focus stays there.
+using its form and no replacement arrives, focus stays on the chat pane.
+Enter leaves your draft in place until you return to the message box.
+If you have moved to another pane, focus stays there.
 
 If Local disconnects while you are drafting a clarification answer,
 your selections and text reappear when the same pending question
