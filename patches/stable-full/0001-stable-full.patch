@@ -18102,6 +18102,31 @@ index fb9e327a2c0dccfb1d15077b480653ea36a27fa6..0bffa2ec98056a649b37bd95dd42c55c
 +  fireEvent.click(screen.getByRole('button', { name: 'Close' }))
 +  await waitFor(() => expect(document.activeElement).toBe(view.container.querySelector('[data-artifact-library]')))
  })
+diff --git a/apps/desktop/src/app/chat/composer/chat-bar-parts.tsx b/apps/desktop/src/app/chat/composer/chat-bar-parts.tsx
+index dad20176d853e54763ce7637ad3fdc923ae7ce6d..433fe6cd6507ec7ef2feca2c2267464305dea5c3 100644
+--- a/apps/desktop/src/app/chat/composer/chat-bar-parts.tsx
++++ b/apps/desktop/src/app/chat/composer/chat-bar-parts.tsx
+@@ -31,3 +31,9 @@ export function ComposerDockGlow({ dockProximity }: { dockProximity: number }) {
+ /** "Editing a queued prompt" banner with Cancel / Save actions. */
+-export function QueuedEditBanner({ onExit }: { onExit: (action: 'cancel' | 'save') => unknown }) {
++export function QueuedEditBanner({
++  onExit,
++  saveDisabled
++}: {
++  onExit: (action: 'cancel' | 'save') => unknown
++  saveDisabled: boolean
++}) {
+   const { t } = useI18n()
+@@ -46,3 +52,8 @@ export function QueuedEditBanner({ onExit }: { onExit: (action: 'cancel' | 'save
+         </Button>
+-        <Button className="h-6 rounded-md px-2 text-[0.68rem]" onClick={() => onExit('save')} type="button">
++        <Button
++          className="h-6 rounded-md px-2 text-[0.68rem]"
++          disabled={saveDisabled}
++          onClick={() => onExit('save')}
++          type="button"
++        >
+           {t.common.save}
 diff --git a/apps/desktop/src/app/chat/composer/clipboard-files.ts b/apps/desktop/src/app/chat/composer/clipboard-files.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..9d2473e3805619ff823efbf19761ec47973f5972
@@ -19827,9 +19852,14 @@ index 8d1bf8c1ee56b9b2e8c3ccf91691adf4885577f0..72b6e95dcef349230c3cbde959184e72
 +  return override ?? restingPlaceholder
  }
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-queue.test.tsx b/apps/desktop/src/app/chat/composer/hooks/use-composer-queue.test.tsx
-index 52a543154a6db1f4fd4e4ddaa9b1c789214a346e..ab35cd1d41e0ff9ebd385c5ba256e2a0d02fb5f0 100644
+index 52a543154a6db1f4fd4e4ddaa9b1c789214a346e..7e1c976d307954bc31942d9eb9807247cd70c6db 100644
 --- a/apps/desktop/src/app/chat/composer/hooks/use-composer-queue.test.tsx
 +++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-queue.test.tsx
+@@ -19,3 +19,3 @@ import { $notifications, clearNotifications } from '@/store/notifications'
+ import { reconcilePendingSubmissions } from '@/store/pending-submissions'
+-import { $connection, setSessionsLoading } from '@/store/session'
++import { $connection, $gatewayState, setSessionsLoading } from '@/store/session'
+
 @@ -51,2 +51,3 @@ function renderQueueHook(
      draft?: string
 +    gatewayReady?: boolean
@@ -20032,10 +20062,85 @@ index 52a543154a6db1f4fd4e4ddaa9b1c789214a346e..ab35cd1d41e0ff9ebd385c5ba256e2a0
 +  })
 +
    it('holds a parked queue at the idle settle (the Stop edge)', async () => {
+@@ -521,4 +703,7 @@ describe('useComposerQueue park integration', () => {
+ describe('useComposerQueue scope', () => {
++  beforeEach(() => $gatewayState.set('open'))
++
+   afterEach(() => {
+     cleanup()
++    $gatewayState.set('idle')
+     window.localStorage.clear()
+@@ -580,2 +765,50 @@ describe('useComposerQueue scope', () => {
+
++  it('waits for Ready before replacing an owner admission and preserves the edit', async () => {
++    reconcilePendingSubmissions(SESSION_KEY, [
++      { admission_id: 'adm-1', status: 'queued', user: 'old words', controls: ['replace'] }
++    ])
++
++    const replaceServerQueued = vi.fn(async () => ({}))
++    const { draftRef, hook } = renderQueueHook({ busy: true, draft: 'my draft', replaceServerQueued })
++
++    act(() => hook.result.current.beginQueuedEdit(getQueuedPrompts(SESSION_KEY)[0]!))
++    draftRef.current = 'new words'
++    $gatewayState.set('connecting')
++
++    // The gateway can close before Chat re-renders its readiness prop.
++    act(() => expect(hook.result.current.exitQueuedEdit('save')).toBe(false))
++    hook.rerender({ busy: true, gatewayReady: false })
++    act(() => expect(hook.result.current.exitQueuedEdit('save')).toBe(false))
++    expect(replaceServerQueued).not.toHaveBeenCalled()
++    expect(hook.result.current.queueEdit?.entryId).toBe('adm-1')
++    expect(draftRef.current).toBe('new words')
++
++    $gatewayState.set('open')
++    hook.rerender({ busy: true, gatewayReady: true })
++    expect(replaceServerQueued).not.toHaveBeenCalled()
++    await act(async () => expect(hook.result.current.exitQueuedEdit('save')).toBe(true))
++    expect(replaceServerQueued).toHaveBeenCalledExactlyOnceWith('adm-1', 'new words', expect.any(String))
++    expect(draftRef.current).toBe('my draft')
++  })
++
++  it('keeps local edit navigation within local entries and can save them while offline', () => {
++    reconcilePendingSubmissions(SESSION_KEY, [
++      { admission_id: 'adm-1', status: 'queued', user: 'owner words' }
++    ])
++
++    const entry = enqueueQueuedPrompt(SESSION_KEY, { attachments: [], text: 'local words' })!
++    const { draftRef, hook } = renderQueueHook({ busy: true, draft: 'my draft', gatewayReady: false })
++
++    $gatewayState.set('connecting')
++    act(() => hook.result.current.beginQueuedEdit(entry))
++    draftRef.current = 'edited local words'
++    act(() => expect(hook.result.current.stepQueuedEdit(-1)).toBe(true))
++    expect(hook.result.current.queueEdit?.entryId).toBe(entry.id)
++    expect(draftRef.current).toBe('edited local words')
++
++    act(() => expect(hook.result.current.exitQueuedEdit('save')).toBe(true))
++    expect(draftRef.current).toBe('my draft')
++    expect(getQueuedPrompts(SESSION_KEY).map(row => row.text)).toEqual(['owner words', 'edited local words'])
++  })
++
+   it('a refused replacement keeps the edited text as an unsent draft and says why', async () => {
+@@ -659,2 +892,10 @@ describe('useComposerQueue scope', () => {
+
++    $gatewayState.set('connecting')
++    hook.rerender({ busy: true, gatewayReady: false })
++    act(() => expect(hook.result.current.exitQueuedEdit('save')).toBe(false))
++    expect(replaceServerQueued).toHaveBeenCalledTimes(1)
++    expect(draftRef.current).toBe('new words')
++
++    $gatewayState.set('open')
++    hook.rerender({ busy: true, gatewayReady: true })
+     act(() => {
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-queue.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-queue.ts
-index 88de17bec644218de7c6aa6a7893dbe358790d2d..71a3c232de6670eb542174db00352396857b306f 100644
+index 88de17bec644218de7c6aa6a7893dbe358790d2d..4832a9465ff9afd8e205992a5cffdb5903bd2ee5 100644
 --- a/apps/desktop/src/app/chat/composer/hooks/use-composer-queue.ts
 +++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-queue.ts
+@@ -30,3 +30,3 @@ import { activeGateway } from '@/store/gateway'
+ import { notify } from '@/store/notifications'
+-import { $sessionsLoading } from '@/store/session'
++import { $gatewayState, $sessionsLoading } from '@/store/session'
+
 @@ -81,2 +81,3 @@ interface UseComposerQueueArgs {
    focusInput: () => void
 +  gatewayReady?: boolean
@@ -20044,7 +20149,11 @@ index 88de17bec644218de7c6aa6a7893dbe358790d2d..71a3c232de6670eb542174db00352396
    focusInput,
 +  gatewayReady = true,
    loadIntoComposer,
-@@ -192,4 +194,7 @@ export function useComposerQueue({
+@@ -169,2 +171,3 @@ export function useComposerQueue({
+   const serverEditRef = useRef<string | null>(null)
++  const editingServerQueue = queueEdit !== null && serverEditRef.current === queueEdit.entryId
+   // The one save the owner is answering: the exact edit it was made in, its own token and the
+@@ -192,4 +195,7 @@ export function useComposerQueue({
    currentQueueKeyRef.current = activeQueueSessionKey
 +  const gatewayReadyRef = useRef(gatewayReady)
 +  gatewayReadyRef.current = gatewayReady
@@ -20052,7 +20161,30 @@ index 88de17bec644218de7c6aa6a7893dbe358790d2d..71a3c232de6670eb542174db00352396
    const drainingQueueRef = useRef(false)
 +  const reconnectDuringDrainRef = useRef(false)
    const drainFailuresRef = useRef(new Map<string, number>())
-@@ -484,4 +489,7 @@ export function useComposerQueue({
+@@ -230,3 +236,4 @@ export function useComposerQueue({
+
+-    const index = queuedPrompts.findIndex(e => e.id === queueEdit.entryId)
++    const localPrompts = queuedPrompts.filter(entry => !entry.serverStatus)
++    const index = localPrompts.findIndex(entry => entry.id === queueEdit.entryId)
+     const target = index + direction
+@@ -252,3 +259,3 @@ export function useComposerQueue({
+
+-    const next = queuedPrompts[target]
++    const next = localPrompts[target]
+
+@@ -274,2 +281,6 @@ export function useComposerQueue({
+     if (action === 'save') {
++      if (editingServerQueue && (!gatewayReadyRef.current || $gatewayState.get() !== 'open')) {
++        return false
++      }
++
+       const text = draftRef.current
+@@ -301,3 +312,3 @@ export function useComposerQueue({
+       // A server row's edit (its row may be gone while an unconfirmed save of it is retried).
+-      if (serverEditRef.current === queueEdit.entryId) {
++      if (editingServerQueue) {
+         // The owner replaces the admission and its pending fanout repaints the card. Text only,
+@@ -484,4 +495,7 @@ export function useComposerQueue({
    const runDrain = useCallback(
 -    async (pickEntry: (entries: QueuedPromptEntry[]) => QueuedPromptEntry | undefined): Promise<boolean | null> => {
 -      if (drainingQueueRef.current || !activeQueueSessionKey) {
@@ -20062,14 +20194,14 @@ index 88de17bec644218de7c6aa6a7893dbe358790d2d..71a3c232de6670eb542174db00352396
 +    ): Promise<boolean | null> => {
 +      if (!gatewayReadyRef.current || drainingQueueRef.current || !activeQueueSessionKey) {
          return false
-@@ -496,2 +504,6 @@ export function useComposerQueue({
+@@ -496,2 +510,6 @@ export function useComposerQueue({
          return await withQueueDrainClaim(drainQueueSessionKey, async queue => {
 +          if (!gatewayReadyRef.current || (isCurrent && !isCurrent())) {
 +            return null
 +          }
 +
            // Server-owned rows already sit in the gateway FIFO; never re-send them.
-@@ -546,2 +558,7 @@ export function useComposerQueue({
+@@ -546,2 +564,7 @@ export function useComposerQueue({
          drainingQueueRef.current = false
 +
 +        if (reconnectDuringDrainRef.current) {
@@ -20077,12 +20209,12 @@ index 88de17bec644218de7c6aa6a7893dbe358790d2d..71a3c232de6670eb542174db00352396
 +          setDrainRetryTick(tick => tick + 1)
 +        }
        }
-@@ -564,3 +581,3 @@ export function useComposerQueue({
+@@ -564,3 +587,3 @@ export function useComposerQueue({
      (id: string) => {
 -      if (!activeQueueSessionKey || id === queueEdit?.entryId) {
 +      if (!gatewayReadyRef.current || !activeQueueSessionKey || id === queueEdit?.entryId) {
          return false
-@@ -602,3 +619,9 @@ export function useComposerQueue({
+@@ -602,3 +625,9 @@ export function useComposerQueue({
      async (id: string): Promise<boolean> => {
 -      if (!onSteer || !busy || !activeQueueSessionKey || id === queueEditRef.current?.entryId) {
 +      if (
@@ -20093,19 +20225,19 @@ index 88de17bec644218de7c6aa6a7893dbe358790d2d..71a3c232de6670eb542174db00352396
 +        id === queueEditRef.current?.entryId
 +      ) {
          return false
-@@ -657,2 +680,6 @@ export function useComposerQueue({
+@@ -657,2 +686,6 @@ export function useComposerQueue({
      async (id: string) => {
 +      if (!gatewayReadyRef.current) {
 +        return false
 +      }
 +
        const entry = activeQueueSessionKey ? getQueuedPrompts(activeQueueSessionKey).find(e => e.id === id) : undefined
-@@ -720,3 +747,3 @@ export function useComposerQueue({
+@@ -720,3 +753,3 @@ export function useComposerQueue({
      // window — which is not a failed send.
 -    void runDrain(entries => entries.find(e => e.id === entry.id))
 +    void runDrain(entries => entries.find(e => e.id === entry.id), () => !cancelled)
        .then(sent => {
-@@ -760,7 +787,14 @@ export function useComposerQueue({
+@@ -760,7 +793,14 @@ export function useComposerQueue({
    // edge, on mount/reconnect, and after a re-key — so a swallowed edge can't
 -  // strand them. A park (explicit Stop/Esc) is the one gate: those entries wait
 -  // for the user. To cancel queued turns, the user deletes them from the panel.
@@ -20124,11 +20256,15 @@ index 88de17bec644218de7c6aa6a7893dbe358790d2d..71a3c232de6670eb542174db00352396
 +
 +    // Match the background drainer: preserve the retry budget during session discovery.
      if (sessionsLoading) {
-@@ -772,3 +806,3 @@ export function useComposerQueue({
+@@ -772,3 +812,3 @@ export function useComposerQueue({
      }
 -  }, [autoDrainNext, busy, drainRetryTick, queueParked, queuedPrompts.length, sessionsLoading])
 +  }, [autoDrainNext, busy, drainRetryTick, gatewayReady, queueParked, queuedPrompts.length, sessionsLoading])
 
+@@ -812,2 +852,3 @@ export function useComposerQueue({
+     editingQueuedPrompt,
++    editingServerQueue,
+     exitQueuedEdit,
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.restore-scoping.test.tsx b/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.restore-scoping.test.tsx
 index b43a453ce927f76bdc0a7b9b96a463247982aaa1..23f32b4e6b23aa8c862aebee4853d1b79e8f97aa 100644
 --- a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.restore-scoping.test.tsx
@@ -20976,7 +21112,7 @@ index a6102dfde21bc0bfcd5885140282de3e7d761ff4..af6f340296f8fefccb427782af277ad9
 +  return useLiveCompletionAdapter({ enabled, epoch: `${epoch}:${locale}:${gatewayReady}`, fetcher, isCached, toItem })
  }
 diff --git a/apps/desktop/src/app/chat/composer/index.tsx b/apps/desktop/src/app/chat/composer/index.tsx
-index aee9bf96c50cee698de0c72fff94dc22f26a541f..ce5c6bfe572031afe2be75c6b11291dc00cfba0c 100644
+index aee9bf96c50cee698de0c72fff94dc22f26a541f..4ce5077e82cdfe77bc4c729bb4aa618a2cc412f2 100644
 --- a/apps/desktop/src/app/chat/composer/index.tsx
 +++ b/apps/desktop/src/app/chat/composer/index.tsx
 @@ -29,2 +29,3 @@ import { useStoreSelector, useStoresSelector } from '@/lib/use-session-slice'
@@ -21090,11 +21226,15 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..ce5c6bfe572031afe2be75c6b11291dc
 -  }, [activeQueueSessionKey, resetUndoHistory])
 -
    // "Add URL" dialog — open/value state, autofocus, and submit (host onAddUrl or
-@@ -367,2 +387,3 @@ export function ChatBar({
+@@ -352,2 +372,3 @@ export function ChatBar({
+     editingQueuedPrompt,
++    editingServerQueue,
+     exitQueuedEdit,
+@@ -367,2 +388,3 @@ export function ChatBar({
      focusInput,
 +    gatewayReady: !disabled,
      loadIntoComposer,
-@@ -417,17 +438,11 @@ export function ChatBar({
+@@ -417,17 +439,11 @@ export function ChatBar({
    const { queueDraft, steerDraft, submitDraft } = useComposerSubmit({
 +    ...draft,
      busyInputMode,
@@ -21113,7 +21253,7 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..ce5c6bfe572031afe2be75c6b11291dc
      inputDisabled,
 -    loadIntoComposer,
      // The submit engine's only cancel call is the Stop-button branch (busy +
-@@ -441,16 +456,12 @@ export function ChatBar({
+@@ -441,16 +457,12 @@ export function ChatBar({
      queuedPrompts,
 -    sessionId,
 -    setComposerText,
@@ -21137,7 +21277,7 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..ce5c6bfe572031afe2be75c6b11291dc
 -  // this API; keyup uses triggerKeyConsumedRef to skip its refresh.
 +  // Shared completion engine; keyup skips refresh for keys its keydown handler consumed.
    const {
-@@ -563,2 +574,8 @@ export function ChatBar({
+@@ -563,2 +575,8 @@ export function ChatBar({
    const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
 +    if (pasteFiles(event.clipboardData)) {
 +      event.preventDefault()
@@ -21146,11 +21286,11 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..ce5c6bfe572031afe2be75c6b11291dc
 +    }
 +
      const imageBlobs = extractClipboardImageBlobs(event.clipboardData)
-@@ -1141,2 +1158,3 @@ export function ChatBar({
+@@ -1141,2 +1159,3 @@ export function ChatBar({
        foldVoice={foldVoice}
 +      hasBackgroundWork={Boolean(backgroundResume)}
        hasComposerPayload={hasComposerPayload}
-@@ -1147,3 +1165,21 @@ export function ChatBar({
+@@ -1147,3 +1166,21 @@ export function ChatBar({
        onSteer={canSteer ? () => steerDraft('steer') : undefined}
 +      onStop={haltRun}
        onToggleAutoSpeak={handleToggleAutoSpeak}
@@ -21172,15 +21312,15 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..ce5c6bfe572031afe2be75c6b11291dc
 +        />
 +      }
        state={state}
-@@ -1158,2 +1194,3 @@ export function ChatBar({
+@@ -1158,2 +1195,3 @@ export function ChatBar({
        <div
 +        aria-describedby={blockedConnectionStatus ? connectionStatusId : undefined}
          aria-disabled={inputDisabled ? true : undefined}
-@@ -1231,2 +1268,3 @@ export function ChatBar({
+@@ -1231,2 +1269,3 @@ export function ChatBar({
        <ComposerDirectiveActions editorRef={editorRef} />
 +
        {/* assistant-ui requires ComposerPrimitive.Input somewhere in the tree
-@@ -1302,7 +1340,8 @@ export function ChatBar({
+@@ -1302,7 +1341,8 @@ export function ChatBar({
              <PreparedImageRecovery
 -              occupied={hasText || attachments.length > 0 || busy || disabled}
 +              occupied={hasText || attachments.length > 0 || Boolean(draft.recovery) || busy || disabled}
@@ -21191,11 +21331,11 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..ce5c6bfe572031afe2be75c6b11291dc
                }}
 +              owner={draftOwner}
                request={requestBusyConfig}
-@@ -1323,2 +1362,3 @@ export function ChatBar({
+@@ -1323,2 +1363,3 @@ export function ChatBar({
                  busy,
 +                deliveryDisabled: disabled,
                  drainNextQueued,
-@@ -1487,6 +1527,15 @@ export function ChatBar({
+@@ -1487,6 +1528,15 @@ export function ChatBar({
                    <ContribSlot area={COMPOSER_AREAS.top} />
 -                  <RestoredDraftNotice
 -                    freshDraft={activeQueueSessionKey === null}
@@ -21215,6 +21355,13 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..ce5c6bfe572031afe2be75c6b11291dc
 +                    scope={activeQueueSessionKey}
 +                    sessionId={sessionId}
                    />
+@@ -1494,3 +1544,5 @@ export function ChatBar({
+                   <VoicePlaybackActivity />
+-                  {queueEdit && editingQueuedPrompt && <QueuedEditBanner onExit={exitQueuedEdit} />}
++                  {queueEdit && (editingQueuedPrompt || editingServerQueue) && (
++                    <QueuedEditBanner onExit={exitQueuedEdit} saveDisabled={disabled && editingServerQueue} />
++                  )}
+                   {attachments.length > 0 && <AttachmentList attachments={attachments} onRemove={onRemoveAttachment} />}
 diff --git a/apps/desktop/src/app/chat/composer/paste-files.test.tsx b/apps/desktop/src/app/chat/composer/paste-files.test.tsx
 new file mode 100644
 index 0000000000000000000000000000000000000000..a4af4194220b86b7f5fb5b75aca1b1fe91692b6d

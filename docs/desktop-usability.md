@@ -88,7 +88,10 @@ Queued messages stay visible, and a queue paused with Stop stays paused.
 Resume, Send, Next, Steer and the shortcut to send the next queued
 message are available when the gateway is ready. You can still edit
 or remove messages held on this device during reconnect. Delete and
-Discard for entries held by the gateway wait for the connection.
+Discard for entries held by the gateway wait for the connection. You can
+keep typing an edit to a gateway-held entry and save it when Ready.
+If the previous Save could not be confirmed, choose Save again after the
+connection returns.
 When reconnect interrupts the open Chat, it tries to resume
 after the Local gateway returns. During recovery, a closed socket or
 shutdown refusal uses the existing reconnect status. A split Chat shows its
