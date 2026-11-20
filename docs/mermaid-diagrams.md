@@ -15,6 +15,10 @@ flowchart LR
 ```
 ````
 
+When a diagram has an `accTitle`, its **Open diagram** button and viewer
+include that title so screen reader users can tell diagrams apart in Chat
+and on work cards.
+
 Open the diagram to enter the zoom and pan viewer. While the viewer or its
 toolbar has focus, use the arrow keys to pan. Press **+** or **=** to zoom in,
 **−** to zoom out, and **0** to fit and recenter. Zooming keeps the center point
