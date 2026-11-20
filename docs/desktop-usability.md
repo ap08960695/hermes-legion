@@ -87,6 +87,8 @@ its error explains why automatic retries stop. After fixing the reported
 issue, choose **Reconnect now** on the error to retry that Local connection.
 When you activate it by keyboard, focus moves to the Local connection
 status and stays there while the retry completes.
+If the retry is refused again and focus is still on the status, focus
+returns to **Reconnect now**.
 Open split Chats on the shared Local gateway reattach across profiles.
 While a split Chat restores its runtime, it can show a read-only excerpt
 of recent saved messages. The composer returns when the Chat reattaches.
