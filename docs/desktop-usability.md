@@ -17,8 +17,9 @@ saved chat in another tab. Select the main tab to continue your draft.
 Press Enter or Space on a History result to move focus into the saved
 chat while it loads, including when it opens in an empty main tab.
 If the main chat fails to load, activating **Retry** with the keyboard
-keeps focus in that chat until the composer is ready. Use Back to
-return to the same History search.
+keeps focus in that chat until the composer is ready. Retry uses the
+profile that owns the saved chat, even when another Local profile is
+active. Use Back to return to the same History search.
 During Local reconnect, message search waits for the gateway. You can
 edit the query or choose a result already shown for that same search.
 If the result opens in a split tab, focus moves to that chat while it waits
