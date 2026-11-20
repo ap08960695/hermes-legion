@@ -57,6 +57,9 @@ load, use **Retry run** in the open row. The totals and other open run
 details stay visible.
 If a refresh fails, the last loaded totals and open run evidence stay
 visible with a warning. **Retry usage** rechecks the same card and review.
+On a narrow pane, press Tab to focus **Usage by phase** and use the
+Left and Right arrows to scroll through the columns. Press Tab again
+to reach the run evidence.
 
 Coverage is partial. When THINK usage is linked, the table explains that
 adding card totals can count the same run twice. Use the run evidence to
