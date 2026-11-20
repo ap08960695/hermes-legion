@@ -252,3 +252,8 @@ the question in the main pane.
 When **Open chat** returns to a live question, keyboard focus moves
 to its first choice or answer field. Tab continues through the form.
 Opening the chat leaves the answer unsubmitted.
+
+If the question closes while you are still using its form, keyboard
+focus returns to that chat's message box so you can continue typing
+your draft. A failed confirmation lets you retry from the question.
+If you have moved to another pane, focus stays there.
