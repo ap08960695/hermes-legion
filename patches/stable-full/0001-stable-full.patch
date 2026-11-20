@@ -18968,6 +18968,97 @@ index 0000000000000000000000000000000000000000..e592e58cc33696493da385a500fa52d6
 +
 +  return dispatchSubmit
 +}
+diff --git a/apps/desktop/src/app/chat/composer/hooks/use-at-completions-contrib.test.tsx b/apps/desktop/src/app/chat/composer/hooks/use-at-completions-contrib.test.tsx
+index e931dd78050bad246bb496447c1a691f3bbbe7a6..bc6ad788519e8f890022d4b96eea71393b37a963 100644
+--- a/apps/desktop/src/app/chat/composer/hooks/use-at-completions-contrib.test.tsx
++++ b/apps/desktop/src/app/chat/composer/hooks/use-at-completions-contrib.test.tsx
+@@ -62,2 +62,36 @@ afterEach(() => {
+ describe('contributed @ completion sources', () => {
++  it('keeps reference starters and fresh scoped paths while reconnecting', async () => {
++    vi.useFakeTimers()
++    addSource('bots', q => ('fixture-bot'.startsWith(q) ? [{ insert: '@fixture-bot' }] : []))
++
++    const gateway = gatewayStub([{ text: '@file:notes/fixture-note.md', display: 'fixture-note.md', meta: 'file' }])
++    const offline = { cwd: '/repo', gatewayReady: false }
++
++    const { result, rerender } = renderHook(
++      props => useAtCompletions({ gateway: gateway as never, sessionId: 's1', ...props }),
++      { initialProps: offline }
++    )
++
++    expect(await searchAndRead(result, 'fi')).toEqual(['@fixture-bot', '@file:'])
++    expect(gateway.request).not.toHaveBeenCalled()
++
++    rerender({ ...offline, gatewayReady: true })
++    expect(await searchAndRead(result, 'fi')).toEqual(['@fixture-bot', 'notes/fixture-note.md'])
++    expect(gateway.request).toHaveBeenCalledExactlyOnceWith('complete.path', {
++      cwd: '/repo',
++      session_id: 's1',
++      word: '@fi'
++    })
++
++    rerender(offline)
++    expect(await searchAndRead(result, 'fi')).toEqual(['@fixture-bot', 'notes/fixture-note.md'])
++    rerender({ ...offline, cwd: '/other' })
++    expect(await searchAndRead(result, 'fi')).toEqual(['@fixture-bot', '@file:'])
++
++    await act(async () => vi.advanceTimersByTimeAsync(15_001))
++    rerender(offline)
++    expect(await searchAndRead(result, 'fi')).toEqual(['@fixture-bot', '@file:'])
++    expect(gateway.request).toHaveBeenCalledOnce()
++  })
++
+   it('merges contributed rows ahead of gateway path results', async () => {
+diff --git a/apps/desktop/src/app/chat/composer/hooks/use-at-completions.ts b/apps/desktop/src/app/chat/composer/hooks/use-at-completions.ts
+index f0b96541195466e9beef3c67ca5bdfd5d1ad00e3..31d01bac40f99c4215f7b657e67e0697a0e9a2e4 100644
+--- a/apps/desktop/src/app/chat/composer/hooks/use-at-completions.ts
++++ b/apps/desktop/src/app/chat/composer/hooks/use-at-completions.ts
+@@ -6,3 +6,3 @@ import { useContributions } from '@/contrib/react/use-contributions'
+ import type { HermesGateway } from '@/hermes'
+-import { cachedPathCompletion, hasCachedPathCompletion } from '@/lib/slash-completion-cache'
++import { cachedPathCompletion, hasCachedPathCompletion, peekCachedPathCompletion } from '@/lib/slash-completion-cache'
+ import { normalize } from '@/lib/text'
+@@ -128,2 +128,3 @@ export function useAtCompletions(options: {
+   gateway: HermesGateway | null
++  gatewayReady?: boolean
+   sessionId: string | null
+@@ -131,3 +132,3 @@ export function useAtCompletions(options: {
+ }): { adapter: Unstable_TriggerAdapter; loading: boolean } {
+-  const { gateway, sessionId, cwd } = options
++  const { gateway, gatewayReady = true, sessionId, cwd } = options
+   const enabled = Boolean(gateway)
+@@ -231,7 +232,11 @@ export function useAtCompletions(options: {
+         // measured on this repo's 8k files).
+-        const result = await cachedPathCompletion(cacheKey(query), () =>
+-          requestCompletion<{ items?: CompletionEntry[] }>(gateway, completionOwner(sessionId), 'complete.path', params)
+-        )
++        const key = cacheKey(query)
+
+-        const items = result.items ?? []
++        const result = gatewayReady
++          ? await cachedPathCompletion(key, () =>
++              requestCompletion<{ items?: CompletionEntry[] }>(gateway, completionOwner(sessionId), 'complete.path', params)
++            )
++          : peekCachedPathCompletion<{ items?: CompletionEntry[] }>(key)
++
++        const items = result?.items ?? []
+         const base = items.length > 0 ? items : starters
+@@ -243,3 +248,3 @@ export function useAtCompletions(options: {
+     },
+-    [cacheKey, contributedEntries, gateway, sessionId, cwd]
++    [cacheKey, contributedEntries, gateway, gatewayReady, sessionId, cwd]
+   )
+@@ -272,5 +277,8 @@ export function useAtCompletions(options: {
+   // nothing when the answer is already in hand.
+-  const isCached = useCallback((query: string) => hasCachedPathCompletion(cacheKey(query)), [cacheKey])
++  const isCached = useCallback(
++    (query: string) => !gatewayReady || hasCachedPathCompletion(cacheKey(query)),
++    [cacheKey, gatewayReady]
++  )
+
+-  return useLiveCompletionAdapter({ enabled, fetcher, isCached, toItem })
++  return useLiveCompletionAdapter({ enabled, epoch: `${gatewayReady}:${cacheKey('')}`, fetcher, isCached, toItem })
+ }
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-draft.owner.test.tsx b/apps/desktop/src/app/chat/composer/hooks/use-composer-draft.owner.test.tsx
 new file mode 100644
 index 0000000000000000000000000000000000000000..cb2f941b3b9fc3735d5aa3a5abf1b3859c5bac6e
@@ -20582,7 +20673,7 @@ index a6102dfde21bc0bfcd5885140282de3e7d761ff4..af6f340296f8fefccb427782af277ad9
 +  return useLiveCompletionAdapter({ enabled, epoch: `${epoch}:${locale}:${gatewayReady}`, fetcher, isCached, toItem })
  }
 diff --git a/apps/desktop/src/app/chat/composer/index.tsx b/apps/desktop/src/app/chat/composer/index.tsx
-index aee9bf96c50cee698de0c72fff94dc22f26a541f..f6b2ab468da5f731734239ad1046109bdb84d79e 100644
+index aee9bf96c50cee698de0c72fff94dc22f26a541f..9386acf5cb1047d0d37010a14b6639bd73c86bee 100644
 --- a/apps/desktop/src/app/chat/composer/index.tsx
 +++ b/apps/desktop/src/app/chat/composer/index.tsx
 @@ -29,2 +29,3 @@ import { useStoreSelector, useStoresSelector } from '@/lib/use-session-slice'
@@ -20625,15 +20716,26 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..f6b2ab468da5f731734239ad1046109b
    const statusSessionId = sessionId ?? null
 +  const backgroundResume = useStore(useMemo(() => sessionBackgroundResume(statusSessionId), [statusSessionId]))
 
-@@ -264,2 +268,3 @@ export function ChatBar({
+@@ -259,3 +263,9 @@ export function ChatBar({
+   const { availableThemes, themeName } = useTheme()
+-  const at = useAtCompletions({ gateway: gateway ?? null, sessionId: sessionId ?? null, cwd: cwd ?? null })
++
++  const at = useAtCompletions({
++    cwd: cwd ?? null,
++    gateway: gateway ?? null,
++    gatewayReady: !disabled,
++    sessionId: sessionId ?? null
++  })
+
+@@ -264,2 +274,3 @@ export function ChatBar({
      gateway: gateway ?? null,
 +    gatewayReady: !disabled,
      profile: profile ?? null,
-@@ -273,3 +278,2 @@ export function ChatBar({
+@@ -273,3 +284,2 @@ export function ChatBar({
    const gatewayState = useStore($gatewayState)
 -  const reconnecting = gatewayState !== 'open'
    const inputDisabled = shouldDisableComposerInput(disabled, gatewayState)
-@@ -279,2 +283,11 @@ export function ChatBar({
+@@ -279,2 +289,11 @@ export function ChatBar({
    // and threads it in so the draft↔queue coupling is an explicit dep, not a tangle.
 +  const draft = useComposerDraft({
 +    activeQueueSessionKey,
@@ -20645,11 +20747,11 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..f6b2ab468da5f731734239ad1046109b
 +  })
 +
    const {
-@@ -282,3 +295,2 @@ export function ChatBar({
+@@ -282,3 +301,2 @@ export function ChatBar({
      clearDraft,
 -    draftScopeRef,
      draftRef,
-@@ -296,8 +308,15 @@ export function ChatBar({
+@@ -296,8 +314,15 @@ export function ChatBar({
      setComposerText,
 -    stashAt,
 -    syncDraftFromEditor,
@@ -20669,14 +20771,14 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..f6b2ab468da5f731734239ad1046109b
    useComposerScreenshot({ sessionKey: activeQueueSessionKey, focusKey, onAttachImageBlob })
 +  const pasteFiles = useComposerFilePaste({ disabled: inputDisabled, onAttachDroppedItems, target: scope.target })
 
-@@ -306,4 +325,5 @@ export function ChatBar({
+@@ -306,4 +331,5 @@ export function ChatBar({
    // path below banks its pre-edit state through `recordUndoPoint`.
 -  const { recordUndoPoint, redo, resetUndoHistory, undo, withUndoPoint } = useComposerUndo({
 +  const { recordUndoPoint, redo, undo, withUndoPoint } = useComposerUndo({
      editorRef,
 +    scopeKey: JSON.stringify([activeQueueSessionKey, draft.ownerIdentity]),
      syncDraftFromEditor
-@@ -332,8 +352,2 @@ export function ChatBar({
+@@ -332,8 +358,2 @@ export function ChatBar({
 
 -  // Prior history belongs to the draft that just left — undoing into another
 -  // conversation's text is worse than having none.
@@ -20685,7 +20787,7 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..f6b2ab468da5f731734239ad1046109b
 -  }, [activeQueueSessionKey, resetUndoHistory])
 -
    // "Add URL" dialog — open/value state, autofocus, and submit (host onAddUrl or
-@@ -417,17 +431,11 @@ export function ChatBar({
+@@ -417,17 +437,11 @@ export function ChatBar({
    const { queueDraft, steerDraft, submitDraft } = useComposerSubmit({
 +    ...draft,
      busyInputMode,
@@ -20704,7 +20806,7 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..f6b2ab468da5f731734239ad1046109b
      inputDisabled,
 -    loadIntoComposer,
      // The submit engine's only cancel call is the Stop-button branch (busy +
-@@ -441,16 +449,12 @@ export function ChatBar({
+@@ -441,16 +455,12 @@ export function ChatBar({
      queuedPrompts,
 -    sessionId,
 -    setComposerText,
@@ -20728,7 +20830,7 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..f6b2ab468da5f731734239ad1046109b
 -  // this API; keyup uses triggerKeyConsumedRef to skip its refresh.
 +  // Shared completion engine; keyup skips refresh for keys its keydown handler consumed.
    const {
-@@ -563,2 +567,8 @@ export function ChatBar({
+@@ -563,2 +573,8 @@ export function ChatBar({
    const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
 +    if (pasteFiles(event.clipboardData)) {
 +      event.preventDefault()
@@ -20737,11 +20839,11 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..f6b2ab468da5f731734239ad1046109b
 +    }
 +
      const imageBlobs = extractClipboardImageBlobs(event.clipboardData)
-@@ -1141,2 +1151,3 @@ export function ChatBar({
+@@ -1141,2 +1157,3 @@ export function ChatBar({
        foldVoice={foldVoice}
 +      hasBackgroundWork={Boolean(backgroundResume)}
        hasComposerPayload={hasComposerPayload}
-@@ -1147,3 +1158,21 @@ export function ChatBar({
+@@ -1147,3 +1164,21 @@ export function ChatBar({
        onSteer={canSteer ? () => steerDraft('steer') : undefined}
 +      onStop={haltRun}
        onToggleAutoSpeak={handleToggleAutoSpeak}
@@ -20763,15 +20865,15 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..f6b2ab468da5f731734239ad1046109b
 +        />
 +      }
        state={state}
-@@ -1158,2 +1187,3 @@ export function ChatBar({
+@@ -1158,2 +1193,3 @@ export function ChatBar({
        <div
 +        aria-describedby={blockedConnectionStatus ? connectionStatusId : undefined}
          aria-disabled={inputDisabled ? true : undefined}
-@@ -1231,2 +1261,3 @@ export function ChatBar({
+@@ -1231,2 +1267,3 @@ export function ChatBar({
        <ComposerDirectiveActions editorRef={editorRef} />
 +
        {/* assistant-ui requires ComposerPrimitive.Input somewhere in the tree
-@@ -1302,7 +1333,8 @@ export function ChatBar({
+@@ -1302,7 +1339,8 @@ export function ChatBar({
              <PreparedImageRecovery
 -              occupied={hasText || attachments.length > 0 || busy || disabled}
 +              occupied={hasText || attachments.length > 0 || Boolean(draft.recovery) || busy || disabled}
@@ -20782,7 +20884,7 @@ index aee9bf96c50cee698de0c72fff94dc22f26a541f..f6b2ab468da5f731734239ad1046109b
                }}
 +              owner={draftOwner}
                request={requestBusyConfig}
-@@ -1487,6 +1519,15 @@ export function ChatBar({
+@@ -1487,6 +1525,15 @@ export function ChatBar({
                    <ContribSlot area={COMPOSER_AREAS.top} />
 -                  <RestoredDraftNotice
 -                    freshDraft={activeQueueSessionKey === null}
@@ -49040,7 +49142,7 @@ index 3ec9fbc62be5925f22453e17c53e251ae2b6344b..a8d1a748896af11d1064ae8bf9170672
 +export const SESSION_REF_RE = /(?<![\w/])(?<!]\()@session:(`[^`\n]+`|"[^"\n]+"|'[^'\n]+'|[^\s"'`]+)/g
  
 diff --git a/apps/desktop/src/lib/slash-completion-cache.ts b/apps/desktop/src/lib/slash-completion-cache.ts
-index 7b87c4c746f2f5aa55aab1a58be7f5a0f6c529f8..e6cd237ed4c2a27a8e341d0a36d90abe65d49893 100644
+index 7b87c4c746f2f5aa55aab1a58be7f5a0f6c529f8..0748ecd3ae9c4855e7453594c0e2eef3d62122a6 100644
 --- a/apps/desktop/src/lib/slash-completion-cache.ts
 +++ b/apps/desktop/src/lib/slash-completion-cache.ts
 @@ -36,3 +36,3 @@ export function hasCachedSlashCompletion(key: string): boolean {
@@ -49048,7 +49150,17 @@ index 7b87c4c746f2f5aa55aab1a58be7f5a0f6c529f8..e6cd237ed4c2a27a8e341d0a36d90abe
 -  return state?.data !== undefined && Date.now() - state.dataUpdatedAt < SLASH_COMPLETIONS_TTL_MS
 +  return state?.data !== undefined && !state.isInvalidated && Date.now() - state.dataUpdatedAt < SLASH_COMPLETIONS_TTL_MS
  }
-@@ -89,3 +89,5 @@ export const $slashCompletionsEpoch = atom(0)
+@@ -72,3 +72,8 @@ export function hasCachedPathCompletion(key: string): boolean {
+
+-  return state?.data !== undefined && Date.now() - state.dataUpdatedAt < PATH_COMPLETIONS_TTL_MS
++  return state?.data !== undefined && !state.isInvalidated && Date.now() - state.dataUpdatedAt < PATH_COMPLETIONS_TTL_MS
++}
++
++/** Read a fresh path result without initiating a gateway lookup. */
++export function peekCachedPathCompletion<T>(key: string): T | undefined {
++  return hasCachedPathCompletion(key) ? queryClient.getQueryData<T>([PATH_COMPLETIONS_KEY, key]) : undefined
+ }
+@@ -89,3 +94,5 @@ export const $slashCompletionsEpoch = atom(0)
  export function invalidateSlashCompletions(): void {
 -  void queryClient.invalidateQueries({ queryKey: [SLASH_COMPLETIONS_KEY] })
 +  const queryKey = [SLASH_COMPLETIONS_KEY]
