@@ -28739,7 +28739,7 @@ index edfc854e2e8b1b81c01a5c4c36e68c6ed85ad7a1..58b4f471e929101f494c98683b432750
 +    sessionsLoading
    ])
 diff --git a/apps/desktop/src/app/contrib/hooks/use-session-tile-delegate.test.ts b/apps/desktop/src/app/contrib/hooks/use-session-tile-delegate.test.ts
-index b3fa07674db36bcaa03b4a1515818b64cc06a7c3..8719f68f79c2c5b1a61bb677a7fa9130a2fc8e6d 100644
+index b3fa07674db36bcaa03b4a1515818b64cc06a7c3..8e10b38546d4797e9419037da618358e84fc08b6 100644
 --- a/apps/desktop/src/app/contrib/hooks/use-session-tile-delegate.test.ts
 +++ b/apps/desktop/src/app/contrib/hooks/use-session-tile-delegate.test.ts
 @@ -3,2 +3,4 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -28747,16 +28747,34 @@ index b3fa07674db36bcaa03b4a1515818b64cc06a7c3..8719f68f79c2c5b1a61bb677a7fa9130
 +import { MAIN_COMPOSER_SCOPE } from '@/app/chat/composer/scope'
 +import { useSessionTileActions } from '@/app/chat/session-tile-actions'
  import { reasoningEffortPending } from '@/app/chat/session-view'
-@@ -59,2 +61,3 @@ function renderTile(
+@@ -6,4 +8,5 @@ import type { ClientSessionState } from '@/app/types'
+ import type * as HermesModule from '@/hermes'
+-import { textPart } from '@/lib/chat-messages'
++import { restorePendingClarifyToolCall, textPart } from '@/lib/chat-messages'
+ import { createClientSessionState } from '@/lib/chat-runtime'
++import { $clarifyRequests, clearClarifyRequest, setClarifyRequest } from '@/store/clarify'
+ import { clearSessionDraft, stashSessionDraft, takeSessionDraft } from '@/store/composer'
+@@ -12,3 +15,4 @@ import { $cronRunReadOnlyVerdicts, recordCronRunVerdict } from '@/store/read-onl
+ import { $activeSessionId, setSessionOwnerHint, setSessions } from '@/store/session'
+-import { $sessionTiles, sessionTileDelegate } from '@/store/session-states'
++import { forgetServerRequest, hasOpenServerRequest, rememberServerRequest } from '@/store/server-requests'
++import { $sessionTiles, resetTileRuntimeBindings, sessionTileDelegate } from '@/store/session-states'
+ import type { SessionInfo } from '@/types/hermes'
+@@ -19,2 +23,4 @@ import {
+
++import { pendingClarifyToolPayload } from '../../session/hooks/use-session-actions/restore-pending-clarify'
++
+ import { useSessionTileDelegate } from './use-session-tile-delegate'
+@@ -59,2 +65,3 @@ function renderTile(
      branchLoadedSession?: ReturnType<typeof vi.fn>
 +    executeSlashCommand?: Parameters<typeof useSessionTileDelegate>[0]['executeSlashCommand']
      runtimeIdByStoredSessionIdRef?: { current: Map<string, string> }
-@@ -69,3 +72,3 @@ function renderTile(
+@@ -69,3 +76,3 @@ function renderTile(
        branchStoredSession: vi.fn(async () => undefined),
 -      executeSlashCommand: vi.fn(async () => undefined) as never,
 +      executeSlashCommand: options.executeSlashCommand ?? vi.fn(async () => true),
        removeSession: vi.fn(async () => undefined),
-@@ -79,2 +82,43 @@ function renderTile(
+@@ -79,2 +86,43 @@ function renderTile(
 
 +it.each([undefined, 'conn:local::research'])('keeps a refused split queue invocation retryable (owner: %s)', async queuedOwnerScope => {
 +  const executeSlashCommand = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true)
@@ -28800,7 +28818,7 @@ index b3fa07674db36bcaa03b4a1515818b64cc06a7c3..8719f68f79c2c5b1a61bb677a7fa9130
 +})
 +
  describe('useSessionTileDelegate resumeTile', () => {
-@@ -200,2 +244,29 @@ describe('useSessionTileDelegate resumeTile', () => {
+@@ -200,2 +248,29 @@ describe('useSessionTileDelegate resumeTile', () => {
 
 +  it.each(['writer', 'other'])('uses the persisted display receipt only for the requested Local owner (%s)', async profile => {
 +    const storedSessionId = 'stored-scoped-display'
@@ -28830,30 +28848,133 @@ index b3fa07674db36bcaa03b4a1515818b64cc06a7c3..8719f68f79c2c5b1a61bb677a7fa9130
 +  })
 +
    it('reuses a warm binding that still carries a transcript', async () => {
+@@ -653,2 +728,61 @@ describe('useSessionTileDelegate resumeTile', () => {
+
++  it.each(['closed', 'other input', 'still pending', 'missing snapshot', 'newer question'] as const)(
++    'reconciles an exact Local question on tile reconnect (%s)', async result => {
++      const storedSessionId = 'stored-clarify'
++      const runtimeId = 'runtime-clarify'
++      const request = {
++        sessionId: runtimeId, requestId: 'old-question',
++        questions: [{ qid: 'q1', question: 'Which format?', choices: ['Outline'], multiSelect: false }]
++      }
++      const peer = { ...request, requestId: 'peer-question', sessionId: 'peer-runtime' }
++      const tile = {
++        dir: 'center' as const, storedSessionId, runtimeId, workspaceMode: 'bots' as const,
++        ownerRoute: { connectionId: 'local', mode: 'local' as const, profile: 'writer' }
++      }
++      const saved = { id: 'saved', role: 'user' as const, parts: [textPart('Saved chat history')] }
++      const projected = restorePendingClarifyToolCall([saved], pendingClarifyToolPayload(request))
++      let state = {
++        ...createClientSessionState(storedSessionId, projected.messages),
++        needsInput: true, streamId: projected.streamId
++      }
++      const updateSessionState = vi.fn((_id, update) => { state = update(state) })
++      const cleared = result === 'closed' || result === 'other input'
++      const openRequests = result === 'missing snapshot' ? undefined
++        : result === 'still pending' ? [{ id: request.requestId, method: 'clarify', params: {} }]
++          : result === 'other input' ? [{ id: 'approval', method: 'approval', params: {} }] : []
++      const previousTiles = $sessionTiles.get()
++      setClarifyRequest(request)
++      setClarifyRequest(peer)
++      rememberServerRequest({ id: request.requestId, method: 'clarify', params: {}, respond: vi.fn(), fail: vi.fn() })
++      $sessionTiles.set([tile])
++      vi.mocked(requestGatewayForAgent).mockImplementationOnce(async () => {
++        if (result === 'newer question') {
++          setClarifyRequest({ ...request, receivedAt: Date.now() / 1000 + 1, requestId: 'new-question' })
++        }
++
++        return { session_id: runtimeId, open_requests: openRequests, messages: [], running: false } as never
++      })
++
++      try {
++        renderTile(vi.fn(), { updateSessionState })
++        resetTileRuntimeBindings({ connectionId: 'local' }, true)
++        expect($sessionTiles.get()[0]).toMatchObject({ localReconnect: { runtimeId } })
++        expect(await sessionTileDelegate()!.resumeTile(storedSessionId)).toBe(runtimeId)
++
++        expect($clarifyRequests.get()[runtimeId]?.requestId).toBe(cleared ? undefined
++          : result === 'newer question' ? 'new-question' : request.requestId)
++        expect(state.needsInput).toBe(result !== 'closed')
++        expect(state.messages).toEqual(cleared ? [saved] : projected.messages)
++        expect(state.streamId).toBe(cleared ? null : projected.streamId)
++        expect(hasOpenServerRequest(request.requestId)).toBe(!cleared)
++        expect($clarifyRequests.get()[peer.sessionId]).toBe(peer)
++      } finally {
++        clearClarifyRequest(undefined, runtimeId)
++        clearClarifyRequest(peer.requestId, peer.sessionId)
++        forgetServerRequest(request.requestId)
++        $sessionTiles.set(previousTiles)
++      }
++    }
++  )
++
+   it('branches a tile from the live message array that rendered the clicked action', async () => {
 diff --git a/apps/desktop/src/app/contrib/hooks/use-session-tile-delegate.ts b/apps/desktop/src/app/contrib/hooks/use-session-tile-delegate.ts
-index a1effde9c31c6fba4aa8fe91885aa39e1014493a..05d0937017b9186a02881ec154424f05beb548dc 100644
+index a1effde9c31c6fba4aa8fe91885aa39e1014493a..11f080f9bd6489ffbd26669e24022ab0a09f38ff 100644
 --- a/apps/desktop/src/app/contrib/hooks/use-session-tile-delegate.ts
 +++ b/apps/desktop/src/app/contrib/hooks/use-session-tile-delegate.ts
 @@ -1 +1,2 @@
 +import { LOCAL_CONNECTION_ID } from '@hermes/shared'
  import { useEffect } from 'react'
-@@ -28,2 +29,3 @@ import { assertSessionOwnerResolved } from '@/store/session-owner-resolution'
+@@ -14,5 +15,6 @@ import {
+ import { translateNow } from '@/i18n/runtime'
+-import { type ChatMessage, chatMessageText, toChatMessages } from '@/lib/chat-messages'
++import { type ChatMessage, chatMessageText, stripPendingClarifyProjectionForCache, toChatMessages } from '@/lib/chat-messages'
+ import { markReasoningEffortPending } from '@/lib/chat-runtime'
+ import { type GuardedModelSwitchResult, surfaceModelSwitchConfirm } from '@/lib/guarded-model-switch'
++import { $clarifyRequests } from '@/store/clarify'
+ import { noteMessageSent } from '@/store/desktop-metrics'
+@@ -25,2 +27,3 @@ import {
+ } from '@/store/read-only-transcript'
++import { forgetServerRequest } from '@/store/server-requests'
+ import { knownSessionOwner, ownerLookupSessionRows } from '@/store/session'
+@@ -28,2 +31,3 @@ import { assertSessionOwnerResolved } from '@/store/session-owner-resolution'
  import {
 +  isSessionOwnerRoute,
    profileScopeForSessionOwner,
-@@ -45,2 +47,3 @@ import { markSessionRecentlyInterrupted, withSessionNotFoundResume } from '../..
+@@ -45,2 +49,4 @@ import { markSessionRecentlyInterrupted, withSessionNotFoundResume } from '../..
  import type { useSessionActions } from '../../session/hooks/use-session-actions'
++import { restorePendingClarifyFromSnapshot } from '../../session/hooks/use-session-actions/restore-pending-clarify'
 +import { createPersistedDisplayTranscriptProvenance } from '../../session/hooks/use-session-actions/transcript-provenance'
  import {
-@@ -268,5 +271,3 @@ export function useSessionTileDelegate({
+@@ -268,5 +274,3 @@ export function useSessionTileDelegate({
        },
 -      executeSlash: async (rawCommand, sessionId, options) => {
 -        await executeSlashCommand(rawCommand, { sessionId, ...options })
 -      },
 +      executeSlash: (rawCommand, sessionId, options) => executeSlashCommand(rawCommand, { ...options, sessionId }),
        // The picker's wire (config.set model), always --session (never the profile default), with a
-@@ -554,2 +555,14 @@ export function useSessionTileDelegate({
+@@ -459,2 +463,5 @@ export function useSessionTileDelegate({
+         // REST read routes no live session at all.
++        const reconnect = $sessionTiles.get().find(tile => tile.storedSessionId === storedSessionId)?.localReconnect
++        const clarifyAtStart = reconnect && $clarifyRequests.get()[reconnect.runtimeId]
++        const resumeStartedAt = Date.now() / 1000
+         const outcome = await resumeWithStoredTranscriptFallback(
+@@ -532,2 +539,12 @@ export function useSessionTileDelegate({
+         const info = resumed?.info
++        const openRequests = resumed.open_requests
++        // Only the same Local reconnect can retire the question it had before the resume.
++        const clearedClarify = clarifyAtStart?.sessionId === runtimeId &&
++          $clarifyRequests.get()[runtimeId]?.requestId === clarifyAtStart.requestId &&
++          $sessionTiles.get().some(tile => tile.storedSessionId === storedSessionId && tile.localReconnect === reconnect) &&
++          Array.isArray(openRequests)
++          ? restorePendingClarifyFromSnapshot(resumed, runtimeId, resumeStartedAt, clarifyAtStart.requestId).cleared
++          : null
++
++        if (clearedClarify) forgetServerRequest(clearedClarify.requestId)
 
+@@ -538,3 +555,3 @@ export function useSessionTileDelegate({
+
+-            const messages = authoritativeSnapshot
++            const resumedMessages = authoritativeSnapshot
+               ? resumed.messages.length > 0
+@@ -553,2 +570,17 @@ export function useSessionTileDelegate({
+                 : toChatMessages(prefetch?.messages ?? resumed.messages ?? [])
++            const messages = clearedClarify
++              ? stripPendingClarifyProjectionForCache(resumedMessages, clearedClarify.requestId)
++              : resumedMessages
++
 +            const resumedStoredSessionId = resumed.session_key || resumed.resumed
 +            const scopedStoredPage =
 +              !authoritativeSnapshot && !previousMessages.length &&
@@ -28862,15 +28983,20 @@ index a1effde9c31c6fba4aa8fe91885aa39e1014493a..05d0937017b9186a02881ec154424f05
 +              (!resumedStoredSessionId || resumedStoredSessionId === storedSessionId)
 +            const transcriptProvenance = scopedStoredPage
 +              ? createPersistedDisplayTranscriptProvenance({ lineageRootId: null, scope: restScope, storedSessionId })
-+              : messages === state.messages
++              : resumedMessages === state.messages
 +                ? state.transcriptProvenance
 +                : undefined
-+
-             const busyChangedWhileResuming = cached
-@@ -576,3 +589,4 @@ export function useSessionTileDelegate({
+
+@@ -576,3 +608,10 @@ export function useSessionTileDelegate({
                busy: running,
 -              messages
 +              messages,
++              ...(clearedClarify && openRequests?.length === 0 && !resumed.pending_approval && !resumed.pending_connection
++                ? { needsInput: false }
++                : {}),
++              ...(clearedClarify && state.streamId && !messages.some(message => message.id === state.streamId)
++                ? { streamId: null }
++                : {}),
 +              transcriptProvenance
              }
 diff --git a/apps/desktop/src/app/contrib/surfaces.app-routes.test.tsx b/apps/desktop/src/app/contrib/surfaces.app-routes.test.tsx

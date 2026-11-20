@@ -265,3 +265,7 @@ returns in that chat. Review the draft and confirm when you are ready.
 When Monitor refreshes after Local reconnect, a pending question
 can appear alongside a provider warning for the same bot. **Open chat**
 returns to the question, and the warning stays in the Attention column.
+
+If the gateway confirms that a split Bot Chat's question closed
+while Local was disconnected, Monitor clears **Waiting for your
+answer** after the chat resumes, matching the refreshed Owner Inbox.
