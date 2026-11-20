@@ -62786,10 +62786,10 @@ index 0000000000000000000000000000000000000000..b52daa0825bb668536b7b4e67aadfe69
 +}
 diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx b/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..5ec24cd47b97b457f00f6d736fd82a12397d39bb
+index 0000000000000000000000000000000000000000..711e9cf4f2d989c76c9149d5ddb5055beb63f072
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx
-@@ -0,0 +1,978 @@
+@@ -0,0 +1,1012 @@
 +import { host, type OwnerInboxItem } from '@hermes/plugin-sdk'
 +import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 +import { atom } from 'nanostores'
@@ -63513,6 +63513,39 @@ index 0000000000000000000000000000000000000000..5ec24cd47b97b457f00f6d736fd82a12
 +  await screen.findByText('Nothing is waiting for your answer.')
 +})
 +
++it.each(['pending', 'settled'])('shows an interrupted approval only if the refreshed list still contains it (%s)', async state => {
++  const approval = prompt('tester', '', { kind: 'approval', command: 'fixture-approval', choices: ['once', 'deny'] })
++  const peer = { ...approval, profile: 'writer', command: 'fixture-peer' }
++  const inbox = fixture([approval, peer])
++  inbox.mount()
++  fireEvent.click(await screen.findByRole('button', { name: 'Waiting for owner 2' }))
++  const row = () => screen.getByText('fixture-approval').closest('li')!
++  let fail!: () => void
++  inbox.request.mockImplementationOnce(() => new Promise((_, reject) => {
++    fail = () => reject(new Error('Fixture gateway closed'))
++  }))
++  fireEvent.click(within(row()).getByRole('button', { name: 'Approve once' }))
++  act(() => inbox.gatewayState.set('closed'))
++  await act(async () => fail())
++  expect(within(row()).queryByRole('alert')).toBeNull()
++
++  let finish!: () => void
++  inbox.request.mockImplementationOnce(() => new Promise(resolve => {
++    finish = () => resolve({ items: state === 'pending' ? [approval, peer] : [peer] })
++  }))
++  act(() => inbox.gatewayState.set('open'))
++  expect(within(row()).queryByRole('alert')).toBeNull()
++  await act(async () => finish())
++
++  if (state === 'pending') {
++    expect(within(row()).getByRole('alert').textContent).toBe('Could not confirm your response. Try again.')
++  } else {
++    expect(screen.queryByText('fixture-approval')).toBeNull()
++  }
++  expect(within(screen.getByText('fixture-peer').closest('li')!).queryByRole('alert')).toBeNull()
++  expect(inbox.request.mock.calls.filter(([method]) => method === 'owner_inbox.respond')).toHaveLength(1)
++})
++
 +it('keeps the new gateway request pending when an old gateway request rejects', async () => {
 +  const approval = prompt('tester', '', { kind: 'approval', command: 'fixture-review', choices: ['once'] })
 +  const inbox = fixture([approval])
@@ -63541,6 +63574,7 @@ index 0000000000000000000000000000000000000000..5ec24cd47b97b457f00f6d736fd82a12
 +  await act(async () => fail())
 +  expect(approve.getAttribute('aria-disabled')).toBe('true')
 +  expect(screen.getByText('Sending response…')).toBeTruthy()
++  expect(screen.queryByRole('alert')).toBeNull()
 +  await act(async () => finish())
 +  expect(screen.getByText('Nothing is waiting for your answer.')).toBeTruthy()
 +})
@@ -63770,10 +63804,10 @@ index 0000000000000000000000000000000000000000..5ec24cd47b97b457f00f6d736fd82a12
 +)
 diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx b/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..f78089b7c123979ef583d89a37e138a4ecbe01a3
+index 0000000000000000000000000000000000000000..b73b5fcd123461a7ab88070fa505bff1515a0958
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx
-@@ -0,0 +1,380 @@
+@@ -0,0 +1,385 @@
 +import {
 +  Button, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, host, type OwnerInboxItem, type PluginProfileRoute, relativeTime
 +} from '@hermes/plugin-sdk'
@@ -63864,6 +63898,7 @@ index 0000000000000000000000000000000000000000..f78089b7c123979ef583d89a37e138a4
 +
 +    const changeScope = () => {
 +      focusHeadingFromRefresh()
++      dialogGeneration.current += 1
 +      drafts.clear()
 +      invalidateScope()
 +    }
@@ -63980,7 +64015,8 @@ index 0000000000000000000000000000000000000000..f78089b7c123979ef583d89a37e138a4
 +        setNotice(result === 'resolved' ? t.sent : t.expired)
 +      }
 +    } catch {
-+      if (isCurrent()) { throw new Error(t.failed) }
++      const sameLocalApproval = prompt.kind === 'approval' && connection === 'local' && dialogGeneration.current === dialog
++      if (isCurrent() || sameLocalApproval) { throw new Error(t.failed) }
 +    }
 +  }
 +
@@ -64061,6 +64097,7 @@ index 0000000000000000000000000000000000000000..f78089b7c123979ef583d89a37e138a4
 +
 +  const selectedChoices = selected.filter(choice => prompt.choices.includes(choice))
 +  const [error, setError] = useState(false)
++  const responseAttempt = useRef(0)
 +  const createdAt = prompt.created_at * 1000
 +  const openAction = <>
 +    <Button aria-disabled={openingChat || stale} className="aria-disabled:cursor-default aria-disabled:opacity-50"
@@ -64082,12 +64119,13 @@ index 0000000000000000000000000000000000000000..f78089b7c123979ef583d89a37e138a4
 +
 +  async function send(value: string) {
 +    if (pending || stale) { return }
++    const attempt = ++responseAttempt.current
 +    setError(false)
 +
 +    try {
 +      await onRespond(value)
 +    } catch {
-+      setError(true)
++      if (attempt === responseAttempt.current) setError(true)
 +    }
 +  }
 +
@@ -64151,7 +64189,8 @@ index 0000000000000000000000000000000000000000..f78089b7c123979ef583d89a37e138a4
 +    </>}
 +    {pending && <p className="text-sm text-muted-foreground" role="status">{t.sending}</p>}
 +    {openFailed && <p className="text-sm text-destructive" ref={revealFocusedError} role="alert">{t.openFailed}</p>}
-+    {error && <p className="text-sm text-destructive" ref={revealFocusedError} role="alert">{t.failed}</p>}
++    {error && (prompt.kind === 'clarify' || !stale) &&
++      <p className="text-sm text-destructive" ref={revealFocusedError} role="alert">{t.failed}</p>}
 +  </li>
 +}
 diff --git a/apps/desktop/src/plugins/hermes-bots/pet.test.tsx b/apps/desktop/src/plugins/hermes-bots/pet.test.tsx

@@ -94,6 +94,9 @@ Sending another answer clears the previous confirmation. When answers
 overlap, only the most recent submission shows a shared confirmation.
 If sending fails, the error appears below the controls. The row keeps
 your answer so you can retry with the same button.
+If Local disconnects before confirming an approval while the inbox stays
+open, the row shows a retry message when the gateway lists the same
+request after reconnecting.
 The same request stays pending if you close and reopen the inbox while
 it sends. Other questions and approvals are still available.
 
