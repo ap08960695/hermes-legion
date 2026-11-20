@@ -749,7 +749,8 @@ correction and canonical navigation/report/terminal progress remain open.
 Press Tab to reach the scrollable Monitor table. Use Left and Right to
 reveal more columns. The table and its controls show a focus outline,
 including in high-contrast palettes. Report buttons name the bot and
-its connection.
+its connection. The report dialog wraps long names and saved text. Its
+status filter and Close button show keyboard focus.
 
 ## Native query-cache acceptance
 
