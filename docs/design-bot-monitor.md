@@ -120,7 +120,7 @@ moves to the new answer controls. The new answer starts blank. If the
 replacement is unclear or the question simply closes, focus returns to
 the inbox heading. A confirmed answer clears its row even if an older
 inbox read finishes afterward.
-If **Open chat** finds that the listed question is no longer live in the
+If **Open chat** finds that the listed question or approval is no longer live in the
 Local chat, the inbox checks the gateway again. The row and badge update
 from that refreshed list. Private credential prompts stay in their native
 chat flow. Board-only gates still use the
