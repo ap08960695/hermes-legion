@@ -37801,6 +37801,43 @@ index 0656345dc306a5fb275dd9a8ffea1c5fc4584335..6531af02dc5824e0cf07caf703d25263
 -  onResume: (storedSessionId: string) => void
 +  onResume: (storedSessionId: string, owner?: SessionOwnerRoute) => void
  }
+diff --git a/apps/desktop/src/app/session/hooks/use-background-queue-drain.test.tsx b/apps/desktop/src/app/session/hooks/use-background-queue-drain.test.tsx
+index 26de1e6d69bd2f2593100145857de70363dd6178..bebc46b742b6e665d5de5830bba846a23ce895ac 100644
+--- a/apps/desktop/src/app/session/hooks/use-background-queue-drain.test.tsx
++++ b/apps/desktop/src/app/session/hooks/use-background-queue-drain.test.tsx
+@@ -20,2 +20,3 @@ import {
+   _resetSessionOwnerHintsForTests,
++  setMessagingSessions,
+   setSessionOwnerHint,
+@@ -95,2 +96,3 @@ describe('useBackgroundQueueDrain', () => {
+     $sessions.set([])
++    setMessagingSessions([])
+     setSessionsLoading(true)
+@@ -409,6 +411,9 @@ describe('useBackgroundQueueDrain', () => {
+
+-  it('keeps the queued prompt for a session the loaded list still knows, with a quiet notice (#98015)', async () => {
++  it.each([
++    ['recents', setSessions],
++    ['messaging', setMessagingSessions]
++  ])('keeps the queued prompt when %s still lists the session (#98015)', async (_list, setRows) => {
+     vi.useFakeTimers()
+
+-    setSessions([lineageSession({ id: 'stored-session-a' })])
++    setRows([lineageSession({ id: 'stored-session-a' })])
+     const runtimeMap = { current: new Map([['stored-session-a', 'rt-session-a']]) }
+diff --git a/apps/desktop/src/app/session/hooks/use-background-queue-drain.ts b/apps/desktop/src/app/session/hooks/use-background-queue-drain.ts
+index c5b0e14e707ce58055ee92e9a43e7413a07f4d24..2bad784b54de28841fac8980d91bee0016a5e279 100644
+--- a/apps/desktop/src/app/session/hooks/use-background-queue-drain.ts
++++ b/apps/desktop/src/app/session/hooks/use-background-queue-drain.ts
+@@ -25,2 +25,3 @@ import {
+   idsShareLineage,
++  ownerLookupSessionRows,
+   sessionMatchesStoredId
+@@ -131,3 +132,3 @@ export function useBackgroundQueueDrain({
+           const sessionKnown =
+-            $sessions.get().some(session => sessionMatchesStoredId(session, sessionKey)) ||
++            ownerLookupSessionRows().some(session => sessionMatchesStoredId(session, sessionKey)) ||
+             getSessionOwnerHints(sessionKey).length > 0
 diff --git a/apps/desktop/src/app/session/hooks/use-message-stream/duplicate-background-reply.test.tsx b/apps/desktop/src/app/session/hooks/use-message-stream/duplicate-background-reply.test.tsx
 index 64988f0096c5d1cc8b1ce68528b550ec5b9a400e..21109a790407cd11a960bd30ba35f4115a44b3aa 100644
 --- a/apps/desktop/src/app/session/hooks/use-message-stream/duplicate-background-reply.test.tsx
@@ -38167,10 +38204,55 @@ index fb12b3dd1300e72a331b8b30657e30d425842ce0..7ee8435c0fdb6feb237b9a48682a0ebd
 -        },
          // /browser connect|disconnect manages the live CDP connection on the
 diff --git a/apps/desktop/src/app/session/hooks/use-prompt-actions/submission-destination.test.tsx b/apps/desktop/src/app/session/hooks/use-prompt-actions/submission-destination.test.tsx
-index c3ca2749e50731d48a0546463f03a47cda8e8ef3..2839399c2e975e89bc8bb8263964de79689dcf12 100644
+index c3ca2749e50731d48a0546463f03a47cda8e8ef3..162a937534e6fe59a27fc675d8563c8ab17c6944 100644
 --- a/apps/desktop/src/app/session/hooks/use-prompt-actions/submission-destination.test.tsx
 +++ b/apps/desktop/src/app/session/hooks/use-prompt-actions/submission-destination.test.tsx
-@@ -324,2 +324,20 @@ describe('submission intent destinations', () => {
+@@ -81,2 +81,44 @@ afterEach(() => {
+ describe('submission intent destinations', () => {
++  it.each(['bare queue', 'ambient destination', 'explicit destination', 'one owner'] as const)(
++    'avoids a wrong-profile queued write after compression (%s)',
++    async scenario => {
++      const { deps, requestGateway } = setup()
++      const research = { connectionId: 'local', profile: 'research' }
++      const personal = { connectionId: 'local', profile: 'personal' }
++
++      deps.selectedStoredSessionIdRef.current = 'compressed-tip'
++      $activeGatewayProfile.set(personal.profile)
++
++      const row = (owner: typeof research) => ({
++        id: 'compressed-tip', _lineage_root_id: 'stored-a', connection_id: owner.connectionId, profile: owner.profile
++      })
++
++      $sessions.set((scenario === 'one owner' ? [row(research), row(research)] : [row(personal), row(research)]) as never)
++      const { result } = renderHook(() => useSubmitPrompt(deps))
++
++      const destination = scenario === 'explicit destination'
++        ? captureSubmissionDestination('stored-a', deps.requestGateway, { owner: research })
++        : scenario === 'ambient destination'
++          ? captureSubmissionDestination(null, deps.requestGateway)
++          : undefined
++
++      const maySend = scenario === 'explicit destination' || scenario === 'one owner'
++
++      await act(async () => {
++        expect(await result.current('Queued follow-up', {
++          destination,
++          fromQueue: true,
++          sessionId: 'runtime-a',
++          storedSessionId: 'stored-a',
++          submission_id: 'saved-queue-id'
++        })).toBe(maySend)
++      })
++
++      const writes = wire.request.mock.calls.filter(call => call[2] === 'prompt.submit')
++
++      expect(writes.map(call => call[1])).toEqual(maySend ? [research.profile] : [])
++      expect(requestGateway).not.toHaveBeenCalled()
++    }
++  )
++
+   // N7 (ported from #135061): two panes in one window are enough. The owner replays a known
+@@ -324,2 +366,20 @@ describe('submission intent destinations', () => {
 
 +  it('does not fall back to an identityless write for a recovered submission', async () => {
 +    const { deps, requestGateway } = setup()
@@ -38192,10 +38274,57 @@ index c3ca2749e50731d48a0546463f03a47cda8e8ef3..2839399c2e975e89bc8bb8263964de79
 +
    it.each(['missing', 'wrong', '4094', 'lost-legacy'])(
 diff --git a/apps/desktop/src/app/session/hooks/use-prompt-actions/submit.ts b/apps/desktop/src/app/session/hooks/use-prompt-actions/submit.ts
-index df0fc7b7c36a8ed28b16a6aec0f2f77058de5a73..ed60b33390419770cfc775ce73aeee8791c183df 100644
+index df0fc7b7c36a8ed28b16a6aec0f2f77058de5a73..37982837a72e9461f5a8ee92917e4de21d7fb5f8 100644
 --- a/apps/desktop/src/app/session/hooks/use-prompt-actions/submit.ts
 +++ b/apps/desktop/src/app/session/hooks/use-prompt-actions/submit.ts
-@@ -1169,2 +1169,6 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
+@@ -1,2 +1,2 @@
+-import type { PromptSubmitResult } from '@hermes/shared'
++import { type PromptSubmitResult, registryBackendScopeKey } from '@hermes/shared'
+ import { type MutableRefObject, useCallback } from 'react'
+@@ -34,3 +34,6 @@ import {
+   $sessions,
++  getSessionOwnerHints,
++  ownerLookupSessionRows,
+   resolveComposerSessionKey,
++  sessionMatchesStoredId,
+   setActiveSessionId,
+@@ -41,3 +44,3 @@ import {
+ } from '@/store/session'
+-import { profileScopeForSessionOwner } from '@/store/session-request-router'
++import { isSessionOwnerRoute, profileScopeForSessionOwner } from '@/store/session-request-router'
+ import { $sessionStates, $sessionTiles } from '@/store/session-states'
+@@ -214,2 +217,16 @@ function isPreAdmissionRefusal(error: unknown): boolean {
+
++function queuedPromptOwnerIsAmbiguous(storedId: string): boolean {
++  const owners = new Set(
++    getSessionOwnerHints(storedId).map(owner => registryBackendScopeKey(owner.connectionId, owner.profile))
++  )
++
++  for (const row of ownerLookupSessionRows()) {
++    if (row.connection_id?.trim() && sessionMatchesStoredId(row, storedId)) {
++      owners.add(registryBackendScopeKey(row.connection_id, row.profile))
++    }
++  }
++
++  return owners.size > 1
++}
++
+ export function useSubmitPrompt(deps: SubmitPromptDeps) {
+@@ -235,2 +252,13 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
+     async (rawText: string, options?: SubmitTextOptions) => {
++      // Renderer-managed queue entries carry an id and stored key, without the owner that queued them.
++      if (
++        options?.fromQueue &&
++        options.submission_id &&
++        options.storedSessionId &&
++        !isSessionOwnerRoute(options.destination?.owner) &&
++        queuedPromptOwnerIsAmbiguous(options.storedSessionId)
++      ) {
++        return false
++      }
++
+       const usingComposerAttachments = !options?.attachments
+@@ -1169,2 +1197,6 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
 
 +                  if (options?.requireIdempotentSubmit) {
 +                    throw new Error(translateNow('promptNotices.legacySendUnconfirmed'))

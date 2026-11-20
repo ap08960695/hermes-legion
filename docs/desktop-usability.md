@@ -23,7 +23,9 @@ active. If Local reconnects while this chat is still waiting to open,
 it retries the same profile automatically. An open chat also reconnects
 through its known Local owner. This includes new chats after their page
 opens and active chats whose saved ID changes during auto-compression.
-Use Back to return to the same History search.
+If more than one profile claims the same saved chat, queued messages
+without a confirmed destination stay queued. Use Back to return to the
+same History search.
 During Local reconnect, message search waits for the gateway. You can
 edit the query or choose a result already shown for that same search.
 If the result opens in a split tab, focus moves to that chat while it waits
