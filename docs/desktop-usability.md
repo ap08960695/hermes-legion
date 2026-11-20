@@ -233,3 +233,9 @@ Pasted bot-role and Hub-title queries ignore surrounding whitespace. Changing Hu
 Saved-chat search retires results from another query or profile immediately. A failed full-text request shows a small error with **Retry**, keeps any applicable local matches, and does not reuse the previous full-text hits. There is no new retry timer or polling loop. Retry makes one new debounced search request through the existing native transport.
 
 **Manage bot access** distinguishes a pending profile catalog, a failed read and a successfully loaded empty catalog. Existing selections remain visible and are never relabeled as missing before the catalog is available. Saving stays disabled while that read is pending or failed. Use **Retry** to recover explicitly; no membership write occurs during loading, filtering or retrying.
+
+## Bot Monitor
+
+When the focused bot chat asks for an answer, **Monitor** shows
+**Waiting for your answer** under **Needs attention**. Active workers
+can still report progress separately.

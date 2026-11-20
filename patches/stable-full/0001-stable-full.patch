@@ -59035,10 +59035,10 @@ index 0000000000000000000000000000000000000000..809479b795adeddea1d959dfdbe4e58e
 +})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..19581f60021de9e484a657f3dd71ccd55dd9629c
+index 0000000000000000000000000000000000000000..fe80e8dbfef8b2c1777dd5934ec2afde8f6068f2
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-characters.tsx
-@@ -0,0 +1,315 @@
+@@ -0,0 +1,305 @@
 +import { atom, Dialog, host, MAX_PREVIEW_CHARACTERS, type PetCharacterPublisher, useValue } from '@hermes/plugin-sdk'
 +import { useEffect, useMemo, useRef, useState } from 'react'
 +
@@ -59054,7 +59054,7 @@ index 0000000000000000000000000000000000000000..19581f60021de9e484a657f3dd71ccd5
 +
 +import type { BotMonitorProps } from './monitor'
 +import { BotMonitorReportContent, type ReportSnapshot } from './monitor-reports'
-+import { botRosterMeta, requestForBot, resolveBotConnectionRoute } from './routing'
++import { botRosterMeta, focusedBotClarificationRow, requestForBot, resolveBotConnectionRoute } from './routing'
 +import { activeWorkerSessions, workerProgress } from './row-helpers'
 +import { $botPluginCtx, bumpBotOpenGeneration, getBotOpenGeneration } from './shared'
 +import type { BotDelegationReport } from './types'
@@ -59134,17 +59134,7 @@ index 0000000000000000000000000000000000000000..19581f60021de9e484a657f3dd71ccd5
 +
 +    if (!active || !visible || stale) {return current}
 +
-+    const waiting = clarification ? rows.filter(({ bot }) => {
-+      const session = bot.canonical_session
-+
-+      if (session?.id !== clarification.storedSessionId && session?.resolved_id !== clarification.storedSessionId) {return false}
-+
-+      const { route } = resolveBotConnectionRoute({ ...bot, sourceScoped: true })
-+
-+      return route?.connectionId === clarification.connectionId && route.profile === clarification.profile
-+    }) : []
-+
-+    const waitingRow = waiting.length === 1 ? waiting[0] : null
++    const waitingRow = focusedBotClarificationRow(rows, clarification)
 +
 +    for (const row of [...rows].sort((a, z) => botRosterKey(a.bot).localeCompare(botRosterKey(z.bot)))) {
 +      if (!row.bot.connectionId || row.bot.retained || row.bot.ghost || row.source.key !== 'ready' || !row.source.available) {continue}
@@ -60745,11 +60735,12 @@ index 0000000000000000000000000000000000000000..1f02400cf3a4afd358f1a6dbd05049cd
 +}
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..c8322aa688c46b751c34149a3015a4766f99251c
+index 0000000000000000000000000000000000000000..9389fbbe450d903f0f422f311e48576b9e86b1e1
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor.test.tsx
-@@ -0,0 +1,831 @@
-+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+@@ -0,0 +1,877 @@
++import { atom, host } from '@hermes/plugin-sdk'
++import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 +
 +// eslint-disable-next-line no-restricted-imports
@@ -61325,7 +61316,6 @@ index 0000000000000000000000000000000000000000..c8322aa688c46b751c34149a3015a476
 +  expect(io.refetch).not.toHaveBeenCalled()
 +})
 +
-+
 +it('keeps captured reports readable after a refresh failure without claiming current work', async () => {
 +  io.rows[0].canonical_session = { ...io.rows[0].canonical_session,
 +    delegation_reports: [recordedReport('Saved failed task', 'error', 'Stored report survives')] }
@@ -61459,7 +61449,6 @@ index 0000000000000000000000000000000000000000..c8322aa688c46b751c34149a3015a476
 +  expect(io.refetch).not.toHaveBeenCalled()
 +})
 +
-+
 +it('filters recorded issues across bot owners without including current attention or inheriting history into workers', () => {
 +  const ready = { connectionId: 'owner-one', sourceReachable: true }
 +  io.rows = [
@@ -61580,13 +61569,60 @@ index 0000000000000000000000000000000000000000..c8322aa688c46b751c34149a3015a476
 +  expect(io.open).not.toHaveBeenCalled()
 +  expect(io.refetch).not.toHaveBeenCalled()
 +})
++
++it('shows a live owner handoff for only the matching bot while its worker keeps reporting progress', () => {
++  const clarification = atom<null | { connectionId: string; profile: string; storedSessionId: string; requestId: string }>(null)
++  const original = Object.getOwnPropertyDescriptor(host.state, 'focusedClarification')
++  Object.defineProperty(host.state, 'focusedClarification', { configurable: true, value: clarification })
++
++  try {
++    const [writer, , other] = io.rows
++    io.rows = [
++      { ...writer, canonical_session: { id: 'kept-parent', resolved_id: 'tip', preview: 'Local current chat' } },
++      { ...other, canonical_session: { id: 'kept-parent', resolved_id: 'tip', preview: 'Same session ID elsewhere' } }
++    ]
++    const view = openMonitor()
++    const prompt = { connectionId: 'owner-one', profile: 'writer', storedSessionId: 'tip', requestId: 'question' }
++    const waiting = 'Waiting for your answer…'
++    act(() => clarification.set(prompt))
++    const local = screen.getByText('Local current chat').closest('tr')!
++    const peer = screen.getByText('Same session ID elsewhere').closest('tr')!
++    expect(within(local).getByText(waiting)).toBeTruthy()
++    expect(within(peer).queryByText(waiting)).toBeNull()
++    expect(screen.getByText('step 3/8')).toBeTruthy()
++    expect(screen.getByText('read_file')).toBeTruthy()
++
++    fireEvent.click(screen.getByRole('button', { name: 'Working' }))
++    expect(screen.queryByText('Local current chat')).toBeNull()
++    expect(screen.getByText('step 3/8')).toBeTruthy()
++    fireEvent.click(screen.getByRole('button', { name: 'Needs attention' }))
++    expect(screen.getByText('Local current chat')).toBeTruthy()
++    expect(screen.queryByText('step 3/8')).toBeNull()
++    act(() => clarification.set(null))
++    expect(screen.queryByText(waiting)).toBeNull()
++
++    fireEvent.click(screen.getByRole('button', { name: 'All' }))
++    act(() => clarification.set({ ...prompt, storedSessionId: 'another-chat' }))
++    expect(screen.queryByText(waiting)).toBeNull()
++    act(() => clarification.set(prompt))
++    io.error = new Error('refresh unavailable')
++    view.rerender(<BotsWorkspace />)
++    expect(screen.queryByText(waiting)).toBeNull()
++    expect(screen.queryByText('step 3/8')).toBeNull()
++    expect(io.open).not.toHaveBeenCalled()
++    expect(io.refetch).not.toHaveBeenCalled()
++  } finally {
++    if (original) Object.defineProperty(host.state, 'focusedClarification', original)
++    else Reflect.deleteProperty(host.state, 'focusedClarification')
++  }
++})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor.tsx b/apps/desktop/src/plugins/hermes-bots/monitor.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..c1a3eccd887f711ec4ea29a32c609539696d57ca
+index 0000000000000000000000000000000000000000..94826cddd4311d60433a8bb16c240d47e36e07fe
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor.tsx
-@@ -0,0 +1,249 @@
-+import { Button, Codicon, compactNumber, EmptyState, SearchField, SegmentedControl, useValue } from '@hermes/plugin-sdk'
+@@ -0,0 +1,256 @@
++import { atom, Button, Codicon, compactNumber, EmptyState, host, SearchField, SegmentedControl, useValue } from '@hermes/plugin-sdk'
 +import { useRef, useState } from 'react'
 +
 +import { botRosterKey, type botSourceStatus } from './data'
@@ -61595,6 +61631,7 @@ index 0000000000000000000000000000000000000000..c1a3eccd887f711ec4ea29a32c609539
 +// eslint-disable-next-line no-restricted-imports -- shared with the global Characters publisher.
 +import { $characterExtraActor } from '@/store/character-settings'
 +import { BotMonitorReports, botRecordedIssue } from './monitor-reports'
++import { focusedBotClarificationRow } from './routing'
 +import { activeWorkerSessions, workerProgress } from './row-helpers'
 +import type { RosterRow, WorkerSession } from './types'
 +
@@ -61672,10 +61709,14 @@ index 0000000000000000000000000000000000000000..c1a3eccd887f711ec4ea29a32c609539
 +      : row.source.key !== 'ready' ? row.source.label : b.workspace.notActive
 +}
 +
++const noClarification = atom(null)
++
 +/** A read-only projection of the existing roster; only explicit chat actions navigate. */
 +export function BotMonitor({ rows, onOpen, now, stale: refreshFailed = false, waitingForRoster = false }: BotMonitorProps) {
 +  const stale = refreshFailed || waitingForRoster
 +  const includeSixth = useValue($characterExtraActor)
++  const clarification = useValue(host.state.focusedClarification || noClarification)
++  const waitingRow = stale ? undefined : focusedBotClarificationRow(rows, clarification)
 +  const b = useBots(), m = b.monitor
 +  const [search, setSearch] = useState(''), [filter, setFilter] = useState('all')
 +  const [sort, setSort] = useState('name'), [limit, setLimit] = useState(60)
@@ -61686,14 +61727,16 @@ index 0000000000000000000000000000000000000000..c1a3eccd887f711ec4ea29a32c609539
 +  const entries = rows.flatMap(row => {
 +    const current = !stale && row.source.available && !row.bot.retained && row.source.key !== 'on-demand'
 +
++    const waiting = current && row === waitingRow && row.source.key === 'ready' && Boolean(row.bot.connectionId) &&
++      !row.bot.ghost && !row.needsAttention
 +    const status = stale || !row.source.available ? 'unavailable'
-+      : current && row.needsAttention ? 'attention' : current && row.working ? 'working' : 'idle'
++      : current && (row.needsAttention || waiting) ? 'attention' : current && row.working ? 'working' : 'idle'
 +
-+    const bot = { row, issue: botRecordedIssue(row.bot), worker: null as WorkerSession | null, usage: row.bot.canonical_session || null, key: `${botRosterKey(row.bot)}:bot`, status }
++    const bot = { row, waiting, issue: botRecordedIssue(row.bot), worker: null as WorkerSession | null, usage: row.bot.canonical_session || null, key: `${botRosterKey(row.bot)}:bot`, status }
 +    const workers = current ? activeWorkerSessions(row.bot, now) : []
 +
 +    return [bot, ...workers.map((worker, index) => ({
-+      row, worker, issue: null, usage: worker, key: `${botRosterKey(row.bot)}:worker:${worker.id || index}`, status: 'working'
++      row, worker, waiting: false, issue: null, usage: worker, key: `${botRosterKey(row.bot)}:worker:${worker.id || index}`, status: 'working'
 +    }))]
 +  })
 +
@@ -61794,7 +61837,7 @@ index 0000000000000000000000000000000000000000..c1a3eccd887f711ec4ea29a32c609539
 +              </tr>
 +            </thead>
 +            <tbody>
-+              {shown.slice(0, limit).map(({ row, worker, usage, key, status }) => {
++              {shown.slice(0, limit).map(({ row, worker, usage, key, status, waiting }) => {
 +                const progress = workerProgress(worker, now)
 +                const title = stripPreviewMarkdown(worker?.title || '').replace(/\s+/g, ' ').trim().slice(0, 120)
 +
@@ -61811,7 +61854,7 @@ index 0000000000000000000000000000000000000000..c1a3eccd887f711ec4ea29a32c609539
 +                        {b.workspace.open}
 +                      </Button>
 +                    </td>
-+                    <td className="p-3">{stale ? m.retained : monitorStatusLabel(row, status, b)}</td>
++                    <td className="p-3">{stale ? m.retained : waiting ? b.group.waitingForAnswer : monitorStatusLabel(row, status, b)}</td>
 +                    <td className="min-w-48 p-3">
 +                      {title && title !== signal && <div className="font-medium">{title}</div>}
 +                      <div className="break-words">{signal || m.missing}</div>
@@ -63930,6 +63973,32 @@ index 84dda2bf3b8d41c6ac594f2f9c920e4afa55bc1e..fd5c93b9a1b6841b63ef2f2547b23c28
          activeSourceRoster,
 +        creationInHeader: acceptDialogIntent,
          roster,
+diff --git a/apps/desktop/src/plugins/hermes-bots/routing.ts b/apps/desktop/src/plugins/hermes-bots/routing.ts
+index ef4053f65cb523536d80294c232a23a5303933f9..bba3191287a49f93222a5702073359bc43ca44dd 100644
+--- a/apps/desktop/src/plugins/hermes-bots/routing.ts
++++ b/apps/desktop/src/plugins/hermes-bots/routing.ts
+@@ -74,2 +74,21 @@ export function resolveBotConnectionRoute(bot: Partial<RosterRow> | null | undef
+
++/** Match the live question to a unique canonical bot and exact owner. */
++export function focusedBotClarificationRow<T extends { bot: RosterRow }>(
++  rows: readonly T[],
++  clarification: { connectionId: string; profile: string; storedSessionId: string } | null
++): T | undefined {
++  if (!clarification) return undefined
++
++  const matches = rows.filter(({ bot }) => {
++    const session = bot.canonical_session
++    if (session?.id !== clarification.storedSessionId && session?.resolved_id !== clarification.storedSessionId) return false
++
++    const { route } = resolveBotConnectionRoute({ ...bot, sourceScoped: true })
++
++    return route?.connectionId === clarification.connectionId && route.profile === clarification.profile
++  })
++
++  return matches.length === 1 ? matches[0] : undefined
++}
++
+ /** Immutable owner descriptor for every source-scoped row. The active
 diff --git a/apps/desktop/src/plugins/hermes-bots/row-helpers.test.ts b/apps/desktop/src/plugins/hermes-bots/row-helpers.test.ts
 index be8f19bf4b00b71b1822d0086e84b6884ce3891e..31b2ae5e6eb0165a94bccb2a50286824add528fa 100644
 --- a/apps/desktop/src/plugins/hermes-bots/row-helpers.test.ts
