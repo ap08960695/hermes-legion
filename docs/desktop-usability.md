@@ -269,3 +269,7 @@ returns to the question, and the warning stays in the Attention column.
 If the gateway confirms that a split Bot Chat's question closed
 while Local was disconnected, Monitor clears **Waiting for your
 answer** after the chat resumes, matching the refreshed Owner Inbox.
+
+If Local drops while a split chat is reopening, the chat waits
+for a fresh resume. An interrupted attempt cannot restore a stale
+question after the gateway reconnects.
