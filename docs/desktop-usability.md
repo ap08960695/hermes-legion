@@ -257,3 +257,7 @@ If the question closes while you are still using its form, keyboard
 focus returns to that chat's message box so you can continue typing
 your draft. A failed confirmation lets you retry from the question.
 If you have moved to another pane, focus stays there.
+
+If Local disconnects while you are drafting a clarification answer,
+your selections and text reappear when the same pending question
+returns in that chat. Review the draft and confirm when you are ready.
