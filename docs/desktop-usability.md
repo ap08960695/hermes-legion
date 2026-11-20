@@ -82,7 +82,9 @@ reconnect interrupts the open Chat, it tries to resume again after the
 Local gateway returns. During recovery, a closed socket or shutdown refusal
 uses the existing reconnect status. A split Chat waiting to resume shows its
 connection status until the gateway is ready, then returns to its session
-loader. If the Local runtime refuses to start because it needs repair,
+loader. If the Local gateway reports no startup result, the recovery
+dialog keeps the original startup error under **Details**.
+If the Local runtime refuses to start because it needs repair,
 its error explains why automatic retries stop. After fixing the reported
 issue, choose **Reconnect now** on the error to retry that Local connection.
 If the Local gateway is incompatible or Hermes flags an unsafe control
