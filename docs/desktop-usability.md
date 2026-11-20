@@ -193,6 +193,8 @@ Ordinary typing just before IME starts is saved with the draft while
 the input method is still offering candidates.
 When switching away from a composing draft, the next edit is saved in
 the draft you are now viewing.
+If Local reconnect interrupts IME in a split Chat, the restored draft
+keeps your caret or selection from just before composition.
 
 For the staged macOS split reconnect fixture, run
 `python3 verification/verify_split_reconnect.py EVIDENCE_DIR` on its
