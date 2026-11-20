@@ -85,7 +85,9 @@ connection status until the gateway is ready, then returns to its session
 loader. If the Local gateway reports no startup result, the recovery
 dialog keeps the original startup error under **Details**. Background
 requests reuse that failure. Choose **Retry** to start a new attempt. Once
-the Local gateway comes up, the chat composer is available again.
+the Local gateway comes up, the chat composer is available again. If Desktop
+can’t confirm the reset, the dialog keeps its open diagnostics and lets you
+choose **Retry** again.
 In a small window, scroll the recovery dialog to read **Details** and recent
 logs while keeping the recovery buttons reachable.
 If the Local runtime refuses to start because it needs repair,
