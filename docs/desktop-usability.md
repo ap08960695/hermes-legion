@@ -254,10 +254,12 @@ to its first choice or answer field, including after Local reconnect.
 Tab continues through the form. Opening the chat leaves the answer
 unsubmitted.
 
-If the question closes while you are still using its form, keyboard
-focus returns to that chat's message box so you can continue typing
-your draft. A failed confirmation lets you retry from the question.
-If you have moved to another pane, focus stays there.
+After you confirm or skip in the question form, focus returns to
+the message box. A failed confirmation lets you retry from the question.
+If the question expires or is answered elsewhere while you are still
+using its form, focus stays on the chat pane. Enter leaves your draft
+in place until you return to the message box. If you have moved to
+another pane, focus stays there.
 
 If Local disconnects while you are drafting a clarification answer,
 your selections and text reappear when the same pending question
