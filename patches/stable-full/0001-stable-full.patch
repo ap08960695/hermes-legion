@@ -60760,16 +60760,20 @@ index 0000000000000000000000000000000000000000..1f02400cf3a4afd358f1a6dbd05049cd
 +}
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..9389fbbe450d903f0f422f311e48576b9e86b1e1
+index 0000000000000000000000000000000000000000..618d411f9e84910e4773e7c64f8033585234616d
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor.test.tsx
-@@ -0,0 +1,877 @@
+@@ -0,0 +1,928 @@
 +import { atom, host } from '@hermes/plugin-sdk'
 +import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 +
 +// eslint-disable-next-line no-restricted-imports
 +import { registerPluginLocales } from '@/i18n/plugin-i18n'
++// eslint-disable-next-line no-restricted-imports -- exercise the real SDK state.
++import { $clarifyRequests } from '@/store/clarify'
++// eslint-disable-next-line no-restricted-imports -- exercise the real SDK state.
++import { $sessionStates, $sessionTiles } from '@/store/session-states'
 +
 +import * as data from './data'
 +import { BOTS_LOCALES } from './i18n'
@@ -61641,13 +61645,60 @@ index 0000000000000000000000000000000000000000..9389fbbe450d903f0f422f311e48576b
 +    else Reflect.deleteProperty(host.state, 'focusedClarification')
 +  }
 +})
++
++it('keeps pending bots in Needs attention after focus moves and opens the matching tab', () => {
++  const [writer, , other] = io.rows
++  const storedId = 'local-tip'
++  const peerId = 'peer-tip'
++  io.rows = [
++    { ...writer, canonical_session: { id: 'local-root', resolved_id: storedId, preview: 'First waiting chat' } },
++    { ...other, canonical_session: { id: 'peer-root', resolved_id: peerId, preview: 'Second waiting chat' } }
++  ]
++  const tiles = io.rows.map((bot, index) => ({
++    storedSessionId: index === 0 ? storedId : peerId,
++    runtimeId: `runtime-${index}`,
++    workspaceOwnerKey: `bot:${bot.connectionId}::${bot.name}`,
++    workspaceMode: 'bots' as const,
++    ownerRoute: { connectionId: bot.connectionId!, profile: bot.name }
++  }))
++  const state = Object.fromEntries(tiles.map(({ runtimeId, storedSessionId }) =>
++    [runtimeId, { storedSessionId, needsInput: true } as never]))
++  const requests = Object.fromEntries(tiles.map(({ runtimeId }) =>
++    [runtimeId, { sessionId: runtimeId, requestId: `question-${runtimeId}`, questions: [] }]))
++  const previous = [$sessionTiles.get(), $sessionStates.get(), $clarifyRequests.get()] as const
++
++  try {
++    openMonitor()
++    fireEvent.click(screen.getByRole('button', { name: 'Needs attention' }))
++    expect(host.state.focusedClarification.get()).toBeNull()
++    act(() => {
++      $sessionStates.set(state)
++      $sessionTiles.set(tiles)
++      $clarifyRequests.set(requests)
++    })
++    expect(screen.getAllByText('Waiting for your answer…')).toHaveLength(2)
++    const first = screen.getByText('First waiting chat').closest('tr')!
++    fireEvent.click(within(first).getByRole('button', { name: /Open chat/ }))
++    expect(io.open).toHaveBeenCalledExactlyOnceWith(io.rows[0], storedId)
++    act(() => $clarifyRequests.set({ 'runtime-1': requests['runtime-1'] }))
++    expect(screen.queryByText('First waiting chat')).toBeNull()
++    expect(screen.getByText('Second waiting chat')).toBeTruthy()
++    expect(io.refetch).not.toHaveBeenCalled()
++  } finally {
++    act(() => {
++      $sessionTiles.set(previous[0])
++      $sessionStates.set(previous[1])
++      $clarifyRequests.set(previous[2])
++    })
++  }
++})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor.tsx b/apps/desktop/src/plugins/hermes-bots/monitor.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..1db6e43a5a53031c4e8e6c95bbd22ca7ba8cfe43
+index 0000000000000000000000000000000000000000..d164ec8e65b3a11f4379be9a3f948df0296b2799
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor.tsx
-@@ -0,0 +1,258 @@
-+import { atom, Button, Codicon, compactNumber, EmptyState, host, SearchField, SegmentedControl, useValue } from '@hermes/plugin-sdk'
+@@ -0,0 +1,270 @@
++import { atom, Button, Codicon, compactNumber, EmptyState, host, SearchField, SegmentedControl, type PluginSessionClarification, useValue } from '@hermes/plugin-sdk'
 +import { useRef, useState } from 'react'
 +
 +import { botRosterKey, type botSourceStatus } from './data'
@@ -61735,13 +61786,25 @@ index 0000000000000000000000000000000000000000..1db6e43a5a53031c4e8e6c95bbd22ca7
 +}
 +
 +const noClarification = atom(null)
++const noOpenClarifications = atom<readonly PluginSessionClarification[]>([])
 +
 +/** A read-only projection of the existing roster; only explicit chat actions navigate. */
 +export function BotMonitor({ rows, onOpen, now, stale: refreshFailed = false, waitingForRoster = false }: BotMonitorProps) {
 +  const stale = refreshFailed || waitingForRoster
 +  const includeSixth = useValue($characterExtraActor)
 +  const clarification = useValue(host.state.focusedClarification || noClarification)
-+  const waitingRow = stale ? undefined : focusedBotClarificationRow(rows, clarification)
++  const openClarifications = useValue(host.state.openBotClarifications || noOpenClarifications)
++  const waitingRows = new Map<BotMonitorProps['rows'][number], string>()
++
++  if (!stale) {
++    for (const pending of openClarifications) {
++      const row = focusedBotClarificationRow(rows, pending)
++      if (row && !waitingRows.has(row)) waitingRows.set(row, pending.storedSessionId)
++    }
++
++    const focusedRow = focusedBotClarificationRow(rows, clarification)
++    if (focusedRow && clarification) waitingRows.set(focusedRow, clarification.storedSessionId)
++  }
 +  const b = useBots(), m = b.monitor
 +  const [search, setSearch] = useState(''), [filter, setFilter] = useState('all')
 +  const [sort, setSort] = useState('name'), [limit, setLimit] = useState(60)
@@ -61752,8 +61815,8 @@ index 0000000000000000000000000000000000000000..1db6e43a5a53031c4e8e6c95bbd22ca7
 +  const entries = rows.flatMap(row => {
 +    const current = !stale && row.source.available && !row.bot.retained && row.source.key !== 'on-demand'
 +
-+    const waiting = current && row === waitingRow && row.source.key === 'ready' && Boolean(row.bot.connectionId) &&
-+      !row.bot.ghost && !row.needsAttention
++    const waiting = current && row.source.key === 'ready' && row.bot.connectionId &&
++      !row.bot.ghost && !row.needsAttention ? waitingRows.get(row) : undefined
 +    const status = stale || !row.source.available ? 'unavailable'
 +      : current && (row.needsAttention || waiting) ? 'attention' : current && row.working ? 'working' : 'idle'
 +
@@ -61761,7 +61824,7 @@ index 0000000000000000000000000000000000000000..1db6e43a5a53031c4e8e6c95bbd22ca7
 +    const workers = current ? activeWorkerSessions(row.bot, now) : []
 +
 +    return [bot, ...workers.map((worker, index) => ({
-+      row, worker, waiting: false, issue: null, usage: worker, key: `${botRosterKey(row.bot)}:worker:${worker.id || index}`, status: 'working'
++      row, worker, waiting: undefined, issue: null, usage: worker, key: `${botRosterKey(row.bot)}:worker:${worker.id || index}`, status: 'working'
 +    }))]
 +  })
 +
@@ -61876,7 +61939,7 @@ index 0000000000000000000000000000000000000000..1db6e43a5a53031c4e8e6c95bbd22ca7
 +                      <div className="mt-1 text-muted-foreground">{row.bot.connectionLabel || row.bot.connectionId}</div>
 +                      <Button aria-label={`${b.workspace.open} · ${row.name}${worker ? ` · ${title || m.worker}` : ''}`}
 +                        className="mt-1 whitespace-nowrap" disabled={stale || !row.source.available}
-+                        onClick={() => void (waiting && clarification ? onOpen(row.bot, clarification.storedSessionId) : onOpen(row.bot))}
++                        onClick={() => void (waiting ? onOpen(row.bot, waiting) : onOpen(row.bot))}
 +                        size="sm" variant="ghost">
 +                        {b.workspace.open}
 +                      </Button>
@@ -71874,10 +71937,10 @@ index 565db36838c541199b323f69f99a33b9f4833c8e..ac4bf2bddbabf1dbf39c18b613ba891b
 +    return takeSessionDraft(stored, owner).text || null
    },
 diff --git a/apps/desktop/src/sdk/host-state.test.ts b/apps/desktop/src/sdk/host-state.test.ts
-index d8b9185feafc444a121334f59a46cfc131171ef2..4f39f50f7091fc3b43ca1aa0487140f35a3caa63 100644
+index d8b9185feafc444a121334f59a46cfc131171ef2..b9ddfa7e80e251553062c450ccc47fd22eb532dc 100644
 --- a/apps/desktop/src/sdk/host-state.test.ts
 +++ b/apps/desktop/src/sdk/host-state.test.ts
-@@ -151,2 +151,34 @@ describe('host.state.focusedSessionProfile', () => {
+@@ -151,2 +151,72 @@ describe('host.state.focusedSessionProfile', () => {
 
 +  it('exposes only a pending clarification for the bound stored session and unique owner', async () => {
 +    const { host, session, states } = await setup()
@@ -71909,6 +71972,44 @@ index d8b9185feafc444a121334f59a46cfc131171ef2..4f39f50f7091fc3b43ca1aa0487140f3
 +    session.$activeSessionId.set(null)
 +    session.$selectedStoredSessionId.set(null)
 +    session.$sessions.set([])
++  })
++
++  it('exposes only still-bound questions on exactly owned Bot tabs without following focus', async () => {
++    const { host, states } = await setup()
++    const { $clarifyRequests } = await import('@/store/clarify')
++    const tile = { workspaceMode: 'bots' as const, storedSessionId: 'canonical', runtimeId: 'bound',
++      workspaceOwnerKey: 'bot:local::worker', ownerRoute: { connectionId: 'local', profile: 'worker' } }
++    const pending = { storedSessionId: 'canonical', needsInput: true }
++    const requests = { bound: { sessionId: 'bound', requestId: 'question', questions: [] } }
++
++    states.$sessionTiles.set([tile])
++    states.$sessionStates.set({ bound: pending as never })
++    $clarifyRequests.set(requests)
++
++    const open = host.state.openBotClarifications
++    const snapshot = open.get()
++    expect(snapshot).toEqual([{ connectionId: 'local', profile: 'worker', storedSessionId: 'canonical', requestId: 'question' }])
++    states.$sessionStates.set({ bound: { ...pending, busy: true } as never })
++    expect(open.get()).toBe(snapshot)
++
++    states.$sessionTiles.set([{ ...tile, ownerRoute: undefined }])
++    expect(open.get()).toEqual([])
++    states.$sessionTiles.set([{ ...tile, runtimeId: 'replacement' }])
++    expect(open.get()).toEqual([])
++    states.$sessionTiles.set([tile])
++    states.$sessionStates.set({ bound: { ...pending, storedSessionId: 'another' } as never })
++    expect(open.get()).toEqual([])
++    states.$sessionStates.set({ bound: { ...pending, needsInput: false } as never })
++    expect(open.get()).toEqual([])
++    states.$sessionStates.set({ bound: pending as never })
++    states.recordSessionEventScope({ connectionId: 'wrong-owner', profile: 'worker', session_id: 'bound' })
++    $clarifyRequests.set({ ...requests })
++    expect(open.get()).toEqual([])
++    states.recordSessionEventScope({ connectionId: 'local', profile: 'worker', session_id: 'bound' })
++    $clarifyRequests.set({ ...requests })
++    expect(open.get()).toEqual(snapshot)
++    $clarifyRequests.set({})
++    expect(open.get()).toEqual([])
 +  })
 +
    it('fails closed when duplicate stored or lineage ids resolve to different connections', async () => {
@@ -71948,43 +72049,98 @@ index 24bf8b26c27fef8286c4bb1b8ceaa56e3562ea95..1da04ebc77ee47e6f0ece49d7b073ef7
 +    stashSessionDraft('stored-stash', 'runtime-addressed', [], 'default')
 
 diff --git a/apps/desktop/src/sdk/index.ts b/apps/desktop/src/sdk/index.ts
-index 1771079ce633e58b6cc4374d95417cb169b71984..3d187ba639128309e18f2b2949899b356edbc449 100644
+index 1771079ce633e58b6cc4374d95417cb169b71984..619a131bcbbeeb7d6c611e72903ccfb60c27932d 100644
 --- a/apps/desktop/src/sdk/index.ts
 +++ b/apps/desktop/src/sdk/index.ts
 @@ -52,2 +52,3 @@ import { traceIdentityChange } from '@/lib/identity-trace'
  import { completeMcpDesktopOAuth } from '@/lib/mcp-dashboard-oauth'
-+import { $clarifyRequests } from '@/store/clarify'
++import { $clarifyRequests, type ClarifyRequest } from '@/store/clarify'
  import {
-@@ -125,4 +126,5 @@ import { desktopSettings } from './settings'
+@@ -103,2 +104,3 @@ import {
+   focusWorkspaceOwnerSessionTile,
++  runtimeSessionOwner,
+   sessionTileDelegate
+@@ -125,4 +127,5 @@ import { desktopSettings } from './settings'
  export { PANES_AREA, STATUSBAR_AREAS, TITLEBAR_AREAS } from './areas'
 -/** The plugin authoring contract (`HermesPlugin`, `PluginContext`, `ctx.*` door types). */
  export type * from './plugin-contract'
 +export type { OwnerInboxItem, OwnerInboxList, OwnerInboxResponse } from '@hermes/shared'
 +export type { PluginProfileRequestOptions, PluginProfileRoute } from './profile-request'
 
-@@ -214,2 +216,16 @@ const $focusedSessionOwner = computed(
+@@ -214,2 +217,65 @@ const $focusedSessionOwner = computed(
 
++export interface PluginSessionClarification extends PluginFocusedSessionOwner {
++  storedSessionId: string
++  requestId: string
++}
++
 +// A remembered needsInput bit can survive reconnect. Require the pending
-+// request on this runtime and the same stored session currently in view.
++// request on this runtime and the exact stored session bound to it.
++function pendingClarificationId(
++  runtimeId: string | null,
++  storedId: string | null,
++  state: ClientSessionState | undefined,
++  requests: Record<string, ClarifyRequest>
++): string | null {
++  return runtimeId && storedId && state?.storedSessionId === storedId && state.needsInput &&
++    requests[runtimeId]?.sessionId === runtimeId ? requests[runtimeId].requestId : null
++}
++
 +const $focusedClarificationId = computed(
 +  [$focusedRuntimeId, $focusedSessionState, $focusedStoredSessionId, $clarifyRequests],
-+  (runtimeId, state, storedId, requests) =>
-+    runtimeId && storedId && state?.storedSessionId === storedId && state.needsInput &&
-+    requests[runtimeId]?.sessionId === runtimeId ? requests[runtimeId].requestId : null
++  (runtimeId, state, storedId, requests) => pendingClarificationId(runtimeId, storedId, state, requests)
 +)
 +
 +const $focusedClarification = computed(
 +  [$focusedClarificationId, $focusedStoredSessionId, $focusedSessionOwner],
-+  (requestId, storedSessionId, owner) => requestId && storedSessionId && owner ? { ...owner, storedSessionId, requestId } : null
++  (requestId, storedSessionId, owner): PluginSessionClarification | null =>
++    requestId && storedSessionId && owner ? { ...owner, storedSessionId, requestId } : null
 +)
 +
++let openBotClarifications: readonly PluginSessionClarification[] = []
++const $openBotClarifications = computed([$sessionTiles, $sessionStates, $clarifyRequests], (tiles, states, requests) => {
++  const next: PluginSessionClarification[] = []
++
++  if (Object.keys(requests).length) {
++    for (const { workspaceMode, workspaceOwnerKey, storedSessionId, runtimeId, ownerRoute } of tiles) {
++      if (workspaceMode !== 'bots' || !workspaceOwnerKey || !runtimeId || !ownerRoute?.connectionId) continue
++
++      const requestId = pendingClarificationId(runtimeId, storedSessionId, states[runtimeId], requests)
++      if (!requestId) continue
++
++      const connectionId = ownerRoute.connectionId
++      const profile = normalizeProfileKey(ownerRoute.profile)
++      const eventOwner = runtimeSessionOwner(runtimeId)
++      if (eventOwner && typeof eventOwner !== 'string' &&
++        (eventOwner.connectionId !== connectionId ||
++          (normalizeProfileKey(eventOwner.profile) !== profile &&
++            normalizeProfileKey(eventOwner.profile) !== normalizeProfileKey(ownerRoute.targetProfile ?? ownerRoute.profile)))) continue
++
++      next.push({ connectionId, profile, storedSessionId, requestId })
++    }
++  }
++
++  // Transcript updates shouldn't redraw Monitor while the pending set is unchanged.
++  if (next.length !== openBotClarifications.length || next.some((item, index) => {
++    const prev = openBotClarifications[index]
++    return item.storedSessionId !== prev.storedSessionId || item.requestId !== prev.requestId ||
++      item.connectionId !== prev.connectionId || item.profile !== prev.profile
++  })) {
++    openBotClarifications = next
++  }
++
++  return openBotClarifications
++})
++
  const $focusedSessionProfile = computed(
-@@ -595,2 +611,4 @@ export const host = {
+@@ -595,2 +661,6 @@ export const host = {
      cwd: readonlyAtom<string>($currentCwd),
 +    /** Pending clarification on the focused stored chat with a known owner. */
 +    focusedClarification: readonlyAtom($focusedClarification),
++    /** Pending questions still bound to open, owner-scoped Bot tabs. */
++    openBotClarifications: readonlyAtom($openBotClarifications),
      /** Runtime id of the FOCUSED chat session — the interacted tile, else the
-@@ -1264,2 +1282,9 @@ export const host = {
+@@ -1264,2 +1334,9 @@ export const host = {
 
 +  /** Update an open workspace caption without remounting its content or moving focus. */
 +  setWorkspaceTitle: (id: string, title: string): void => {
@@ -71994,38 +72150,38 @@ index 1771079ce633e58b6cc4374d95417cb169b71984..3d187ba639128309e18f2b2949899b35
 +  },
 +
    /** Name a workspace owner on its tabs (a bot's display name). A canonical
-@@ -1574,3 +1599,3 @@ export const host = {
+@@ -1574,3 +1651,3 @@ export const host = {
 
 -export type { PluginProfileRequestOptions, PluginProfileRoute } from './profile-request'
 +export type { DesktopSettingKey, DesktopSettingValues } from './settings'
 
-@@ -1578,3 +1603,2 @@ export type { PluginProfileRequestOptions, PluginProfileRoute } from './profile-
+@@ -1578,3 +1655,2 @@ export type { PluginProfileRequestOptions, PluginProfileRoute } from './profile-
 
 -export type { DesktopSettingKey, DesktopSettingValues } from './settings'
  /** THE whole Capabilities surface (Skills / Tools / MCP tabs, installed
-@@ -1663,3 +1687,2 @@ export {
+@@ -1663,3 +1739,2 @@ export {
  } from '@/app/overlays/panel'
 -
  export {
-@@ -1674,2 +1697,3 @@ export {
+@@ -1674,2 +1749,3 @@ export {
  } from '@/app/routes'
 +
  /** Appearance settings' plugin seam: register a render contribution at
-@@ -1810,2 +1834,4 @@ export type { GatewayEventListener } from '@/contrib/events'
+@@ -1810,2 +1886,4 @@ export type { GatewayEventListener } from '@/contrib/events'
  export { Contribute, type ContributeProps } from '@/contrib/react/contribute'
 +/** Settings ▸ Plugins entries (`ctx.registerSettingsPage`); `pluginSettingsHref` deep-links one. */
 +export { pluginSettingsHref, SETTINGS_PLUGINS_AREA } from '@/contrib/settings-pages'
 
-@@ -1813,4 +1839,2 @@ export { Contribute, type ContributeProps } from '@/contrib/react/contribute'
+@@ -1813,4 +1891,2 @@ export { Contribute, type ContributeProps } from '@/contrib/react/contribute'
 
 -/** Settings ▸ Plugins entries (`ctx.registerSettingsPage`); `pluginSettingsHref` deep-links one. */
 -export { pluginSettingsHref, SETTINGS_PLUGINS_AREA } from '@/contrib/settings-pages'
  export type { Contribution } from '@/contrib/types'
-@@ -1854,2 +1878,3 @@ export { type BudgetedLoop, type BudgetedLoopOptions, createBudgetedLoop } from
+@@ -1854,2 +1930,3 @@ export { type BudgetedLoop, type BudgetedLoopOptions, createBudgetedLoop } from
  export { CHAT_EMPTY_AREA, type ChatEmptyContribution, type ChatEmptyProps } from '@/lib/chat-empty'
 +export { isMissingRpcMethod } from '@/lib/gateway-rpc'
  /** THE confirm flow for guarded model switches — when a gateway model-switch
-@@ -1884,2 +1909,4 @@ export { captureGatewayFileDownload } from '@/lib/media'
+@@ -1884,2 +1961,4 @@ export { captureGatewayFileDownload } from '@/lib/media'
  export { catalogProviderMatches } from '@/lib/model-options'
 +/** The plugin authoring contract (`HermesPlugin`, `PluginContext`, `ctx.*` door types). */
 +export { MAX_PREVIEW_CHARACTERS } from '@/lib/pet-character-sprite'

@@ -236,9 +236,10 @@ Saved-chat search retires results from another query or profile immediately. A f
 
 ## Bot Monitor
 
-When the focused bot chat asks for an answer, **Monitor** shows
-**Waiting for your answer** under **Needs attention**. Active workers
-can still report progress separately.
+When an open Bot Chat asks for an answer, **Monitor** shows **Waiting
+for your answer** under **Needs attention**. The bot stays listed when
+you switch to another chat. Active workers can still report progress
+separately.
 
 Choose **Open chat** on the waiting bot to return to the open tab
 that holds the question, even if another tab from that Bot Chat
