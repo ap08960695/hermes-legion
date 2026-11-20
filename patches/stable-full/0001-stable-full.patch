@@ -55673,19 +55673,43 @@ index 2592db925346d092a4d3800abbab2c50a910e3d5..8e7f53632705fe31b28b585a57123894
 +  }
 +})
 diff --git a/apps/desktop/src/plugins/hermes-bots/data.ts b/apps/desktop/src/plugins/hermes-bots/data.ts
-index 46c90a0a39c3ce9f35181ef3b0d04d3f88ffe159..c45b85e0733162ac84a411da98282ce61cc3fdbe 100644
+index 46c90a0a39c3ce9f35181ef3b0d04d3f88ffe159..fd564185ec843e68d3afe202a705b8a4271610bf 100644
 --- a/apps/desktop/src/plugins/hermes-bots/data.ts
 +++ b/apps/desktop/src/plugins/hermes-bots/data.ts
 @@ -9,2 +9,3 @@
  import { atom, host, queryClient, useQuery, useValue } from '@hermes/plugin-sdk'
 +import { useSyncExternalStore } from 'react'
 
-@@ -762,3 +763,3 @@ function traceRosterSnapshot(
+@@ -709,2 +710,3 @@ interface RosterSnapshot {
+   fetchedAt?: number
++  localGatewayEpoch?: number
+   primaryConnectionId?: string
+@@ -762,3 +764,23 @@ function traceRosterSnapshot(
   *  cross-connection rows. */
 -async function fetchRosterSnapshot(activeConnectionId: null | string | undefined): Promise<RosterSnapshot> {
++export const $localRosterEpoch = atom(0)
++
 +async function fetchRosterSnapshot(activeConnectionId: null | string | undefined, previous?: RosterSnapshot): Promise<RosterSnapshot> {
++  const epoch = $localRosterEpoch.get()
++  const assertCurrent = () => {
++    if (activeConnectionId === 'local' && epoch !== $localRosterEpoch.get()) {
++      throw new Error('Bot roster query outlived the Local gateway')
++    }
++  }
++
++  const snapshot = await readRosterSnapshot(activeConnectionId, previous, assertCurrent)
++  assertCurrent()
++
++  return activeConnectionId === 'local' ? { ...snapshot, localGatewayEpoch: epoch } : snapshot
++}
++
++async function readRosterSnapshot(
++  activeConnectionId: null | string | undefined,
++  previous: RosterSnapshot | undefined,
++  assertCurrent: () => void
++): Promise<RosterSnapshot> {
    // Stamp the ISSUE time on the snapshot: mergeServerMeta compares it
-@@ -787,3 +788,7 @@ async function fetchRosterSnapshot(activeConnectionId: null | string | undefined
+@@ -787,3 +809,7 @@ async function fetchRosterSnapshot(activeConnectionId: null | string | undefined
      } catch {
 -      /* keep the previous alias index */
 +      // The standalone Monitor has no sidebar publisher; retain its query-owned source.
@@ -55694,7 +55718,11 @@ index 46c90a0a39c3ce9f35181ef3b0d04d3f88ffe159..c45b85e0733162ac84a411da98282ce6
 +      }
 +      /* keep the previous alias index for an unscoped legacy host */
      }
-@@ -886,4 +891,13 @@ async function reconcileBotMeta(rows: RosterRow[], fetchedAt: number): Promise<v
+@@ -814,2 +840,3 @@ async function fetchRosterSnapshot(activeConnectionId: null | string | undefined
+     : await requestForBot<RosterSnapshot>(activeBot, 'profiles.list', {})
++  assertCurrent()
+
+@@ -886,4 +913,13 @@ async function reconcileBotMeta(rows: RosterRow[], fetchedAt: number): Promise<v
 
 -export function useRoster() {
 +function subscribeRosterVisibility(update: () => void) {
@@ -55709,7 +55737,7 @@ index 46c90a0a39c3ce9f35181ef3b0d04d3f88ffe159..c45b85e0733162ac84a411da98282ce6
    const activeConnectionId = useValue(host.state.connectionId)
 +  const hidden = useSyncExternalStore(subscribeRosterVisibility, isRosterHidden)
 
-@@ -891,4 +905,6 @@ export function useRoster() {
+@@ -891,4 +927,6 @@ export function useRoster() {
      queryKey: [...ROSTER_KEY, activeConnectionId],
 -    queryFn: () => fetchRosterSnapshot(activeConnectionId),
 -    refetchInterval: 5000,
@@ -55718,7 +55746,21 @@ index 46c90a0a39c3ce9f35181ef3b0d04d3f88ffe159..c45b85e0733162ac84a411da98282ce6
 +    refetchInterval: pollWhileHidden && hidden ? 8_000 : 5_000,
 +    refetchIntervalInBackground: pollWhileHidden,
      staleTime: 5000,
-@@ -911,3 +927,3 @@ export async function primeRoster(): Promise<void> {
+@@ -905,2 +943,13 @@ export function useRoster() {
+  *  One fetch, no polling — the pane owns the refresh while open. Never throws. */
++export function bindRosterGateway() {
++  if (host.state.gateway.get() === 'open') { void primeRoster() }
++
++  return host.state.gateway.listen(state => {
++    if (host.state.connectionId.get() === 'local') {
++      $localRosterEpoch.set($localRosterEpoch.get() + 1)
++    }
++    if (state === 'open') { void primeRoster() }
++  })
++}
++
+ export async function primeRoster(): Promise<void> {
+@@ -911,3 +960,3 @@ export async function primeRoster(): Promise<void> {
        queryKey: [...ROSTER_KEY, connectionId],
 -      queryFn: () => fetchRosterSnapshot(connectionId),
 +      queryFn: ({ client, queryKey }) => fetchRosterSnapshot(connectionId, client.getQueryData<RosterSnapshot>(queryKey)),
@@ -58202,10 +58244,10 @@ index 0000000000000000000000000000000000000000..b8d01eafa6a125aeb013f529440eae7f
 +}
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-desktop-bridge.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-desktop-bridge.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..2f45745f13788c07ce2187fd791afcfb0f37b2a3
+index 0000000000000000000000000000000000000000..8a4c0b7e4bc77dc35d20f6799dbcc9c0e2609c4a
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-desktop-bridge.test.tsx
-@@ -0,0 +1,308 @@
+@@ -0,0 +1,311 @@
 +import { host, queryClient } from '@hermes/plugin-sdk'
 +import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 +import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -58220,7 +58262,7 @@ index 0000000000000000000000000000000000000000..2f45745f13788c07ce2187fd791afcfb
 +// eslint-disable-next-line no-restricted-imports
 +import { $activeGatewayProfile, $profiles } from '@/store/profile'
 +// eslint-disable-next-line no-restricted-imports
-+import { $connection } from '@/store/session'
++import { $connection, $gatewayState } from '@/store/session'
 +
 +import { $botAttention, $botMeta, $lastRoster, primeRoster, ROSTER_KEY, useRoster } from './data'
 +import { BOTS_LOCALES } from './i18n'
@@ -58246,6 +58288,7 @@ index 0000000000000000000000000000000000000000..2f45745f13788c07ce2187fd791afcfb
 +
 +const originalDesktop = window.hermesDesktop
 +const originalConnection = $connection.get()
++const originalGateway = $gatewayState.get()
 +const originalProfile = $activeGatewayProfile.get()
 +const originalProfiles = $profiles.get()
 +const localRoute = { connectionId: 'local', mode: 'local', primary: true, profile: 'default', targetProfile: 'default' }
@@ -58298,6 +58341,7 @@ index 0000000000000000000000000000000000000000..2f45745f13788c07ce2187fd791afcfb
 +  window.hermesDesktop = electron.contextBridge.exposeInMainWorld.mock.calls[0][1] as typeof originalDesktop
 +  $connection.set({ connectionId: 'local', mode: 'local' } as typeof originalConnection)
 +  $activeGatewayProfile.set('default')
++  $gatewayState.set('open')
 +  $botManagementOpen.set(false)
 +  $botAttention.set({})
 +  $botMeta.set({})
@@ -58330,6 +58374,7 @@ index 0000000000000000000000000000000000000000..2f45745f13788c07ce2187fd791afcfb
 +  $lastSources.set([])
 +  indexAliasRoutes([])
 +  $connection.set(originalConnection)
++  $gatewayState.set(originalGateway)
 +  $activeGatewayProfile.set(originalProfile)
 +  $profiles.set(originalProfiles)
 +  window.hermesDesktop = originalDesktop
@@ -58516,10 +58561,10 @@ index 0000000000000000000000000000000000000000..2f45745f13788c07ce2187fd791afcfb
 +})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-locales.ts b/apps/desktop/src/plugins/hermes-bots/monitor-locales.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..b470efeb291547fb8c3b7cc34ed5daabb5365d3d
+index 0000000000000000000000000000000000000000..c4a45b2099932c735cbf3ca4954370115f1a7175
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-locales.ts
-@@ -0,0 +1,498 @@
+@@ -0,0 +1,508 @@
 +import type { CANONICAL_GROUP_LOCALES } from './canonical-group-locales'
 +
 +export interface MonitorMessages {
@@ -58547,6 +58592,7 @@ index 0000000000000000000000000000000000000000..b470efeb291547fb8c3b7cc34ed5daab
 +  missing: string
 +  retained: string
 +  refreshFailed: string
++  waitingForRoster: string
 +  sortName: string
 +  sortElapsed: string
 +  sortTokens: string
@@ -58590,6 +58636,7 @@ index 0000000000000000000000000000000000000000..b470efeb291547fb8c3b7cc34ed5daab
 +    recordedIssues: "Recorded issues",
 +    hint: 'Recent worker observations, up to 20 per bot. Missing or stale data does not prove inactivity. Uses the existing roster refresh.',
 +    refreshFailed: 'Refresh failed. Showing a stored snapshot; current work status is unavailable.',
++    waitingForRoster: 'Waiting for a fresh Local snapshot.',
 +    search: 'Search bots, workers and tasks', entity: 'Bot / worker', status: 'Status',
 +    activity: 'Task / latest signal', elapsed: 'Elapsed', tokens: 'Tokens', cost: "Recorded cost (USD)",
 +    model: "Model", attention: 'Last reported bot attention', worker: 'Worker',
@@ -58639,6 +58686,7 @@ index 0000000000000000000000000000000000000000..b470efeb291547fb8c3b7cc34ed5daab
 +    recordedIssues: "記録済みの問題",
 +    hint: 'ボットごとに最大20件の最近のワーカー観測です。情報の欠落や古さは停止の証拠ではありません。既存の名簿更新を使用します。',
 +    refreshFailed: '更新に失敗しました。保存済みのスナップショットを表示しています。現在の作業状況は確認できません。',
++    waitingForRoster: 'ローカルの最新スナップショットを待っています。',
 +    search: 'ボット・ワーカー・タスクを検索', entity: 'ボット / ワーカー', status: '状態',
 +    activity: 'タスク / 最新の情報', elapsed: '経過時間', tokens: 'トークン', cost: "記録済み費用 (USD)",
 +    model: "モデル", attention: '最後に報告されたボットの注意事項', worker: 'ワーカー',
@@ -58688,6 +58736,7 @@ index 0000000000000000000000000000000000000000..b470efeb291547fb8c3b7cc34ed5daab
 +    recordedIssues: "已记录的问题",
 +    hint: '每个机器人最多显示20条近期工作进程观测。缺失或过时的数据不能证明没有活动。使用现有名单刷新。',
 +    refreshFailed: '刷新失败。正在显示已保存的快照；无法确认当前工作状态。',
++    waitingForRoster: '正在等待最新的本地快照。',
 +    search: '搜索机器人、工作进程和任务', entity: '机器人 / 工作进程', status: '状态',
 +    activity: '任务 / 最新信号', elapsed: '已用时间', tokens: '令牌', cost: "已记录费用 (USD)",
 +    model: "模型", attention: '最近报告的机器人注意事项', worker: '工作进程',
@@ -58737,6 +58786,7 @@ index 0000000000000000000000000000000000000000..b470efeb291547fb8c3b7cc34ed5daab
 +    recordedIssues: "已記錄的問題",
 +    hint: '每個機器人最多顯示20筆近期工作程序觀測。缺失或過時的資料不能證明沒有活動。使用現有名冊重新整理。',
 +    refreshFailed: '重新整理失敗。正在顯示已儲存的快照；無法確認目前的工作狀態。',
++    waitingForRoster: '正在等待最新的本機快照。',
 +    search: '搜尋機器人、工作程序和工作', entity: '機器人 / 工作程序', status: '狀態',
 +    activity: '工作 / 最新訊號', elapsed: '經過時間', tokens: '權杖', cost: "已記錄費用 (USD)",
 +    model: "模型", attention: '最近回報的機器人注意事項', worker: '工作程序',
@@ -58786,6 +58836,7 @@ index 0000000000000000000000000000000000000000..b470efeb291547fb8c3b7cc34ed5daab
 +    recordedIssues: "المشكلات المسجلة",
 +    hint: 'ملاحظات حديثة للعاملين، بحد أقصى 20 لكل بوت. البيانات المفقودة أو القديمة لا تثبت عدم النشاط. تستخدم تحديث القائمة الحالي.',
 +    refreshFailed: 'تعذر التحديث. تُعرض لقطة محفوظة؛ حالة العمل الحالية غير متاحة.',
++    waitingForRoster: 'في انتظار لقطة محلية حديثة.',
 +    search: 'البحث في البوتات والعاملين والمهام', entity: 'البوت / العامل', status: 'الحالة',
 +    activity: 'المهمة / آخر إشارة', elapsed: 'الوقت المنقضي', tokens: 'الرموز', cost: "التكلفة المسجلة (USD)",
 +    model: "النموذج", attention: 'آخر تنبيه مُبلّغ عنه للبوت', worker: 'عامل',
@@ -58835,6 +58886,7 @@ index 0000000000000000000000000000000000000000..b470efeb291547fb8c3b7cc34ed5daab
 +    recordedIssues: "Записанные проблемы",
 +    hint: 'Недавние наблюдения за исполнителями: до 20 на бота. Отсутствующие или устаревшие данные не доказывают бездействие. Используется текущее обновление списка.',
 +    refreshFailed: 'Не удалось обновить данные. Показан сохранённый снимок; текущий статус работы недоступен.',
++    waitingForRoster: 'Ожидание свежего локального снимка.',
 +    search: 'Поиск ботов, исполнителей и задач', entity: 'Бот / исполнитель', status: 'Состояние',
 +    activity: 'Задача / последний сигнал', elapsed: 'Прошло', tokens: 'Токены', cost: "Записанная стоимость (USD)",
 +    model: "Модель", attention: 'Последнее замечание о боте', worker: 'Исполнитель',
@@ -58884,6 +58936,7 @@ index 0000000000000000000000000000000000000000..b470efeb291547fb8c3b7cc34ed5daab
 +    recordedIssues: "Problèmes enregistrés",
 +    hint: 'Observations récentes des agents de travail, au plus 20 par bot. Des données absentes ou anciennes ne prouvent pas une inactivité. Utilise le rafraîchissement existant.',
 +    refreshFailed: 'Échec de l’actualisation. Instantané enregistré affiché ; l’état du travail en cours est indisponible.',
++    waitingForRoster: 'En attente d’un nouvel instantané local.',
 +    search: 'Rechercher des bots, agents et tâches', entity: 'Bot / agent de travail', status: 'État',
 +    activity: 'Tâche / dernier signal', elapsed: 'Durée', tokens: 'Jetons', cost: "Coût enregistré (USD)",
 +    model: "Modèle", attention: 'Dernière alerte signalée du bot', worker: 'Agent de travail',
@@ -58933,6 +58986,7 @@ index 0000000000000000000000000000000000000000..b470efeb291547fb8c3b7cc34ed5daab
 +    recordedIssues: "Erfasste Probleme",
 +    hint: 'Aktuelle Worker-Beobachtungen, bis zu 20 pro Bot. Fehlende oder veraltete Daten beweisen keine Inaktivität. Nutzt die vorhandene Listenaktualisierung.',
 +    refreshFailed: 'Aktualisierung fehlgeschlagen. Gespeicherter Stand wird angezeigt; der aktuelle Arbeitsstatus ist nicht verfügbar.',
++    waitingForRoster: 'Aktueller lokaler Stand wird abgewartet.',
 +    search: 'Bots, Worker und Aufgaben suchen', entity: 'Bot / Worker', status: 'Status',
 +    activity: 'Aufgabe / letztes Signal', elapsed: 'Verstrichen', tokens: 'Tokens', cost: "Erfasste Kosten (USD)",
 +    model: "Modell", attention: 'Zuletzt gemeldeter Bot-Hinweis', worker: 'Worker',
@@ -58982,6 +59036,7 @@ index 0000000000000000000000000000000000000000..b470efeb291547fb8c3b7cc34ed5daab
 +    recordedIssues: "Problemas registrados",
 +    hint: 'Observaciones recientes de trabajadores, hasta 20 por bot. Los datos ausentes o antiguos no prueban inactividad. Usa la actualización existente de la lista.',
 +    refreshFailed: 'Error al actualizar. Se muestra una captura guardada; el estado del trabajo actual no está disponible.',
++    waitingForRoster: 'Esperando una captura local actualizada.',
 +    search: 'Buscar bots, trabajadores y tareas', entity: 'Bot / trabajador', status: 'Estado',
 +    activity: 'Tarea / última señal', elapsed: 'Tiempo transcurrido', tokens: 'Tokens', cost: "Coste registrado (USD)",
 +    model: "Modelo", attention: 'Último aviso del bot comunicado', worker: 'Trabajador',
@@ -59153,21 +59208,22 @@ index 0000000000000000000000000000000000000000..bbb6c4ab1abea5be5e88004a18c06a36
 +})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-query.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-query.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..f1a316f342ebec491b6afce71de01a61e0121b98
+index 0000000000000000000000000000000000000000..be1b600da1d8948c07c04c42f1cb0e5136d1990d
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-query.test.tsx
-@@ -0,0 +1,219 @@
+@@ -0,0 +1,266 @@
 +import type * as PluginSDK from '@hermes/plugin-sdk'
-+import { host } from '@hermes/plugin-sdk'
++import { host, queryClient } from '@hermes/plugin-sdk'
 +import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
++import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
++import type { WritableAtom } from 'nanostores'
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 +
 +// eslint-disable-next-line no-restricted-imports
 +import { registerPluginLocales } from '@/i18n/plugin-i18n'
 +
 +import { $characterSpriteRefresh } from './character-sprites'
-+import { $botAttention, $botMeta, $lastRoster, ROSTER_KEY } from './data'
++import { $botAttention, $botMeta, $lastRoster, bindRosterGateway, ROSTER_KEY } from './data'
 +import { BOTS_LOCALES } from './i18n'
 +import { $botManagementOpen } from './management'
 +import { indexAliasRoutes } from './routing'
@@ -59178,7 +59234,7 @@ index 0000000000000000000000000000000000000000..f1a316f342ebec491b6afce71de01a61
 +  const sdk = await original<typeof PluginSDK>()
 +
 +  return { ...sdk, host: { ...sdk.host, state: { ...sdk.host.state,
-+    connectionId: sdk.atom('local'), profile: sdk.atom('default'), busy: sdk.atom(false)
++    connectionId: sdk.atom('local'), profile: sdk.atom('default'), gateway: sdk.atom('open'), busy: sdk.atom(false)
 +  } } }
 +})
 +vi.mock('./avatar', () => ({
@@ -59375,6 +59431,52 @@ index 0000000000000000000000000000000000000000..f1a316f342ebec491b6afce71de01a61
 +  expect(host.ensureAgent).not.toHaveBeenCalled()
 +  expect(host.openSession).not.toHaveBeenCalled()
 +  expect(host.newChat).not.toHaveBeenCalled()
++})
++
++
++it('holds a retained snapshot until a read from the current Local gateway succeeds', async () => {
++  client = queryClient
++  client.clear()
++  const gateway = host.state.gateway as WritableAtom<string>
++  const now = Date.now() / 1000
++  const snapshot = (task: string) => ({ profiles: [{ name: 'writer', display_name: 'Writer',
++    canonical_session: { id: 'parent', preview: 'Saved canonical note' },
++    worker_sessions: [{ id: task, title: task, last_active: now }] }] })
++  const pending: ((value: ReturnType<typeof snapshot>) => void)[] = []
++  const request = vi.spyOn(host, 'requestProfile').mockResolvedValueOnce(snapshot('Old worker'))
++    .mockImplementation(() => new Promise(resolve => { pending.push(resolve) }))
++  const stop = bindRosterGateway()
++
++  try {
++    render(<QueryClientProvider client={client}><BotsWorkspace /></QueryClientProvider>)
++    fireEvent.click(screen.getByRole('button', { name: 'Monitor' }))
++    await screen.findByText('Old worker')
++    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
++    await waitFor(() => expect(pending).toHaveLength(1))
++
++    act(() => gateway.set('closed'))
++    expect(screen.getByRole('status').textContent).toBe('Waiting for a fresh Local snapshot.')
++    expect(screen.queryByText('Old worker')).toBeNull()
++    const local = within(screen.getByText('Saved canonical note').closest('tr')!)
++    expect(local.getByText('Retained snapshot')).toBeTruthy()
++    expect((local.getByRole('button', { name: 'Open chat · Writer' }) as HTMLButtonElement).disabled).toBe(true)
++
++    act(() => gateway.set('open'))
++    await act(async () => pending[0](snapshot('Late old worker')))
++    await waitFor(() => expect(pending).toHaveLength(2))
++    expect(screen.queryByText('Late old worker')).toBeNull()
++    expect(screen.queryByText('No bots match these filters')).toBeNull()
++    expect(screen.getByRole('status').textContent).toBe('Waiting for a fresh Local snapshot.')
++
++    await act(async () => pending[1](snapshot('Recovered worker')))
++    await screen.findByText('Recovered worker')
++    expect(screen.queryByRole('status')).toBeNull()
++    expect((local.getByRole('button', { name: 'Open chat · Writer' }) as HTMLButtonElement).disabled).toBe(false)
++    expect(request.mock.calls).toEqual(Array(3).fill([route, 'profiles.list', {}]))
++  } finally {
++    stop()
++    gateway.set('open')
++  }
 +})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-reports.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-reports.tsx
 new file mode 100644
@@ -60304,10 +60406,10 @@ index 0000000000000000000000000000000000000000..0f81f8495a47cf509956537d7dbdd93a
 +})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor.tsx b/apps/desktop/src/plugins/hermes-bots/monitor.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..532f40cf2d3e60bd980a558b1240913122840a7d
+index 0000000000000000000000000000000000000000..ad1d63fa0a54ee196f9d79e895c65a559993f749
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor.tsx
-@@ -0,0 +1,244 @@
+@@ -0,0 +1,246 @@
 +import { Button, Codicon, compactNumber, EmptyState, SearchField, SegmentedControl, useValue } from '@hermes/plugin-sdk'
 +import { useRef, useState } from 'react'
 +
@@ -60323,6 +60425,7 @@ index 0000000000000000000000000000000000000000..532f40cf2d3e60bd980a558b12409131
 +export interface BotMonitorProps {
 +  now: number
 +  stale?: boolean
++  waitingForRoster?: boolean
 +  rows: {
 +    bot: RosterRow
 +    name: string
@@ -60394,7 +60497,8 @@ index 0000000000000000000000000000000000000000..532f40cf2d3e60bd980a558b12409131
 +}
 +
 +/** A read-only projection of the existing roster; only explicit chat actions navigate. */
-+export function BotMonitor({ rows, onOpen, now, stale = false }: BotMonitorProps) {
++export function BotMonitor({ rows, onOpen, now, stale: refreshFailed = false, waitingForRoster = false }: BotMonitorProps) {
++  const stale = refreshFailed || waitingForRoster
 +  const includeSixth = useValue($characterExtraActor)
 +  const b = useBots(), m = b.monitor
 +  const [search, setSearch] = useState(''), [filter, setFilter] = useState('all')
@@ -60450,10 +60554,10 @@ index 0000000000000000000000000000000000000000..532f40cf2d3e60bd980a558b12409131
 +      <div className="pt-4">
 +        <h2 className="text-lg font-semibold">{m.title}</h2>
 +        <p className="mt-1 text-xs text-muted-foreground">{m.hint}</p>
-+        <p className="mt-2 text-xs text-muted-foreground">{m.counts(rows.length, entries.length - rows.length)}</p>
++        {!stale && <p className="mt-2 text-xs text-muted-foreground">{m.counts(rows.length, entries.length - rows.length)}</p>}
 +        <p className="mt-1 text-xs text-muted-foreground">{m.costHint}</p>
 +        <p className="mt-1 text-xs text-muted-foreground">{m.usageHint}</p>
-+        {stale && <p className="mt-2 text-sm" role="status">{m.refreshFailed}</p>}
++        {stale && <p className="mt-2 text-sm" role="status">{waitingForRoster ? m.waitingForRoster : m.refreshFailed}</p>}
 +      </div>
 +      <div className="flex flex-wrap items-center gap-4">
 +        <Button aria-pressed={includeSixth} onClick={() => $characterExtraActor.set(!includeSixth)}
@@ -60476,7 +60580,7 @@ index 0000000000000000000000000000000000000000..532f40cf2d3e60bd980a558b12409131
 +      </div>
 +      {shown.length === 0 ? (
 +        <div className="grid min-h-48 content-center justify-items-center gap-2">
-+          <EmptyState className="min-h-0" title={b.workspace.empty} />
++          {!waitingForRoster && <EmptyState className="min-h-0" title={b.workspace.empty} />}
 +          {rows.length > 0 && (query || filter !== 'all') && (
 +            <Button onClick={() => {
 +              searchInput.current?.focus()
@@ -62134,31 +62238,47 @@ index 89cb62d4ffd4fe95b8d1c5b87a047d14631e537c..32bd210f2912b8046442a4fb51ab43bc
 +      i18n: { register: () => () => undefined, t: (key: string) => key },
        onDispose: () => undefined,
 diff --git a/apps/desktop/src/plugins/hermes-bots/plugin.tsx b/apps/desktop/src/plugins/hermes-bots/plugin.tsx
-index adc7deb5ed235510d84d6d2238d3756c070137d2..abe1f281b8715bdd5bdea85312cd8f4ff065b6c5 100644
+index adc7deb5ed235510d84d6d2238d3756c070137d2..b9631ace9ad3d5066719477e395f1bb15fbcd9c7 100644
 --- a/apps/desktop/src/plugins/hermes-bots/plugin.tsx
 +++ b/apps/desktop/src/plugins/hermes-bots/plugin.tsx
 @@ -28,2 +28,3 @@ import type { ChatEmptyProps, PluginContext, ProfileGroupRoute } from '@hermes/p
 
 +import { BotsWorkspace } from './workspace'
  import { startFaceClock, stopFaceClock } from './avatar'
-@@ -81,2 +82,3 @@ import {
+@@ -45,2 +46,3 @@ import {
+   $lastRoster,
++  bindRosterGateway,
+   botHandle,
+@@ -81,2 +83,3 @@ import {
  import { botRosterMeta, botWorkspaceOwnerKey, setBotsWorkspaceOwner } from './routing'
 +import { requestBotManagement } from './management'
  import { startScreenAutoRaise } from './screen-autoraise'
-@@ -84,3 +86,3 @@ import { ProfileGroupScreenPortal } from './screen-portal'
+@@ -84,3 +87,3 @@ import { ProfileGroupScreenPortal } from './screen-portal'
  import { startHideSweepScheduler } from './session-sweep'
 -import { bumpBotOpenGeneration, getBotOpenGeneration, ID, setPluginCtx } from './shared'
 +import { bumpBotOpenGeneration, getBotOpenGeneration, getPluginCtx, ID, setPluginCtx } from './shared'
  import type { GroupChat, RosterRow } from './types'
-@@ -120,2 +122,3 @@ export default {
+@@ -120,2 +123,3 @@ export default {
      const disposeLocales = ctx.i18n.register(BOTS_LOCALES)
 +    ctx.register({ id: 'workspace-page', area: 'routes', title: ctx.i18n.t('workspace.title'), data: { path: '/bots' }, render: () => <BotsWorkspace /> })
      setGroupChatSyncDisposed(false)
-@@ -131,2 +134,3 @@ export default {
+@@ -131,2 +135,3 @@ export default {
      if (typeof ctx.onDispose === 'function') {
 +      ctx.onDispose(() => {if (getPluginCtx() === ctx) {setPluginCtx(null)}})
        ctx.onDispose(disposeLocales)
-@@ -742,6 +746,4 @@ export default {
+@@ -374,10 +379,3 @@ export default {
+     // pane has ever mounted (#94018). The pane owns the refresh once open.
+-    const primeOnGatewayOpen = (state: unknown) => {
+-      if (String(state) === 'open') {
+-        void primeRoster()
+-      }
+-    }
+-
+-    primeOnGatewayOpen(host.state.gateway.get())
+-    const unbindRosterPrime = host.state.gateway.listen(primeOnGatewayOpen)
++    const unbindRosterPrime = bindRosterGateway()
+
+@@ -742,6 +740,4 @@ export default {
          run: () => {
 -          host.notify({
 -            kind: 'info',
@@ -63013,10 +63133,10 @@ index 0000000000000000000000000000000000000000..a04002008fa7775f744d2d0418a7353e
 +})
 diff --git a/apps/desktop/src/plugins/hermes-bots/workspace.tsx b/apps/desktop/src/plugins/hermes-bots/workspace.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..0a59aa1676260ac106ee0e7cb8d97c860d28ebd0
+index 0000000000000000000000000000000000000000..d8a3a78ea033635e1cfdb502e8f501b247243a54
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/workspace.tsx
-@@ -0,0 +1,332 @@
+@@ -0,0 +1,338 @@
 +import { Button, Codicon, ErrorState, host, Loader, useValue } from '@hermes/plugin-sdk'
 +import { useMemo, useState } from 'react'
 +
@@ -63027,6 +63147,7 @@ index 0000000000000000000000000000000000000000..0a59aa1676260ac106ee0e7cb8d97c86
 +import {
 +  $botAttention,
 +  $botMeta,
++  $localRosterEpoch,
 +  botActivitySession,
 +  botAttentionHint,
 +  botRosterKey,
@@ -63064,7 +63185,12 @@ index 0000000000000000000000000000000000000000..0a59aa1676260ac106ee0e7cb8d97c86
 +
 +  const focused = focusedRosterOwner(useValue($focusedBotOwner)),
 +    busy = useTurnBusy(),
-+    connection = useValue(host.state.connectionId)
++    connection = useValue(host.state.connectionId),
++    gateway = useValue(host.state.gateway),
++    localEpoch = useValue($localRosterEpoch)
++
++  const waitingForRoster = connection === 'local' &&
++    (gateway !== 'open' || (roster.data?.localGatewayEpoch ?? 0) !== localEpoch)
 +
 +  // Successful refreshes must age identical snapshots out of current work.
 +  const now = roster.dataUpdatedAt || Date.now()
@@ -63171,7 +63297,7 @@ index 0000000000000000000000000000000000000000..0a59aa1676260ac106ee0e7cb8d97c86
 +          <BotsPane acceptDialogIntent />
 +        </div>
 +      ) : monitor ? (
-+        roster.isLoading ? <Loader /> : roster.error && !roster.data ? <ErrorState title={b.unavailable} /> : <BotMonitor now={now} onOpen={open} rows={rows} stale={Boolean(roster.error)} />
++        roster.isLoading ? <Loader /> : roster.error && !roster.data ? <ErrorState title={b.unavailable} /> : <BotMonitor now={now} onOpen={open} rows={rows} stale={Boolean(roster.error)} waitingForRoster={waitingForRoster} />
 +      ) : (
 +        <>
 +          <div className="flex flex-wrap items-center gap-3 px-6 py-4">

@@ -750,6 +750,10 @@ A fresh production build of the query-owned guard now passes the standalone
 Monitor path. Actual labelled route-read failures leave source labels intact,
 show the stored-snapshot warning and Retained snapshot rows, and disable Open.
 The aggregate fault is configured but not reached after the route shortcircuit.
+During a Local reconnect, Monitor retains the roster and hides live
+worker counts and disables Open until a new snapshot arrives. A reply from
+before the reconnect cannot replace that snapshot.
+
 Removing the fault plus explicit Refresh restores current rows and Open, with
 successful inventory and real profile-reader receipts. CUA AX and pixels agree.
 
