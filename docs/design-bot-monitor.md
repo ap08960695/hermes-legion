@@ -88,6 +88,8 @@ question before moving focus.
 When a Local split missed an approval, **Open chat** checks the gateway
 for the request so you can review it in the chat. The same check clears
 expired approval cards that would otherwise cover the current request.
+The chat stops showing **Needs your input** when its last request has
+expired. A new request that arrived during the check keeps the indicator.
 If the connection, profile, or gateway state changes meanwhile, the earlier
 open leaves the current inbox alone when it finishes.
 If you reopen the inbox or switch connection or profile while an answer
