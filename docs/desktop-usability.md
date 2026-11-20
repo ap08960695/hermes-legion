@@ -189,6 +189,8 @@ focused, the selected text stays selected. Typing replaces that range.
 An in-progress IME composition also survives a key change within the
 same live session when the draft is unchanged. Confirming saves the
 finished text. Canceling leaves the committed draft intact.
+Ordinary typing just before IME starts is saved with the draft while
+the input method is still offering candidates.
 
 For the staged macOS split reconnect fixture, run
 `python3 verification/verify_split_reconnect.py EVIDENCE_DIR` on its
