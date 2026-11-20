@@ -78,10 +78,12 @@ for the connection to return, keeping saved Chat visible in the meantime.
 The composer shows the connection status above the message field, including
 when it is empty. The status wraps in narrow panes and is available to
 assistive technology. It shows Disconnected when retries have stopped
-and clears the status when the connection is ready. When
-reconnect interrupts the open Chat, it tries to resume again after the
-Local gateway returns. During recovery, a closed socket or shutdown refusal
-uses the existing reconnect status. A split Chat waiting to resume shows its
+and clears the status when the connection is ready. You can edit the draft
+while reconnecting. **Suggest prompt** becomes available again when the
+gateway is ready. Any suggestion still pending when the connection dropped
+is discarded. When reconnect interrupts the open Chat, it tries to resume
+after the Local gateway returns. During recovery, a closed socket or
+shutdown refusal uses the existing reconnect status. A split Chat shows its
 connection status until the gateway is ready, then returns to its session
 loader. If the Local gateway reports no startup result, the recovery
 dialog keeps the original startup error under **Details**. Background
