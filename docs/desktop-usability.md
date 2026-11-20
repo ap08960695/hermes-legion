@@ -175,6 +175,10 @@ drafts, and confirm focus stays where you moved it.
 For the staged macOS split reconnect fixture, run
 `python3 verification/verify_split_reconnect.py EVIDENCE_DIR` on its
 recorded readiness, input, rebind, replacement, process and SSH checks.
+Add `--switch-pane` for the run that moves focus to the primary draft
+before the split rebinds. This check requires the primary selection
+to stay in place through the rebind and for at least 60 seconds afterward,
+then verifies that typing replaces only the selected primary text.
 
 Regression tests and real isolated Electron interactions use disposable conversations, files, bot profiles and paused controls. Provider inference is denied and counted. Production source adoption, package preparation, graceful activation and isolated visual acceptance are separate evidence. No remote Screen transport, provider authorization, allowance or production worker execution is certified by these checks.
 
