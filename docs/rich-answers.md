@@ -57,6 +57,8 @@ points, finite numbers only, and series that match the label count. Anything els
 falls back to the original code block, as Mermaid and cards do. Charts follow the
 light/dark theme colours, include a legend and expose each value through a
 tooltip title. Long chart fences stay inline instead of becoming a side artifact.
+Long legend labels wrap inside narrow Chat and Work card panes. Open
+**Chart values** to read the full labels and exact values without hovering.
 
 The Desktop platform hint now names the rich blocks the renderer already
 supports — `mermaid` diagrams, `chart`, `cards`, `<details>` and callouts — and
