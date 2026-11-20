@@ -753,6 +753,8 @@ its connection. The report dialog wraps long names and saved text. Its
 status filter and Close button show keyboard focus.
 In a character report without a status filter, Tab reaches the report
 body when it overflows. Page Down and End reveal the remaining text.
+After closing a report opened from a character, focus returns to the
+previous app control or the Characters switch if that control is unavailable.
 
 ## Native query-cache acceptance
 
