@@ -195,6 +195,8 @@ When switching away from a composing draft, the next edit is saved in
 the draft you are now viewing.
 If Local reconnect interrupts IME in a split Chat, the restored draft
 keeps your caret or selection from just before composition.
+A leading blank line stays in place when you paste before or over
+the first inline reference in the restored draft.
 
 For the staged macOS split reconnect fixture, run
 `python3 verification/verify_split_reconnect.py EVIDENCE_DIR` on its
