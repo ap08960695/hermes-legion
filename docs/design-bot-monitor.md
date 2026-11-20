@@ -102,8 +102,12 @@ the inbox or changing the active connection or profile clears these drafts. The
 button stays focused while it loads. If the inbox recovers while the button still has focus, focus moves to the
 inbox heading so you can tab into the list.
 
-The inbox updates when the gateway opens or settles a request. A confirmed
-answer clears its row even if an older inbox read finishes afterward.
+The inbox updates when the gateway opens or settles a request. If a new
+question clearly replaces the focused question in the same bot run, focus
+moves to the new answer controls. The new answer starts blank. If the
+replacement is unclear or the question simply closes, focus returns to
+the inbox heading. A confirmed answer clears its row even if an older
+inbox read finishes afterward.
 An expired request clears without changing the session. Private credential
 prompts stay in their native chat flow. Board-only gates still use the
 **Needs owner** lane in Work.

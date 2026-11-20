@@ -62572,7 +62572,7 @@ index 0000000000000000000000000000000000000000..9da7826ee789e78c331d8f560234fa23
 +}
 diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox-data.ts b/apps/desktop/src/plugins/hermes-bots/owner-inbox-data.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..09462de6ef92a8af84f07b51893d9ea562142c22
+index 0000000000000000000000000000000000000000..89b69a2fad6529a5503b8d56d88fdba43e0094d0
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox-data.ts
 @@ -0,0 +1,181 @@
@@ -62602,7 +62602,7 @@ index 0000000000000000000000000000000000000000..09462de6ef92a8af84f07b51893d9ea5
 +    prompt.kind === 'clarify' ? prompt.question_id : undefined])
 +}
 +
-+export function useOwnerInbox(beforeReady: () => void, beforeRowsChange: (keepsRow: (key: string) => boolean) => void) {
++export function useOwnerInbox(beforeReady: () => void, beforeRowsChange: (keepsRow: (key: string) => boolean, nextItems?: OwnerInboxItem[]) => void) {
 +  const connection = useValue(host.state.connectionId)
 +  const profile = useValue(host.state.profile)
 +  const socketState = useValue(host.state.gateway)
@@ -62660,7 +62660,7 @@ index 0000000000000000000000000000000000000000..09462de6ef92a8af84f07b51893d9ea5
 +          if (!dirty && !lifetime.signal.aborted && isCurrentScope()) {
 +            readyScope.current = isCurrentScope
 +            beforeReady()
-+            beforeRowsChange(key => items.some(item => ownerPromptKey(item) === key))
++            beforeRowsChange(key => items.some(item => ownerPromptKey(item) === key), items)
 +            setSnapshot({ gateway, connection, profile, items, status: 'ready' })
 +          }
 +        } catch {
@@ -62759,10 +62759,10 @@ index 0000000000000000000000000000000000000000..09462de6ef92a8af84f07b51893d9ea5
 +}
 diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx b/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..5f862bf1748a168c76bdf4b13330838e589508b6
+index 0000000000000000000000000000000000000000..396f522634e733731aeb6497db3309f76367e3e2
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx
-@@ -0,0 +1,827 @@
+@@ -0,0 +1,865 @@
 +import { host, type OwnerInboxItem } from '@hermes/plugin-sdk'
 +import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 +import { atom } from 'nanostores'
@@ -62878,6 +62878,44 @@ index 0000000000000000000000000000000000000000..5f862bf1748a168c76bdf4b13330838e
 +    route: { connectionId: 'local', mode: 'local', profile: 'writer', targetProfile: 'writer' }
 +  }))
 +})
++
++it.each(['exact replacement', 'ambiguous', 'another run', 'focus moved'])(
++  'scopes focus when a pending inbox question is replaced (%s)',
++  async scenario => {
++    const old = prompt('writer', 'Old question?', { choices: ['Brief'], question_id: 'q1' })
++    const sibling = { ...old, question: 'Already waiting?', question_id: 'q2', choices: [] }
++    const other = { ...old, profile: 'tester', question: 'Other bot question?', choices: [] }
++    const successor = {
++      ...old, question: 'Replacement question?', prompt_id: 'replacement', question_id: 'q3',
++      execution_generation: scenario === 'another run' ? old.execution_generation + 1 : old.execution_generation
++    }
++    const inbox = fixture([sibling, other, old])
++    inbox.mount()
++    fireEvent.click(await screen.findByRole('button', { name: 'Waiting for owner 3' }))
++    const dialog = screen.getByRole('dialog')
++    const row = (question: string) => within(screen.getByText(question).closest('li')!)
++    const oldRow = row(old.question!)
++    fireEvent.click(oldRow.getByRole('radio', { name: 'Brief' }))
++    oldRow.getByRole('button', { name: 'Send answer' }).focus()
++    const otherAnswer = row(other.question!).getByRole('textbox')
++    if (scenario === 'focus moved') otherAnswer.focus()
++
++    await act(async () => inbox.change([
++      sibling, other, successor,
++      ...(scenario === 'ambiguous' ? [{ ...successor, question: 'Another replacement?', question_id: 'q4' }] : [])
++    ]))
++
++    const replacement = row(successor.question)
++    const first = replacement.getByRole<HTMLInputElement>('radio', { name: 'Brief' })
++    const heading = within(dialog).getByRole('heading')
++    expect(document.activeElement).toBe(
++      scenario === 'exact replacement' ? first : scenario === 'focus moved' ? otherAnswer : heading
++    )
++    expect(first.checked).toBe(false)
++    expect(replacement.getByRole<HTMLInputElement>('textbox').value).toBe('')
++    expect(inbox.request.mock.calls.map(([method]) => method)).toEqual(['owner_inbox.list', 'owner_inbox.list'])
++  }
++)
 +
 +it('refreshes a pending approval on an event and hides old connection rows immediately', async () => {
 +  const inbox = fixture([])
@@ -63592,14 +63630,14 @@ index 0000000000000000000000000000000000000000..5f862bf1748a168c76bdf4b13330838e
 +)
 diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx b/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..f25ea619a6148343dc1e881e8c462c4a6d5417ff
+index 0000000000000000000000000000000000000000..9ee173bc185a0f56cb8dd33a8dc40c9f2385c7a6
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx
-@@ -0,0 +1,309 @@
+@@ -0,0 +1,334 @@
 +import {
 +  Button, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, host, type OwnerInboxItem, type PluginProfileRoute, relativeTime
 +} from '@hermes/plugin-sdk'
-+import { useCallback, useEffect, useId, useRef, useState } from 'react'
++import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 +
 +import type { BotsText } from './i18n'
 +import { ownerPromptKey, useOwnerInbox } from './owner-inbox-data'
@@ -63636,15 +63674,40 @@ index 0000000000000000000000000000000000000000..f25ea619a6148343dc1e881e8c462c4a
 +      heading.current?.focus()
 +    }
 +  }, [])
-+  const focusBeforeRowsChange = useCallback((keepsRow: (key: string) => boolean) => {
++  const renderedItems = useRef<OwnerInboxItem[]>([])
++  const nextFocus = useRef<{ items: OwnerInboxItem[]; key: string } | null>(null)
++  const focusBeforeRowsChange = useCallback((keepsRow: (key: string) => boolean, nextItems?: OwnerInboxItem[]) => {
 +    const focused = list.current?.ownerDocument.activeElement
 +    const row = focused?.closest<HTMLElement>('[data-owner-prompt-key]')
 +    const key = row?.dataset.ownerPromptKey
-+    if (key && list.current?.contains(row ?? null) && !keepsRow(key)) {
-+      heading.current?.focus()
++    if (!key || !list.current?.contains(row ?? null) || keepsRow(key)) return
++
++    nextFocus.current = null
++    const previous = renderedItems.current.find(item => ownerPromptKey(item) === key)
++    if (previous?.kind === 'clarify' && nextItems) {
++      const existingKeys = new Set(renderedItems.current.map(ownerPromptKey))
++      const replacements = nextItems.filter(item =>
++        item.kind === 'clarify' && item.profile === previous.profile && item.session_id === previous.session_id &&
++        item.authority_epoch === previous.authority_epoch && item.execution_generation === previous.execution_generation &&
++        !existingKeys.has(ownerPromptKey(item))
++      )
++      if (replacements.length === 1) nextFocus.current = { items: nextItems, key: ownerPromptKey(replacements[0]) }
 +    }
++
++    heading.current?.focus()
 +  }, [])
 +  const inbox = useOwnerInbox(focusBeforeReady, focusBeforeRowsChange)
++  useLayoutEffect(() => {
++    renderedItems.current = inbox.items
++    const focus = nextFocus.current
++    nextFocus.current = null
++    const title = heading.current
++    if (!focus || inbox.items !== focus.items || inbox.status !== 'ready' ||
++      !title || title.ownerDocument.activeElement !== title) return
++
++    const row = Array.from(list.current?.children ?? []).find(item => item.getAttribute('data-owner-prompt-key') === focus.key)
++    row?.querySelector<HTMLInputElement>('input:not(:disabled):not([aria-disabled="true"]):not([readonly])')?.focus()
++  }, [inbox.items, inbox.status])
 +  const count = inbox.status === 'ready' ? inbox.items.length : 0
 +  const status = openingChat ? '' : notice
 +
