@@ -2,6 +2,10 @@
 
 The Desktop renderer keeps the existing chat history and Markdown engine. Comparison tables use quiet horizontal rules and retain resizing and horizontal scrolling. Existing Markdown images, source links, Mermaid diagrams and sandboxed artifacts remain available. The patch does not rewrite old conversations or ask a model to regenerate them.
 
+When a table is wider than the pane, press Tab to focus its scroll area.
+Use Left and Right to reveal columns, then press Tab to continue.
+Tables that fit leave the tab order unchanged.
+
 ## Opt-in answer cards
 
 A message can contain a `cards` fenced JSON block. Values must come from the author or verified sources; the renderer never infers prices, facts or citations and never fetches page metadata.
