@@ -186,6 +186,9 @@ while moving focus to the other pane during reconnect. Check both
 drafts, and confirm focus stays where you moved it.
 If an unchanged draft gets a new session key while its editor is
 focused, the selected text stays selected. Typing replaces that range.
+An in-progress IME composition also survives a key change within the
+same live session when the draft is unchanged. Confirming saves the
+finished text. Canceling leaves the committed draft intact.
 
 For the staged macOS split reconnect fixture, run
 `python3 verification/verify_split_reconnect.py EVIDENCE_DIR` on its
