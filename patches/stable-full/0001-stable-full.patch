@@ -18464,10 +18464,64 @@ index 21531b72970d3d5f00578e8608a489fcf07bf981..6c841d14d690c95f21bcc2253c4b722d
 +  ) {
      flushSync(() => selectSurface(id))
 diff --git a/apps/desktop/src/app/chat/composer/focus.test.ts b/apps/desktop/src/app/chat/composer/focus.test.ts
-index 76f6ce9eae46515ec41a896609a688a0d239aeae..9455deb3f72ab8a8d58dfaa7a71fb829793bb476 100644
+index 76f6ce9eae46515ec41a896609a688a0d239aeae..744bcd3642f87955f6263727b68e1e680de8ec30 100644
 --- a/apps/desktop/src/app/chat/composer/focus.test.ts
 +++ b/apps/desktop/src/app/chat/composer/focus.test.ts
-@@ -86,2 +86,46 @@ describe('focusComposerInput', () => {
+@@ -2,3 +2,4 @@ import { afterEach, describe, expect, it } from 'vitest'
+
+-import { $hoveredTreeGroup } from '@/components/pane-shell/tree/store'
++import { group } from '@/components/pane-shell/tree/model'
++import { $activeTreeGroup, $hoveredTreeGroup, $layoutTree, noteActiveTreeGroup } from '@/components/pane-shell/tree/store'
+
+@@ -8,3 +9,5 @@ import {
+   focusComposerInput,
++  focusHistoryResultTile,
+   getActiveComposer,
++  historyTileAllowsAutomaticFocus,
+   markActiveComposer,
+@@ -64,2 +67,41 @@ afterEach(() => {
+
++describe('focusHistoryResultTile', () => {
++  it.each([false, true])('hands off only while the saved pane owns keyboard focus (%s)', async movedFocus => {
++    const tree = $layoutTree.get()
++    const activeGroup = $activeTreeGroup.get()
++    const paneId = 'session-tile:canonical'
++    const panel = document.createElement('section')
++    const trigger = document.createElement('button')
++    const other = document.createElement('button')
++    panel.dataset.sessionTilePanel = paneId
++    panel.tabIndex = -1
++    document.body.append(trigger, panel, other)
++    $layoutTree.set(group([paneId], { active: paneId, id: 'history-test' }))
++    noteActiveTreeGroup('history-test')
++    trigger.focus()
++
++    try {
++      focusHistoryResultTile(trigger)
++      trigger.remove()
++      await new Promise(resolve => window.requestAnimationFrame(resolve))
++      expect(document.activeElement).toBe(panel)
++
++      if (movedFocus) {
++        other.focus()
++      }
++
++      const editor = document.createElement('div')
++      editor.tabIndex = 0
++      editor.dataset.slot = RICH_INPUT_SLOT
++      panel.append(editor)
++      focusComposerInput(editor, () => historyTileAllowsAutomaticFocus(editor))
++
++      expect(document.activeElement).toBe(movedFocus ? other : editor)
++    } finally {
++      $layoutTree.set(tree)
++      noteActiveTreeGroup(activeGroup)
++    }
++  })
++})
++
+ describe('focusComposerInput', () => {
+@@ -86,2 +128,46 @@ describe('focusComposerInput', () => {
 
 +  it('lets a dialog restore focus between a composer focus request and its retries', async () => {
 +    const input = mountInput()
@@ -18515,15 +18569,16 @@ index 76f6ce9eae46515ec41a896609a688a0d239aeae..9455deb3f72ab8a8d58dfaa7a71fb829
 +
    it('takes the caret from a hidden keep-alive composer on tab switch', () => {
 diff --git a/apps/desktop/src/app/chat/composer/focus.ts b/apps/desktop/src/app/chat/composer/focus.ts
-index 3c7f5a20da88790d5ad67782b3e9567299d30533..0e30f6abe338d4ecd1d75dce9e144984ce1a3c01 100644
+index 3c7f5a20da88790d5ad67782b3e9567299d30533..0f66aba4b6ab64ef40b89ec01088eecbe7c3f2f3 100644
 --- a/apps/desktop/src/app/chat/composer/focus.ts
 +++ b/apps/desktop/src/app/chat/composer/focus.ts
-@@ -17,2 +17,4 @@ import { dataUrlToBlob } from '@/lib/preview-annotate/pack'
-
-+import type { DroppedFile } from '../hooks/use-composer-actions'
+@@ -16,2 +16,5 @@ import { subscribePreviewAnnotateHandoff } from '@/lib/preview-annotate/handoff'
+ import { dataUrlToBlob } from '@/lib/preview-annotate/pack'
++import { $focusedTreePaneId, TILE_PANE_PREFIX } from '@/store/session-focus'
 +
- import { $floatingComposerOwner } from './floating-state'
-@@ -58,2 +60,7 @@ interface AttachImagesDetail {
++import type { DroppedFile } from '../hooks/use-composer-actions'
+
+@@ -58,2 +61,7 @@ interface AttachImagesDetail {
 
 +interface AttachFilesDetail {
 +  files: DroppedFile[]
@@ -18531,11 +18586,69 @@ index 3c7f5a20da88790d5ad67782b3e9567299d30533..0e30f6abe338d4ecd1d75dce9e144984
 +}
 +
  const FOCUS_EVENT = 'hermes:composer-focus'
-@@ -62,2 +69,3 @@ const INSERT_REPLY_EVENT = 'hermes:composer-insert-reply'
+@@ -62,2 +70,3 @@ const INSERT_REPLY_EVENT = 'hermes:composer-insert-reply'
  const ATTACH_IMAGES_EVENT = 'hermes:composer-attach-images'
 +const ATTACH_FILES_EVENT = 'hermes:composer-attach-files'
  const INSERT_REFS_EVENT = 'hermes:composer-insert-refs'
-@@ -386,2 +394,14 @@ export const onComposerAttachImagesRequest = (handler: (detail: AttachImagesDeta
+@@ -83,2 +92,57 @@ const cssEscape = (value: string): string => {
+
++const historyLoadingPanels = new WeakSet<HTMLElement>()
++
++export function focusHistoryResultTile(trigger: HTMLElement) {
++  const paneId = $focusedTreePaneId.get()
++
++  if (!paneId?.startsWith(TILE_PANE_PREFIX)) {
++    return
++  }
++
++  const doc = trigger.ownerDocument
++  const view = doc.defaultView
++  const location = view?.location.href
++
++  // Wait for the row to leave the view and the chosen tile to attach.
++  view?.requestAnimationFrame(() => {
++    if (view.location.href !== location || $focusedTreePaneId.get() !== paneId) {
++      return
++    }
++
++    const panel = queryVisible<HTMLElement>(`[data-session-tile-panel="${cssEscape(paneId)}"]`, doc)
++
++    if (!panel || panel.closest('[inert]')) {
++      return
++    }
++
++    const editor = queryVisible<HTMLElement>(`[data-slot="${RICH_INPUT_SLOT}"][contenteditable="true"]`, panel)
++
++    if (!editor) {
++      historyLoadingPanels.add(panel)
++    }
++
++    if (doc.hasFocus() && (doc.activeElement === doc.body || doc.activeElement === trigger)) {
++      (editor ?? panel).focus({ preventScroll: true })
++    }
++  })
++}
++
++export function historyTileAllowsAutomaticFocus(editor: HTMLElement | null): boolean {
++  const panel = editor?.closest<HTMLElement>('[data-session-tile-panel]')
++
++  if (!panel || !historyLoadingPanels.has(panel)) {
++    return true
++  }
++
++  const doc = panel.ownerDocument
++
++  if (!doc.hasFocus() || (doc.activeElement !== panel && doc.activeElement !== editor)) {
++    return false
++  }
++
++  historyLoadingPanels.delete(panel)
++
++  return true
++}
++
+ interface SubmitDetail {
+@@ -386,2 +450,14 @@ export const onComposerAttachImagesRequest = (handler: (detail: AttachImagesDeta
 
 +export const requestComposerAttachFiles = (
 +  files: DroppedFile[],
@@ -18550,12 +18663,12 @@ index 3c7f5a20da88790d5ad67782b3e9567299d30533..0e30f6abe338d4ecd1d75dce9e144984
 +  subscribe<AttachFilesDetail>(ATTACH_FILES_EVENT, handler)
 +
  /** Insert typed ref chips (carrying a display label) into a composer — the
-@@ -721,2 +741,4 @@ export const onComposerModelMenuRequest = (handler: (target: ComposerTarget) =>
+@@ -721,2 +797,4 @@ export const onComposerModelMenuRequest = (handler: (target: ComposerTarget) =>
 
 +export const isDialogTrigger = (element: Element | null) => Boolean(element?.matches('[data-slot="dialog-trigger"]'))
 +
  /**
-@@ -727,5 +749,5 @@ export const onComposerModelMenuRequest = (handler: (target: ComposerTarget) =>
+@@ -727,5 +805,5 @@ export const onComposerModelMenuRequest = (handler: (target: ComposerTarget) =>
   *   - rAF:  React just committed a `renderComposerContents` swap
 - *   - 0ms:  browser focus reclaim from a click target inside an external panel
 + *   - 0ms:  a transient reset to the document body during a panel close
@@ -18563,12 +18676,12 @@ index 3c7f5a20da88790d5ad67782b3e9567299d30533..0e30f6abe338d4ecd1d75dce9e144984
 -export const focusComposerInput = (el: HTMLElement | null) => {
 +export const focusComposerInput = (el: HTMLElement | null, canFocus?: () => boolean) => {
    if (!el) {
-@@ -748,3 +770,3 @@ export const focusComposerInput = (el: HTMLElement | null) => {
+@@ -748,3 +826,3 @@ export const focusComposerInput = (el: HTMLElement | null) => {
 
 -    if (!el.isConnected || isElementInHiddenPane(el) || document.activeElement === el) {
 +    if (canFocus?.() === false || !el.isConnected || isElementInHiddenPane(el) || document.activeElement === el) {
        return
-@@ -767,4 +789,15 @@ export const focusComposerInput = (el: HTMLElement | null) => {
+@@ -767,4 +845,15 @@ export const focusComposerInput = (el: HTMLElement | null) => {
    focus()
 -  window.requestAnimationFrame(focus)
 -  window.setTimeout(focus, 0)
@@ -19346,7 +19459,7 @@ index fccec70b5470274dbe02ef2a3590f5123f3f1ae3..6837d9177d06245c63811a505855edff
 +
    it('claims the bus on mount when visible', () => {
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-draft.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-draft.ts
-index f88f22679132810982d3ea0deb83c3ee20ebfbcd..b0f330d2bddd25c5a3437a4ab2cf89abb9ea6b21 100644
+index f88f22679132810982d3ea0deb83c3ee20ebfbcd..d797c021d51871cbbba21f27a890650b39f6efa7 100644
 --- a/apps/desktop/src/app/chat/composer/hooks/use-composer-draft.ts
 +++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-draft.ts
 @@ -2,3 +2,3 @@ import { useAui, useAuiState, useComposerRuntime } from '@assistant-ui/react'
@@ -19369,15 +19482,16 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..b0f330d2bddd25c5a3437a4ab2cf89ab
  import { migrateQueuedPrompts } from '@/store/composer-queue'
 +import type { SessionOwnerScope } from '@/store/session-request-router'
 
-@@ -41,2 +41,3 @@ import {
+@@ -41,2 +41,4 @@ import {
    getActiveComposer,
++  historyTileAllowsAutomaticFocus,
 +  isDialogTrigger,
    markActiveComposer,
-@@ -49,2 +50,3 @@ import {
+@@ -49,2 +51,3 @@ import {
  import { type InlineRefInput, insertInlineRefsIntoEditor } from '../inline-refs'
 +import { automaticComposerFocusHeld, restoreSplitReconnectFocus } from '../reconnect-focus'
  import {
-@@ -62,4 +64,12 @@ import { useComposerVisible } from '../visibility'
+@@ -62,4 +65,12 @@ import { useComposerVisible } from '../visibility'
 
 +import { createComposerDraftAccess } from './composer-draft-access'
 +
@@ -19390,17 +19504,17 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..b0f330d2bddd25c5a3437a4ab2cf89ab
    activeQueueSessionKey: string | null
 +  draftOwner?: SessionOwnerScope
    focusKey: ChatBarProps['focusKey']
-@@ -82,2 +92,3 @@ export function useComposerDraft({
+@@ -82,2 +93,3 @@ export function useComposerDraft({
    activeQueueSessionKey,
 +  draftOwner,
    focusKey,
-@@ -94,3 +105,4 @@ export function useComposerDraft({
+@@ -94,3 +106,4 @@ export function useComposerDraft({
    // Which composer this is on the focus bus + which attachment set it owns.
 -  const { attachments: attachmentScope, target } = useComposerScope()
 +  const { attachments: attachmentScope, localReconnect, target } = useComposerScope()
 +  const initialReconnectKey = useRef(localReconnect ? focusKey : undefined)
 
-@@ -123,5 +135,9 @@ export function useComposerDraft({
+@@ -123,5 +136,9 @@ export function useComposerDraft({
    const draftRef = useRef('')
 +  // Like draftScopeRef, this belongs to the committed editor, not a pending render.
 +  const draftOwnerRef = useRef(draftOwner)
@@ -19411,17 +19525,17 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..b0f330d2bddd25c5a3437a4ab2cf89ab
 +  const [recovery, setRecovery] = useState<ComposerDraftRetry>()
 +  const pendingDraftPersistRef = useRef<{ scope: string | null; text: string; owner: SessionOwnerScope } | null>(null)
    const draftPersistTimerRef = useRef<number | undefined>(undefined)
-@@ -143,3 +159,3 @@ export function useComposerDraft({
+@@ -143,3 +160,3 @@ export function useComposerDraft({
 
 -  const focusInput = useCallback(() => {
 +  const focusInput = useCallback((automatic = false) => {
      const editor = editorRef.current
-@@ -150,3 +166,3 @@ export function useComposerDraft({
+@@ -150,3 +167,3 @@ export function useComposerDraft({
 
 -    focusComposerInput(editorRef.current)
-+    focusComposerInput(editor, automatic ? automaticComposerFocusAllowed : undefined)
++    focusComposerInput(editor, automatic ? () => automaticComposerFocusAllowed() && historyTileAllowsAutomaticFocus(editor) : undefined)
      markActiveComposer(target)
-@@ -238,7 +254,18 @@ export function useComposerDraft({
+@@ -238,7 +255,18 @@ export function useComposerDraft({
    // stack, so tiles, pop-outs, and secondary windows still auto-focus.
 +  // A closing dialog can restore its trigger before this effect runs.
    useEffect(() => {
@@ -19443,7 +19557,7 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..b0f330d2bddd25c5a3437a4ab2cf89ab
 +    }
 +  }, [floating, focusInput, focusKey, inputDisabled, localReconnect, paneVisible, target])
 
-@@ -302,30 +329,6 @@ export function useComposerDraft({
+@@ -302,30 +330,6 @@ export function useComposerDraft({
 
 -  const stashAt = (scope: string | null, text = draftRef.current, attachments = attachmentScope.$attachments.get()) =>
 -    stashSessionDraft(scope, text, attachments)
@@ -19478,7 +19592,7 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..b0f330d2bddd25c5a3437a4ab2cf89ab
 +    [attachmentScope]
 +  )
 
-@@ -399,2 +402,25 @@ export function useComposerDraft({
+@@ -399,2 +403,25 @@ export function useComposerDraft({
 
 +  const loadRecoveredDraft = (text: string, attachments: ComposerAttachment[], retry?: ComposerDraftRetry) => {
 +    // The switch has already persisted the new identity. Painting must not clear it as an edit.
@@ -19504,7 +19618,7 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..b0f330d2bddd25c5a3437a4ab2cf89ab
 +  const getDraftRetry = () => draftRetryRef.current
 +
    const clearDraft = useCallback(() => {
-@@ -466,8 +492,8 @@ export function useComposerDraft({
+@@ -466,8 +493,8 @@ export function useComposerDraft({
        // An edited (or cleared) restored draft is a new message: it no longer retries the old send.
 -      if (draftRetryRef.current && !draftRetryTextMatches(draftRetryRef.current, text)) {
 +      if (draftRetryRef.current && !draftRetryRef.current.recovery && !draftRetryTextMatches(draftRetryRef.current, text)) {
@@ -19516,7 +19630,7 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..b0f330d2bddd25c5a3437a4ab2cf89ab
 -      const entry = { scope, text }
 +      const entry = { scope, text, owner: draftOwnerRef.current }
        pendingDraftPersistRef.current = entry
-@@ -480,3 +506,6 @@ export function useComposerDraft({
+@@ -480,3 +507,6 @@ export function useComposerDraft({
          // silently filing text under the wrong session.
 -        if (!isPendingDraftPersistCurrent(pendingDraftPersistRef.current, entry)) {
 +        if (
@@ -19524,17 +19638,17 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..b0f330d2bddd25c5a3437a4ab2cf89ab
 +          !isPendingDraftPersistCurrent(pendingDraftPersistRef.current, entry)
 +        ) {
            return
-@@ -485,3 +514,3 @@ export function useComposerDraft({
+@@ -485,3 +515,3 @@ export function useComposerDraft({
          pendingDraftPersistRef.current = null
 -        stashAt(scope, text)
 +        stashAt(scope, text, attachmentScope.$attachments.get(), entry.owner)
        }, DRAFT_PERSIST_DEBOUNCE_MS)
-@@ -495,3 +524,3 @@ export function useComposerDraft({
+@@ -495,3 +525,3 @@ export function useComposerDraft({
      }
 -  }, [composerRuntime, queueEditRef])
 +  }, [composerRuntime, queueEditRef, stashAt, attachmentScope.$attachments])
 
-@@ -571,3 +600,6 @@ export function useComposerDraft({
+@@ -571,3 +601,6 @@ export function useComposerDraft({
      // later than the route flips the scope, so it is not a usable signal here.
 -    if ((isFreshDraftScope(draftScopeRef.current) || !draftScopeRef.current) && activeQueueSessionKey) {
 +    const owner = typeof draftOwner === 'object' && draftOwner ? { ...draftOwner } : draftOwner
@@ -19542,7 +19656,7 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..b0f330d2bddd25c5a3437a4ab2cf89ab
 +
 +    if (sameOwner && (isFreshDraftScope(draftScopeRef.current) || !draftScopeRef.current) && activeQueueSessionKey) {
        const freshKey = draftScopeRef.current || freshDraftScope()
-@@ -577,6 +609,6 @@ export function useComposerDraft({
+@@ -577,6 +610,6 @@ export function useComposerDraft({
        // fresh → stored (#139190), so only this announced handoff does.
 -      if (adoptNewSessionDraft(activeQueueSessionKey)) {
 +      if (adoptNewSessionDraft(activeQueueSessionKey, owner)) {
@@ -19551,12 +19665,12 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..b0f330d2bddd25c5a3437a4ab2cf89ab
 -    } else if (!activeQueueSessionKey) {
 +    } else if (sameOwner && !activeQueueSessionKey) {
        // The reverse handoff: a session the user was typing into turned out
-@@ -587,3 +619,3 @@ export function useComposerDraft({
+@@ -587,3 +620,3 @@ export function useComposerDraft({
        // verdict announced it. No announcement, no-op.
 -      adoptGoneSessionDraft()
 +      adoptGoneSessionDraft(owner)
      }
-@@ -591,5 +623,7 @@ export function useComposerDraft({
+@@ -591,5 +624,7 @@ export function useComposerDraft({
      draftScopeRef.current = activeQueueSessionKey
 -    draftRetryRef.current = readDraftRetry(activeQueueSessionKey)
 +    draftOwnerRef.current = owner
@@ -19566,7 +19680,7 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..b0f330d2bddd25c5a3437a4ab2cf89ab
 -    const { attachments, text } = takeSessionDraft(activeQueueSessionKey)
 +    const { attachments, text } = takeSessionDraft(activeQueueSessionKey, owner)
      loadIntoComposer(text, attachments, true)
-@@ -601,8 +635,8 @@ export function useComposerDraft({
+@@ -601,8 +636,8 @@ export function useComposerDraft({
        if (editing?.sessionKey === activeQueueSessionKey) {
 -        stashAt(activeQueueSessionKey, editing.draft, editing.attachments)
 +        stashAt(activeQueueSessionKey, editing.draft, editing.attachments, owner)
@@ -19578,7 +19692,7 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..b0f330d2bddd25c5a3437a4ab2cf89ab
 -  }, [activeQueueSessionKey]) // eslint-disable-line react-hooks/exhaustive-deps
 +  }, [activeQueueSessionKey, ownerIdentity]) // eslint-disable-line react-hooks/exhaustive-deps
 
-@@ -623,4 +657,5 @@ export function useComposerDraft({
+@@ -623,4 +658,5 @@ export function useComposerDraft({
      reloadPersistedDrafts()
 -    draftRetryRef.current = readDraftRetry(draftScopeRef.current)
 -    const stashed = takeSessionDraft(draftScopeRef.current)
@@ -19586,7 +19700,7 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..b0f330d2bddd25c5a3437a4ab2cf89ab
 +    setRecovery(draftRetryRef.current?.recovery ? draftRetryRef.current : undefined)
 +    const stashed = takeSessionDraft(draftScopeRef.current, draftOwnerRef.current)
      loadIntoComposer(stashed.text, stashed.attachments)
-@@ -633,8 +668,19 @@ export function useComposerDraft({
+@@ -633,8 +669,19 @@ export function useComposerDraft({
      () =>
 -      onComposerDraftSyncRequest(({ mode, target: requested }) => {
 -        if (requested === target) {
@@ -19610,7 +19724,7 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..b0f330d2bddd25c5a3437a4ab2cf89ab
 -    [target]
 +    [attachmentScope, target]
    )
-@@ -664,5 +710,6 @@ export function useComposerDraft({
+@@ -664,5 +711,6 @@ export function useComposerDraft({
      }
 -  }, [syncDraftFromEditor])
 +  }, [syncDraftFromEditor, stashAt])
@@ -19618,11 +19732,11 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..b0f330d2bddd25c5a3437a4ab2cf89ab
    return {
 +    ownerIdentity,
      activeQueueSessionKeyRef,
-@@ -670,2 +717,3 @@ export function useComposerDraft({
+@@ -670,2 +718,3 @@ export function useComposerDraft({
      draftScopeRef,
 +    draftOwnerRef,
      draftRef,
-@@ -679,2 +727,5 @@ export function useComposerDraft({
+@@ -679,2 +728,5 @@ export function useComposerDraft({
      loadIntoComposer,
 +    loadRecoveredDraft,
 +    getDraftRetry,
@@ -24731,7 +24845,7 @@ index d847fc07b0f047bda92096681fd8a77c08681b6b..3c16a3570d4dea42ee3b99e19f16376f
 +      {status}
        <Codicon aria-hidden="true" className="shrink-0 opacity-60" name="chevron-down" size="0.875rem" />
 diff --git a/apps/desktop/src/app/chat/sidebar/index.tsx b/apps/desktop/src/app/chat/sidebar/index.tsx
-index dadfd889c0a65cb953b70396c8e2ca3f30c7fc57..01ef945f6b54519af2dc472a1a6145cb68831a28 100644
+index dadfd889c0a65cb953b70396c8e2ca3f30c7fc57..ee0a2bc0cba462c7c85b9b76a1463f4badacb178 100644
 --- a/apps/desktop/src/app/chat/sidebar/index.tsx
 +++ b/apps/desktop/src/app/chat/sidebar/index.tsx
 @@ -1 +1,4 @@
@@ -24759,11 +24873,15 @@ index dadfd889c0a65cb953b70396c8e2ca3f30c7fc57..01ef945f6b54519af2dc472a1a6145cb
  import { SidebarSectionAddButton } from './chrome'
 +import { contributedSidebarItems } from './nav-contributions'
  import { SidebarCronJobsSection } from './cron-jobs-section'
-@@ -194,2 +199,3 @@ import { useEnteredProjectSessions } from './use-entered-project-sessions'
+@@ -190,2 +195,3 @@ import {
+ import { buildSessionByAnyId, resolvePinnedSessions } from './session-index'
++import type { ResumeSessionRow } from './session-row'
+ import { SidebarSessionsSection, VIRTUALIZE_THRESHOLD } from './sessions-section'
+@@ -194,2 +200,3 @@ import { useEnteredProjectSessions } from './use-entered-project-sessions'
  import { useServerSessionSearch } from './use-server-session-search'
 +import { SessionSearchFeedback, SessionSearchEmptyState } from './session-search-feedback'
 
-@@ -289,36 +295,2 @@ const HEADER_NAV_BTN =
+@@ -289,36 +296,2 @@ const HEADER_NAV_BTN =
  // stripped or a search for "foo" paints rows titled ">>>foo<<<".
 -// Exported for tests.
 -export function stripFtsMarkers(snippet: string): string {
@@ -24800,13 +24918,13 @@ index dadfd889c0a65cb953b70396c8e2ca3f30c7fc57..01ef945f6b54519af2dc472a1a6145cb
 -}
 -
  export function mergeSearchResults(
-@@ -328,3 +300,4 @@ export function mergeSearchResults(
+@@ -328,3 +301,4 @@ export function mergeSearchResults(
    sessionByAnyId: ReadonlyMap<string, SessionInfo>,
 -  searchPending: boolean
 +  searchPending: boolean,
 +  connectionId: string | null = null
  ): SessionInfo[] {
-@@ -358,3 +331,15 @@ export function mergeSearchResults(
+@@ -358,3 +332,15 @@ export function mergeSearchResults(
      const loaded = sessionByAnyId.get(match.session_id)
 -    out.set(match.session_id, loaded ?? searchResultToSession(match))
 +    const profile = match.profile?.trim()
@@ -24823,7 +24941,12 @@ index dadfd889c0a65cb953b70396c8e2ca3f30c7fc57..01ef945f6b54519af2dc472a1a6145cb
 +      loaded && (!owner || sameOwnerAndId) ? loaded : { ...searchResultToSession(match), ...owner }
 +    )
    }
-@@ -417,26 +402,5 @@ export function ChatSidebar({
+@@ -379,3 +365,3 @@ interface ChatSidebarProps extends React.ComponentProps<typeof Sidebar> {
+   onLoadMoreMessaging?: (platform: string) => Promise<void> | void
+-  onResumeSession: (sessionId: string, session?: SessionInfo) => void
++  onResumeSession: ResumeSessionRow
+   onDeleteSession: (sessionId: string) => void
+@@ -417,26 +403,5 @@ export function ChatSidebar({
 
 -  const contributedNav = useMemo<SidebarNavItem[]>(
 -    () =>
@@ -24852,16 +24975,16 @@ index dadfd889c0a65cb953b70396c8e2ca3f30c7fc57..01ef945f6b54519af2dc472a1a6145cb
 
 +  const focusNavigation = useFocusNavigation()
    const interfaceMode = useStore($interfaceMode)
-@@ -547,3 +511,3 @@ export function ChatSidebar({
+@@ -547,3 +512,3 @@ export function ChatSidebar({
    const newSessionKbd = newSessionCombo ? comboTokens(newSessionCombo) : []
 -  const [searchQuery, setSearchQuery] = useState('')
 +  const { searchQuery, setSearchQuery, searchInputRef } = useHistorySearch()
    const [newSessionKbdFlash, setNewSessionKbdFlash] = useState(false)
-@@ -554,3 +518,2 @@ export function ChatSidebar({
+@@ -554,3 +519,2 @@ export function ChatSidebar({
    const [messagingVisible, setMessagingVisible] = useState<Record<string, number>>({})
 -  const searchInputRef = useRef<HTMLInputElement>(null)
    const trimmedQuery = searchQuery.trim()
-@@ -743,7 +706,11 @@ export function ChatSidebar({
+@@ -743,7 +707,11 @@ export function ChatSidebar({
 
 -  const { searchPending, serverMatches } = useServerSessionSearch(trimmedQuery, profileScope)
 +  const { searchPending, serverMatches, searchError, retrySearch, switchingConnection, waitingForLocal } =
@@ -24876,16 +24999,16 @@ index dadfd889c0a65cb953b70396c8e2ca3f30c7fc57..01ef945f6b54519af2dc472a1a6145cb
 +        : mergeSearchResults(sortedSessions, trimmedQuery, serverMatches, sessionByAnyId, searchPending, activeConnectionId),
 +    [switchingConnection, sortedSessions, trimmedQuery, serverMatches, sessionByAnyId, searchPending, activeConnectionId]
    )
-@@ -1517,2 +1484,3 @@ export function ChatSidebar({
+@@ -1517,2 +1485,3 @@ export function ChatSidebar({
    const showSessionSections =
 +    Boolean(trimmedQuery) ||
      showSessionSkeletons ||
-@@ -1579,3 +1547,3 @@ export function ChatSidebar({
+@@ -1579,3 +1548,3 @@ export function ChatSidebar({
              <SidebarMenu className="gap-px">
 -              {navItems.map(item => {
 +              {contextualSidebarItems(navItems, focusNavigation).map(item => {
                  const isInteractive = Boolean(item.action) || Boolean(item.route)
-@@ -1731,2 +1699,13 @@ export function ChatSidebar({
+@@ -1731,2 +1700,13 @@ export function ChatSidebar({
            >
 +            <SessionSearchFeedback
 +              failed={searchError}
@@ -24899,7 +25022,7 @@ index dadfd889c0a65cb953b70396c8e2ca3f30c7fc57..01ef945f6b54519af2dc472a1a6145cb
 +              waitingForLocal={waitingForLocal}
 +            />
              {trimmedQuery && (
-@@ -1736,8 +1715,4 @@ export function ChatSidebar({
+@@ -1736,8 +1716,4 @@ export function ChatSidebar({
                  emptyState={
 -                  searchPending ? (
 -                    <SidebarSessionSkeletons />
@@ -24910,20 +25033,20 @@ index dadfd889c0a65cb953b70396c8e2ca3f30c7fc57..01ef945f6b54519af2dc472a1a6145cb
 +                  waitingForLocal ? null : (
 +                    <SessionSearchEmptyState pending={searchPending} failed={searchError} noMatch={s.noMatch(trimmedQuery)} />
                    )
-@@ -1748,3 +1723,11 @@ export function ChatSidebar({
+@@ -1748,3 +1724,11 @@ export function ChatSidebar({
                  onDeleteSession={onDeleteSession}
 -                onResumeSession={onResumeSession}
-+                onResumeSession={(id, session) => {
++                onResumeSession={(id, session, keyboardTrigger) => {
 +                  if (
 +                    $pendingConnectionId.get() === null &&
 +                    $activeConnectionId.get() === activeConnectionId &&
 +                    $profileScope.get() === profileScope
 +                  ) {
-+                    onResumeSession(id, session)
++                    onResumeSession(id, session, keyboardTrigger)
 +                  }
 +                }}
                  onToggle={() => undefined}
-@@ -1916,23 +1899,25 @@ export function ChatSidebar({
+@@ -1916,23 +1900,25 @@ export function ChatSidebar({
                              the dropped spot. */}
 -                        <SidebarSectionAddButton
 -                          ariaLabel={agentsGrouped ? s.projects.newButton : s.nav['new-session']}
@@ -25118,22 +25241,45 @@ index d3756eaf1ade80f75e172edbc25e68ee332cfe67..48f68f8d13a39bed207bf94656e4a381
 +
    it('maps an unloaded server hit with the backend last_active, not its start time', () => {
 diff --git a/apps/desktop/src/app/chat/sidebar/session-row.tsx b/apps/desktop/src/app/chat/sidebar/session-row.tsx
-index 292af34b51bd8a04e900fb53349f1682d7febe13..da9575e66d998153537bf3119ed525ae9b65868f 100644
+index 292af34b51bd8a04e900fb53349f1682d7febe13..8ef1d77ab17270446de39e9145c7e6f1343380cb 100644
 --- a/apps/desktop/src/app/chat/sidebar/session-row.tsx
 +++ b/apps/desktop/src/app/chat/sidebar/session-row.tsx
 @@ -1 +1,2 @@
 +import { pinLoadedRow } from './pin-loaded-row'
  import { compactNumber } from '@hermes/shared'
-@@ -136,3 +137,3 @@ function SidebarSessionRowImpl({
+@@ -58,2 +59,4 @@ import { useProfilePrewarm } from './use-profile-prewarm'
+
++export type ResumeSessionRow = (sessionId: string, session?: SessionInfo, keyboardTrigger?: HTMLButtonElement) => void
++
+ interface SidebarSessionRowProps extends React.ComponentProps<'div'> {
+@@ -72,3 +75,3 @@ interface SidebarSessionRowProps extends React.ComponentProps<'div'> {
+   onToggleUnread: () => void
+-  onResume: () => void
++  onResume: (keyboardTrigger?: HTMLButtonElement) => void
+   reorderable?: boolean
+@@ -136,3 +139,3 @@ function SidebarSessionRowImpl({
    onDelete,
 -  onPin,
 +  onPin: togglePin,
    onToggleUnread,
-@@ -152,3 +153,3 @@ function SidebarSessionRowImpl({
+@@ -152,3 +155,3 @@ function SidebarSessionRowImpl({
    const { cancelPrewarm, notePointerMove, startPrewarm } = useProfilePrewarm(session.profile)
 -  const title = sessionTitle(session)
 +  const title = sessionTitle(session), onPin = pinLoadedRow(session, togglePin)
    const density = useStore($sessionListDensity)
+@@ -479,3 +482,11 @@ function SidebarSessionRowImpl({
+             if (action === 'resume') {
+-              onResume()
++              const button = event.detail === 0 && event.target instanceof Element
++                ? event.target.closest('button')
++                : null
++
++              if (button && button.ownerDocument.activeElement === button) {
++                onResume(button)
++              } else {
++                onResume()
++              }
+
 diff --git a/apps/desktop/src/app/chat/sidebar/session-search-feedback.tsx b/apps/desktop/src/app/chat/sidebar/session-search-feedback.tsx
 new file mode 100644
 index 0000000000000000000000000000000000000000..30b6712c1d65c7660e7f435d79be243808427417
@@ -25215,22 +25361,42 @@ index a79d713ca9568a7faccc9dfd060373e29282174f..aaf1fb4aa7f5950a60d99d285d52e067
 +
    it('keeps the divider "+" click-only without a split handler', () => {
 diff --git a/apps/desktop/src/app/chat/sidebar/sessions-section.tsx b/apps/desktop/src/app/chat/sidebar/sessions-section.tsx
-index 98dcd623ac5805f845cb724e9739d35271b92672..7bba66937e9a24b1297cde988777eb9974270eb7 100644
+index 98dcd623ac5805f845cb724e9739d35271b92672..f72d236d8681f66b431aee35f394b71ecde83d25 100644
 --- a/apps/desktop/src/app/chat/sidebar/sessions-section.tsx
 +++ b/apps/desktop/src/app/chat/sidebar/sessions-section.tsx
 @@ -6,2 +6,3 @@ import { useCallback, useEffect, useMemo } from 'react'
  import { type NewSessionSplitHandler, startNewSessionDrag } from '@/app/chat/new-session-drag'
 +import { useFocusNavigation } from '@/app/focus/context'
  import { SidebarPanelLabel } from '@/app/shell/sidebar-label'
+@@ -46,3 +47,3 @@ import { ReorderableList, useSortableBindings } from './reorderable-list'
+ import { SidebarSessionSkeletons } from './section-states'
+-import { SidebarSessionRow } from './session-row'
++import { type ResumeSessionRow, SidebarSessionRow } from './session-row'
+ import { VirtualSessionList } from './virtual-session-list'
+@@ -111,3 +112,3 @@ interface SidebarSessionsSectionProps {
+   activeSessionId: null | string
+-  onResumeSession: (sessionId: string, session?: SessionInfo) => void
++  onResumeSession: ResumeSessionRow
+   onDeleteSession: (sessionId: string) => void
 @@ -244,2 +245,3 @@ export function SidebarSessionsSection({
    const { t } = useI18n()
 +  const focusNavigation = useFocusNavigation()
    const showAllSessions = useStore($sidebarShowAllSessions)
+@@ -289,3 +291,3 @@ export function SidebarSessionsSection({
+         onToggleUnread: () => onToggleUnread(session.id),
+-        onResume: () => onResumeSession(session.id, session),
++        onResume: (keyboardTrigger?: HTMLButtonElement) => onResumeSession(session.id, session, keyboardTrigger),
+         reorderable: draggable && !branchStem,
 @@ -327,3 +329,3 @@ export function SidebarSessionsSection({
    const dividerAction =
 -    grouping === 'date' && onNewSessionInWorkspace ? (
 +    !focusNavigation && grouping === 'date' && onNewSessionInWorkspace ? (
        <WorkspaceAddButton
+@@ -664,3 +666,3 @@ interface SortableSessionRowProps {
+   onToggleUnread: () => void
+-  onResume: () => void
++  onResume: (keyboardTrigger?: HTMLButtonElement) => void
+ }
 diff --git a/apps/desktop/src/app/chat/sidebar/use-server-session-search.test.tsx b/apps/desktop/src/app/chat/sidebar/use-server-session-search.test.tsx
 new file mode 100644
 index 0000000000000000000000000000000000000000..2e0bffeda2fae12436a4905ef8330be631d2efcb
@@ -25609,6 +25775,30 @@ index 32fd677b19b6111588d2c0a2bf68486442f13b0a..6f160909249b96d75d405ba76fb1cb06
 +    retrySearch: () => setAttempt(n => n + 1)
 +  }
  }
+diff --git a/apps/desktop/src/app/chat/sidebar/virtual-session-list.tsx b/apps/desktop/src/app/chat/sidebar/virtual-session-list.tsx
+index 5406397453f94cee45a8aef9f4a0dd6185474225..66c96662f70b886a832fcb7bf3698ca4b8aff17f 100644
+--- a/apps/desktop/src/app/chat/sidebar/virtual-session-list.tsx
++++ b/apps/desktop/src/app/chat/sidebar/virtual-session-list.tsx
+@@ -16,3 +16,3 @@ import { $sessionListDensity } from '@/store/session-list-density'
+ import { SidebarDateDivider } from './chrome'
+-import { SidebarSessionRow } from './session-row'
++import { type ResumeSessionRow, SidebarSessionRow } from './session-row'
+ import { SESSION_CARD_ROW_ESTIMATE_PX, sessionRowEstimate } from './session-row-details'
+@@ -30,3 +30,3 @@ interface SessionRowCommonProps {
+   onToggleUnread: () => void
+-  onResume: () => void
++  onResume: (keyboardTrigger?: HTMLButtonElement) => void
+   reorderable?: boolean
+@@ -52,3 +52,3 @@ export interface VirtualSessionListProps {
+   onDeleteSession: (sessionId: string) => void
+-  onResumeSession: (sessionId: string, session?: SessionInfo) => void
++  onResumeSession: ResumeSessionRow
+   onTogglePin: (sessionId: string) => void
+@@ -171,3 +171,3 @@ export const VirtualSessionList: FC<VirtualSessionListProps> = ({
+       onToggleUnread: () => onToggleUnread(session.id),
+-      onResume: () => onResumeSession(session.id, session),
++      onResume: keyboardTrigger => onResumeSession(session.id, session, keyboardTrigger),
+       reorderable,
 diff --git a/apps/desktop/src/app/command-center/cache-stats.test.tsx b/apps/desktop/src/app/command-center/cache-stats.test.tsx
 new file mode 100644
 index 0000000000000000000000000000000000000000..2c1eb25ddd0a9edc59840073f1afa5ff92ad74b1
@@ -27333,7 +27523,7 @@ index 0000000000000000000000000000000000000000..66eee9125738f1da77a328b76a877e57
 +  return { actions, chatRoutes, sidebar, statusbar, terminal }
 +}
 diff --git a/apps/desktop/src/app/contrib/wiring.tsx b/apps/desktop/src/app/contrib/wiring.tsx
-index 954975fa63a045fb74a685beb98239821a922959..5ab341ed8ab4ccb29e3dad36059b950cc1ab7c99 100644
+index 954975fa63a045fb74a685beb98239821a922959..6a41ec0d87ce78bd89bcf173f43752242e73dcfa 100644
 --- a/apps/desktop/src/app/contrib/wiring.tsx
 +++ b/apps/desktop/src/app/contrib/wiring.tsx
 @@ -34,3 +34,2 @@ import {
@@ -27396,8 +27586,8 @@ index 954975fa63a045fb74a685beb98239821a922959..5ab341ed8ab4ccb29e3dad36059b950c
 -
 -    openSession(sessionId, navigate)
 -  }
-+  const openStoredSession = (sessionId: string, session?: SessionInfo) =>
-+    openSessionFromRow(sessionId, navigate, session, currentView === 'history')
++  const openStoredSession = (sessionId: string, session?: SessionInfo, keyboardTrigger?: HTMLButtonElement) =>
++    openSessionFromRow(sessionId, navigate, session, currentView === 'history', keyboardTrigger)
 
 @@ -1201,9 +1173,4 @@ export function ContribWiring({ children }: { children: ReactNode }) {
    const api = useMemo<WiringApi>(
@@ -32264,24 +32454,32 @@ index 0000000000000000000000000000000000000000..ff3b0cf782467a04c2132b64a01a21d2
 +  return true
 +}
 diff --git a/apps/desktop/src/app/open-session.test.ts b/apps/desktop/src/app/open-session.test.ts
-index 0396d9d2ea307c34440c0269579c6172ee3543b7..2b39b403faa2f731a3836e836afc4527ee80601d 100644
+index 0396d9d2ea307c34440c0269579c6172ee3543b7..aa0e29d155dc09bde30f4352f1ef737ec68e0120 100644
 --- a/apps/desktop/src/app/open-session.test.ts
 +++ b/apps/desktop/src/app/open-session.test.ts
-@@ -2,2 +2,3 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
+@@ -2,3 +2,5 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 +const sessionTiles = vi.fn()
  const focusOpenSession = vi.fn()
-@@ -17,2 +18,5 @@ const workspaceIsPageGet = vi.fn(() => false)
++const focusHistoryResultTile = vi.fn()
+ const frontMainIfSelected = vi.fn((storedSessionId: string) => false)
+@@ -17,2 +19,5 @@ const workspaceIsPageGet = vi.fn(() => false)
  vi.mock('@/store/session-states', () => ({
 +  $sessionTiles: { get: () => sessionTiles() },
 +  runtimeSessionOwner: () => undefined,
 +  knownOwnerForSession: () => undefined,
    focusedSessionNeedsRoute: (focused: 'main' | 'tile' | null, workspaceIsPage: boolean) =>
-@@ -34,2 +38,3 @@ vi.mock('./routes', () => ({
+@@ -32,4 +37,9 @@ vi.mock('@/store/windows', () => ({
+
++vi.mock('./chat/composer/focus', () => ({
++  focusHistoryResultTile: (trigger: HTMLButtonElement) => focusHistoryResultTile(trigger)
++}))
++
+ vi.mock('./routes', () => ({
    $workspaceIsPage: { get: () => workspaceIsPageGet() },
 +  NEW_CHAT_ROUTE: '/',
    sessionRoute: (id: string) => `/c/${encodeURIComponent(id)}`
-@@ -37,5 +42,16 @@ vi.mock('./routes', () => ({
+@@ -37,5 +47,16 @@ vi.mock('./routes', () => ({
 
 -import { $activeSessionId, $selectedStoredSessionId, $sessionResumeRequest } from '@/store/session'
 -
@@ -32301,36 +32499,38 @@ index 0396d9d2ea307c34440c0269579c6172ee3543b7..2b39b403faa2f731a3836e836afc4527
 +
 +import { openSession, openSessionFromPicker, openSessionFromRow, openSessionIntentFromModifiers } from './open-session'
 
-@@ -70,2 +86,3 @@ describe('openSession', () => {
+@@ -70,3 +91,5 @@ describe('openSession', () => {
    beforeEach(() => {
 +    sessionTiles.mockReturnValue([])
      navigate.mockClear()
-@@ -85,2 +102,4 @@ describe('openSession', () => {
++    focusHistoryResultTile.mockClear()
+     focusOpenSession.mockReset()
+@@ -85,2 +108,4 @@ describe('openSession', () => {
      $sessionResumeRequest.set(null)
 +    $queuedPromptsBySession.set({})
 +    clearSessionDraft(null, sessionDraftOwner(null))
    })
-@@ -157,3 +176,3 @@ describe('openSession', () => {
+@@ -157,3 +182,3 @@ describe('openSession', () => {
      openSession('s1', navigate, 'tab')
 -    expect(openSessionTile).toHaveBeenCalledWith('s1', 'center')
 +    expect(openSessionTile).toHaveBeenCalledWith('s1', 'center', undefined, undefined, undefined)
      expect(navigate).not.toHaveBeenCalled()
-@@ -195,3 +214,3 @@ describe('openSession', () => {
+@@ -195,3 +220,3 @@ describe('openSession', () => {
      openSession('s1', navigate, 'stack')
 -    expect(openSessionTile).toHaveBeenCalledWith('s1', 'center')
 +    expect(openSessionTile).toHaveBeenCalledWith('s1', 'center', undefined, undefined, undefined)
      expect(navigate).not.toHaveBeenCalled()
-@@ -204,3 +223,3 @@ describe('openSession', () => {
+@@ -204,3 +229,3 @@ describe('openSession', () => {
      openSession('s1', navigate, 'stack')
 -    expect(reuseBlankDraftTile).toHaveBeenCalledWith('s1')
 +    expect(reuseBlankDraftTile).toHaveBeenCalledWith('s1', undefined)
      expect(openSessionTile).not.toHaveBeenCalled()
-@@ -222,3 +241,3 @@ describe('openSession', () => {
+@@ -222,3 +247,3 @@ describe('openSession', () => {
      openSession('s1', navigate, 'stack')
 -    expect(openSessionTile).toHaveBeenCalledWith('s1', 'center')
 +    expect(openSessionTile).toHaveBeenCalledWith('s1', 'center', undefined, undefined, undefined)
    })
-@@ -232,2 +251,84 @@ describe('openSession', () => {
+@@ -232,2 +257,84 @@ describe('openSession', () => {
 
 +  it('keeps a newly typed main draft when opening a saved result in a separate tab', () => {
 +    const unlisten = onComposerDraftSyncRequest(detail => {
@@ -32415,7 +32615,7 @@ index 0396d9d2ea307c34440c0269579c6172ee3543b7..2b39b403faa2f731a3836e836afc4527
 +  })
 +
    it('picker doors resume into the focused Bot workspace and stay in-place in Sessions', () => {
-@@ -259,2 +360,18 @@ describe('openSession', () => {
+@@ -259,2 +366,18 @@ describe('openSession', () => {
 
 +  it('history preserves the saved ID and explicit connection/profile owner', () => {
 +    const ownerRoute = { connectionId: 'remote-example', profile: 'writer-example' }
@@ -32434,7 +32634,7 @@ index 0396d9d2ea307c34440c0269579c6172ee3543b7..2b39b403faa2f731a3836e836afc4527
 +  })
 +
    // #62045: picking the session this window already shows must still be an
-@@ -287,5 +404,159 @@ describe('openSession', () => {
+@@ -287,5 +410,162 @@ describe('openSession', () => {
 
 +  it.each(['main', 'tile', 'no window bridge'])('isolates a different owner when a same-ID chat is open (%s)', placement => {
 +    const id = 'same-history-id'
@@ -32510,8 +32710,10 @@ index 0396d9d2ea307c34440c0269579c6172ee3543b7..2b39b403faa2f731a3836e836afc4527
 +    focusOpenSession.mockReturnValueOnce(firstFocus).mockReturnValueOnce(secondFocus)
 +
 +    try {
-+      openSessionFromRow(id, navigate, row, fromHistory)
++      const trigger = document.createElement('button')
++      openSessionFromRow(id, navigate, row, fromHistory, trigger)
 +
++      expect(focusHistoryResultTile.mock.calls).toEqual(restoresDraft ? [[trigger]] : [])
 +      expect(navigate.mock.calls).toEqual(restoresDraft ? [['/']] : [])
 +      expect(openSessionTile).toHaveBeenCalledTimes(firstFocus ? 0 : 1)
 +    } finally {
@@ -32529,8 +32731,9 @@ index 0396d9d2ea307c34440c0269579c6172ee3543b7..2b39b403faa2f731a3836e836afc4527
 +    sessionTiles.mockReturnValue([{ storedSessionId: id, ownerRoute: currentOwner }])
 +
 +    try {
-+      openSessionFromRow(id, navigate, row, true)
++      openSessionFromRow(id, navigate, row, true, document.createElement('button'))
 +
++      expect(focusHistoryResultTile).not.toHaveBeenCalled()
 +      expect(openSessionInNewWindow).toHaveBeenCalledExactlyOnceWith(id, {
 +        workspaceMode: 'sessions', ownerRoute: { connectionId: 'local', profile: 'research' }
 +      })
@@ -32595,13 +32798,13 @@ index 0396d9d2ea307c34440c0269579c6172ee3543b7..2b39b403faa2f731a3836e836afc4527
 -    expect(openSessionInNewWindow).toHaveBeenCalledWith('s1')
 +    expect(openSessionInNewWindow).toHaveBeenCalledWith('s1', { workspaceMode: 'sessions' })
      expect(openSessionTile).not.toHaveBeenCalled()
-@@ -298,3 +569,3 @@ describe('openSession', () => {
+@@ -298,3 +578,3 @@ describe('openSession', () => {
      expect(openSessionInNewWindow).not.toHaveBeenCalled()
 -    expect(openSessionTile).toHaveBeenCalledWith('s1', 'center')
 +    expect(openSessionTile).toHaveBeenCalledWith('s1', 'center', undefined, undefined, undefined)
    })
 diff --git a/apps/desktop/src/app/open-session.ts b/apps/desktop/src/app/open-session.ts
-index b4da7a42c45061d676c88b5b49f77b66aabcf4a7..055a27c7a9257f8a72264a71df80200ecac5578e 100644
+index b4da7a42c45061d676c88b5b49f77b66aabcf4a7..44f69b4955403797de1a210c208abe4e7d705c95 100644
 --- a/apps/desktop/src/app/open-session.ts
 +++ b/apps/desktop/src/app/open-session.ts
 @@ -17,4 +17,13 @@
@@ -32620,19 +32823,20 @@ index b4da7a42c45061d676c88b5b49f77b66aabcf4a7..055a27c7a9257f8a72264a71df80200e
 +import { sessionDraftOwner } from '@/store/session-draft-owner'
 +import { sessionOwnerRouteFromRow, type SessionProfileRoute } from '@/store/session-request-router'
  import {
-@@ -29,4 +38,6 @@ import {
+@@ -29,4 +38,7 @@ import {
  import { canOpenSessionWindow, openSessionInNewWindow } from '@/store/windows'
 +import type { SessionInfo } from '@/types/hermes'
 
 -import { $workspaceIsPage, sessionRoute } from './routes'
++import { focusHistoryResultTile } from './chat/composer/focus'
 +import { openConflictingSessionInWindow } from './open-session-owner'
 +import { $workspaceIsPage, NEW_CHAT_ROUTE, sessionRoute } from './routes'
 
-@@ -37,2 +48,3 @@ export type OpenSessionNavigate = (to: string, options?: { replace?: boolean })
+@@ -37,2 +49,3 @@ export type OpenSessionNavigate = (to: string, options?: { replace?: boolean })
  export interface OpenSessionWorkspaceScope {
 +  ownerProfile?: string
    ownerRoute?: SessionProfileRoute
-@@ -55,2 +67,18 @@ export function mainChatOccupied(activeSessionId: null | string, selectedStoredS
+@@ -55,2 +68,18 @@ export function mainChatOccupied(activeSessionId: null | string, selectedStoredS
 
 +function mainDraftHasPayload(): boolean {
 +  if (getQueuedPrompts(freshDraftScope()).length > 0) {
@@ -32651,7 +32855,7 @@ index b4da7a42c45061d676c88b5b49f77b66aabcf4a7..055a27c7a9257f8a72264a71df80200e
 +}
 +
  /** Read modifiers the way session rows do — meta OR ctrl for tab, +shift for
-@@ -88,20 +116,41 @@ export function openSessionFromPicker(
+@@ -88,20 +117,46 @@ export function openSessionFromPicker(
    navigate: OpenSessionNavigate,
 -  intent: OpenSessionIntent = 'in-place'
 -): void {
@@ -32688,7 +32892,8 @@ index b4da7a42c45061d676c88b5b49f77b66aabcf4a7..055a27c7a9257f8a72264a71df80200e
 +  storedSessionId: string,
 +  navigate: OpenSessionNavigate,
 +  session?: SessionInfo,
-+  fromHistory = false
++  fromHistory = false,
++  keyboardTrigger?: HTMLButtonElement
 +): void {
 +  const ownerRoute = sessionOwnerRouteFromRow(session)
 +  const freshMain = !mainChatOccupied($activeSessionId.get(), $selectedStoredSessionId.get())
@@ -32707,9 +32912,13 @@ index b4da7a42c45061d676c88b5b49f77b66aabcf4a7..055a27c7a9257f8a72264a71df80200e
 +  if (fromHistory && intent === 'tab' && focused === 'tile') {
 +    // History occupies the workspace pane. Restore its draft behind the saved tab.
 +    navigate(NEW_CHAT_ROUTE)
++
++    if (keyboardTrigger) {
++      focusHistoryResultTile(keyboardTrigger)
++    }
 +  }
  }
-@@ -116,4 +165,5 @@ export function openSession(
+@@ -116,4 +171,5 @@ export function openSession(
    intent: OpenSessionIntent = 'in-place',
 -  workspaceScope: OpenSessionWorkspaceScope = { workspaceMode: 'sessions' }
 -): void {
@@ -32717,7 +32926,7 @@ index b4da7a42c45061d676c88b5b49f77b66aabcf4a7..055a27c7a9257f8a72264a71df80200e
 +  beforePlacement?: () => void
 +): ReturnType<typeof focusOpenSession> | void {
    if (!storedSessionId) {
-@@ -122,2 +172,8 @@ export function openSession(
+@@ -122,2 +178,8 @@ export function openSession(
 
 +  if (openConflictingSessionInWindow(storedSessionId, workspaceScope)) {
 +    return
@@ -32726,28 +32935,28 @@ index b4da7a42c45061d676c88b5b49f77b66aabcf4a7..055a27c7a9257f8a72264a71df80200e
 +  beforePlacement?.()
 +
    // Any explicit open/focus means the user has seen the finished-turn marker.
-@@ -130,2 +186,5 @@ export function openSession(
+@@ -130,2 +192,5 @@ export function openSession(
 
 +  const tileScope =
 +    botWorkspaceScope || workspaceScope.ownerRoute || workspaceScope.ownerProfile ? workspaceScope : undefined
 +
    let resolved: OpenSessionIntent = intent
-@@ -134,3 +193,3 @@ export function openSession(
+@@ -134,3 +199,3 @@ export function openSession(
      if (canOpenSessionWindow()) {
 -      void openSessionInNewWindow(storedSessionId)
 +      void openSessionInNewWindow(storedSessionId, workspaceScope)
 
-@@ -167,3 +226,3 @@ export function openSession(
+@@ -167,3 +232,3 @@ export function openSession(
        Boolean(botWorkspaceScope) || mainChatOccupied($activeSessionId.get(), $selectedStoredSessionId.get())
 -    resolved = spendBlankDraft ? 'tab' : 'in-place'
 +    resolved = spendBlankDraft || mainDraftHasPayload() ? 'tab' : 'in-place'
    }
-@@ -181,3 +240,3 @@ export function openSession(
+@@ -181,3 +246,3 @@ export function openSession(
 
 -      return
 +      return focused
      }
-@@ -187,8 +246,3 @@ export function openSession(
+@@ -187,8 +252,3 @@ export function openSession(
      // stacking a second blank one beside it.
 -    if (
 -      spendBlankDraft &&
@@ -32757,7 +32966,7 @@ index b4da7a42c45061d676c88b5b49f77b66aabcf4a7..055a27c7a9257f8a72264a71df80200e
 -    ) {
 +    if (spendBlankDraft && reuseBlankDraftTile(storedSessionId, tileScope)) {
        return
-@@ -196,11 +250,5 @@ export function openSession(
+@@ -196,11 +256,5 @@ export function openSession(
 
 -    if (botWorkspaceScope) {
 -      openSessionTile(storedSessionId, 'center', undefined, undefined, botWorkspaceScope)
