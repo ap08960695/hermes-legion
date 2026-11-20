@@ -93,6 +93,7 @@ In a small window, scroll the recovery dialog to read **Details** and recent
 logs while keeping the recovery buttons reachable. Opening **Gateway settings**
 from recovery moves keyboard focus to **Back**. Choose **Back** or press Escape
 in Gateway settings to return to recovery and focus **Gateway settings**.
+In a short window, scroll the settings panel to reach **Save and reconnect**.
 If the Local runtime refuses to start because it needs repair,
 its error explains why automatic retries stop. After fixing the reported
 issue, choose **Reconnect now** on the error to retry that Local connection.
