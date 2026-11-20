@@ -70808,14 +70808,19 @@ index 0000000000000000000000000000000000000000..ecd9851038771e8d40bdbe4f92162561
 +  return route ?? profile
 +}
 diff --git a/apps/desktop/src/store/session-states.test.ts b/apps/desktop/src/store/session-states.test.ts
-index 0a1fd46096c39f25550d63a6b29fcf8f8f2c9796..6edbec429afed4818a8a529efdbc43749f4cc15e 100644
+index 0a1fd46096c39f25550d63a6b29fcf8f8f2c9796..3bf5684c0992665e5edb084900c3107d1641ec36 100644
 --- a/apps/desktop/src/store/session-states.test.ts
 +++ b/apps/desktop/src/store/session-states.test.ts
-@@ -59,2 +59,3 @@ import {
+@@ -12,2 +12,4 @@ import {
+ } from '@/components/pane-shell/workspace-scope'
++import { clearSessionDraft, onComposerDraftSyncRequest, stashSessionDraft } from '@/store/composer'
++import { $queuedPromptsBySession, enqueueQueuedPrompt } from '@/store/composer-queue'
+ import { $connectionsRegistry } from '@/store/connection-registry-state'
+@@ -59,2 +61,3 @@ import {
    sessionTileOwnerRoute,
 +  sessionTileReconnectRows,
    setSessionTileDelegate,
-@@ -143,2 +144,74 @@ describe('resetTileRuntimeBindings', () => {
+@@ -143,2 +146,74 @@ describe('resetTileRuntimeBindings', () => {
 
 +  it('keeps a memory-only saved excerpt for the exact Local owner until the binding returns', () => {
 +    const route = { connectionId: 'local', mode: 'local', profile: 'writer' } as const
@@ -70890,22 +70895,116 @@ index 0a1fd46096c39f25550d63a6b29fcf8f8f2c9796..6edbec429afed4818a8a529efdbc4374
 +  })
 +
    it('keeps Bot runtimes owned by a different connection', () => {
+@@ -1426,2 +1501,79 @@ describe('blankDraftTile', () => {
+
++  it('skips the latest empty transcript when its split composer already has live content', () => {
++    const tiles = [bound('a', 'run-a'), bound('b', 'run-b')]
++    const states = { 'run-a': state(0), 'run-b': state(0) }
++
++    const unlisten = onComposerDraftSyncRequest(detail => {
++      if (detail.mode === 'inspect' && detail.target === 'tile:b') {
++        detail.hasPayload = true
++      }
++    })
++
++    try {
++      expect(blankDraftTile(tiles, states)).toEqual(tiles[0])
++    } finally {
++      unlisten()
++    }
++  })
++
++  it('keeps an unmounted split tab with an attachment in its owner-scoped lineage draft', () => {
++    const owner = { connectionId: 'local', profile: 'research' }
++    const candidate = { ...bound('b', 'run-b'), ownerRoute: owner }
++    const states = { 'run-b': state(0) }
++    setSessions([{ id: 'b', _lineage_root_id: 'root-b' } as never])
++    stashSessionDraft('root-b', '', [{ id: 'seed-file', kind: 'file', label: 'Draft notes' }], owner)
++
++    try {
++      expect(blankDraftTile([candidate], states)).toBeNull()
++    } finally {
++      clearSessionDraft('root-b', owner)
++      setSessions([])
++    }
++  })
++
++  it('prefers a just-cleared split composer over its stale matching stash', () => {
++    const owner = { connectionId: 'local', profile: 'research' }
++    const candidate = { ...bound('b', 'run-b'), ownerRoute: owner }
++
++    const unlisten = onComposerDraftSyncRequest(detail => {
++      if (detail.mode === 'inspect' && detail.target === 'tile:b') {
++        detail.hasPayload = false
++      }
++    })
++
++    stashSessionDraft('b', 'just cleared', [], owner)
++
++    try {
++      expect(blankDraftTile([candidate], { 'run-b': state(0) })).toEqual(candidate)
++    } finally {
++      unlisten()
++      clearSessionDraft('b', owner)
++    }
++  })
++
++  it('ignores another owner’s draft for the same stored ID', () => {
++    const owner = { connectionId: 'local', profile: 'research' }
++    const other = { ...owner, profile: 'another-profile' }
++    const candidate = { ...bound('b', 'run-b'), ownerRoute: owner }
++    stashSessionDraft('b', 'another draft', [], other)
++
++    try {
++      expect(blankDraftTile([candidate], { 'run-b': state(0) })).toEqual(candidate)
++    } finally {
++      clearSessionDraft('b', other)
++    }
++  })
++
++  it.each(['root-b', 'b', 'run-b'])('does not reuse a split with queued follow-ups under %s', scope => {
++    setSessions([{ id: 'b', _lineage_root_id: 'root-b' } as never])
++    enqueueQueuedPrompt(scope, { attachments: [], text: 'follow-up' })
++
++    try {
++      expect(blankDraftTile([bound('b', 'run-b')], { 'run-b': state(0) })).toBeNull()
++    } finally {
++      $queuedPromptsBySession.set({})
++      setSessions([])
++    }
++  })
++
+   it('leaves a blank-but-busy tab alone — its first turn is already in flight', () => {
 diff --git a/apps/desktop/src/store/session-states.ts b/apps/desktop/src/store/session-states.ts
-index c5b38a21bcef2911893d0ceb07fa06fd1fcd981c..eac1f3be194695341f352d2128eeb51bd515df8e 100644
+index c5b38a21bcef2911893d0ceb07fa06fd1fcd981c..970d06e01a8a836504897f2d84e5b3fd6ddf5dc3 100644
 --- a/apps/desktop/src/store/session-states.ts
 +++ b/apps/desktop/src/store/session-states.ts
-@@ -35,3 +35,3 @@ import { resolveRememberedActivePane, workspaceScopeKey } from '@/components/pan
+@@ -22,2 +22,3 @@ import { atom, computed } from 'nanostores'
+ import { setSessionOwnerResolver } from '@/api/client'
++import { tileOwnerRoute } from '@/app/chat/session-tile-owner'
+ import { routeSessionId } from '@/app/routes'
+@@ -35,3 +36,3 @@ import { resolveRememberedActivePane, workspaceScopeKey } from '@/components/pan
  import type { WorkspaceMode } from '@/contrib/types'
 -import { finalizeInterruptedMessages, sealOpenToolParts } from '@/lib/chat-messages'
 +import { finalizeInterruptedMessages, lastTextPartText, sealOpenToolParts } from '@/lib/chat-messages'
  import { tileFocusStampOnFocusChange } from '@/lib/session-timer-since'
-@@ -41,3 +41,4 @@ import type { SessionInfo } from '@/types/hermes'
+@@ -41,3 +42,6 @@ import type { SessionInfo } from '@/types/hermes'
 
 -import { dropStatusDrawersForProfile, migrateStatusDrawersForProfile } from './composer-status-drawer'
 +import { characterScope, dropCharacterSettings, migrateCharacterSettings } from './character-settings'
++import { inspectComposerDraft, takeSessionDraft } from './composer'
 +import { dropComposerStateForProfile, migrateComposerStateForProfile } from './composer-draft-lifecycle'
++import { getQueuedPrompts } from './composer-queue'
  import { registryConnectionKind } from './connection-registry-state'
-@@ -1172,2 +1173,11 @@ export interface SessionTile {
+@@ -76,2 +80,3 @@ import {
+   ownerLookupSessionRows,
++  resolveComposerSessionKey,
+   sessionMatchesStoredId,
+@@ -84,2 +89,3 @@ import {
+ } from './session'
++import { sessionDraftOwner } from './session-draft-owner'
+ import { secondaryProfileOwnerForEvent } from './session-event-provenance'
+@@ -1172,2 +1178,11 @@ export interface SessionTile {
    runtimeId?: string
 +  /** The exact Local reset whose next binding is being mounted. */
 +  localReconnect?: { runtimeId: string }
@@ -70917,7 +71016,7 @@ index c5b38a21bcef2911893d0ceb07fa06fd1fcd981c..eac1f3be194695341f352d2128eeb51b
 +    rows: { id: string; text: string }[]
 +  }
    /** Resume failed terminally (shown in the tile; retryable). */
-@@ -1471,3 +1481,22 @@ if (!isSecondaryWindow() && !isBrowserWindow()) {
+@@ -1471,3 +1486,22 @@ if (!isSecondaryWindow() && !isBrowserWindow()) {
  export function patchSessionTile(storedSessionId: string, patch: Partial<SessionTile>) {
 -  saveTiles($sessionTiles.get().map(t => (t.storedSessionId === storedSessionId ? { ...t, ...patch } : t)))
 +  saveTiles($sessionTiles.get().map(tile => {
@@ -70941,7 +71040,7 @@ index c5b38a21bcef2911893d0ceb07fa06fd1fcd981c..eac1f3be194695341f352d2128eeb51b
 +    return next
 +  }))
  }
-@@ -1491,2 +1520,17 @@ function sameSessionOwner(left: SessionOwnerScope, right: SessionOwnerScope): bo
+@@ -1491,2 +1525,17 @@ function sameSessionOwner(left: SessionOwnerScope, right: SessionOwnerScope): bo
 
 +export function sessionTileReconnectRows(tile: SessionTile | undefined) {
 +  const preview = tile?.reconnectPreview
@@ -70959,13 +71058,13 @@ index c5b38a21bcef2911893d0ceb07fa06fd1fcd981c..eac1f3be194695341f352d2128eeb51b
 +}
 +
  function tileWorkspaceMode(tile: SessionTile): WorkspaceMode {
-@@ -2051,3 +2095,4 @@ export interface UnknownRuntimeReconnectScope {
+@@ -2051,3 +2100,4 @@ export interface UnknownRuntimeReconnectScope {
  export function resetTileRuntimeBindings(
 -  reconnectedScope?: null | string | RuntimeReconnectScope | UnknownRuntimeReconnectScope
 +  reconnectedScope?: null | string | RuntimeReconnectScope | UnknownRuntimeReconnectScope,
 +  keepLocalTranscript = false
  ) {
-@@ -2107,3 +2152,60 @@ export function resetTileRuntimeBindings(
+@@ -2107,3 +2157,60 @@ export function resetTileRuntimeBindings(
    if (tiles.some(tile => tile.runtimeId && !preservedStoredIds.has(tile.storedSessionId))) {
 -    $sessionTiles.set(tiles.map(tile => (preservedStoredIds.has(tile.storedSessionId) ? tile : toStored(tile))))
 +    const states = $sessionStates.get()
@@ -71027,20 +71126,54 @@ index c5b38a21bcef2911893d0ceb07fa06fd1fcd981c..eac1f3be194695341f352d2128eeb51b
 +      return unbound
 +    }))
    }
-@@ -2753,3 +2855,3 @@ export function dropTilesForProfile(
+@@ -2620,6 +2727,31 @@ export function blankDraftTile(
+   return (
+-    tiles.findLast(({ runtimeId }) => {
++    tiles.findLast(tile => {
++      const { runtimeId, storedSessionId } = tile
+       const state = runtimeId ? states[runtimeId] : undefined
+
+-      return Boolean(state && !state.busy && state.messages.length === 0)
++      if (!runtimeId || !state || state.busy || state.messages.length > 0) {
++        return false
++      }
++
++      const draftKey = resolveComposerSessionKey(storedSessionId, $sessions.get()) ?? storedSessionId
++      const keys = [...new Set([draftKey, storedSessionId, runtimeId])]
++
++      if (keys.some(key => getQueuedPrompts(key).length > 0)) {
++        return false
++      }
++
++      const live = inspectComposerDraft(`tile:${storedSessionId}`)
++
++      if (live !== undefined) {
++        return !live
++      }
++
++      const ownerRoute = tileOwnerRoute([tile], ownerLookupSessionRows(), storedSessionId)
++      const owner = sessionDraftOwner(runtimeId, ownerRoute)
++
++      return !keys.some(key => {
++        const { attachments, text } = takeSessionDraft(key, owner)
++
++        return Boolean(text.trim() || attachments.length)
++      })
+     }) ?? null
+@@ -2753,3 +2885,3 @@ export function dropTilesForProfile(
    dropPreviewArtifactsForProfile(name, route)
 -  dropStatusDrawersForProfile(name, route)
 +  dropComposerStateForProfile(name, route, tileConnectionId || LOCAL_CONNECTION_ID)
    // Route fields go through the SAME canonicalization as `name` below — a
-@@ -2765,2 +2867,3 @@ export function dropTilesForProfile(
+@@ -2765,2 +2897,3 @@ export function dropTilesForProfile(
    const removedScope = backendScopeKey(route ? routeConnection : ambientConnection, routeProfile || name)
 +  dropCharacterSettings(characterScope(route ? routeConnection : ambientConnection, routeProfile || name))
 
-@@ -2895,2 +2998,3 @@ export function migrateTilesForProfile(oldProfile: string, newProfile: string):
+@@ -2895,2 +3028,3 @@ export function migrateTilesForProfile(oldProfile: string, newProfile: string):
    persistTiles()
 +  migrateCharacterSettings(characterScope(LOCAL_CONNECTION_ID, from), characterScope(LOCAL_CONNECTION_ID, to))
    migrateTranscriptTailsForProfile(from, to)
-@@ -2899,3 +3003,3 @@ export function migrateTilesForProfile(oldProfile: string, newProfile: string):
+@@ -2899,3 +3033,3 @@ export function migrateTilesForProfile(oldProfile: string, newProfile: string):
    migratePreviewArtifactsForProfile(from, to)
 -  migrateStatusDrawersForProfile(from, to)
 +  migrateComposerStateForProfile(from, to)

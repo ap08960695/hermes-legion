@@ -11,7 +11,8 @@ settles. Your query stays in place, and results refresh on the active device.
 During Local reconnect, message search waits for the gateway. You can
 edit the query or choose a result already shown for that same search.
 If the main Chat has an unsent draft, opening a saved result keeps that
-draft in its own tab.
+draft in its own tab. A split Chat with a draft or queued messages
+also stays open. Search can reuse a split tab when it is empty.
 When Local is ready, search runs for the current query. A search that
 already failed still offers Retry.
 If a saved-chat search fails in History, use **Retry**. Activating the
