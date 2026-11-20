@@ -29532,6 +29532,18 @@ index 53c5d0240cf329f961a446f89b28d973c9025e25..ba56a72a0d6191ecc385e8eb44718712
 +}
 +
  export const invalidateHermesConfig = (profile?: ProfileScope) =>
+diff --git a/apps/desktop/src/app/hooks/use-keybinds.ts b/apps/desktop/src/app/hooks/use-keybinds.ts
+index 79c2b818c0dc560744ad32477e08965345e1456c..431b388ec7c60d08b4e89cfb7d9645d1060daa7a 100644
+--- a/apps/desktop/src/app/hooks/use-keybinds.ts
++++ b/apps/desktop/src/app/hooks/use-keybinds.ts
+@@ -530,2 +530,7 @@ export function useKeybinds(deps: KeybindRuntimeDeps): void {
+
++      // Let the focused chart table page within its own scroll area.
++      if ((combo === 'pageup' || combo === 'pagedown') && isFocusWithin('[data-slot="chart-values"]')) {
++        return
++      }
++
+       // The open find bar owns ⌘G / ⌘⇧G / Escape. Its own capture-phase
 diff --git a/apps/desktop/src/app/open-session-owner.ts b/apps/desktop/src/app/open-session-owner.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..ff3b0cf782467a04c2132b64a01a21d24f75bd9b
@@ -38776,12 +38788,15 @@ index 0000000000000000000000000000000000000000..ce9380cbcf154c9e44de614d9129f963
 +}
 diff --git a/apps/desktop/src/components/assistant-ui/embeds/chart-embed.test.tsx b/apps/desktop/src/components/assistant-ui/embeds/chart-embed.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..040f91624a2005ad81107de03105f08826d8dfc1
+index 0000000000000000000000000000000000000000..8e23b32d76757f5b543d05d13037ec394a8e9294
 --- /dev/null
 +++ b/apps/desktop/src/components/assistant-ui/embeds/chart-embed.test.tsx
-@@ -0,0 +1,135 @@
-+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+@@ -0,0 +1,169 @@
++import { act, cleanup, createEvent, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
++import { MemoryRouter } from 'react-router'
 +import { afterEach, expect, it, vi } from 'vitest'
++
++import { useKeybinds } from '@/app/hooks/use-keybinds'
 +
 +import ChartRenderer from './chart-embed'
 +import { RichCodeBlock } from './registry'
@@ -38880,9 +38895,11 @@ index 0000000000000000000000000000000000000000..040f91624a2005ad81107de03105f088
 +    series: names.map((name, index) => ({ name, values: index ? [1, 2, 3] : values })) })} />)
 +
 +  expect(container.querySelector('table')).toBeNull()
-+  const summary = screen.getByText('Details')
++  const summary = screen.getByText('Chart values')
 +  fireEvent.click(summary)
-+  const table = await screen.findByRole('table')
++  const region = await screen.findByRole('region', { name: 'Chart values' })
++  expect(region.tabIndex).toBe(0)
++  const table = within(region).getByRole('table')
 +  expect(table.textContent).toContain('items')
 +  const rows = within(table).getAllByRole('row')
 +  expect(rows).toHaveLength(4)
@@ -38915,15 +38932,44 @@ index 0000000000000000000000000000000000000000..040f91624a2005ad81107de03105f088
 +  expect(ticks.length).toBeGreaterThan(0)
 +  expect(ticks.length).toBeLessThanOrEqual(4)
 +})
++
++it('lets Page Up and Page Down scroll focused chart values instead of the conversation', async () => {
++  renderHook(() => useKeybinds({
++    archiveSelectedSession: vi.fn(),
++    openNewSessionTab: vi.fn(),
++    requestGateway: vi.fn(),
++    startFreshSession: vi.fn(),
++    toggleCommandCenter: vi.fn(),
++    toggleSelectedPin: vi.fn()
++  }), { wrapper: MemoryRouter })
++  render(<ChartRenderer code={JSON.stringify({
++    type: 'bar', title: 'Orders', labels: ['A'], series: [{ name: 'Count', values: [2] }]
++  })} />)
++  fireEvent.click(screen.getByText('Chart values'))
++  const region = await screen.findByRole('region', { name: 'Chart values' })
++  const trigger = screen.getByRole('button', { name: 'Open preview: Orders' })
++
++  for (const key of ['PageUp', 'PageDown']) {
++    region.focus()
++    const inside = createEvent.keyDown(region, { code: key, key })
++    fireEvent(region, inside)
++    expect(inside.defaultPrevented).toBe(false)
++
++    trigger.focus()
++    const outside = createEvent.keyDown(trigger, { code: key, key })
++    fireEvent(trigger, outside)
++    expect(outside.defaultPrevented).toBe(true)
++  }
++})
 diff --git a/apps/desktop/src/components/assistant-ui/embeds/chart-embed.tsx b/apps/desktop/src/components/assistant-ui/embeds/chart-embed.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..77e930079f88c4ab5592bb72169413df3c2573f9
+index 0000000000000000000000000000000000000000..5e1e34d16e2f18fd5d27dc677edd7dce6cc889df
 --- /dev/null
 +++ b/apps/desktop/src/components/assistant-ui/embeds/chart-embed.tsx
-@@ -0,0 +1,235 @@
+@@ -0,0 +1,244 @@
 +'use client'
 +
-+import { useState } from 'react'
++import { useId, useState } from 'react'
 +
 +import { Zoomable } from '@/components/ui/zoomable'
 +import { useI18n } from '@/i18n'
@@ -39081,6 +39127,7 @@ index 0000000000000000000000000000000000000000..77e930079f88c4ab5592bb72169413df
 + *  RichBoundary falls back to the plain code block. */
 +export default function ChartRenderer({ code, streaming }: RichFenceProps) {
 +  const { t } = useI18n()
++  const valuesLabelId = useId()
 +  const [showData, setShowData] = useState(false)
 +
 +  if (streaming) {
@@ -39138,8 +39185,16 @@ index 0000000000000000000000000000000000000000..77e930079f88c4ab5592bb72169413df
 +      </Zoomable>
 +      {legendView}
 +      <details className="mt-2" onToggle={event => setShowData(event.currentTarget.open)} open={showData}>
-+        <summary className="cursor-pointer py-2 text-xs text-muted-foreground">{t.notifications.details}</summary>
-+        {showData && <div className="max-h-[40dvh] overflow-auto">
++        <summary className="cursor-pointer py-2 text-xs text-muted-foreground focus-visible:[box-shadow:inset_0_0_0_2px_var(--dt-ring)]" id={valuesLabelId}>
++          {t.preview.chartValues}
++        </summary>
++        {showData && <div
++          aria-labelledby={valuesLabelId}
++          className="max-h-[40dvh] overflow-auto focus-visible:[box-shadow:inset_0_0_0_2px_var(--dt-ring)]"
++          data-slot="chart-values"
++          role="region"
++          tabIndex={0}
++        >
 +          <table className="w-full border-collapse text-xs">
 +            <caption className="mb-2 text-left">{label}{spec.unit && ` · ${spec.unit}`}</caption>
 +            <thead><tr>
@@ -43883,6 +43938,14 @@ index 92b8a49d13ab64372963ad3fae62a49cc7d08535..f693870f836c97e6434249d87bcd169e
 +  },
 +
    preview: arArtifacts.preview,
+diff --git a/apps/desktop/src/i18n/ar_artifacts.ts b/apps/desktop/src/i18n/ar_artifacts.ts
+index 9876dc7c0e28c99a71a338c5a66ad16dc4236f4c..c20631e1b7128be46968f133d55b078a181a89de 100644
+--- a/apps/desktop/src/i18n/ar_artifacts.ts
++++ b/apps/desktop/src/i18n/ar_artifacts.ts
+@@ -67,2 +67,3 @@ export const arArtifacts = {
+     hide: 'إخفاء',
++    chartValues: 'قيم المخطط',
+     openPreview: 'فتح المعاينة',
 diff --git a/apps/desktop/src/i18n/ar_boot.ts b/apps/desktop/src/i18n/ar_boot.ts
 index dd7a55c2be0bc2d5302a2b831984cfaa86801a28..28594737a1fe9ed71fba1e09982c15e5151a9b2f 100644
 --- a/apps/desktop/src/i18n/ar_boot.ts
@@ -44143,7 +44206,7 @@ index 0000000000000000000000000000000000000000..7e5536e24905735b5bd741a4abf969d2
 +  }
 +} satisfies Record<string, Partial<ComposerDraftCopy>>
 diff --git a/apps/desktop/src/i18n/de.ts b/apps/desktop/src/i18n/de.ts
-index fa52d7628c503d03a70de218d09664dbe6a33a4c..c77543d2a8475b5f6672d892bcd5526c9daa5918 100644
+index fa52d7628c503d03a70de218d09664dbe6a33a4c..7a2052529c3c01b1c933604e4af5eb2e7ddac42a 100644
 --- a/apps/desktop/src/i18n/de.ts
 +++ b/apps/desktop/src/i18n/de.ts
 @@ -1,4 +1,5 @@
@@ -44221,6 +44284,10 @@ index fa52d7628c503d03a70de218d09664dbe6a33a4c..c77543d2a8475b5f6672d892bcd5526c
 +  },
 +
    preview: {
+@@ -4665,2 +4704,3 @@ export const deOverrides = {
+     hide: 'Ausblenden',
++    chartValues: 'Diagrammwerte',
+     openPreview: 'Vorschau öffnen',
 diff --git a/apps/desktop/src/i18n/de_notices.ts b/apps/desktop/src/i18n/de_notices.ts
 index 0552e42fccd94a14c3817380fb31618725d18168..6741fd77c637de42b54ac46eb8c74dcd6bd91787 100644
 --- a/apps/desktop/src/i18n/de_notices.ts
@@ -44235,7 +44302,7 @@ index 0552e42fccd94a14c3817380fb31618725d18168..6741fd77c637de42b54ac46eb8c74dcd
 +      composer: 'gesendete Nachrichten laufen erst nach `hermes resume`'
      }
 diff --git a/apps/desktop/src/i18n/en.ts b/apps/desktop/src/i18n/en.ts
-index 57a5b0604644dcb4f61155382dda4beeef8224ca..d820e33fd3f388de723fcf2e3471bbfe78bb9e70 100644
+index 57a5b0604644dcb4f61155382dda4beeef8224ca..c2209a0e7cfb834f42e5afcf8bd06096e7cf835f 100644
 --- a/apps/desktop/src/i18n/en.ts
 +++ b/apps/desktop/src/i18n/en.ts
 @@ -1,4 +1,5 @@
@@ -44352,6 +44419,10 @@ index 57a5b0604644dcb4f61155382dda4beeef8224ca..d820e33fd3f388de723fcf2e3471bbfe
 +  },
 +
    preview: {
+@@ -4245,2 +4309,3 @@ export const en: Translations = {
+     hide: 'Hide',
++    chartValues: 'Chart values',
+     openPreview: 'Open preview',
 diff --git a/apps/desktop/src/i18n/en_clarify.ts b/apps/desktop/src/i18n/en_clarify.ts
 index 3db6830629051c8298e7dca34c71883ae7312a70..4ff43e5e9b6942d32f02d1241e405206fc4e8bee 100644
 --- a/apps/desktop/src/i18n/en_clarify.ts
@@ -44375,7 +44446,7 @@ index 34d36eb096dac06ec5c4059dc55ad07cb13e7e14..d6ccaffb7457ea3c6cc704c963d8d962
 +      composer: "messages you send won't run until `hermes resume`"
      }
 diff --git a/apps/desktop/src/i18n/es.ts b/apps/desktop/src/i18n/es.ts
-index 34a9287d0f6d300ed410e09f712feee6c2ad6aab..d3b857afc27e44ffa2acb3adc370d2998ee21232 100644
+index 34a9287d0f6d300ed410e09f712feee6c2ad6aab..2383b71170b54c62fd6be3a7400456347c4d9998 100644
 --- a/apps/desktop/src/i18n/es.ts
 +++ b/apps/desktop/src/i18n/es.ts
 @@ -1,4 +1,5 @@
@@ -44453,6 +44524,10 @@ index 34a9287d0f6d300ed410e09f712feee6c2ad6aab..d3b857afc27e44ffa2acb3adc370d299
 +  },
 +
    preview: {
+@@ -4650,2 +4689,3 @@ export const esOverrides = {
+     hide: 'Ocultar',
++    chartValues: 'Valores del gráfico',
+     openPreview: 'Abrir vista previa',
 diff --git a/apps/desktop/src/i18n/es_notices.ts b/apps/desktop/src/i18n/es_notices.ts
 index 6d5b7ccd5718edd568dac4d5292c365623efd58e..14ee5225eb7b7a71ccae877af3ad9047a84b3548 100644
 --- a/apps/desktop/src/i18n/es_notices.ts
@@ -44467,7 +44542,7 @@ index 6d5b7ccd5718edd568dac4d5292c365623efd58e..14ee5225eb7b7a71ccae877af3ad9047
 +      composer: 'los mensajes que envíes no se ejecutarán hasta `hermes resume`'
      }
 diff --git a/apps/desktop/src/i18n/fr.ts b/apps/desktop/src/i18n/fr.ts
-index 3585156c94de02148be30e4c1a925e8c6fa827af..4fb47db258b3ecfc4a0caf4db5cb26040eac508d 100644
+index 3585156c94de02148be30e4c1a925e8c6fa827af..6602e931915a7cc568153d98ab68cb2704ee2c24 100644
 --- a/apps/desktop/src/i18n/fr.ts
 +++ b/apps/desktop/src/i18n/fr.ts
 @@ -1,4 +1,5 @@
@@ -44545,6 +44620,10 @@ index 3585156c94de02148be30e4c1a925e8c6fa827af..4fb47db258b3ecfc4a0caf4db5cb2604
 +  },
 +
    preview: {
+@@ -4673,2 +4712,3 @@ export const frOverrides = {
+     hide: 'Masquer',
++    chartValues: 'Valeurs du graphique',
+     openPreview: "Ouvrir l'aperçu",
 diff --git a/apps/desktop/src/i18n/fr_notices.ts b/apps/desktop/src/i18n/fr_notices.ts
 index 82bc5bc4653cf99563e84cba78204a51edf18213..86c4f922081cf552f716bf5578f9efe64560025e 100644
 --- a/apps/desktop/src/i18n/fr_notices.ts
@@ -44559,7 +44638,7 @@ index 82bc5bc4653cf99563e84cba78204a51edf18213..86c4f922081cf552f716bf5578f9efe6
 +      composer: 'vos messages ne seront pas traités avant `hermes resume`'
      }
 diff --git a/apps/desktop/src/i18n/ja.ts b/apps/desktop/src/i18n/ja.ts
-index 07e8081c56ce631e946418e10f4395ecdd9f6c53..1e36d88f7beb5ff9d611559a9fb14577d678f763 100644
+index 07e8081c56ce631e946418e10f4395ecdd9f6c53..d7b3d3c32a9e0dac58c348424ff49c8a471b1e9b 100644
 --- a/apps/desktop/src/i18n/ja.ts
 +++ b/apps/desktop/src/i18n/ja.ts
 @@ -1,4 +1,5 @@
@@ -44637,6 +44716,10 @@ index 07e8081c56ce631e946418e10f4395ecdd9f6c53..1e36d88f7beb5ff9d611559a9fb14577
 +  },
 +
    preview: {
+@@ -3089,2 +3128,3 @@ export const jaOverrides = {
+     hide: '非表示',
++    chartValues: 'グラフの値',
+     openPreview: 'プレビューを開く',
 diff --git a/apps/desktop/src/i18n/ja_notices.ts b/apps/desktop/src/i18n/ja_notices.ts
 index f07f677aff0a7e71083415e5e76be022b1ea5abc..fc7590268f1205aeac6ad49b26c5a4ab99240608 100644
 --- a/apps/desktop/src/i18n/ja_notices.ts
@@ -44711,7 +44794,7 @@ index ef09bea74af6898b44262b9a3baba41349940349..954673cff0fb906494f04e2eceb6eb03
 -import type { HermesApiRequest } from '@/global'
  import type { HermesConfigRecord } from '@/hermes'
 diff --git a/apps/desktop/src/i18n/ru.ts b/apps/desktop/src/i18n/ru.ts
-index f18bf35b8cb991c3b69a393c0816bdb7c26615b9..8b7dcd9208224e3f143126881b86d2330f335e26 100644
+index f18bf35b8cb991c3b69a393c0816bdb7c26615b9..2b990660ecf78a45c42b3258b7b9178a450cf648 100644
 --- a/apps/desktop/src/i18n/ru.ts
 +++ b/apps/desktop/src/i18n/ru.ts
 @@ -1,4 +1,5 @@
@@ -44789,6 +44872,10 @@ index f18bf35b8cb991c3b69a393c0816bdb7c26615b9..8b7dcd9208224e3f143126881b86d233
 +  },
 +
    preview: {
+@@ -3360,2 +3399,3 @@ export const ruOverrides = {
+     hide: 'Скрыть',
++    chartValues: 'Значения диаграммы',
+     openPreview: 'Открыть предпросмотр',
 diff --git a/apps/desktop/src/i18n/ru_notices.ts b/apps/desktop/src/i18n/ru_notices.ts
 index 2f16980065ad8ca00ead0ebfcb8b1be389fe91ec..ffe3f023381c99c6270ee722b06b6d5064de3342 100644
 --- a/apps/desktop/src/i18n/ru_notices.ts
@@ -44803,7 +44890,7 @@ index 2f16980065ad8ca00ead0ebfcb8b1be389fe91ec..ffe3f023381c99c6270ee722b06b6d50
 +      composer: 'отправленные сообщения не выполнятся до `hermes resume`'
      }
 diff --git a/apps/desktop/src/i18n/types.ts b/apps/desktop/src/i18n/types.ts
-index 0f2e489af4f39fa0571f7d4880bc24e501b7707c..27eea62c7c52fc089e47ca2897e8ff0a6dfb1ee6 100644
+index 0f2e489af4f39fa0571f7d4880bc24e501b7707c..2e1325463b80d6dc7afbdd47a64350319374abf0 100644
 --- a/apps/desktop/src/i18n/types.ts
 +++ b/apps/desktop/src/i18n/types.ts
 @@ -1 +1,3 @@
@@ -44894,6 +44981,10 @@ index 0f2e489af4f39fa0571f7d4880bc24e501b7707c..27eea62c7c52fc089e47ca2897e8ff0a
 +  }
 +
    preview: {
+@@ -3713,2 +3767,3 @@ catalog: CatalogTranslations
+     hide: string
++    chartValues: string
+     openPreview: string
 diff --git a/apps/desktop/src/i18n/types_clarify.ts b/apps/desktop/src/i18n/types_clarify.ts
 index c786c19a1c950a5b063302be4fa69b943e654a8f..ef222fe76a4d01aa05ec2417d0fc41e6997f0d1a 100644
 --- a/apps/desktop/src/i18n/types_clarify.ts
@@ -44931,6 +45022,14 @@ index 20438602b9511a9765df4426526bebccb9df1d7a..49936e879d93cb7875198c139f9cd4fd
 +  },
 +
    preview: zhHantArtifacts.preview,
+diff --git a/apps/desktop/src/i18n/zh-hant_artifacts.ts b/apps/desktop/src/i18n/zh-hant_artifacts.ts
+index a8928fd88097ab42751961fd5da62771bf1eadfc..fcfe0aad347f8cb87c4b23adcd1a74ec17f8b776 100644
+--- a/apps/desktop/src/i18n/zh-hant_artifacts.ts
++++ b/apps/desktop/src/i18n/zh-hant_artifacts.ts
+@@ -69,2 +69,3 @@ export const zhHantArtifacts = {
+     hide: '隱藏',
++    chartValues: '圖表數值',
+     openPreview: '開啟預覽',
 diff --git a/apps/desktop/src/i18n/zh-hant_boot.ts b/apps/desktop/src/i18n/zh-hant_boot.ts
 index 61fdcc596d6ddacdf6180b6fcf6d5d3be8411024..fafd1c8d7c0fc6ac86529e574225152159373a62 100644
 --- a/apps/desktop/src/i18n/zh-hant_boot.ts
@@ -45008,7 +45107,7 @@ index 467cca6dbbc154c4bb36d7ef51d4db2899837390..efcfe2abc9f67c26a6ff29ded8fb51a0
 +      },
        connectAccount: '連結帳號',
 diff --git a/apps/desktop/src/i18n/zh.ts b/apps/desktop/src/i18n/zh.ts
-index 485376eb48b050c6f428dbc52c44b1f0f65158a2..252ef3ef71214f71eb98bb5cfde83562ca4032a0 100644
+index 485376eb48b050c6f428dbc52c44b1f0f65158a2..1a998b0697a6ce45e4442d7292996d4f9bddbf83 100644
 --- a/apps/desktop/src/i18n/zh.ts
 +++ b/apps/desktop/src/i18n/zh.ts
 @@ -1,4 +1,5 @@
@@ -45086,6 +45185,10 @@ index 485376eb48b050c6f428dbc52c44b1f0f65158a2..252ef3ef71214f71eb98bb5cfde83562
 +  },
 +
    preview: {
+@@ -4087,2 +4126,3 @@ export const zhOverrides = {
+     hide: '隐藏',
++    chartValues: '图表数值',
+     openPreview: '打开预览',
 diff --git a/apps/desktop/src/i18n/zh_notices.ts b/apps/desktop/src/i18n/zh_notices.ts
 index c4c99e27ec738010441ce24153144bac133af075..53e8fc186611a9d4fb36dd71dd870e59bb902d11 100644
 --- a/apps/desktop/src/i18n/zh_notices.ts

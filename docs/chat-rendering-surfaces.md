@@ -13,10 +13,11 @@ shows tables.
 ## Read and enlarge Desktop charts (v0.32.0)
 
 Click a valid chart to open the existing pan/zoom viewer. Its full view includes
-title, unit and legend. Below the inline chart, **Details** opens a semantic table
-with every validated category, series and parsed value. Full labels, repeated
-category names, decimals, zero and negative values stay distinct. The table is
-created only while open and scrolls within its own bounded area.
+title, unit and legend. Below the inline chart, open **Chart values** to read
+every category, series and parsed value. Full labels, repeated category names,
+decimals, zero and negative values stay distinct. Press Tab after opening the
+disclosure to focus the table area, then use the arrow keys or Page Up and Page
+Down to scroll. Closing the disclosure removes the table until you reopen it.
 
 Dense Cartesian axes show at most four category ticks; all plotted data and the
 full table remain. Existing parser bounds and text escaping stay in place.
