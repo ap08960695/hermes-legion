@@ -76,6 +76,7 @@ prompt, and its age. A row shows its card or goal when the gateway can
 identify one. Answer inline, approve once, deny, or open the exact chat
 for the full context and any additional approval options. Long questions and
 choices wrap in narrow windows, keeping the reply field inside the inbox.
+Tab shows which button has focus while you scroll through the inbox.
 While a chat is opening, **Opening chat…** stays beside that item's
 **Open chat** button.
 The inbox waits before accepting another open. If it fails, the error
