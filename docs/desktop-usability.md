@@ -184,6 +184,8 @@ in two panes. Select part of the split draft before reconnecting.
 Verify the selection returns when you stay in that pane. Repeat
 while moving focus to the other pane during reconnect. Check both
 drafts, and confirm focus stays where you moved it.
+If an unchanged draft gets a new session key while its editor is
+focused, the selected text stays selected. Typing replaces that range.
 
 For the staged macOS split reconnect fixture, run
 `python3 verification/verify_split_reconnect.py EVIDENCE_DIR` on its
