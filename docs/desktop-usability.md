@@ -10,6 +10,8 @@ When you switch devices, History and message search pause until the switch
 settles. Your query stays in place, and results refresh on the active device.
 During Local reconnect, message search waits for the gateway. You can
 edit the query or choose a result already shown for that same search.
+If the result opens in a split tab, focus moves to that chat while it waits
+for Local. You can keep using the keyboard from there.
 If the main Chat has an unsent draft, opening a saved result keeps that
 draft in its own tab. A split Chat with a draft or queued messages
 also stays open. Search can reuse a split tab when it is empty.
