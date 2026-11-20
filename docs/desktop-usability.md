@@ -201,6 +201,8 @@ Typing also stays on the restored line next to an inline reference
 or on the last blank line. Undo removes the edit in one step.
 The same caret is used when IME input is confirmed from either blank-line
 position. Canceling keeps the original draft and leaves the caret there.
+If Chromium drops an IME composition that started over the first inline
+reference, Chat keeps the original draft so you can continue editing.
 
 For the staged macOS split reconnect fixture, run
 `python3 verification/verify_split_reconnect.py EVIDENCE_DIR` on its
