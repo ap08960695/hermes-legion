@@ -191,6 +191,8 @@ same live session when the draft is unchanged. Confirming saves the
 finished text. Canceling leaves the committed draft intact.
 Ordinary typing just before IME starts is saved with the draft while
 the input method is still offering candidates.
+When switching away from a composing draft, the next edit is saved in
+the draft you are now viewing.
 
 For the staged macOS split reconnect fixture, run
 `python3 verification/verify_split_reconnect.py EVIDENCE_DIR` on its

@@ -18158,10 +18158,10 @@ index 0000000000000000000000000000000000000000..9d2473e3805619ff823efbf19761ec47
 +}
 diff --git a/apps/desktop/src/app/chat/composer/composer-ime-frame.test.tsx b/apps/desktop/src/app/chat/composer/composer-ime-frame.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..e5121f6c6f555627744f0b21e3a4dc38a07568ef
+index 0000000000000000000000000000000000000000..c3e18f7710a440b3ab150c15d58a84bce0b3b3d7
 --- /dev/null
 +++ b/apps/desktop/src/app/chat/composer/composer-ime-frame.test.tsx
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,110 @@
 +// @vitest-environment jsdom
 +import { AssistantRuntimeProvider, type ThreadMessageLike, useExternalStoreRuntime } from '@assistant-ui/react'
 +import { act, cleanup, fireEvent, render } from '@testing-library/react'
@@ -18169,14 +18169,15 @@ index 0000000000000000000000000000000000000000..e5121f6c6f555627744f0b21e3a4dc38
 +import { afterEach, expect, it, vi } from 'vitest'
 +
 +import { I18nProvider } from '@/i18n'
-+import { clearSessionDraft, takeSessionDraft } from '@/store/composer'
++import { clearSessionDraft, stashSessionDraft, takeSessionDraft } from '@/store/composer'
 +import { sessionDraftOwner } from '@/store/session-draft-owner'
 +
 +import { ChatBar } from './index'
 +
 +const draftKey = 'ime-frame-draft'
++const otherKey = 'ime-other-draft'
 +
-+function Harness() {
++function Harness({ scope = draftKey }: { scope?: string }) {
 +  const runtime = useExternalStoreRuntime({
 +    convertMessage: (message: ThreadMessageLike) => message,
 +    isRunning: false,
@@ -18194,7 +18195,8 @@ index 0000000000000000000000000000000000000000..e5121f6c6f555627744f0b21e3a4dc38
 +            gateway={null}
 +            onCancel={() => {}}
 +            onSubmit={async () => true}
-+            queueSessionKey={draftKey}
++            queueSessionKey={scope}
++            sessionId={scope}
 +            state={{
 +              model: { canSwitch: false, model: '', provider: '' },
 +              tools: { enabled: false, label: '' },
@@ -18210,7 +18212,10 @@ index 0000000000000000000000000000000000000000..e5121f6c6f555627744f0b21e3a4dc38
 +afterEach(() => {
 +  cleanup()
 +  vi.useRealTimers()
-+  act(() => clearSessionDraft(draftKey, sessionDraftOwner(draftKey)))
++  act(() => {
++    clearSessionDraft(draftKey, sessionDraftOwner(draftKey))
++    clearSessionDraft(otherKey, sessionDraftOwner(otherKey))
++  })
 +})
 +
 +it.each(['日本', ''])('keeps preedit out of a queued input flush (settled text: %j)', async settled => {
@@ -18236,6 +18241,36 @@ index 0000000000000000000000000000000000000000..e5121f6c6f555627744f0b21e3a4dc38
 +  fireEvent.compositionEnd(editor, { data: settled })
 +  fireEvent(window, new Event('pagehide'))
 +  expect(takeSessionDraft(draftKey, sessionDraftOwner(draftKey)).text).toBe('a' + settled)
++})
++
++it.each([false, true])('saves the first ordinary input after a draft swap interrupts IME (return: %s)', async returnToDraft => {
++  vi.useFakeTimers({ toFake: ['requestAnimationFrame', 'cancelAnimationFrame'] })
++  const owner = sessionDraftOwner(draftKey)
++  stashSessionDraft(draftKey, 'Draft', [], owner)
++  stashSessionDraft(otherKey, 'Other', [], owner)
++  const { getByRole, rerender } = render(<Harness />)
++  const editor = getByRole('textbox', { name: 'Message' })
++  await act(async () => editor.focus())
++
++  fireEvent.compositionStart(editor)
++  editor.textContent = 'Drにほaft'
++  fireEvent.input(editor, { isComposing: true, inputType: 'insertCompositionText' })
++
++  await act(async () => rerender(<Harness scope={otherKey} />))
++  expect(editor.textContent).toBe('Other')
++  expect(takeSessionDraft(draftKey, owner).text).toBe('Draft')
++  if (returnToDraft) await act(async () => rerender(<Harness scope={draftKey} />))
++
++  // Replacing the composing DOM can leave no compositionend or keydown event.
++  const key = returnToDraft ? draftKey : otherKey
++  const next = (returnToDraft ? 'Draft' : 'Other') + 'Z'
++  editor.textContent = next
++  fireEvent.input(editor, { data: 'Z', isComposing: false, inputType: 'insertText' })
++  act(() => vi.advanceTimersToNextFrame())
++  fireEvent(window, new Event('pagehide'))
++
++  expect(takeSessionDraft(key, owner).text).toBe(next)
++  expect(takeSessionDraft(returnToDraft ? otherKey : draftKey, owner).text).toBe(returnToDraft ? 'Other' : 'Draft')
 +})
 diff --git a/apps/desktop/src/app/chat/composer/controls.test.tsx b/apps/desktop/src/app/chat/composer/controls.test.tsx
 index 0b74c3c52a0ed5a723de7a73c4195cf51fce7309..d6e39bd12c75713ed0abd440e9400f899901ed8c 100644
@@ -19920,7 +19955,7 @@ index fccec70b5470274dbe02ef2a3590f5123f3f1ae3..92825b608e74319c062bd487c9eeb281
 +
    it('claims the bus on mount when visible', () => {
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-draft.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-draft.ts
-index f88f22679132810982d3ea0deb83c3ee20ebfbcd..7403bd8f50322626aa3def408b17dd3308df95e1 100644
+index f88f22679132810982d3ea0deb83c3ee20ebfbcd..eb941f8d343c12e58ae579a9a844f2e32b5cd855 100644
 --- a/apps/desktop/src/app/chat/composer/hooks/use-composer-draft.ts
 +++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-draft.ts
 @@ -2,3 +2,3 @@ import { useAui, useAuiState, useComposerRuntime } from '@assistant-ui/react'
@@ -20118,8 +20153,8 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..7403bd8f50322626aa3def408b17dd33
      attachmentScope.$attachments.set(cloneAttachments(attachments))
 -    paintDraft(text, false, preserveFocusedCaret)
 +    if (!keepComposition) paintDraft(text, false, preserveFocusedSelection)
-   }
-
++  }
++
 +  const loadRecoveredDraft = (text: string, attachments: ComposerAttachment[], retry?: ComposerDraftRetry) => {
 +    // The switch has already persisted the new identity. Painting must not clear it as an edit.
 +    draftRetryRef.current = undefined
@@ -20139,8 +20174,8 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..7403bd8f50322626aa3def408b17dd33
 +    }
 +
 +    return retry
-+  }
-+
+   }
+
 +  const getDraftRetry = () => draftRetryRef.current
 +
    const clearDraft = useCallback(() => {
@@ -20206,7 +20241,7 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..7403bd8f50322626aa3def408b17dd33
 -      adoptGoneSessionDraft()
 +      adoptGoneSessionDraft(owner)
      }
-@@ -591,6 +618,13 @@ export function useComposerDraft({
+@@ -591,6 +618,17 @@ export function useComposerDraft({
      draftScopeRef.current = activeQueueSessionKey
 -    draftRetryRef.current = readDraftRetry(activeQueueSessionKey)
 +    draftOwnerRef.current = owner
@@ -20221,9 +20256,13 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..7403bd8f50322626aa3def408b17dd33
 +    const keepComposition = Boolean(composingRef?.current && sameOwner && sessionId &&
 +      sessionId === committedSessionIdRef.current && text === draftRef.current &&
 +      editor && document.activeElement === editor && visibleRef.current && !isElementInHiddenPane(editor))
++    if (composingRef?.current && !keepComposition) {
++      // Replacing the composing DOM can abort IME without firing compositionend.
++      composingRef.current = false
++    }
 +    loadIntoComposer(text, attachments, sameOwner, keepComposition)
 
-@@ -601,8 +635,12 @@ export function useComposerDraft({
+@@ -601,8 +639,12 @@ export function useComposerDraft({
        if (editing?.sessionKey === activeQueueSessionKey) {
 -        stashAt(activeQueueSessionKey, editing.draft, editing.attachments)
 +        stashAt(activeQueueSessionKey, editing.draft, editing.attachments, owner)
@@ -20239,7 +20278,7 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..7403bd8f50322626aa3def408b17dd33
 +    committedSessionIdRef.current = sessionId
 +  }, [sessionId])
 
-@@ -623,4 +661,5 @@ export function useComposerDraft({
+@@ -623,4 +665,5 @@ export function useComposerDraft({
      reloadPersistedDrafts()
 -    draftRetryRef.current = readDraftRetry(draftScopeRef.current)
 -    const stashed = takeSessionDraft(draftScopeRef.current)
@@ -20247,7 +20286,7 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..7403bd8f50322626aa3def408b17dd33
 +    setRecovery(draftRetryRef.current?.recovery ? draftRetryRef.current : undefined)
 +    const stashed = takeSessionDraft(draftScopeRef.current, draftOwnerRef.current)
      loadIntoComposer(stashed.text, stashed.attachments)
-@@ -633,8 +672,19 @@ export function useComposerDraft({
+@@ -633,8 +676,19 @@ export function useComposerDraft({
      () =>
 -      onComposerDraftSyncRequest(({ mode, target: requested }) => {
 -        if (requested === target) {
@@ -20271,7 +20310,7 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..7403bd8f50322626aa3def408b17dd33
 -    [target]
 +    [attachmentScope, target]
    )
-@@ -664,5 +714,6 @@ export function useComposerDraft({
+@@ -664,5 +718,6 @@ export function useComposerDraft({
      }
 -  }, [syncDraftFromEditor])
 +  }, [syncDraftFromEditor, stashAt])
@@ -20279,11 +20318,11 @@ index f88f22679132810982d3ea0deb83c3ee20ebfbcd..7403bd8f50322626aa3def408b17dd33
    return {
 +    ownerIdentity,
      activeQueueSessionKeyRef,
-@@ -670,2 +721,3 @@ export function useComposerDraft({
+@@ -670,2 +725,3 @@ export function useComposerDraft({
      draftScopeRef,
 +    draftOwnerRef,
      draftRef,
-@@ -679,2 +731,5 @@ export function useComposerDraft({
+@@ -679,2 +735,5 @@ export function useComposerDraft({
      loadIntoComposer,
 +    loadRecoveredDraft,
 +    getDraftRetry,
