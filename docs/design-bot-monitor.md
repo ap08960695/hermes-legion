@@ -105,8 +105,9 @@ submissions. While the inbox stays open, a question that temporarily leaves
 the list can restore its unsent answer or choices when the same request
 returns. A new request starts blank. Closing
 the inbox or changing the active connection or profile clears these drafts. The
-button stays focused while it loads. If the inbox recovers while the button still has focus, focus moves to the
-inbox heading so you can tab into the list.
+button stays focused while it loads. If the inbox recovers or switches
+connection or profile while the button has focus, focus moves to the
+inbox heading so you can tab into the current list.
 
 The inbox updates when the gateway opens or settles a request. If a new
 question clearly replaces the focused question in the same bot run, focus
