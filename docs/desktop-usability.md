@@ -95,8 +95,9 @@ from recovery moves keyboard focus to **Back**. Choose **Back** or press Escape
 in Gateway settings to return to recovery and focus **Gateway settings**.
 **Details** keeps its open or closed state when you return to the same startup error.
 In a short window, scroll the settings panel to reach **Save and reconnect**.
-If the Local reconnect request fails, the error appears next to that button
-and you can try again from the same panel.
+If the Local reconnect request fails, the error appears next to that button.
+Keyboard focus stays on **Save and reconnect** while the request is pending
+unless you move it, so you can press Enter again after a refusal.
 If the Local runtime refuses to start because it needs repair,
 its error explains why automatic retries stop. After fixing the reported
 issue, choose **Reconnect now** on the error to retry that Local connection.
