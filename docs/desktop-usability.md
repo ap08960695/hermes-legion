@@ -70,8 +70,10 @@ Device, profile for new chats and connection state remain visible above the work
 
 Desktop reopens the Local socket after it drops, including during initial
 sidebar loading. The reconnect uses a fresh ticket from the canonical gateway
-and waits with jittered backoff capped at 15 seconds between attempts. Tabs
-and drafts stay open. If the runtime refuses to start because it needs repair,
+and waits with jittered backoff capped at 15 seconds between attempts.
+**Device & profile** shows **Connecting** during an active attempt, including
+while the Local backend and fresh ticket are being prepared. Tabs and drafts
+stay open. If the runtime refuses to start because it needs repair,
 use **Reconnect gateway** after resolving the reported reason.
 
 ## Verification boundaries

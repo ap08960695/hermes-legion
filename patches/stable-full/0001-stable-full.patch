@@ -29100,7 +29100,7 @@ index 0000000000000000000000000000000000000000..b3658f2a42c0e6626e55b61178c8d44b
 +  )
 +}
 diff --git a/apps/desktop/src/app/gateway/hooks/use-gateway-boot.test.tsx b/apps/desktop/src/app/gateway/hooks/use-gateway-boot.test.tsx
-index c700f88a49a1afe5dedf379418ac6b181815d97e..2c49f1743800091dbddea4cae1bbc8ac46cce026 100644
+index c700f88a49a1afe5dedf379418ac6b181815d97e..2b0c0f8e90cc41fe430e64ef11929ef2e2f47044 100644
 --- a/apps/desktop/src/app/gateway/hooks/use-gateway-boot.test.tsx
 +++ b/apps/desktop/src/app/gateway/hooks/use-gateway-boot.test.tsx
 @@ -1,5 +1,11 @@
@@ -29131,7 +29131,7 @@ index c700f88a49a1afe5dedf379418ac6b181815d97e..2c49f1743800091dbddea4cae1bbc8ac
  const remotePrimaryConn = { ...primaryConn, mode: 'remote' as const }
 +const localFixtureConn = { ...primaryConn, authMode: 'native' as const, mode: 'local' as const, connectionId: 'local' }
 
-@@ -286,2 +295,163 @@ async function flushAsync() {
+@@ -286,2 +295,181 @@ async function flushAsync() {
 
 +it('redials Local when the gateway disappears during initial sidebar hydration', async () => {
 +  const desktop = window.hermesDesktop as unknown as ReturnType<typeof fakeDesktop>
@@ -29193,8 +29193,14 @@ index c700f88a49a1afe5dedf379418ac6b181815d97e..2c49f1743800091dbddea4cae1bbc8ac
 +  render(<Harness />)
 +  await flushAsync()
 +
-+  desktop.getGatewayWsUrl.mockRejectedValueOnce(new Error('Gateway incompatible (runtime_protocol).'))
++  const ticket = deferred<string>()
++  desktop.getGatewayWsUrl.mockImplementationOnce(() => ticket.promise)
 +  act(() => FakeWebSocket.instances[0].drop())
++  await act(async () => vi.advanceTimersByTimeAsync(1000))
++  expect(FakeWebSocket.instances).toHaveLength(1)
++  expect($gatewayState.get()).toBe('connecting')
++
++  await act(async () => ticket.reject(new Error('Gateway incompatible (runtime_protocol).')))
 +  await act(async () => vi.advanceTimersByTimeAsync(30_000))
 +  expect(desktop.getGatewayWsUrl).toHaveBeenCalledTimes(2)
 +  expect($gatewayState.get()).toBe('closed')
@@ -29214,9 +29220,16 @@ index c700f88a49a1afe5dedf379418ac6b181815d97e..2c49f1743800091dbddea4cae1bbc8ac
 +  const desktop = window.hermesDesktop as unknown as ReturnType<typeof fakeDesktop>
 +  const processes = new Set<ChildProcess>()
 +  let startCount = 0
++  const replacing = deferred<void>()
++  const allowReplacement = deferred<void>()
++  void allowReplacement.promise.catch(() => undefined)
 +  let cached: Awaited<ReturnType<typeof startFixture>> | undefined
 +
 +  async function startFixture() {
++    if (startCount > 0) {
++      replacing.resolve()
++      await allowReplacement.promise
++    }
 +    expect(processes.size).toBe(0)
 +    const child = spawn(process.execPath, ['-e', `
 +      const { WebSocketServer } = require('ws')
@@ -29274,7 +29287,11 @@ index c700f88a49a1afe5dedf379418ac6b181815d97e..2c49f1743800091dbddea4cae1bbc8ac
 +    })
 +
 +    // Only the existing socket's close event must be needed. No focus, wake,
-+    // Reload or click. The first retry uses the 300 ms backoff window.
++    // Reload or click. Observe the status before the new socket can open.
++    await act(async () => replacing.promise)
++    expect(context.textContent).toContain('Connecting')
++    expect(startCount).toBe(1)
++    allowReplacement.resolve()
 +    await waitFor(() => {
 +      expect(startCount).toBe(2)
 +      expect(context.textContent).toContain('Connected')
@@ -29284,6 +29301,7 @@ index c700f88a49a1afe5dedf379418ac6b181815d97e..2c49f1743800091dbddea4cae1bbc8ac
 +    expect(desktop.revalidateConnection).not.toHaveBeenCalled()
 +    view.unmount()
 +  } finally {
++    allowReplacement.reject(new Error('Local replacement fixture closed'))
 +    await Promise.all([...processes].map(async child => {
 +      if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
 +        const exited = once(child, 'close')
@@ -29296,7 +29314,7 @@ index c700f88a49a1afe5dedf379418ac6b181815d97e..2c49f1743800091dbddea4cae1bbc8ac
 +
  it('loads and tracks saved gateways without mounting the statusbar or Settings', async () => {
 diff --git a/apps/desktop/src/app/gateway/hooks/use-gateway-boot.ts b/apps/desktop/src/app/gateway/hooks/use-gateway-boot.ts
-index a013ec9335650533984751bd304e06b4cfafd984..7fff042ac4c9730bcfc990edcf2dc98f2ee45fc7 100644
+index a013ec9335650533984751bd304e06b4cfafd984..acadf58c5b8f58fd8ca01d61c2ee65306dcadbfd 100644
 --- a/apps/desktop/src/app/gateway/hooks/use-gateway-boot.ts
 +++ b/apps/desktop/src/app/gateway/hooks/use-gateway-boot.ts
 @@ -25,2 +25,3 @@ import {
@@ -29342,11 +29360,20 @@ index a013ec9335650533984751bd304e06b4cfafd984..7fff042ac4c9730bcfc990edcf2dc98f
 -      if (cancelled || primaryReauthError || reconnecting || gatewayOpen() || $gatewaySwitching.get()) {
 +      if (cancelled || primaryReauthError || localReconnectRefused || reconnecting || gatewayOpen() || $gatewaySwitching.get()) {
          return
-@@ -454,2 +469,3 @@ export function useGatewayBoot({
+@@ -454,4 +469,12 @@ export function useGatewayBoot({
        reconnecting = true
 +      let dialRevision = primaryRouteRevision
++      const activationEpoch = gatewayActivationEpoch()
++      const showLocalProgress = primaryConnection?.mode === 'local' && isActivePrimary()
 
-@@ -463,7 +479,9 @@ export function useGatewayBoot({
+       try {
++        // Local startup and ticket minting happen before the socket reports 'connecting'.
++        if (showLocalProgress) {
++          reportPrimaryGatewayState('connecting')
++        }
++
+         // Drop a stale REMOTE backend cache before re-dialing. After sleep/wake a
+@@ -463,7 +486,9 @@ export function useGatewayBoot({
          // the specific hang this loop must survive, not just a rejection.
 -        await withTimeout(
 -          desktop.revalidateConnection?.() ?? Promise.resolve(),
@@ -29361,24 +29388,24 @@ index a013ec9335650533984751bd304e06b4cfafd984..7fff042ac4c9730bcfc990edcf2dc98f
 +          ).catch(() => undefined)
 +        }
 
-@@ -473,3 +491,5 @@ export function useGatewayBoot({
+@@ -473,3 +498,5 @@ export function useGatewayBoot({
          // its explicit profile so a foreground secondary cannot retarget it.
 -        const lookupRevision = primaryRouteRevision
 +        if (cancelled || dialRevision !== primaryRouteRevision) {
 +          return
 +        }
 
-@@ -489,3 +509,3 @@ export function useGatewayBoot({
+@@ -489,3 +516,3 @@ export function useGatewayBoot({
          // route would undo it and pin later reconnects to the old gateway.
 -        if (cancelled || lookupRevision !== primaryRouteRevision) {
 +        if (cancelled || dialRevision !== primaryRouteRevision) {
            return
-@@ -494,3 +514,3 @@ export function useGatewayBoot({
+@@ -494,3 +521,3 @@ export function useGatewayBoot({
          recordPrimaryConnection(conn)
 -        const dialRevision = primaryRouteRevision
 +        dialRevision = primaryRouteRevision
 
-@@ -552,8 +572,25 @@ export function useGatewayBoot({
+@@ -552,8 +579,25 @@ export function useGatewayBoot({
          // A manual retry may finish after the user has moved to another route.
 -        if (!manual || (isActivePrimary() && gatewayActivationEpoch() === manual.activationEpoch)) {
 +        const shouldRefresh = () =>
@@ -29407,11 +29434,20 @@ index a013ec9335650533984751bd304e06b4cfafd984..7fff042ac4c9730bcfc990edcf2dc98f
 +        }
 +
          // OAuth session expired mid-reconnect: surface the actionable "sign in
-@@ -619,2 +656,3 @@ export function useGatewayBoot({
+@@ -588,2 +632,8 @@ export function useGatewayBoot({
+
++        if (showLocalProgress && !cancelled && dialRevision === primaryRouteRevision &&
++            activationEpoch === gatewayActivationEpoch() && !$gatewaySwitching.get() &&
++            $gatewayState.get() === 'connecting' && !gatewayOpen()) {
++          reportPrimaryGatewayState(gateway.connectionState)
++        }
++
+         if (!cancelled && !primaryReauthError && !gatewayOpen() && !$gatewaySwitching.get()) {
+@@ -619,2 +669,3 @@ export function useGatewayBoot({
          primaryReauthError ||
 +        localReconnectRefused ||
          reconnecting ||
-@@ -631,6 +669,13 @@ export function useGatewayBoot({
+@@ -631,6 +682,13 @@ export function useGatewayBoot({
        // descriptors while it's still coming back up.
 -      const delay = reconnectBackoffDelayMs(reconnectAttempt)
 +      const connectionId = primaryConnection?.remoteKind === 'ssh' ? primaryConnection.connectionId : null
@@ -29426,16 +29462,16 @@ index a013ec9335650533984751bd304e06b4cfafd984..7fff042ac4c9730bcfc990edcf2dc98f
          reconnectTimer = null
 +        setSshRetry('primary', null)
          void attemptReconnect(manual)
-@@ -731,2 +776,4 @@ export function useGatewayBoot({
+@@ -731,2 +789,4 @@ export function useGatewayBoot({
 
 +      $startupConnectionId.set(route?.connectionId ?? null)
 +
        // Initial registry publication can precede boot. Resolve captured launch
-@@ -823,2 +870,3 @@ export function useGatewayBoot({
+@@ -823,2 +883,3 @@ export function useGatewayBoot({
          bootRetryAttempt = 0
 +        localReconnectRefused = false
          resetReconnectBackoff()
-@@ -1061,2 +1109,13 @@ export function useGatewayBoot({
+@@ -1061,2 +1122,13 @@ export function useGatewayBoot({
        onActiveConnectionChanged: publish,
 +      prepareSecondaryReconnect: (scope, connectionId, backoff) => {
 +        if (!connectionId || registryConnectionKind(connectionId) !== 'ssh') {
@@ -29449,7 +29485,7 @@ index a013ec9335650533984751bd304e06b4cfafd984..7fff042ac4c9730bcfc990edcf2dc98f
 +      },
 +      onSecondaryReconnectCleared: scope => setSshRetry(scope, null),
        // Keep $activeGatewayProfile in lockstep with the registry's OWN record
-@@ -1103,2 +1162,8 @@ export function useGatewayBoot({
+@@ -1103,2 +1175,8 @@ export function useGatewayBoot({
 
 +    const offSwitchReconnect = $gatewaySwitching.listen(switching => {
 +      if (!switching && bootCompleted && !bootFailed) {
@@ -29458,11 +29494,11 @@ index a013ec9335650533984751bd304e06b4cfafd984..7fff042ac4c9730bcfc990edcf2dc98f
 +    })
 +
      const offActiveGatewayReauth = $gateway.listen(syncPrimaryReauthError)
-@@ -1245,2 +1310,3 @@ export function useGatewayBoot({
+@@ -1245,2 +1323,3 @@ export function useGatewayBoot({
          primaryReauthError = null
 +        localReconnectRefused = false
          reauthNotified = false
-@@ -1513,9 +1579,3 @@ export function useGatewayBoot({
+@@ -1513,9 +1592,3 @@ export function useGatewayBoot({
 
 -        // Mint a fresh WS URL right before connecting. For OAuth gateways the
 -        // ticket is single-use with a short TTL, so the ticket baked into
@@ -29473,7 +29509,7 @@ index a013ec9335650533984751bd304e06b4cfafd984..7fff042ac4c9730bcfc990edcf2dc98f
 -        const wsUrl = await withTimeout(
 +        const mintWsUrl = () => withTimeout(
            resolveDesktopGatewayWsUrl(desktop, conn),
-@@ -1525,39 +1585,20 @@ export function useGatewayBoot({
+@@ -1525,39 +1598,20 @@ export function useGatewayBoot({
 
 -        // Only a valid WebSocket dial against a remote descriptor counts as a
 -        // transient renderer-side failure; URL and capability failures stay
@@ -29527,7 +29563,7 @@ index a013ec9335650533984751bd304e06b4cfafd984..7fff042ac4c9730bcfc990edcf2dc98f
 +            connect: async () => gateway.connect(await mintWsUrl()),
 +            isCancelled: () => cancelled
            })
-@@ -1591,3 +1632,7 @@ export function useGatewayBoot({
+@@ -1591,3 +1645,7 @@ export function useGatewayBoot({
            seedDefaultCwd().catch(err => console.warn('Failed to sync default workspace cwd post-connect', err)),
 -          callbacksRef.current.refreshHermesConfig(),
 +          callbacksRef.current.refreshHermesConfig().catch(error => {
@@ -29536,14 +29572,14 @@ index a013ec9335650533984751bd304e06b4cfafd984..7fff042ac4c9730bcfc990edcf2dc98f
 +            }
 +          }),
            // Session-list population is never boot-fatal. The gateway WS is
-@@ -1610,2 +1655,6 @@ export function useGatewayBoot({
+@@ -1610,2 +1668,6 @@ export function useGatewayBoot({
          bootRetryAttempt = 0
 +        // The socket can close while profile/config/session hydration is in
 +        // flight. The close listener deferred to boot; hand off to reconnect
 +        // now even if no further socket or window event ever arrives.
 +        scheduleReconnect()
          // A Docker/SSH terminal backend that fails its probe means shell
-@@ -1628,3 +1677,8 @@ export function useGatewayBoot({
+@@ -1628,3 +1690,8 @@ export function useGatewayBoot({
            if (retryable && !cancelled) {
 -            const delay = reconnectBackoffDelayMs(bootRetryAttempt, { baseDelayMs: BOOT_RETRY_BASE_DELAY_MS })
 +            const connectionId = primaryConnection?.remoteKind === 'ssh'
@@ -29553,7 +29589,7 @@ index a013ec9335650533984751bd304e06b4cfafd984..7fff042ac4c9730bcfc990edcf2dc98f
 +              connectionId, reconnectBackoffDelayMs(bootRetryAttempt, { baseDelayMs: BOOT_RETRY_BASE_DELAY_MS })
 +            )
              bootRetryAttempt += 1
-@@ -1633,4 +1687,10 @@ export function useGatewayBoot({
+@@ -1633,4 +1700,10 @@ export function useGatewayBoot({
              clearBootRetryTimer()
 +
 +            if (connectionId) {
@@ -29564,11 +29600,11 @@ index a013ec9335650533984751bd304e06b4cfafd984..7fff042ac4c9730bcfc990edcf2dc98f
                bootRetryTimer = null
 +              setSshRetry('boot', null)
                void boot()
-@@ -1716,2 +1776,3 @@ export function useGatewayBoot({
+@@ -1716,2 +1789,3 @@ export function useGatewayBoot({
        offGatewayReconnect()
 +      offSwitchReconnect()
        offActiveGatewayReauth()
-@@ -1724,2 +1785,4 @@ export function useGatewayBoot({
+@@ -1724,2 +1798,4 @@ export function useGatewayBoot({
        offBootProgress()
 +      offSshBackendStatuses()
 +      $startupConnectionId.set(null)
