@@ -21,9 +21,10 @@ decimals, zero and negative values stay distinct. Press Tab after opening the
 disclosure to focus the table area, then use the arrow keys or Page Up and Page
 Down to scroll. Both the disclosure and table area show a keyboard focus
 outline, including in forced colors. In Chat, focus stays in the disclosure
-or table when you move the pointer. In a short Chat window, keyboard focus
-brings the caption below the pinned prompt when there is room above the
-composer. Closing the disclosure removes the table until you reopen it.
+or table when you move the pointer. In a short Chat window, Tab brings the
+inline chart and its title below the pinned prompt when there is room above
+the composer. The values table uses the same clearance. Closing the
+disclosure removes the table until you reopen it.
 
 Dense Cartesian axes show at most four category ticks; all plotted data and the
 full table remain. Existing parser bounds and text escaping stay in place.
