@@ -283,6 +283,10 @@ If Local disconnects while **Refresh inbox** has keyboard focus,
 focus moves to the **Waiting for owner** heading. You can continue
 with Tab after the refreshed list arrives.
 
+If the inbox stays open with a draft while Local is offline, use
+**Reconnect** in the dialog. The inbox shows when Hermes is reconnecting
+and when the attempt fails. Press Enter again on **Reconnect** to retry.
+
 For a confirmed Local request linked to a Work card, select **Open card**
 to go to that board and card when Kanban is enabled. **Copy card ID**
 is also available for linked requests. If Work says **Card unavailable on
