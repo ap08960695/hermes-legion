@@ -11,6 +11,7 @@ if you stayed in the Move controls.
 The bulk action buttons show a keyboard focus outline while you navigate.
 In narrow panes, the Work views wrap below the board filters and **New task**.
 **Filter cards** uses its own row in narrow panes, so typing keeps nearby controls in place.
+**Clear search** restores the full board and returns focus to **Filter cards**.
 Filtering **Current work** in a narrow pane brings the first matching lane into view.
 In **Workflow**, the graph keeps the pane width and the selected card's details
 stack below it. The graph controls wrap to stay reachable.
