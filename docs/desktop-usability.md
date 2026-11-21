@@ -288,8 +288,9 @@ even if there are no cached requests. The inbox shows when Hermes is
 reconnecting and when the attempt fails. Press Enter on **Reconnect** to retry.
 
 For a confirmed Local request linked to a Work card, select **Open card**
-to go to that board and card when Kanban is enabled. **Copy card ID**
-is also available for linked requests. If Work says **Card unavailable on
+to go to that board and card when Kanban is enabled. If your active
+profile changes, wait for the inbox to refresh before opening a card.
+**Copy card ID** is also available for linked requests. If Work says **Card unavailable on
 this board**, close the drawer and use the board picker to continue.
 If the row shows a board slug, match it in the board picker. The picker
 shows the slug below a different display name, so you can distinguish
