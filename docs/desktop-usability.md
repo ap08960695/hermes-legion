@@ -173,6 +173,8 @@ actions. Retry with **Open logs** to clear the message after success.
 Choose **Show recent logs**, then press Tab to reach the log pane and
 use the arrow keys or Page Down to scroll it. **Copy** copies the
 log entries shown in the pane.
+When the startup failure changes, the pane waits for the new log read
+before showing entries again.
 Keyboard focus stays on **Save and reconnect** while the request is pending
 unless you move it, so you can press Enter again after a refusal.
 You can go back and reopen Gateway settings during the request.
