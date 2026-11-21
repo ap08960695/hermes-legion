@@ -25,6 +25,9 @@ Linux and Mac packages were rebuilt and installed before publication. Native Wor
 
 Acceptance describes recorded evidence at handoff, not a new execution of checks whenever the page opens, nor universal output correctness. Existing running Gateways were not restarted; protected production settings and held work were preserved. New worker processes and rebuilt Desktop packages contain the update; an already-running process may retain previously loaded code until its normal restart.
 
+In the Work card drawer, a comment that fails to send stays in the editor.
+Text you type while another comment is sending stays available as a draft.
+
 ## Compare a revision
 
 In **Track work**, open **Compare with the round that asked for changes**.
