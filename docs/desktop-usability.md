@@ -154,6 +154,9 @@ its selection to assistive technology. Tab moves the focus outline between
 cards. Enter or Space chooses the focused mode in the form. Saving is a
 separate action.
 In a short window, scroll the settings panel to reach **Save and reconnect**.
+A focus outline follows Tab between **Save for next restart** and
+**Save and reconnect**. In Local mode, the button keeps its outline
+while the request runs if it still has keyboard focus.
 While Local applies the settings, the recovery panel shows **Gateway
 connection restarting**.
 If the Local reconnect request fails, the error stays next to
