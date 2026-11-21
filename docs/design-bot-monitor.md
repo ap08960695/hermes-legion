@@ -57,6 +57,8 @@ resets active filters, preserves the sort, and returns focus to search.
 If the roster itself is empty, Monitor still shows **No bots yet**.
 In forced colors, an underline marks the selected status. A separate
 outline shows keyboard focus as you move through the status buttons.
+In a narrow Monitor pane, status buttons wrap onto another row so
+longer translated labels stay readable.
 Search also matches the latest signal, including the Bot Chat preview.
 **Open chat** sits beside the bot or worker name, so it is visible before
 scrolling across the metrics. It uses the existing source-qualified canonical
