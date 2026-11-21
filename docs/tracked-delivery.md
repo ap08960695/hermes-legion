@@ -33,6 +33,7 @@ the header controls within reach.
 show an outline when focused with the keyboard.
 The **Model** menu identifies the pinned model as current for assistive technology.
 Tab to **Clear model override** and press Enter or Space to use the profile default.
+When the assignee is known, **Model** names the profile whose settings the task inherits.
 In **Runs**, focus a run with a long result and press Enter or Space to read
 its full summary or error. Page Down scrolls the list.
 
