@@ -14,6 +14,8 @@ In **Workflow**, the graph keeps the pane width and the selected card's details
 stack below it. The graph controls wrap to stay reachable.
 When card details close, keyboard focus returns to the button that opened them.
 If that button disappeared from the same board, focus returns to **Filter cards**.
+Tabbing to a link in a folded card description expands the description and
+brings that link into view.
 
 When cards in the current list share a title, Track work shows their
 status, assignee and card ID so you can choose the right one.
