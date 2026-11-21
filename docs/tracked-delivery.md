@@ -5,6 +5,9 @@ Open **Work → Track work** on an enabled Kanban board to follow an objective, 
 On the board, use Tab to focus a card and Enter or Space to open it.
 Press Shift+F10 or the Context Menu key for actions such as **Select**.
 Escape closes the menu. Press it again on the board to clear selection.
+After a partial bulk **Move**, focus stays on **Move to** so you can retry
+the remaining cards. After a complete move, focus returns to **Filter cards**
+if you stayed in the Move controls.
 
 When cards in the current list share a title, Track work shows their
 status, assignee and card ID so you can choose the right one.
