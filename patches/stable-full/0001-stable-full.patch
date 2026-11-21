@@ -67769,10 +67769,10 @@ index 0000000000000000000000000000000000000000..0bc4571b57a9d01e95010694c19cfb30
 +  hermesApiAs<T>(owner, { path: '/api/spaces' + path, method, body })
 diff --git a/apps/desktop/src/plugins/hermes-spaces/page.test.tsx b/apps/desktop/src/plugins/hermes-spaces/page.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..3a5f200762969cd9957af2e0f1e0e34a01f4ea35
+index 0000000000000000000000000000000000000000..7f47fc9e5cc78307901d2a67a99c2d31609c1a73
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-spaces/page.test.tsx
-@@ -0,0 +1,466 @@
+@@ -0,0 +1,509 @@
 +import { act, render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
 +import { afterEach, expect, it, vi } from 'vitest'
 +vi.mock('@/app/artifacts', () => ({
@@ -68032,6 +68032,49 @@ index 0000000000000000000000000000000000000000..3a5f200762969cd9957af2e0f1e0e34a
 +  expect(screen.queryByText(/Space not found/)).toBeNull()
 +})
 +
++it.each(['removed', 'surviving', 'catalog failure'] as const)(
++  'waits for the catalog before reporting an early item error (%s)',
++  async outcome => {
++    const refreshed = deferred<{ spaces: typeof exampleSpace[] }>()
++    const staleItems = deferred<unknown>()
++    let catalogReads = 0
++
++    io.api.mockImplementation(async (_owner, path) => {
++      if (path === '') {
++        return ++catalogReads === 1 ? { spaces: [exampleSpace] } : refreshed.promise
++      }
++
++      if (path.startsWith('/shared/items?') && catalogReads > 1) { return staleItems.promise }
++
++      return { items: [] }
++    })
++
++    render(<SpacesPage />)
++    fireEvent.click(await screen.findByRole('button', { name: 'Example Space' }))
++    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
++    await act(async () => { staleItems.reject(new Error('Items unavailable')) })
++
++    expect(screen.queryByText(/Items unavailable/)).toBeNull()
++    expect(screen.getByText('Loading collection items…')).toBeTruthy()
++
++    await act(async () => {
++      if (outcome === 'catalog failure') {
++        refreshed.reject(new Error('Catalog unavailable'))
++      } else {
++        refreshed.resolve({ spaces: outcome === 'removed' ? [] : [exampleSpace] })
++      }
++    })
++
++    if (outcome === 'removed') {
++      expect(screen.getByRole('button', { name: 'All items' }).getAttribute('data-variant')).toBe('secondary')
++      expect(screen.queryByText(/Items unavailable/)).toBeNull()
++    } else {
++      expect(screen.getByRole('heading', { name: 'Example Space' })).toBeTruthy()
++      expect(await screen.findByText(/Items unavailable/)).toBeTruthy()
++    }
++  }
++)
++
 +it.each(['resolve', 'reject'] as const)('retires a preview that %ss after leaving and returning to a collection', async result => {
 +  const earlier = deferred<typeof examplePage & { text: string }>()
 +  let previewReads = 0
@@ -68241,10 +68284,10 @@ index 0000000000000000000000000000000000000000..3a5f200762969cd9957af2e0f1e0e34a
 +})
 diff --git a/apps/desktop/src/plugins/hermes-spaces/page.tsx b/apps/desktop/src/plugins/hermes-spaces/page.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..2b3721348530019a717688a18156ad91a10282d4
+index 0000000000000000000000000000000000000000..41d2ad5b164808a6f1e4206ff9f66e4d12db3f0a
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-spaces/page.tsx
-@@ -0,0 +1,940 @@
+@@ -0,0 +1,954 @@
 +import { suppressNonKeyboardFocusOpen, Tip } from '@hermes/plugin-sdk'
 +import { useStore } from '@nanostores/react'
 +import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -68737,6 +68780,7 @@ index 0000000000000000000000000000000000000000..2b3721348530019a717688a18156ad91
 +    [access, setAccess] = useState<'create' | 'edit' | null>(null),
 +    [editing, setEditing] = useState<SpaceItem | null | undefined>(undefined),
 +    [removing, setRemoving] = useState<SpaceItem | null>(null)
++  const catalogRequest = useRef<Promise<{ spaces: Space[] }> | null>(null)
 +  const viewRequest = useRef(0)
 +  const previewOpener = useRef<HTMLButtonElement | null>(null)
 +  const searchInput = useRef<HTMLInputElement>(null)
@@ -68757,9 +68801,13 @@ index 0000000000000000000000000000000000000000..2b3721348530019a717688a18156ad91
 +    setRevision(n => n + 1)
 +    setOpened(null)
 +  }
++  // eslint-disable-next-line no-restricted-syntax -- shares the new catalog request with the item effect
 +  useEffect(() => {
 +    let current = true
-+    void request<{ spaces: Space[] }>(owner, '')
++    const catalog = request<{ spaces: Space[] }>(owner, '')
++    catalogRequest.current = catalog
++
++    void catalog
 +      .then(value => {
 +        if (current) {
 +          setSpaces(value.spaces)
@@ -68786,12 +68834,21 @@ index 0000000000000000000000000000000000000000..2b3721348530019a717688a18156ad91
 +    setError('')
 +    setItemsLoading(selected !== 'chats')
 +    if (selected === 'chats') return
++    const catalog = selected === 'all' ? null : catalogRequest.current
++
 +    void request<{ items: SpaceItem[] }>(owner, selected === 'all' ? '/all-items' : `/${selected}/items?trash=${trash}`)
 +      .then(value => {
 +        if (current) setItems(value.items)
 +      })
-+      .catch(e => {
-+        if (current) setError(String(e))
++      .catch(async e => {
++        if (!current) { return }
++
++        // Refresh may confirm this error belongs to a removed collection.
++        const result = catalog ? await catalog.catch(() => null) : null
++
++        if (current && (!result || result.spaces.some(row => row.id === selected))) {
++          setError(String(e))
++        }
 +      })
 +      .finally(() => {
 +        if (current) setItemsLoading(false)
