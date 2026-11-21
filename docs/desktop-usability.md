@@ -293,7 +293,9 @@ profile changes, wait for the inbox to refresh before opening a card.
 **Copy card ID** is also available for linked requests. If Work says **Card unavailable on
 this board**, close the drawer and use the board picker to continue.
 If the board itself is unavailable, closing the drawer moves keyboard
-focus to the board picker when it is available.
+focus to the board picker when it is available. Work shows **Board
+unavailable** as soon as the board reports it is missing. Choose another
+board to continue.
 If the row shows a board slug, match it in the board picker. The picker
 shows the slug below a different display name, so you can distinguish
 boards with the same name. Paste the ID into that board's **Filter cards**
