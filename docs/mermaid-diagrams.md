@@ -31,11 +31,12 @@ In Hub's chat file preview, Escape returns from the expanded diagram to
 the file in the list.
 **Copy** keeps focus and runs one copy at a time in the expanded viewer.
 If the clipboard rejects both image and SVG text, the expanded viewer shows
-**Copy failed** above the toolbar and keeps Copy and Close in place. Open **Source** below a
-rendered diagram to read the original Mermaid text. Tab into the source and
-use the arrow keys or Page Up and Page Down to scroll it. In Chat, the focused
-source scrolls into view above the composer. Source keeps focus while the
-composer finishes opening a saved chat. **Copy source** copies the original text.
+**Copy failed** below the diagram and keeps Copy and Close in place.
+Open **Source** below a rendered diagram to read the original Mermaid text.
+Tab into the source and use the arrow keys or Page Up and Page Down to scroll
+it. In Chat, the focused source scrolls into view above the composer. Source
+keeps focus while the composer finishes opening a saved chat. **Copy source**
+copies the original text.
 **Save SVG** saves a scalable image, and **Save PNG**
 saves a raster image. The button stays focused during export. If saving
 fails, select **Save PNG** again to retry. The diagram uses the app's light or dark appearance at
