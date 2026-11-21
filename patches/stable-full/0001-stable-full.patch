@@ -63275,10 +63275,10 @@ index 0000000000000000000000000000000000000000..b52daa0825bb668536b7b4e67aadfe69
 +}
 diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx b/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..9a7a807a2821474d6b1480c6035130127042ec18
+index 0000000000000000000000000000000000000000..851d8795adbde2833873c82f0e35878a03b43caf
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx
-@@ -0,0 +1,1179 @@
+@@ -0,0 +1,1195 @@
 +import * as sdk from '@hermes/plugin-sdk'
 +import { host, type OwnerInboxItem, ROUTES_AREA } from '@hermes/plugin-sdk'
 +import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -63289,6 +63289,8 @@ index 0000000000000000000000000000000000000000..9a7a807a2821474d6b1480c603513012
 +import { registerPluginLocales } from '@/i18n/plugin-i18n'
 +// eslint-disable-next-line no-restricted-imports -- simulate the registered Kanban route.
 +import { registry } from '@/contrib/registry'
++// eslint-disable-next-line no-restricted-imports -- exercise the actual host recovery registry.
++import { registerGatewayReconnect } from '@/store/gateway-reconnect'
 +
 +import { BOTS_LOCALES, useBots } from './i18n'
 +import { OwnerInbox } from './owner-inbox'
@@ -63521,6 +63523,8 @@ index 0000000000000000000000000000000000000000..9a7a807a2821474d6b1480c603513012
 +it.each([false, true])('keeps a draft during Local reconnect without reusing it for a new generation (%s)', async replaced => {
 +  const question = prompt('tester', 'Ready after reconnect?')
 +  const inbox = fixture([question])
++  const reconnect = vi.fn()
++  disposers.push(registerGatewayReconnect(reconnect))
 +  inbox.mount()
 +  fireEvent.click(await screen.findByRole('button', { name: 'Waiting for owner 1' }))
 +  const answer = screen.getByRole<HTMLInputElement>('textbox', { name: 'Your answer' })
@@ -63535,6 +63539,16 @@ index 0000000000000000000000000000000000000000..9a7a807a2821474d6b1480c603513012
 +  fireEvent.submit(answer.closest('form')!)
 +  expect(responses()).toHaveLength(0)
 +
++  const retry = screen.getByRole('button', { name: 'Reconnect' })
++  retry.focus()
++  fireEvent.click(retry)
++  await waitFor(() => expect(reconnect).toHaveBeenCalledTimes(1))
++  act(() => inbox.gatewayState.set('connecting'))
++  expect(retry.getAttribute('aria-disabled')).toBe('true')
++  expect(document.activeElement).toBe(retry)
++  fireEvent.click(retry)
++  expect(reconnect).toHaveBeenCalledTimes(1)
++
 +  act(() => {
 +    inbox.change([replaced ? { ...question, execution_generation: 5 } : question])
 +    inbox.gatewayState.set('open')
@@ -63543,6 +63557,8 @@ index 0000000000000000000000000000000000000000..9a7a807a2821474d6b1480c603513012
 +    const active = screen.getByRole('button', { name: 'Send answer' })
 +    expect(active.getAttribute('aria-disabled')).not.toBe('true')
 +  })
++  expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull()
++  expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Waiting for owner' }))
 +  const recovered = screen.getByRole<HTMLInputElement>('textbox', { name: 'Your answer' })
 +  expect(recovered.value).toBe(replaced ? '' : 'Keep my draft')
 +  expect(recovered === answer).toBe(!replaced)
@@ -64460,12 +64476,12 @@ index 0000000000000000000000000000000000000000..9a7a807a2821474d6b1480c603513012
 +)
 diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx b/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..348d90a72d3787456bda0ae7896c0740e5be514a
+index 0000000000000000000000000000000000000000..2caace7de03fba845f00c5c915768214346f0966
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx
-@@ -0,0 +1,415 @@
+@@ -0,0 +1,422 @@
 +import {
-+  $kanbanAvailable, Button, CopyButton, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, host, isKanbanCardTarget, type OwnerInboxItem, type PluginProfileRoute, queueKanbanCard, relativeTime, useValue
++  $kanbanAvailable, Button, CopyButton, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, host, isKanbanCardTarget, type OwnerInboxItem, type PluginProfileRoute, queueKanbanCard, reconnectAction, relativeTime, useValue
 +} from '@hermes/plugin-sdk'
 +import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 +import { flushSync } from 'react-dom'
@@ -64498,10 +64514,10 @@ index 0000000000000000000000000000000000000000..348d90a72d3787456bda0ae7896c0740
 +  const dialogGeneration = useRef(0)
 +  const scopeGeneration = useRef(0)
 +  const heading = useRef<HTMLHeadingElement>(null)
-+  const refreshButton = useRef<HTMLButtonElement>(null)
++  const retryButton = useRef<HTMLButtonElement>(null)
 +  const list = useRef<HTMLUListElement>(null)
-+  const focusHeadingFromRefresh = useCallback(() => {
-+    const button = refreshButton.current
++  const focusHeadingFromRetry = useCallback(() => {
++    const button = retryButton.current
 +    if (button && button.ownerDocument.activeElement === button) {
 +      heading.current?.focus()
 +    }
@@ -64528,7 +64544,7 @@ index 0000000000000000000000000000000000000000..348d90a72d3787456bda0ae7896c0740
 +
 +    heading.current?.focus()
 +  }, [])
-+  const inbox = useOwnerInbox(focusHeadingFromRefresh, focusBeforeRowsChange)
++  const inbox = useOwnerInbox(focusHeadingFromRetry, focusBeforeRowsChange)
 +  const kanbanAvailable = useValue($kanbanAvailable)
 +  useLayoutEffect(() => {
 +    renderedItems.current = inbox.items
@@ -64544,6 +64560,9 @@ index 0000000000000000000000000000000000000000..348d90a72d3787456bda0ae7896c0740
 +  const count = inbox.status === 'ready' ? inbox.items.length : 0
 +  const needsRefresh = inbox.connected && inbox.status === 'unavailable' && inbox.items.length > 0
 +  const status = openingChat ? '' : notice
++  const gatewayState = useValue(host.state.gateway)
++  const reconnect = connection === 'local' && !inbox.connected && inbox.items.length > 0 ? reconnectAction() : null
++  const canReconnect = (state: string) => state === 'closed' || state === 'error'
 +
 +  useEffect(() => {
 +    const invalidateScope = () => {
@@ -64554,7 +64573,7 @@ index 0000000000000000000000000000000000000000..348d90a72d3787456bda0ae7896c0740
 +    }
 +
 +    const changeScope = () => {
-+      focusHeadingFromRefresh()
++      focusHeadingFromRetry()
 +      dialogGeneration.current += 1
 +      drafts.clear()
 +      invalidateScope()
@@ -64564,8 +64583,8 @@ index 0000000000000000000000000000000000000000..348d90a72d3787456bda0ae7896c0740
 +      host.state.connectionId.listen(changeScope),
 +      host.state.profile.listen(changeScope),
 +      host.state.gateway.listen((state, previous) => {
-+        if (previous === 'open' && state !== 'open') {
-+          focusHeadingFromRefresh()
++        if (previous === 'open' || state === 'open') {
++          focusHeadingFromRetry()
 +        }
 +        invalidateScope()
 +      })
@@ -64575,7 +64594,7 @@ index 0000000000000000000000000000000000000000..348d90a72d3787456bda0ae7896c0740
 +      scopeGeneration.current += 1
 +      stop.forEach(unsubscribe => unsubscribe())
 +    }
-+  }, [drafts, focusHeadingFromRefresh])
++  }, [drafts, focusHeadingFromRetry])
 +
 +  function changeOpen(next: boolean, handoff: ((event: Event) => void) | null = null) {
 +    focusAfterClose.current = handoff
@@ -64721,7 +64740,7 @@ index 0000000000000000000000000000000000000000..348d90a72d3787456bda0ae7896c0740
 +      {inbox.status === 'unavailable' && <div className="space-y-2 text-sm">
 +        <p role="status">{inbox.retrying ? t.loading : inbox.connected && inbox.items.length ? t.stale : t.unavailable}</p>
 +        {inbox.connected && <Button aria-disabled={inbox.retrying || undefined} className="aria-disabled:opacity-60"
-+          onClick={inbox.retry} ref={refreshButton} size="sm" variant="secondary">{t.retry}</Button>}
++          onClick={inbox.retry} ref={retryButton} size="sm" variant="secondary">{t.retry}</Button>}
 +      </div>}
 +      {inbox.status === 'ready' && inbox.items.length === 0 && <p className="text-sm">{t.empty}</p>}
 +      <p className={status ? "text-sm" : "sr-only"} role="status">{status}</p>
@@ -64734,6 +64753,10 @@ index 0000000000000000000000000000000000000000..348d90a72d3787456bda0ae7896c0740
 +          onRespond={value => respond(prompt, value)}
 +          pending={inbox.isResponding(prompt)} prompt={prompt} stale={inbox.status !== 'ready'} text={text} />)}
 +      </ul>
++      {reconnect && <Button aria-disabled={!canReconnect(gatewayState) || undefined} className="self-start aria-disabled:opacity-60"
++        onClick={() => {
++          if (host.state.connectionId.get() === 'local' && canReconnect(host.state.gateway.get())) reconnect.onClick()
++        }} ref={retryButton} size="sm" variant="secondary">{reconnect.label}</Button>}
 +    </DialogContent>
 +  </Dialog>
 +}
@@ -76871,7 +76894,7 @@ index 24bf8b26c27fef8286c4bb1b8ceaa56e3562ea95..c35eef577de97a7c04c06cce18301336
 +    stashSessionDraft('stored-stash', 'runtime-addressed', [], 'default')
 
 diff --git a/apps/desktop/src/sdk/index.ts b/apps/desktop/src/sdk/index.ts
-index 1771079ce633e58b6cc4374d95417cb169b71984..65ce292c7c6e0df17983b20854cc3f75d506ccdb 100644
+index 1771079ce633e58b6cc4374d95417cb169b71984..e0b515d04457c300ed4da9198cf1abb5a4c5161e 100644
 --- a/apps/desktop/src/sdk/index.ts
 +++ b/apps/desktop/src/sdk/index.ts
 @@ -20,2 +20,3 @@
@@ -77226,6 +77249,10 @@ index 1771079ce633e58b6cc4374d95417cb169b71984..65ce292c7c6e0df17983b20854cc3f75
 +/** The plugin authoring contract (`HermesPlugin`, `PluginContext`, `ctx.*` door types). */
 +export { MAX_PREVIEW_CHARACTERS } from '@/lib/pet-character-sprite'
  /** The app's deterministic identity color for a name (profiles, assignees,
+@@ -1927,2 +2112,3 @@ export { cn } from '@/lib/utils'
+ export { gatewayActivationEpoch } from '@/store/gateway'
++export { reconnectAction } from '@/store/gateway-reconnect'
+ /** THE unread store behind `SessionStatusDot`'s emerald dot. A plugin that
 diff --git a/apps/desktop/src/sdk/kanban-navigation.ts b/apps/desktop/src/sdk/kanban-navigation.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..4e7b9e7d5a4c585e62d3e282169320a9010793d5
