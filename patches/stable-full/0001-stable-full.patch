@@ -17119,12 +17119,15 @@ index 0000000000000000000000000000000000000000..0e09568165c331990ca000ac4844a359
 +}
 diff --git a/apps/desktop/src/app/artifacts/artifact-preview.test.tsx b/apps/desktop/src/app/artifacts/artifact-preview.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..8571215f99b118acf459dd2f0ac5f54f8602391b
+index 0000000000000000000000000000000000000000..f90abca588d96b1c50eabba8d4ad7f6fd46d8bb7
 --- /dev/null
 +++ b/apps/desktop/src/app/artifacts/artifact-preview.test.tsx
-@@ -0,0 +1,131 @@
-+import { cleanup, render, screen, waitFor, fireEvent } from '@testing-library/react'
+@@ -0,0 +1,172 @@
++import { act, cleanup, render, screen, waitFor, fireEvent } from '@testing-library/react'
 +import { afterEach, expect, it, vi } from 'vitest'
++
++import type { HermesReadDirResult } from '@/global'
++
 +import { LibraryFilePreview } from './artifact-preview'
 +import { libraryHtmlDocument } from './open-artifact'
 +const io = vi.hoisted(() => ({ read: vi.fn(), list: vi.fn() }))
@@ -17173,6 +17176,44 @@ index 0000000000000000000000000000000000000000..8571215f99b118acf459dd2f0ac5f54f
 +  expect(external).not.toHaveBeenCalled()
 +  vi.unstubAllGlobals()
 +})
++it('retries the same folder once, preserving focus while the read is pending', async () => {
++  let finish!: (value: HermesReadDirResult) => void
++
++  const pending = new Promise<HermesReadDirResult>(resolve => {
++    finish = resolve
++  })
++
++  io.read.mockResolvedValue({ path: item.value, text: 'Fixture body', mimeType: 'text/markdown' })
++  io.list.mockImplementation(() =>
++    io.list.mock.calls.length === 1 ? Promise.reject(new Error('Folder could not be listed')) : pending
++  )
++  render(<LibraryFilePreview item={item} onClose={() => {}} />)
++  await screen.findByText('Fixture body')
++  fireEvent.click(screen.getByRole('button', { name: 'Browse containing folder' }))
++  expect(await screen.findByText('Folder could not be listed')).toBeTruthy()
++  expect(io.list).toHaveBeenCalledTimes(1)
++
++  const retry = screen.getByRole('button', { name: 'Retry' })
++
++  retry.focus()
++  fireEvent.click(retry)
++  await waitFor(() => expect(io.list).toHaveBeenCalledTimes(2))
++  expect(io.list).toHaveBeenLastCalledWith('/work', item.owner)
++  expect(retry.getAttribute('aria-disabled')).toBe('true')
++  expect(retry.ownerDocument.activeElement).toBe(retry)
++  fireEvent.click(retry)
++  expect(io.list).toHaveBeenCalledTimes(2)
++
++  await act(async () => {
++    finish({ entries: [{ path: '/work/recovered.txt', name: 'recovered.txt', isDirectory: false }] })
++  })
++  expect(screen.getByRole('button', { name: 'recovered.txt' })).toBeTruthy()
++  const results = screen.getByRole('group', { name: '/work' })
++
++  expect(results.ownerDocument.activeElement).toBe(results)
++  expect(io.list).toHaveBeenCalledTimes(2)
++})
++
 +it('removes executable HTML and denies outside resource loading in the embedded document', () => {
 +  const html = libraryHtmlDocument(
 +    '<h1>Report</h1><script>window.bad=true</script><img src="https://example.invalid/private">'
@@ -17256,10 +17297,10 @@ index 0000000000000000000000000000000000000000..8571215f99b118acf459dd2f0ac5f54f
 +})
 diff --git a/apps/desktop/src/app/artifacts/artifact-preview.tsx b/apps/desktop/src/app/artifacts/artifact-preview.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..5597a9d3977328577d2da273eaea7f8b2411bb15
+index 0000000000000000000000000000000000000000..afabe2d1032a68ce4729f18142762692f1e229c6
 --- /dev/null
 +++ b/apps/desktop/src/app/artifacts/artifact-preview.tsx
-@@ -0,0 +1,244 @@
+@@ -0,0 +1,294 @@
 +import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 +import { Button } from '@/components/ui/button'
 +import { Codicon } from '@/components/ui/codicon'
@@ -17287,15 +17328,19 @@ index 0000000000000000000000000000000000000000..5597a9d3977328577d2da273eaea7f8b
 +  const { path, directory, label, previousLimit } = history[history.length - 1]
 +  const backButton = useRef<HTMLButtonElement>(null)
 +  const folderEntries = useRef<HTMLDivElement>(null)
++  const folderResults = useRef<HTMLDivElement>(null)
++  const retryButton = useRef<HTMLButtonElement>(null)
 +  const returnFocus = useRef<{ path: string; limit: number } | null>(null)
 +
 +  const [file, setFile] = useState<LibraryFile | null>(null),
 +    [listing, setListing] = useState<{ path: string; entries: HermesReadDirEntry[] } | null>(null),
-+    [error, setError] = useState(''),
++    [error, setError] = useState<{ message?: string; attempt: number } | null>(null),
++    [attempt, setAttempt] = useState(0),
 +    [limit, setLimit] = useState(FOLDER_PAGE_SIZE),
 +    [expandedFrom, setExpandedFrom] = useState<number | null>(null)
 +
 +  const entries = directory && listing?.path === path ? listing.entries : null
++  const retrying = error !== null && error.attempt !== attempt
 +
 +  const focusExpandedRange = useCallback((heading: HTMLHeadingElement | null) => {
 +    heading?.focus({ preventScroll: true })
@@ -17304,6 +17349,7 @@ index 0000000000000000000000000000000000000000..5597a9d3977328577d2da273eaea7f8b
 +
 +  const navigate = (path: string, directory: boolean, label = item.label) => {
 +    returnFocus.current = null
++    setError(null)
 +    setHistory(previous => [...previous, { path, directory, label, previousLimit: limit }])
 +  }
 +
@@ -17322,7 +17368,6 @@ index 0000000000000000000000000000000000000000..5597a9d3977328577d2da273eaea7f8b
 +    let current = true
 +    setFile(null)
 +    setListing(null)
-+    setError('')
 +    setLimit(returnFocus.current?.limit ?? FOLDER_PAGE_SIZE)
 +    setExpandedFrom(null)
 +    const request = directory
@@ -17332,20 +17377,34 @@ index 0000000000000000000000000000000000000000..5597a9d3977328577d2da273eaea7f8b
 +        : readLibraryFile(path, item.owner, item.sessionId)
 +    void request
 +      .then(value => {
-+        if (!current) return
-+        if ('entries' in value) setListing({ path, entries: value.entries })
-+        else setFile(value)
++        if (!current) {
++          return
++        }
++
++        if ('entries' in value) {
++          const retry = retryButton.current
++
++          if (retry?.ownerDocument.activeElement === retry) {
++            folderResults.current?.focus({ preventScroll: true })
++          }
++
++          setListing({ path, entries: value.entries })
++        } else {
++          setFile(value)
++        }
++
++        setError(null)
 +      })
 +      .catch(error => {
 +        if (current) {
 +          returnFocus.current = null
-+          setError(error instanceof Error ? error.message : t.preview.unavailable)
++          setError({ message: error instanceof Error ? error.message : undefined, attempt })
 +        }
 +      })
 +    return () => {
 +      current = false
 +    }
-+  }, [path, directory, item, t.preview.unavailable])
++  }, [path, directory, item, attempt])
 +
 +  // eslint-disable-next-line no-restricted-syntax -- consume the pending focus request after the folder is ready.
 +  useEffect(() => {
@@ -17394,6 +17453,7 @@ index 0000000000000000000000000000000000000000..5597a9d3977328577d2da273eaea7f8b
 +              history.at(-2)?.directory && back.ownerDocument.activeElement === back
 +                ? { path, limit: previousLimit }
 +                : null
++            setError(null)
 +            setHistory(previous => previous.slice(0, -1))
 +          }}
 +          ref={backButton}
@@ -17410,9 +17470,40 @@ index 0000000000000000000000000000000000000000..5597a9d3977328577d2da273eaea7f8b
 +        <CopyButton text={file?.path || path} label={t.fileMenu.copyPath} />
 +        <span className="min-w-0 truncate text-xs text-muted-foreground">{file?.path || path}</span>
 +      </div>
-+      <div className="min-h-0 flex-1 overflow-auto">
++      <div
++        aria-label={directory ? path : undefined}
++        className="min-h-0 flex-1 overflow-auto"
++        data-library-folder-results={directory ? '' : undefined}
++        ref={folderResults}
++        role={directory ? 'group' : undefined}
++        tabIndex={directory ? -1 : undefined}
++      >
 +        {error ? (
-+          <ErrorState title={t.preview.unavailable} description={error} />
++          <ErrorState description={error.message || t.preview.unavailable} title={t.preview.unavailable}>
++            {directory && (
++              <>
++                <Button
++                  aria-disabled={retrying}
++                  className="justify-self-center aria-disabled:opacity-60"
++                  data-library-folder-retry=""
++                  onClick={() => {
++                    if (!retrying) {
++                      setAttempt(error.attempt + 1)
++                    }
++                  }}
++                  ref={retryButton}
++                  variant="outline"
++                >
++                  {t.common.retry}
++                </Button>
++                {retrying && (
++                  <p className="text-center text-xs text-muted-foreground" role="status">
++                    {t.preview.loading}
++                  </p>
++                )}
++              </>
++            )}
++          </ErrorState>
 +        ) : entries ? (
 +          <div className="flex flex-col gap-1" ref={folderEntries}>
 +            {entries.slice(0, limit).map((entry, index) => (
@@ -84273,10 +84364,10 @@ index b46d5b4247acbda0b8649e2958b4e8ba1fa01925..1b0cc54843ec80008f3a9ae2926545c4
 +      ))
  
 diff --git a/apps/desktop/src/styles.css b/apps/desktop/src/styles.css
-index 219de061127cb5fcc23b67e1f9f7ceed5777a461..17bdbb17427783e13535c5bd5f2527b5959e6423 100644
+index 219de061127cb5fcc23b67e1f9f7ceed5777a461..eb60a35ccdb896954414c7c0e1ce03e32277d9bf 100644
 --- a/apps/desktop/src/styles.css
 +++ b/apps/desktop/src/styles.css
-@@ -1402,2 +1402,46 @@
+@@ -1402,2 +1402,48 @@
 
 +[data-slot='composer-retained-send'] > summary:focus-visible {
 +  outline: 2px solid var(--ui-base);
@@ -84308,6 +84399,8 @@ index 219de061127cb5fcc23b67e1f9f7ceed5777a461..17bdbb17427783e13535c5bd5f2527b5
 +[data-hub-preview-edit]:focus-visible,
 +[data-library-folder-entry]:focus-visible,
 +[data-library-expanded-range]:focus-visible,
++[data-library-folder-results]:focus-visible,
++[data-library-folder-retry]:focus-visible,
 +[data-hub-remove-dialog] button:focus-visible,
 +[data-monitor-table-scroll]:focus-visible,
 +[data-monitor-table-scroll] button:focus-visible,
@@ -84323,7 +84416,7 @@ index 219de061127cb5fcc23b67e1f9f7ceed5777a461..17bdbb17427783e13535c5bd5f2527b5
 +}
 +
  button {
-@@ -1433,2 +1477,19 @@ button {
+@@ -1433,2 +1479,19 @@ button {
 
 +/* Images can paint any color behind the lightbox close control. */
 +[data-variant='media-lightbox'] > [data-slot='dialog-close-button'] {
@@ -84343,7 +84436,7 @@ index 219de061127cb5fcc23b67e1f9f7ceed5777a461..17bdbb17427783e13535c5bd5f2527b5
 +}
 +
  [data-slot='dropdown-menu-item']:focus,
-@@ -2539,2 +2600,7 @@ button[data-slot='aui_msg-reactions'] svg {
+@@ -2539,2 +2602,7 @@ button[data-slot='aui_msg-reactions'] svg {
 
 +/* Keep focused chart values and diagram source above the composer and jump-to-bottom button. */
 +[data-chat-surface] [data-slot='aui_thread-viewport']:has(:is([data-slot='chart-values'], [data-slot='mermaid-source']):focus) {
@@ -84351,7 +84444,7 @@ index 219de061127cb5fcc23b67e1f9f7ceed5777a461..17bdbb17427783e13535c5bd5f2527b5
 +}
 +
  /* A live tool run, shown as one line. `ToolRunTicker` stacks the run's rows
-@@ -2773,2 +2839,96 @@ button[data-slot='aui_msg-reactions'] svg {
+@@ -2773,2 +2841,96 @@ button[data-slot='aui_msg-reactions'] svg {
 
 +[data-pet-walking] > canvas {
 +  transform: var(--pet-walk-shape, none);
