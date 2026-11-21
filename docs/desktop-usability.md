@@ -53,6 +53,9 @@ A collection search names its scope. No matches are distinct from an empty colle
 
 ## Recovering an earlier message
 
+If a refused send restores your draft, release Enter and press it again
+to retry. Holding Enter through a reconnect leaves the draft in the editor.
+
 Open the failed-message notice to read the full text and see any original attachments you need to review or reattach. **Park draft and edit failed message** puts the earlier text in this chat's composer and saves what you were typing. **Return to parked draft** brings back the draft and saves edits to the other message.
 If saving the switch fails, a message appears beside that saved draft.
 Your current draft stays in the editor and you can retry from the same row.
