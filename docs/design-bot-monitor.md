@@ -807,6 +807,9 @@ An empty current roster says “No bots yet.” A search or filter that
 excludes every available row keeps the no-matches message. When a
 refresh brings back matches while **Clear filters** is focused,
 focus returns to Search and the existing filters stay applied.
+While search or a status filter is active, a polite live region
+exposes the number of matching bot and worker rows across all pages.
+The region stays quiet when the count is unchanged or the roster is stale.
 Waiting or failed refresh without rows shows the connection status.
 In a character report without a status filter, Tab reaches the report
 body when it overflows. Page Down and End reveal the remaining text.
