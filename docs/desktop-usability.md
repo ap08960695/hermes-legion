@@ -155,7 +155,9 @@ connection restarting**.
 If the Local reconnect request fails, the error stays next to
 **Save and reconnect** in both recovery and **Settings → Gateway → Connection**.
 Choosing **Save and reconnect** again clears the previous error as the new
-attempt starts.
+attempt starts. In **Settings → Gateway → Connection**, a failed Local
+**Save for next restart** also shows its reason beside the save controls.
+Use the same button to retry without restarting the current connection.
 Keyboard focus stays on **Save and reconnect** while the request is pending
 unless you move it, so you can press Enter again after a refusal.
 You can go back and reopen Gateway settings during the request.

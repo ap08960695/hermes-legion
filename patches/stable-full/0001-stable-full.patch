@@ -43528,7 +43528,7 @@ index fa2b1996b102517262ac337612b8ec226dd54399..9fd3e55fdb92c9cce8da85aff04d17b4
 -import type { HermesApiRequest } from '@/global'
  import { queryClient } from '@/lib/query-client'
 diff --git a/apps/desktop/src/app/settings/gateway-settings.test.tsx b/apps/desktop/src/app/settings/gateway-settings.test.tsx
-index 4872c1de0ba987f5352169d4aaf0120d78d6a39e..1ef9301b9a7e74bc6bb98910db167329bbdae032 100644
+index 4872c1de0ba987f5352169d4aaf0120d78d6a39e..0a8c317ec6d09aad4adf8f0588669db2a2a18038 100644
 --- a/apps/desktop/src/app/settings/gateway-settings.test.tsx
 +++ b/apps/desktop/src/app/settings/gateway-settings.test.tsx
 @@ -4,3 +4,3 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
@@ -43554,7 +43554,7 @@ index 4872c1de0ba987f5352169d4aaf0120d78d6a39e..1ef9301b9a7e74bc6bb98910db167329
 +  }
 +})
  vi.mock('@/store/connections', () => ({
-@@ -82,2 +84,124 @@ afterEach(() => {
+@@ -82,2 +84,170 @@ afterEach(() => {
  describe('GatewaySettings', () => {
 +  it('shows a Local reconnect refusal inline in recovery and clears it when retry begins', async () => {
 +    const reason = 'The Local gateway could not restart.'
@@ -43678,9 +43678,55 @@ index 4872c1de0ba987f5352169d4aaf0120d78d6a39e..1ef9301b9a7e74bc6bb98910db167329
 +    }
 +  })
 +
++  it('keeps a Local save-for-restart failure inline and preserves keyboard retry', async () => {
++    const refusal = deferred<typeof localConnection>()
++    const retry = deferred<typeof localConnection>()
++    saveConnectionConfig.mockReturnValueOnce(refusal.promise).mockReturnValueOnce(retry.promise)
++    const applyConnectionConfig = vi.fn()
++    const logLine = vi.fn()
++    Object.assign(window.hermesDesktop, { applyConnectionConfig, logLine })
++    clearNotifications()
++
++    try {
++      render(<GatewaySettings subpage="connection" />)
++      const save = await screen.findByRole<HTMLButtonElement>('button', { name: 'Save for next restart' })
++      const reconnect = screen.getByRole<HTMLButtonElement>('button', { name: 'Save and reconnect' })
++      save.focus()
++      fireEvent.click(save)
++      await act(async () => refusal.reject(new Error('Could not write the Local gateway configuration.')))
++      const error = screen.getByRole('alert')
++      expect(error.textContent).toContain('Could not save gateway settings')
++      expect(error.textContent).toContain('Could not write the Local gateway configuration.')
++      expect($notifications.get()).toEqual([])
++      expect(logLine).toHaveBeenCalledOnce()
++      expect(save.disabled).toBe(false)
++      expect(globalThis.document.activeElement).toBe(save)
++
++      fireEvent.click(save)
++      expect(screen.queryByRole('alert')).toBeNull()
++      expect(save.disabled).toBe(false)
++      expect(save.getAttribute('aria-disabled')).toBe('true')
++      expect(reconnect.disabled).toBe(true)
++      expect(globalThis.document.activeElement).toBe(save)
++      fireEvent.click(save)
++      expect(saveConnectionConfig).toHaveBeenCalledTimes(2)
++      expect(saveConnectionConfig.mock.calls.every(([payload]) => payload.mode === 'local')).toBe(true)
++
++      await act(async () => retry.resolve(localConnection))
++      expect(screen.queryByRole('alert')).toBeNull()
++      expect(save.hasAttribute('aria-disabled')).toBe(false)
++      expect(reconnect.disabled).toBe(false)
++      expect(globalThis.document.activeElement).toBe(save)
++      expect($notifications.get()[0]?.title).toBe('Gateway settings saved')
++      expect(applyConnectionConfig).not.toHaveBeenCalled()
++    } finally {
++      clearNotifications()
++    }
++  })
++
    it('releases a pending save after a late probe invalidates its response', async () => {
 diff --git a/apps/desktop/src/app/settings/gateway-settings.tsx b/apps/desktop/src/app/settings/gateway-settings.tsx
-index b0ff82366380a3f5968be4b50cba9ce1639ae2ed..00c8310e10417914bfcd9c475021dd887468fac2 100644
+index b0ff82366380a3f5968be4b50cba9ce1639ae2ed..9fb7f5884fbfffb7ee1b2e88c541124e0f6871d6 100644
 --- a/apps/desktop/src/app/settings/gateway-settings.tsx
 +++ b/apps/desktop/src/app/settings/gateway-settings.tsx
 @@ -2,3 +2,3 @@ import { isGatewayReauthRequired } from '@hermes/shared'
@@ -43719,7 +43765,7 @@ index b0ff82366380a3f5968be4b50cba9ce1639ae2ed..00c8310e10417914bfcd9c475021dd88
 +  standalone: boolean
 +}) {
    const { t } = useI18n()
-@@ -258,4 +263,10 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
+@@ -258,4 +263,14 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
    const [saving, setSaving] = useState(false)
 +  const [standaloneApply] = useState(createRecoveryGatewayApply)
 +  const localApply = recoveryApply ?? standaloneApply
@@ -43729,12 +43775,16 @@ index b0ff82366380a3f5968be4b50cba9ce1639ae2ed..00c8310e10417914bfcd9c475021dd88
 +  const localMode = state.mode === 'local'
 +  const localApplyPending = localMode && localApplyState.pending
 +  const localApplyError = localMode ? localApplyState.error : null
++  const [localSaveError, setLocalSaveError] = useState<string | null>(null)
++  const localSavePending = localMode && saving && !localApplyPending
++  const localWriteError = localMode ? localSaveError ?? localApplyError : null
++  const localWriteErrorTitle = localSaveError ? g.saveFailed : g.applyFailed
 
-@@ -273,2 +284,3 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
+@@ -273,2 +288,3 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
    const [sshCustomHost, setSshCustomHost] = useState(false)
 +  const saveActions = useRef<HTMLDivElement>(null)
    const sshResolveSeq = useRef(0)
-@@ -284,2 +296,8 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
+@@ -284,2 +300,8 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
 
 +  useLayoutEffect(() => {
 +    if (embedded && !loading && (localApplyError || localApplyPending)) {
@@ -43743,56 +43793,91 @@ index b0ff82366380a3f5968be4b50cba9ce1639ae2ed..00c8310e10417914bfcd9c475021dd88
 +  }, [embedded, loading, localApplyError, localApplyPending])
 +
    useEffect(() => {
-@@ -570,2 +588,12 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
+@@ -570,5 +592,18 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
    const performSave = async (apply: boolean, allowPlainTextToken: boolean): Promise<void> => {
 +    const applyingLocal = localMode && apply
 +
-+    if (applyingLocal && (localApply.get().pending || saveOwner.current !== null)) {
++    if (localMode && (localApply.get().pending || saveOwner.current !== null)) {
 +      return
 +    }
 +
-+    if (applyingLocal) {
-+      localApply.set({ pending: true, error: null })
+     const seq = ++saveSeq.current
+     saveOwner.current = seq
++
++    if (localMode) {
++      setLocalSaveError(null)
++      localApply.set({ pending: applyingLocal, error: null })
 +    }
 +
-     const seq = ++saveSeq.current
-@@ -573,2 +601,3 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
      setSaving(true)
 +    let localError: string | null = null
 
-@@ -601,2 +630,9 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
+@@ -594,2 +629,4 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
 
-+      if (applyingLocal) {
-+        logErrorToDesktopLog(err, g.applyFailed)
-+        localError = readableError(err, g.applyFailed).message
++      const failureTitle = apply ? g.applyFailed : g.saveFailed
 +
-+        return
+       // The plain-text opt-in path runs inside ConfirmDialog's onConfirm, which
+@@ -598,3 +635,16 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
+       if (allowPlainTextToken) {
+-        throw new Error(readableError(err, apply ? g.applyFailed : g.saveFailed).message)
++        throw new Error(readableError(err, failureTitle).message)
 +      }
 +
-       const sshError = err && typeof err === 'object' && 'sshError' in err ? String(err.sshError) : ''
-@@ -624,2 +660,6 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
++      if (localMode) {
++        logErrorToDesktopLog(err, failureTitle)
++        const reason = readableError(err, failureTitle).message
++
++        if (applyingLocal) {
++          localError = reason
++        } else {
++          setLocalSaveError(reason)
++        }
++
++        return
+       }
+@@ -617,3 +667,3 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
+           kind: 'error',
+-          title: apply ? g.applyFailed : g.saveFailed,
++          title: failureTitle,
+           message: (errors as Record<string, string>)[sshError] || g.sshErrUnknown
+@@ -621,5 +671,9 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
+       } else {
+-        notifyError(err, apply ? g.applyFailed : g.saveFailed)
++        notifyError(err, failureTitle)
+       }
      } finally {
 +      if (applyingLocal) {
 +        localApply.set({ pending: false, error: localError })
 +      }
 +
        // A stale response cannot replace the draft, but its request must release busy state.
-@@ -1441,3 +1481,3 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
+@@ -1441,3 +1495,3 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
        {state.mode !== 'cloud' ? (
 -        <div className="mt-6 flex flex-wrap items-center justify-end gap-4">
 +        <div className="mt-6 flex flex-wrap items-center justify-end gap-4" ref={saveActions}>
            {state.mode === 'remote' ? (
-@@ -1475,4 +1515,27 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
+@@ -1467,3 +1521,5 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
+             <Button
+-              disabled={state.envOverride || saving}
++              aria-disabled={localSavePending || undefined}
++              className="aria-disabled:cursor-default aria-disabled:opacity-50"
++              disabled={state.envOverride || (saving && !localSavePending)}
+               onClick={() => void save(false)}
+@@ -1472,2 +1528,3 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
+             >
++              {localSavePending ? <Loader2 className="animate-spin" /> : null}
+               {g.saveForRestart}
+@@ -1475,4 +1532,27 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
            )}
 -          <Button disabled={state.envOverride || saving} onClick={() => void save(true)} size="sm">
 -            {saving ? <Loader2 className="animate-spin" /> : null}
-+          {localApplyError ? (
++          {localWriteError ? (
 +            <div
 +              className={cn('basis-full wrap-anywhere rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive', !embedded && 'order-last')}
 +              role="alert"
 +            >
-+              <div className="font-medium">{g.applyFailed}</div>
-+              {localApplyError !== g.applyFailed ? <div className="mt-1">{localApplyError}</div> : null}
++              <div className="font-medium">{localWriteErrorTitle}</div>
++              {localWriteError !== localWriteErrorTitle ? <div className="mt-1">{localWriteError}</div> : null}
 +            </div>
 +          ) : null}
 +          {localMode && (
@@ -43810,7 +43895,7 @@ index b0ff82366380a3f5968be4b50cba9ce1639ae2ed..00c8310e10417914bfcd9c475021dd88
 +            onClick={() => void save(true)}
 +            size="sm"
 +          >
-+            {saving || localApplyPending ? <Loader2 className="animate-spin" /> : null}
++            {(saving && !localSavePending) || localApplyPending ? <Loader2 className="animate-spin" /> : null}
              {g.saveAndReconnect}
 diff --git a/apps/desktop/src/app/settings/index.tsx b/apps/desktop/src/app/settings/index.tsx
 index f550dae314b58ea3089a8570be6b5a8335db1aff..ae2c2922fc4dd38b6ef2e2198745f238c218ac37 100644
