@@ -28,6 +28,7 @@ show an outline when focused with the keyboard.
 In **Runs**, focus a run with a long result and press Enter or Space to read
 its full summary or error. Page Down scrolls the list.
 
+In a narrow pane, **Track work** puts the card list above delivery details.
 When cards in the current list share a title, Track work shows their
 status, assignee and card ID so you can choose the right one.
 In **Track work** and **History**, activating a focused **Show more** brings
