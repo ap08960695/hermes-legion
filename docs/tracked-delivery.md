@@ -10,6 +10,7 @@ the remaining cards. After a complete move, focus returns to **Filter cards**
 if you stayed in the Move controls.
 The bulk action buttons show a keyboard focus outline while you navigate.
 In narrow panes, the Work views wrap below the board filters and **New task**.
+The **Filters** menu reports selected profiles and tenants and checked toggles to assistive technology.
 **Filter cards** uses its own row in narrow panes, so typing keeps nearby controls in place.
 **Clear search** restores the full board and returns focus to **Filter cards**.
 Filtering **Current work** in a narrow pane brings the first matching lane into view.
