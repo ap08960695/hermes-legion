@@ -63321,10 +63321,10 @@ index 0000000000000000000000000000000000000000..fc629113fadb896acaf3008b270df052
 +}
 diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx b/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..fd072630e171d62afb4c29957cd79f01ac0efe04
+index 0000000000000000000000000000000000000000..2ab2d2c485c9cebd2b016887111b6cfe4374d90f
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox.test.tsx
-@@ -0,0 +1,1264 @@
+@@ -0,0 +1,1313 @@
 +import * as sdk from '@hermes/plugin-sdk'
 +import { host, type OwnerInboxItem, ROUTES_AREA } from '@hermes/plugin-sdk'
 +import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -64442,6 +64442,55 @@ index 0000000000000000000000000000000000000000..fd072630e171d62afb4c29957cd79f01
 +  expect(inbox.request.mock.calls.filter(([method]) => method === 'owner_inbox.list')).toHaveLength(4)
 +})
 +
++it.each(['reconnect', 'focus moved', 'heading revisited', 'reopened'])(
++  'hands off focus only from the active reconnect when the first list read fails (%s)',
++  async scenario => {
++    const approval = prompt('writer', '', { kind: 'approval', command: 'Fixture approval', choices: ['once'] })
++    const inbox = fixture([approval])
++    disposers.push(registerGatewayReconnect(vi.fn()))
++    inbox.mount()
++    const opener = await screen.findByRole('button', { name: 'Waiting for owner 1' })
++    fireEvent.click(opener)
++    act(() => inbox.gatewayState.set('closed'))
++    const reconnect = screen.getByRole('button', { name: 'Reconnect' })
++    reconnect.focus()
++    fireEvent.click(reconnect)
++
++    let fail!: () => void
++    inbox.request.mockImplementationOnce(() => new Promise((_, reject) => {
++      fail = () => reject(new Error('First fresh list failed'))
++    }))
++    act(() => inbox.gatewayState.set('open'))
++    const title = () => screen.getByRole('heading', { name: 'Waiting for owner' })
++    const close = () => screen.getByRole('button', { name: 'Close' })
++    expect(title().ownerDocument.activeElement).toBe(title())
++
++    if (scenario === 'focus moved' || scenario === 'heading revisited') {
++      close().focus()
++    }
++
++    if (scenario === 'heading revisited') {
++      title().focus()
++    }
++
++    if (scenario === 'reopened') {
++      fireEvent.click(close())
++      fireEvent.click(opener)
++      await waitFor(() => expect(title().ownerDocument.activeElement).toBe(title()))
++    }
++
++    await act(async () => fail())
++    const refresh = screen.getByRole('button', { name: 'Refresh inbox' })
++    const approve = screen.getByRole('button', { name: 'Approve once' })
++    expect(refresh.ownerDocument.activeElement).toBe(
++      scenario === 'reconnect' ? refresh : scenario === 'focus moved' ? close() : title()
++    )
++    expect(approve.getAttribute('aria-disabled')).toBe('true')
++    fireEvent.click(approve)
++    expect(inbox.request.mock.calls.map(([method]) => method)).toEqual(['owner_inbox.list', 'owner_inbox.list'])
++  }
++)
++
 +it.each(['Refresh inbox', 'Close'])('keeps focus in the new profile when the old list resolves (%s)', async focusedControl => {
 +  const inbox = fixture([])
 +  const request = inbox.request.getMockImplementation()!
@@ -64591,10 +64640,10 @@ index 0000000000000000000000000000000000000000..fd072630e171d62afb4c29957cd79f01
 +)
 diff --git a/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx b/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..bd1b50eae9019eea5e27a1b2bdfe2a0e8ca5e37b
+index 0000000000000000000000000000000000000000..43b5f8086626c188a16f0027363d42f3f6803d2b
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/owner-inbox.tsx
-@@ -0,0 +1,437 @@
+@@ -0,0 +1,456 @@
 +import {
 +  $kanbanAvailable, $localReconnectRefused, Button, CopyButton, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, host, isKanbanCardTarget, type OwnerInboxItem, type PluginProfileRoute, queueKanbanCard, reconnectAction, relativeTime, showLocalReconnectInline, useI18n, useValue
 +} from '@hermes/plugin-sdk'
@@ -64631,11 +64680,16 @@ index 0000000000000000000000000000000000000000..bd1b50eae9019eea5e27a1b2bdfe2a0e
 +  const scopeGeneration = useRef(0)
 +  const heading = useRef<HTMLHeadingElement>(null)
 +  const retryButton = useRef<HTMLButtonElement>(null)
++  const reconnectButton = useRef<HTMLButtonElement>(null)
++  const focusRefreshAfterReconnect = useRef(false)
 +  const list = useRef<HTMLUListElement>(null)
-+  const focusHeadingFromRetry = useCallback(() => {
-+    const button = retryButton.current
-+    if (button && button.ownerDocument.activeElement === button) {
-+      heading.current?.focus()
++  const focusHeadingFromRetry = useCallback((fromReconnect = false) => {
++    const button = reconnectButton.current ?? retryButton.current
++    const title = heading.current
++    focusRefreshAfterReconnect.current = false
++    if (title && button && button.ownerDocument.activeElement === button) {
++      title.focus()
++      focusRefreshAfterReconnect.current = fromReconnect && button === reconnectButton.current
 +    }
 +  }, [])
 +  const renderedItems = useRef<OwnerInboxItem[]>([])
@@ -64662,6 +64716,17 @@ index 0000000000000000000000000000000000000000..bd1b50eae9019eea5e27a1b2bdfe2a0e
 +  }, [])
 +  const inbox = useOwnerInbox(focusHeadingFromRetry, focusBeforeRowsChange)
 +  const kanbanAvailable = useValue($kanbanAvailable)
++  useLayoutEffect(() => {
++    if (!focusRefreshAfterReconnect.current || !inbox.connected || inbox.status !== 'unavailable') { return }
++
++    focusRefreshAfterReconnect.current = false
++    const title = heading.current
++
++    if (title && title.ownerDocument.activeElement === title) {
++      retryButton.current?.focus()
++    }
++  }, [inbox.connected, inbox.status])
++
 +  useLayoutEffect(() => {
 +    renderedItems.current = inbox.items
 +    const focus = nextFocus.current
@@ -64712,7 +64777,7 @@ index 0000000000000000000000000000000000000000..bd1b50eae9019eea5e27a1b2bdfe2a0e
 +      host.state.profile.listen(changeScope),
 +      host.state.gateway.listen((state, previous) => {
 +        if (previous === 'open' || state === 'open') {
-+          focusHeadingFromRetry()
++          focusHeadingFromRetry(state === 'open')
 +        }
 +        invalidateScope()
 +      })
@@ -64728,6 +64793,7 @@ index 0000000000000000000000000000000000000000..bd1b50eae9019eea5e27a1b2bdfe2a0e
 +    focusAfterClose.current = handoff
 +
 +    if (!next) {
++      focusRefreshAfterReconnect.current = false
 +      dialogGeneration.current += 1
 +      drafts.clear()
 +      setNotice('')
@@ -64861,7 +64927,9 @@ index 0000000000000000000000000000000000000000..bd1b50eae9019eea5e27a1b2bdfe2a0e
 +      heading.current?.focus()
 +    }}>
 +      <DialogHeader>
-+        <DialogTitle ref={heading} tabIndex={-1}>{t.title}</DialogTitle>
++        <DialogTitle onBlur={() => { focusRefreshAfterReconnect.current = false }} ref={heading} tabIndex={-1}>
++          {t.title}
++        </DialogTitle>
 +        <DialogDescription>{t.scope}</DialogDescription>
 +      </DialogHeader>
 +      {inbox.status === 'loading' && <p className="text-sm" role="status">{t.loading}</p>}
@@ -64885,7 +64953,7 @@ index 0000000000000000000000000000000000000000..bd1b50eae9019eea5e27a1b2bdfe2a0e
 +      {reconnect && <Button aria-disabled={!canReconnect(gatewayState) || undefined} className="self-start aria-disabled:opacity-60"
 +        onClick={() => {
 +          if (host.state.connectionId.get() === 'local' && canReconnect(host.state.gateway.get())) reconnect.onClick()
-+        }} ref={retryButton} size="sm" variant="secondary">{reconnect.label}</Button>}
++        }} ref={reconnectButton} size="sm" variant="secondary">{reconnect.label}</Button>}
 +    </DialogContent>
 +  </Dialog>
 +}

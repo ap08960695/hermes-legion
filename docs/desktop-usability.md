@@ -287,6 +287,11 @@ When Local is offline, open **Waiting for owner** and select **Reconnect**,
 even if there are no cached requests. The inbox shows when Hermes is
 reconnecting and when the attempt fails. Press Enter on **Reconnect** to retry.
 
+After you reconnect from the inbox, focus waits on the heading
+while the list loads. If that read fails and focus is still there,
+press Enter on **Refresh inbox** to try again. You can respond once
+the refreshed list confirms the request.
+
 If Local disconnects before an approval is confirmed, wait for the
 refreshed inbox. If the same approval is still pending, the row shows
 **Could not confirm your response. Try again.** Select the approval
