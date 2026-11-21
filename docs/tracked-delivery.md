@@ -32,6 +32,7 @@ the header controls within reach.
 **Copy workspace path** copies the full path. It and the **Model** picker
 show an outline when focused with the keyboard.
 The **Model** menu identifies the pinned model as current for assistive technology.
+Tab to **Clear model override** and press Enter or Space to use the profile default.
 In **Runs**, focus a run with a long result and press Enter or Space to read
 its full summary or error. Page Down scrolls the list.
 
