@@ -775,6 +775,8 @@ correction and canonical navigation/report/terminal progress remain open.
 
 ## Keyboard access to the wide table
 
+The workspace **Refresh** button shows a keyboard focus outline,
+including in forced colors, and keeps focus during a refresh.
 Press Tab to reach the scrollable Monitor table. Use Left and Right to
 reveal more columns. **Show more** describes how many matching rows are
 shown and how many remain. Activating it by keyboard moves focus to
