@@ -39,6 +39,14 @@ The **Title** and **Description (optional)** labels stay visible as you type in 
 When creating a task fails, **New task** shows the error above the action buttons and keeps the draft open.
 If the task is saved but its lane move fails, **Retry move** moves the existing card.
 After a lost create reply, resubmitting the same values in the open dialog recovers the saved card until it is archived.
+
+An isolated Mac Chromium test exercised both failures on one card through
+the Kanban REST router and temporary SQLite. The first POST saved a Ready
+card before its reply was dropped. Resubmitting recovered the same ID.
+The first move was rejected before reaching the router, so the card stayed
+in Ready. **Retry move** sent a PATCH for that ID, and reloading showed the
+single new card in Todo with its description intact. The test used a
+browser bridge and blocked dispatch.
 An empty assignee search reports **No matching profiles** as an accessibility status.
 In **Runs**, focus a run with a long result and press Enter or Space to read
 its full summary or error. Page Down scrolls the list.
