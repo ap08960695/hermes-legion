@@ -283,7 +283,9 @@ If Local disconnects while **Refresh inbox** has keyboard focus,
 focus moves to the **Waiting for owner** heading. You can continue
 with Tab after the refreshed list arrives.
 
-When an Owner Inbox request shows a Work card ID, select **Copy card ID**.
+For a confirmed Local request linked to a Work card, select **Open card**
+to go to that board and card when Kanban is enabled. **Copy card ID**
+is also available for linked requests.
 If the row shows a board slug, match it in the board picker. The picker
 shows the slug below a different display name, so you can distinguish
 boards with the same name. Paste the ID into that board's **Filter cards**
