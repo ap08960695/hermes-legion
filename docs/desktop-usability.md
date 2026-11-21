@@ -293,6 +293,8 @@ profile changes, wait for the inbox to refresh before opening a card.
 On cards with revision history or accepted usage, **Delivery evidence**
 shows the available revision and usage details in the same drawer.
 If the comparison is stale, use **Refresh card** to load current rounds.
+If the server cannot refresh the card, the last loaded comparison stays
+available to read and retry. Editing resumes after a successful refresh.
 **Copy card ID** is also available for linked requests. If Work says **Card unavailable on
 this board**, close the drawer and use the board picker to continue.
 If the board itself is unavailable, closing the drawer moves keyboard
