@@ -55,8 +55,10 @@ Use Tab to reach **Copy** and other message actions. An inset outline
 shows which action has keyboard focus, including in forced colors.
 
 After you drag a column narrower in a Chat Markdown table, its heading
-wraps so you can still read the full label. Double-click the divider to
-restore the original column widths.
+wraps so you can still read the full label. If the table no longer fits
+when you reopen the chat in a narrower window, scroll sideways to see the
+remaining columns.
+Double-click the divider to restore the original column widths.
 
 ## Recovering an earlier message
 
