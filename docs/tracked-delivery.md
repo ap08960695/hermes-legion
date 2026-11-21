@@ -36,6 +36,7 @@ Tab to **Clear model override** and press Enter or Space to use the profile defa
 When the assignee is known, **Model** names the profile whose settings the task inherits.
 Choosing an assignee in **New task** returns focus to **Assignee**.
 The **Title** and **Description (optional)** labels stay visible as you type in **New task**.
+When creating a task fails, **New task** shows the error above the action buttons and keeps the draft open.
 An empty assignee search reports **No matching profiles** as an accessibility status.
 In **Runs**, focus a run with a long result and press Enter or Space to read
 its full summary or error. Page Down scrolls the list.
