@@ -170,8 +170,9 @@ Open the completed THINK card and choose **Review an ACTION step**. Select the
 step and checkout, then check its declared writes. The preview identifies open
 cards with overlapping declarations in the same checkout and links to each
 card. It reports different checkouts and missing declarations separately.
-Long paths wrap inside the drawer so the overlap details and confirmation
-choices fit a narrow pane.
+On narrow windows, card properties appear below the review instead of
+beside it. Long paths wrap in the drawer. The review disclosure, step and
+checkout pickers, and action buttons show keyboard focus.
 When checkout or scope information is missing, or the card limit is reached,
 the preview marks the check as incomplete and still shows any known overlaps.
 While the check runs, **Check declared writes** keeps focus and the step and
