@@ -58,8 +58,9 @@ Search also matches the latest signal, including the Bot Chat preview.
 **Open chat** sits beside the bot or worker name, so it is visible before
 scrolling across the metrics. It uses the existing source-qualified canonical
 bot-chat action, including for a worker's parent bot. Returning to **Bots**
-in the same window keeps Monitor selected. Select **Monitor** again to go
-back to cards.
+in the same window keeps Monitor selected. Search, status and sort stay in
+place on return to the same connection and profile. Select **Monitor**
+again to go back to cards.
 Refresh and automatic updates reuse the existing roster query.
 
 ```
