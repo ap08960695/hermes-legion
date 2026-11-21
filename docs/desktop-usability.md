@@ -114,6 +114,11 @@ Device, profile for new chats and connection state remain visible above the work
 
 ## Reconnecting to Local
 
+If the main Local chat disconnects while a reply is streaming, you can
+keep reading the text already received. The activity row shows
+**Disconnected** or **Reconnecting to Hermes…** until the connection
+returns or the turn settles.
+
 Desktop reopens the Local socket after it drops, including during initial
 sidebar loading. The reconnect uses a fresh ticket from the canonical gateway
 and waits with jittered backoff capped at 15 seconds between attempts.
