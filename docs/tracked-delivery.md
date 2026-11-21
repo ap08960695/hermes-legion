@@ -16,8 +16,8 @@ When card details close, keyboard focus returns to the button that opened them.
 If that button disappeared from the same board, focus returns to **Filter cards**.
 Tabbing to a link in a folded card description expands the description and
 brings that link into view.
-Tab into **Worker log** to scroll it with the keyboard. Refreshes keep your
-place while you read earlier lines and follow new output at the end.
+Tab into **Activity** or **Worker log** to scroll with the keyboard. Refreshes
+keep your place while you read earlier entries and follow new ones at the end.
 
 When cards in the current list share a title, Track work shows their
 status, assignee and card ID so you can choose the right one.
