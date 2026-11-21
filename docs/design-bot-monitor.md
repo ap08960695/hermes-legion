@@ -776,8 +776,9 @@ correction and canonical navigation/report/terminal progress remain open.
 ## Keyboard access to the wide table
 
 Press Tab to reach the scrollable Monitor table. Use Left and Right to
-reveal more columns. Activating **Show more** by keyboard moves focus
-to the first newly shown row so the next Tab can reach its actions.
+reveal more columns. **Show more** describes how many matching rows are
+shown and how many remain. Activating it by keyboard moves focus to
+the first newly shown row so the next Tab can reach its actions.
 If a refresh removes the focused **Show more** button, focus moves
 to the last visible row’s name cell, to Search if no results match,
 or to the Monitor heading if the roster is empty.
