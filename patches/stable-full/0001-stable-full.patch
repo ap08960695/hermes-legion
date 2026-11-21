@@ -70174,7 +70174,7 @@ index 0000000000000000000000000000000000000000..b190a863d8d2a94ccd7d462c3b3fc82d
 +  )
 +}
 diff --git a/apps/desktop/src/plugins/kanban/drawer.test.tsx b/apps/desktop/src/plugins/kanban/drawer.test.tsx
-index d627664d7ff0bfdda5d7ee46f90d8fda9aa49386..006d8848ef36d5043e55e6592a5eceed8af1b252 100644
+index d627664d7ff0bfdda5d7ee46f90d8fda9aa49386..2b1b1aebec7c725304b901464013e0f99d9d8ad6 100644
 --- a/apps/desktop/src/plugins/kanban/drawer.test.tsx
 +++ b/apps/desktop/src/plugins/kanban/drawer.test.tsx
 @@ -2,3 +2,3 @@ import type { PluginRestOptions } from '@hermes/plugin-sdk'
@@ -70335,9 +70335,9 @@ index d627664d7ff0bfdda5d7ee46f90d8fda9aa49386..006d8848ef36d5043e55e6592a5eceed
 @@ -183,4 +296,8 @@ describe('task attachment compatibility', () => {
      const button = await screen.findByRole('button', { name: 'Download report.md' })
 +    button.focus()
++    fireEvent.click(button)
      fireEvent.click(button)
 -    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(true))
-+    fireEvent.click(button)
 +    await waitFor(() => expect(button.getAttribute('aria-disabled')).toBe('true'))
 +    expect((button as HTMLButtonElement).disabled).toBe(false)
 +    expect(document.activeElement).toBe(button)
@@ -70691,7 +70691,7 @@ index d627664d7ff0bfdda5d7ee46f90d8fda9aa49386..006d8848ef36d5043e55e6592a5eceed
 +    fireEvent.click(screen.getByRole('button', { name: south }))
 +    expect(onOpen.mock.calls).toEqual([['t_south-destination']])
    })
-@@ -436 +856,376 @@ describe('blocked task detail', () => {
+@@ -436 +856,420 @@ describe('blocked task detail', () => {
  })
 +
 +it('shows overlapping ACTION scopes before sending an explicit sequencing decision', async () => {
@@ -70749,6 +70749,50 @@ index d627664d7ff0bfdda5d7ee46f90d8fda9aa49386..006d8848ef36d5043e55e6592a5eceed
 +      body: expect.objectContaining({ decision: 'sequence', token: 'preview-token' })
 +    })
 +  )
++})
++
++it.each([false, true])('focuses Close after opening an ACTION conflict card (cached: %s)', async cached => {
++  detail = {
++    ...legacyDetail,
++    planned_action: {
++      actor: 'Developer',
++      steps: [{ id: 'configure', instructions: 'Update configuration.', acceptance: [], write_scope: ['src/config'] }]
++    }
++  }
++  const peer = {
++    ...legacyDetail,
++    task: { ...legacyDetail.task, id: 't_tester', title: 'Test config', status: 'running' },
++    attachments: []
++  }
++  const respond = rest.getMockImplementation()!
++  rest.mockImplementation(async (path, options) => {
++    if (path === '/tasks/t_tester') return peer
++    return respond(path.replace('/tasks/t_tester/log?', '/tasks/t_example/log?'), options)
++  })
++  if (cached) client.setQueryData(taskKey('local', '', peer.task.id), peer)
++  const onOpen = vi.fn()
++  const drawer = (id: string) => (
++    <QueryClientProvider client={client}>
++      <TaskDrawer columns={['todo', 'running', 'done']} id={id} onClose={vi.fn()} onOpen={onOpen} />
++    </QueryClientProvider>
++  )
++  try {
++    const { rerender } = render(drawer(legacyDetail.task.id))
++    fireEvent.click(await screen.findByText('Review an ACTION step'))
++    fireEvent.click(screen.getByRole('button', { name: 'Check declared writes' }))
++    const conflict = await screen.findByRole('button', { name: peer.task.title })
++    conflict.focus()
++    fireEvent.click(conflict)
++    expect(onOpen).toHaveBeenCalledWith(peer.task.id)
++
++    rerender(drawer(peer.task.id))
++    const dialog = await screen.findByRole('dialog', { name: peer.task.title })
++    expect(conflict.isConnected).toBe(false)
++    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: en.close }))
++    expect(rest.mock.calls.filter(([path]) => path.endsWith('/planned-action'))).toHaveLength(1)
++  } finally {
++    rest.mockImplementation(respond)
++  }
 +})
 +
 +it('identifies same-title ACTION conflicts by the card each button opens', async () => {
@@ -71069,7 +71113,7 @@ index d627664d7ff0bfdda5d7ee46f90d8fda9aa49386..006d8848ef36d5043e55e6592a5eceed
 +  }
 +)
 diff --git a/apps/desktop/src/plugins/kanban/drawer.tsx b/apps/desktop/src/plugins/kanban/drawer.tsx
-index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..0086eed3ad4badd1bc9879f9997a0477f0e9418f 100644
+index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..6998d01dc5d36708c9c1d5d4c7856d98dc3a5d89 100644
 --- a/apps/desktop/src/plugins/kanban/drawer.tsx
 +++ b/apps/desktop/src/plugins/kanban/drawer.tsx
 @@ -27,7 +27,7 @@ import {
@@ -71659,19 +71703,22 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..0086eed3ad4badd1bc9879f9997a0477
        </div>
 -      {body}
      </section>
-@@ -832,2 +973,34 @@ function FeedTabs({
+@@ -832,2 +973,37 @@ function FeedTabs({
 
 +const isTaskUnavailable = (error: unknown) =>
 +  error instanceof Error && /^(?:Error invoking remote method 'hermes:api': Error: )?404:/.test(error.message)
 +
-+// Capture focus before the unavailable view removes the focused control.
++// Capture focus before a card change removes the focused control.
 +class TaskDrawerFocus extends Component<{
 +  closeButton: RefObject<HTMLButtonElement | null>
++  taskId: string
 +  unavailable: boolean
 +}> {
 +  getSnapshotBeforeUpdate(previous: this['props']): Element | null {
 +    const close = this.props.closeButton.current
-+    if (!this.props.unavailable || previous.unavailable || !close) return null
++    const changedCard = previous.taskId !== this.props.taskId
++    const becameUnavailable = this.props.unavailable && !previous.unavailable
++    if (!close || (!changedCard && !becameUnavailable)) return null
 +
 +    const focused = close.ownerDocument.activeElement
 +    return close.closest('[role="dialog"]')?.contains(focused) ? focused : null
@@ -71694,15 +71741,15 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..0086eed3ad4badd1bc9879f9997a0477
 +}
 +
  export function TaskDrawer({
-@@ -836,2 +1009,3 @@ export function TaskDrawer({
+@@ -836,2 +1012,3 @@ export function TaskDrawer({
    onClose,
 +  onCloseAutoFocus,
    onOpen
-@@ -841,2 +1015,3 @@ export function TaskDrawer({
+@@ -841,2 +1018,3 @@ export function TaskDrawer({
    onClose: () => void
 +  onCloseAutoFocus?: (event: Event) => void
    onOpen: (id: string) => void
-@@ -847,2 +1022,7 @@ export function TaskDrawer({
+@@ -847,2 +1025,7 @@ export function TaskDrawer({
    const slug = useValue($boardSlug)
 +  const closeButton = useRef<HTMLButtonElement>(null)
 +
@@ -71710,7 +71757,7 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..0086eed3ad4badd1bc9879f9997a0477
 +  // Preserve TanStack's three client retries when no retry policy is configured.
 +  const retry = qc.defaultQueryOptions({ queryKey }).retry ?? 3
 
-@@ -852,7 +1032,14 @@ export function TaskDrawer({
+@@ -852,7 +1035,14 @@ export function TaskDrawer({
      queryFn: () => fetchTask(id!),
 -    queryKey: taskKey(scope, slug, id ?? ''),
 -    refetchInterval: 30_000
@@ -71728,12 +71775,12 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..0086eed3ad4badd1bc9879f9997a0477
 +  const taskUnavailable = isTaskUnavailable(error)
 +  const task = taskUnavailable ? undefined : detail?.task
    const running = task?.status === 'running'
-@@ -861,3 +1048,3 @@ export function TaskDrawer({
+@@ -861,3 +1051,3 @@ export function TaskDrawer({
    const { data: log } = useQuery({
 -    enabled: query => !!id && routedToScope(query),
 +    enabled: query => !!id && !!task && routedToScope(query),
      queryFn: () => fetchLog(id!),
-@@ -915,4 +1102,6 @@ export function TaskDrawer({
+@@ -915,4 +1105,6 @@ export function TaskDrawer({
    const requeueMut = useMutation({
 -    mutationFn: async (body: string) => {
 +    mutationFn: async ({ body, onPosted }: { body: string; onPosted: () => void }) => {
@@ -71741,12 +71788,12 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..0086eed3ad4badd1bc9879f9997a0477
 +      // A failed reclaim must not make the posted note look unsent.
 +      onPosted()
        await reclaimTask(id!)
-@@ -941,3 +1130,3 @@ export function TaskDrawer({
+@@ -941,3 +1133,3 @@ export function TaskDrawer({
 
 -  const errorMessage = error ? errText(error) : null
 +  const errorMessage = taskUnavailable ? k.taskUnavailable : error ? errText(error) : null
 
-@@ -964,5 +1153,4 @@ export function TaskDrawer({
+@@ -964,5 +1156,4 @@ export function TaskDrawer({
    // assignee, actions and model menus open inside it (no z-index rung needed).
 -  // The body box is split into two independently scrolling columns, so it
 -  // clips instead of scrolling itself; its height follows the content up to
@@ -71754,31 +71801,31 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..0086eed3ad4badd1bc9879f9997a0477
 +  // Wide drawers scroll each column independently. Narrow drawers stack both
 +  // columns in one scroll area so the details keep the full width.
    return (
-@@ -973,5 +1161,7 @@ export function TaskDrawer({
+@@ -973,5 +1164,7 @@ export function TaskDrawer({
          className="w-[min(62rem,94vw)] max-w-none"
 +        onCloseAutoFocus={onCloseAutoFocus}
          showCloseButton={false}
        >
 -        <header className="flex flex-col gap-2 px-5 pt-4 pb-3">
-+        <TaskDrawerFocus closeButton={closeButton} unavailable={taskUnavailable} />
++        <TaskDrawerFocus closeButton={closeButton} taskId={id} unavailable={taskUnavailable} />
 +        <header className="kanban-card-header flex flex-col gap-2 px-5 pt-4 pb-3">
            <div className="flex items-center gap-2">
-@@ -987,3 +1177,3 @@ export function TaskDrawer({
+@@ -987,3 +1180,3 @@ export function TaskDrawer({
              )}
 -            <div className="ml-auto flex items-center gap-0.5">
 +            <div className="ml-auto flex shrink-0 items-center gap-0.5">
                {task && (
-@@ -1029,3 +1219,3 @@ export function TaskDrawer({
+@@ -1029,3 +1222,3 @@ export function TaskDrawer({
                )}
 -              <Button aria-label={k.close} onClick={onClose} size="icon-xs" variant="ghost">
 +              <Button aria-label={k.close} onClick={onClose} ref={closeButton} size="icon-xs" variant="ghost">
                  <Codicon name="close" />
-@@ -1034,3 +1224,3 @@ export function TaskDrawer({
+@@ -1034,3 +1227,3 @@ export function TaskDrawer({
            </div>
 -          <DialogTitle className="leading-snug" data-selectable-text="true">
 +          <DialogTitle className="leading-snug [overflow-wrap:anywhere]" data-selectable-text="true">
              {task ? task.title || task.id : shortId(id)}
-@@ -1041,3 +1231,7 @@ export function TaskDrawer({
+@@ -1041,3 +1234,7 @@ export function TaskDrawer({
            {errorMessage ? (
 -            <ErrorState title={errorMessage} />
 +            <ErrorState
@@ -71787,14 +71834,14 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..0086eed3ad4badd1bc9879f9997a0477
 +              title={errorMessage}
 +            />
            ) : !detail || !task ? (
-@@ -1047,4 +1241,4 @@ export function TaskDrawer({
+@@ -1047,4 +1244,4 @@ export function TaskDrawer({
            ) : (
 -            <div className="flex min-h-0 flex-1">
 -              <div className="min-w-0 flex-1 overflow-y-auto px-5 pb-5">
 +            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto sm:flex-row sm:overflow-visible">
 +              <div className="min-w-0 px-5 pb-5 sm:flex-1 sm:overflow-y-auto">
                  <div className="flex flex-col gap-5">
-@@ -1058,2 +1252,12 @@ export function TaskDrawer({
+@@ -1058,2 +1255,12 @@ export function TaskDrawer({
 
 +                  {detail.planned_action && (
 +                    <PlannedActionReview
@@ -71807,13 +71854,13 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..0086eed3ad4badd1bc9879f9997a0477
 +                  )}
 +
                    {task.diagnostics && task.diagnostics.length > 0 && (
-@@ -1075,3 +1279,4 @@ export function TaskDrawer({
+@@ -1075,3 +1282,4 @@ export function TaskDrawer({
                      body={task.body}
 -                    onSave={body => void mutate(() => patchTask(task.id, { body }))()}
 +                    key={JSON.stringify(['description', scope, slug, task.id])}
 +                    onSave={(body, onSaved) => mutate(() => patchTask(task.id, { body }), onSaved)()}
                    />
-@@ -1093,5 +1298,6 @@ export function TaskDrawer({
+@@ -1093,5 +1301,6 @@ export function TaskDrawer({
                      detail={detail}
 +                    key={JSON.stringify([scope, slug, task.id])}
                      log={log ?? null}
@@ -71822,12 +71869,12 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..0086eed3ad4badd1bc9879f9997a0477
 +                    onComment={(body, onPosted) => commentMut.mutateAsync(body).then(onPosted)}
 +                    onRequeue={(body, onPosted) => requeueMut.mutateAsync({ body, onPosted })}
                      running={running}
-@@ -1100,3 +1306,3 @@ export function TaskDrawer({
+@@ -1100,3 +1309,3 @@ export function TaskDrawer({
                </div>
 -              <aside className="flex w-64 shrink-0 flex-col gap-4 overflow-y-auto border-l border-(--ui-stroke-tertiary) px-4 pb-5">
 +              <aside className="flex shrink-0 flex-col gap-4 border-t border-(--ui-stroke-tertiary) px-5 py-5 sm:w-64 sm:overflow-y-auto sm:border-t-0 sm:border-l sm:px-4 sm:pt-0">
                  <MetaRow label={k.assignee}>
-@@ -1147,2 +1353,3 @@ export function TaskDrawer({
+@@ -1147,2 +1356,3 @@ export function TaskDrawer({
                    <ModelOverrideField
 +                    assignee={task.assignee || defaultAssignee || undefined}
                      onChange={next => void mutate(() => patchTask(task.id, overridePatch(next)))()}
