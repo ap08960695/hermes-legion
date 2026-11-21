@@ -38,9 +38,10 @@ it. In Chat, the focused source scrolls into view above the composer. Source
 keeps focus while the composer finishes opening a saved chat. **Copy source**
 copies the original text.
 **Save SVG** saves a scalable image, and **Save PNG**
-saves a raster image. The button stays focused during export. If saving
-fails, select **Save PNG** again to retry. The diagram uses the app's light or dark appearance at
-render time. A failed diagram shows a short explanation and its source. Choose
+saves a raster image. Both formats use the diagram title in the suggested
+filename when a title is available. The button stays focused during export.
+If saving fails, select **Save PNG** again to retry. The diagram uses the app's
+light or dark appearance at render time. A failed diagram shows a short explanation and its source. Choose
 **Retry** after a timeout to render again while keeping the source visible. If
 focus is on **Retry** or **Copy source**, it moves to **Open diagram** when
 the diagram returns. If a different error removes **Retry**, focus moves
