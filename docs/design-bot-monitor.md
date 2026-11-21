@@ -792,7 +792,8 @@ Save and Cancel within view. The visible **Title**, **Description** and
 **SOUL.md** labels give their fields accessible names. The shared model
 picker names Provider and Model from their visible labels in dropdown
 and text-entry modes. With multiple connections, **Create on** names
-the destination dropdown.
+the destination dropdown. **Advanced** exposes its expanded state in
+both New bot and Edit profile.
 Press Tab to reach the scrollable Monitor table. Use Left and Right to
 reveal more columns. **Show more** describes how many matching rows are
 shown and how many remain. Activating it by keyboard moves focus to
