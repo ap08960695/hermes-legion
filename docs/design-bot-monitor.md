@@ -782,6 +782,9 @@ If a refresh reorders the focused row, Monitor keeps its control in view.
 If the row moves beyond the displayed page, focus goes to **Show more**.
 If a refresh disables the focused **Open chat** button, focus moves
 to that bot’s name cell so keyboard navigation can continue.
+When a focused worker row disappears and there are no more pages,
+focus returns to the parent bot’s name cell or to Search if a filter
+hides the parent. If the roster is empty, focus goes to the heading.
 The table and its controls show a focus outline,
 including in high-contrast palettes. Report buttons name the bot and
 its connection. The report dialog wraps long names and saved text. Its
