@@ -44,6 +44,11 @@ The full local macOS Desktop test run on integration commit `d1e4800`
 discovered 1,836 test files. It recorded 16,795 passing tests, 37 skips
 and zero failures.
 
+The declared macOS Python selection covered all 1,547 files. The full
+sweep reported 24 test failures across seven files with harness issues.
+All seven files passed on corrected reruns, giving 15,021 passing tests
+and 228 skips across the combined results.
+
 Loopback OpenSSH checks cover connection reuse, helper admission and cleanup,
 and reconnect backoff. The owner's installed Hermes.app, the real ai backend,
 and tablet-to-Desktop answer recovery are outside this release's verification.
