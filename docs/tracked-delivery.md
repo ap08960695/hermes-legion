@@ -31,6 +31,7 @@ Long card titles and status labels wrap to keep the full text readable and
 the header controls within reach.
 **Copy workspace path** copies the full path. It and the **Model** picker
 show an outline when focused with the keyboard.
+The **Model** menu identifies the pinned model as current for assistive technology.
 In **Runs**, focus a run with a long result and press Enter or Space to read
 its full summary or error. Page Down scrolls the list.
 
