@@ -782,7 +782,9 @@ refreshing the roster. **New bot** and **New group chat** also show
 keyboard focus. When a creation dialog was opened by keyboard, Escape
 or Cancel returns focus to its button if the button is still available.
 In **New bot**, the Name field shows a keyboard outline on entry.
-On a single Local connection, Tab moves from Name to Title.
+On a single Local connection, Tab moves from Name to Title. The visible
+Name, Title, and Description labels also name their fields for
+assistive technology.
 Press Tab to reach the scrollable Monitor table. Use Left and Right to
 reveal more columns. **Show more** describes how many matching rows are
 shown and how many remain. Activating it by keyboard moves focus to
