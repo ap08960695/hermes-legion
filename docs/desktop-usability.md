@@ -149,6 +149,10 @@ logs while keeping the recovery buttons reachable. Opening **Gateway settings**
 from recovery moves keyboard focus to **Back**. Choose **Back** or press Escape
 in Gateway settings to return to recovery and focus **Gateway settings**.
 **Details** keeps its open or closed state when you return to the same startup error.
+Under **Connection mode**, the selected card has a checkmark and exposes
+its selection to assistive technology. Tab moves the focus outline between
+cards. Enter or Space chooses the focused mode in the form. Saving is a
+separate action.
 In a short window, scroll the settings panel to reach **Save and reconnect**.
 While Local applies the settings, the recovery panel shows **Gateway
 connection restarting**.
