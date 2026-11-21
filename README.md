@@ -4,7 +4,7 @@
 
 An independent open-source companion kit for [Hermes Agent](https://github.com/NousResearch/hermes-agent), with reviewed source patches, operating skills, and role templates.
 
-[**v0.35.0 · Desktop Characters notes**](docs/release-notes-v0.35.0.md) · [**MIT license**](LICENSE) · [**Mac quick start**](#quick-start-on-mac) · [**Changelog**](CHANGELOG.md)
+[**v0.36.0 · Owner Inbox and Work Cards**](docs/release-notes-v0.36.0.md) · [**MIT license**](LICENSE) · [**Mac quick start**](#quick-start-on-mac) · [**Changelog**](CHANGELOG.md)
 
 ![Hermes Bot Monitor lists two bots and one worker, with six small generated desktop pets shown beneath the table.](docs/images/hero.webp)
 
@@ -12,7 +12,7 @@ An independent open-source companion kit for [Hermes Agent](https://github.com/N
 
 ## Quick start on Mac
 
-1. Use this source checkout or extract a source ZIP from [Releases](https://github.com/ap08960695/hermes-legion/releases). Desktop Characters uses the v0.35.0 source kit. Run this in Terminal from the source directory.
+1. Use this source checkout or extract the v0.36.0 source ZIP from [Releases](https://github.com/ap08960695/hermes-legion/releases). Run this in Terminal from the source directory.
 
    ```sh
    python3 scripts/verify_release.py
@@ -91,7 +91,7 @@ Open a delivered PDF in the built-in viewer, or glance at Markdown and CSV conte
 | **Separate bot cards.** You opened individual cards for context. ![Older Bots view showing two separate cards.](docs/images/bots-before-monitor.webp) | **One table.** Bot and worker activity can be searched, filtered, and sorted together. ![Bot Monitor table with worker activity, usage, models, and report actions.](docs/images/bot-monitor.webp) |
 | **Before manual refresh.** A fixture sprite read timed out. ![The Characters switch is on at Large and the fixture scene has no active characters.](docs/images/characters-before-manual-refresh.webp) | **After Refresh Characters.** The fixture actor returns. ![The same fixture shows the Writer character after a successful manual refresh.](docs/images/characters-after-manual-refresh.webp) |
 
-[Desktop Characters in v0.35.0](docs/release-notes-v0.35.0.md) · [Bot Monitor in v0.34.0](docs/release-notes-v0.34.0.md) · [Full changelog](CHANGELOG.md)
+[Owner Inbox and Work Cards in v0.36.0](docs/release-notes-v0.36.0.md) · [Desktop Characters in v0.35.0](docs/release-notes-v0.35.0.md) · [Bot Monitor in v0.34.0](docs/release-notes-v0.34.0.md) · [Full changelog](CHANGELOG.md)
 
 ## FAQ
 
@@ -105,7 +105,7 @@ Local uses the gateway on this Mac. The ai option refers to a separately configu
 
 ### Why is a character or button missing?
 
-Check that your trial uses the v0.35.0 source kit, **Characters** is on, and the assigned pack is installed in the active profile. If a temporary gateway error hid an assigned character, use **Refresh Characters** in the macOS menu bar or **Refresh** in Bots.
+Check that your trial uses the v0.35.0 source kit or later, **Characters** is on, and the assigned pack is installed in the active profile. If a temporary gateway error hid an assigned character, use **Refresh Characters** in the macOS menu bar or **Refresh** in Bots.
 
 ### Why is agent-desktop unavailable?
 

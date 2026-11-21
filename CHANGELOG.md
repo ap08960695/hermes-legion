@@ -5,6 +5,18 @@ supported update or Desktop rebuild path. This kit does not install a rebuilt
 Hermes.app. Linked notes identify opt-in memory settings and admission guards
 that apply after adoption. Each entry states its adoption and verification limits.
 
+## v0.36.0 — Owner Inbox and Work Cards
+
+Answer waiting bots from one inbox on the active connection, then open the
+linked chat or Work card. Work flags recorded path overlaps and shows earlier
+revision rounds, available text diffs, and usage for reviewed results. Accounts
+shows the active profile's provider. Chat retains eligible unsent text, and
+saved-message search can reopen older conversations. Local reconnect is
+available in place, SSH status explains known waiting and unavailable states,
+and Mermaid renders offline. Keyboard and narrow-window fixes span Inbox,
+Work, Bots, Settings, chat, and previews. Apply the source kit to a separate
+Local build. [Release notes and Mac fixture screenshots](docs/release-notes-v0.36.0.md).
+
 ## v0.35.0 — Desktop Characters
 
 Turn **Characters** on and choose Small, Medium or Large from the Desktop

@@ -8668,6 +8668,15 @@ index 25f6be5afdd223c7e4ce48c37075a1f034f19150..55ac8062abfbd2ce601992ee438165ce
 +    pumpAdmissions()
 +  })
  }
+diff --git a/apps/desktop/electron/local-gateway.test-helpers.ts b/apps/desktop/electron/local-gateway.test-helpers.ts
+index 82ce79a2175cbae08dceafd97fe7baeb36bfaa3a..1b5b3304ac19136858df3217d2ee7776c699aa1f 100644
+--- a/apps/desktop/electron/local-gateway.test-helpers.ts
++++ b/apps/desktop/electron/local-gateway.test-helpers.ts
+@@ -17,3 +17,3 @@ export async function shortSocketTmpDir(prefix: string): Promise<string> {
+   // no-tmp: ok — macOS AF_UNIX sun_path is 104 bytes; os.tmpdir() there is too long for the socket.
+-  const base = os.platform() === 'darwin' ? '/tmp' : os.tmpdir()
++  const base = process.env.HERMES_TEST_SOCKET_TMPDIR || (os.platform() === 'darwin' ? '/tmp' : os.tmpdir())
+
 diff --git a/apps/desktop/electron/local-gateway.ts b/apps/desktop/electron/local-gateway.ts
 index ba80e09a90f223a4b14c8046d5f247db2560f023..893bcc5d7a03b957d1c72f0e8f9dfdf8eb2c59f9 100644
 --- a/apps/desktop/electron/local-gateway.ts
@@ -12894,7 +12903,7 @@ index bdd76274b0e89b3a527c55781dfb4c81738bdd26..853c090184960d3b53686ab2a843a5f4
 +  assert.ok(!helpProbe.includes('set -m'), 'capability probe must stay in the supervised group')
  })
 diff --git a/apps/desktop/electron/remote-lifecycle.ts b/apps/desktop/electron/remote-lifecycle.ts
-index 5ec95d2ad476bbf08534f6d08a025301a7c4af55..bc39482d4d701337f15161649bf3c68f5473cebe 100644
+index 5ec95d2ad476bbf08534f6d08a025301a7c4af55..92856b5d44f0e64126015e7e83e914f60909add2 100644
 --- a/apps/desktop/electron/remote-lifecycle.ts
 +++ b/apps/desktop/electron/remote-lifecycle.ts
 @@ -33,3 +33,3 @@ import { backendProfileArg } from './profile-id-guard'
@@ -12909,7 +12918,80 @@ index 5ec95d2ad476bbf08534f6d08a025301a7c4af55..bc39482d4d701337f15161649bf3c68f
 -    const out = (await ssh.exec(withRemoteTimeout(`${expandRemotePath(hermesPath)} --version 2>&1`))).trim()
 +    const out = (await ssh.exec(`${expandRemotePath(hermesPath)} --version 2>&1`)).trim()
 
-@@ -1146,5 +1144,9 @@ function buildSpawnCommand(hermesPath, profile, opts: any = {}) {
+@@ -649,2 +647,28 @@ async function remoteProcessCreationTime(ssh, pid) {
+
++// Darwin ps flattens argv and loses boundaries for arguments containing spaces.
++const remoteProcessArgv = String.raw`
++def process_argv(pid):
++ if sys.platform=="darwin":
++  import ctypes,struct
++  sysctl=ctypes.CDLL(None).sysctl
++  mib=(ctypes.c_int*3)(1,49,pid)  # CTL_KERN, KERN_PROCARGS2
++  size=ctypes.c_size_t()
++  if sysctl(mib,3,None,ctypes.byref(size),None,0)!=0 or size.value<struct.calcsize("@i"):return []
++  buffer=ctypes.create_string_buffer(size.value)
++  if sysctl(mib,3,buffer,ctypes.byref(size),None,0)!=0:return []
++  data=buffer.raw[:size.value]
++  if len(data)<struct.calcsize("@i"):return []
++  argc,=struct.unpack_from("@i",data)
++  if argc<1:return []
++  _,separator,tail=data[struct.calcsize("@i"):].partition(b"\0")
++  args=tail.lstrip(b"\0").split(b"\0",argc)
++  return [os.fsdecode(arg) for arg in args[:-1]] if separator and len(args)==argc+1 else []
++ try:
++  with open(f"/proc/{pid}/cmdline","rb") as file:raw=file.read()
++  return [arg.decode("utf-8","surrogateescape") for arg in raw.split(b"\0") if arg]
++ except OSError:
++  try:return shlex.split(subprocess.check_output(["ps","-ww","-o","command=","-p",str(pid)],text=True).strip())
++  except (OSError,subprocess.CalledProcessError,ValueError):return []
++`
++
+ // A pid is "provably ours" only if its remote cmdline carries our dashboard
+@@ -679,12 +703,4 @@ async function pidIsOurDashboard(
+     `nonce=${shq(spawnNonce)}\n` +
+-    'try:\n' +
+-    ' raw=open(f"/proc/{pid}/cmdline","rb").read()\n' +
+-    ' args=[x.decode("utf-8","surrogateescape") for x in raw.split(b"\\0") if x]\n' +
+-    'except OSError:\n' +
+-    ' try:\n' +
+-    '  line=subprocess.check_output(["ps","-ww","-o","command=","-p",str(pid)],text=True).strip()\n' +
+-    ' except subprocess.CalledProcessError:\n' +
+-    '  # pid already gone — a dead process is FOREIGN, not a transport error\n' +
+-    '  print("FOREIGN");sys.exit(0)\n' +
+-    ' args=shlex.split(line)\n' +
++    remoteProcessArgv +
++    'args=process_argv(pid)\n' +
+     'ok=False\n' +
+@@ -894,23 +910,8 @@ def creation():
+
+-def argv():
+- try:
+-  raw=open(f"/proc/{pid}/cmdline","rb").read()
+-  return [part.decode("utf-8","surrogateescape") for part in raw.split(b"\\0") if part]
+- except OSError:
+-  try:return shlex.split(subprocess.check_output(["ps","-ww","-o","command=","-p",str(pid)],text=True).strip())
+-  except (OSError,subprocess.CalledProcessError,ValueError):return []
+-
++${remoteProcessArgv}
+ def identity_before_signal():
+- # Darwin's lstart has one-second resolution. Read the start time and the
+- # complete argv in one ps call immediately before signalling; the random
+- # ownership nonce is the discriminator for a same-second PID reuse. A
+- # same-second reuse with a forged/repeated nonce remains a residual limitation.
+- if sys.platform=="darwin":
+-  try:
+-   line=subprocess.check_output(["ps","-ww","-p",str(pid),"-o","lstart=","-o","command="],text=True).strip()
+-   prefix=expected_creation.removeprefix("darwin:")
+-   if not prefix or not line.startswith(prefix):return "",[]
+-   return "darwin:"+prefix,shlex.split(line[len(prefix):].strip())
+-  except (OSError,subprocess.CalledProcessError,ValueError):return "",[]
+- return creation(),argv()
++ started=creation()
++ args=process_argv(pid)
++ if sys.platform=="darwin" and creation()!=started:return "",[]
++ return started,args
+
+@@ -1146,5 +1147,9 @@ function buildSpawnCommand(hermesPath, profile, opts: any = {}) {
    const detachedShell: string = `eval "exec $1>&-"; ${dashCmd} </dev/null >> ${logPath} 2>&1 & echo $!`
 +
    // The inner shell backgrounds Hermes and reports its PID; backgrounding the
@@ -12920,7 +13002,7 @@ index 5ec95d2ad476bbf08534f6d08a025301a7c4af55..bc39482d4d701337f15161649bf3c68f
 +
 +  const detachedSpawn: string = `child=$(python3 -I -S -c ${shq(detach)} sh -c ${shq(detachedShell)} hermes-update-child "$1")`
 
-@@ -1205,7 +1207,4 @@ async function remoteSupportsSshOwnership(ssh, hermesPath) {
+@@ -1205,7 +1210,4 @@ async function remoteSupportsSshOwnership(ssh, hermesPath) {
 
 -  // The watchdog wraps the inner `serve --help` so the hung CLI is its direct
 -  // child and dies remotely instead of orphaning (#110478). The `$( (` space
@@ -13314,7 +13396,7 @@ index 0000000000000000000000000000000000000000..491ab676b0fc5df7c9150d96c4dc842f
 +  return { clear, disconnect, snapshot, start }
 +}
 diff --git a/apps/desktop/electron/ssh-connection.test.ts b/apps/desktop/electron/ssh-connection.test.ts
-index 9ccec9b66efc4d4ff815af295322348c0dc25fc4..5b1f6bd24dcdebc39b771a0dc29c8cced0966243 100644
+index 9ccec9b66efc4d4ff815af295322348c0dc25fc4..88e050b92273db0e87057556fc868e5e1ca632a4 100644
 --- a/apps/desktop/electron/ssh-connection.test.ts
 +++ b/apps/desktop/electron/ssh-connection.test.ts
 @@ -8,3 +8,3 @@ import { promisify } from 'node:util'
@@ -13360,12 +13442,27 @@ index 9ccec9b66efc4d4ff815af295322348c0dc25fc4..5b1f6bd24dcdebc39b771a0dc29c8cce
 +  }
 +}
 
-@@ -124,3 +149,3 @@ test.runIf(process.platform !== 'win32')(
+@@ -115,3 +140,3 @@ test('controlSocketPath default base stays under sun_path even with the temp-lis
+ test.runIf(process.platform !== 'win32')(
+-  'deep HOME uses a private short directory and binds a real listener',
++  'deep HOME falls back to a short path and a private control directory can bind a real listener',
+   async () => {
+@@ -124,5 +149,7 @@ test.runIf(process.platform !== 'win32')(
        const spawnFn = scriptedSpawn(args => (args.includes('check') ? { code: 255 } : { code: 0 }))
--      const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, mux: true })
-+      const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, mux: true, controlDir: undefined })
-       assert.equal(conn.controlPath, controlSocketPath('me', 'box', 22))
-@@ -263,4 +288,7 @@ function fakeChild({ code = 0, signal = null, stdout = '', stderr = '', errorEve
++      const fallbackPath = controlSocketPath('me', 'box', 22)
++      assert.ok(!fallbackPath.startsWith(process.env.HOME))
++      assert.ok(Buffer.byteLength(`${fallbackPath}.0123456789abcdef`) <= 104)
++
+       const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, mux: true })
+-      assert.equal(conn.controlPath, controlSocketPath('me', 'box', 22))
+-      assert.ok(!conn.controlPath.startsWith(process.env.HOME))
+       await conn.open()
+@@ -133,3 +160,3 @@ test.runIf(process.platform !== 'win32')(
+       assert.equal(st.mode & 0o777, 0o700)
+-      const temporaryPath = `${conn.controlPath}.0123456789abcdef`
++      const temporaryPath = path.relative(process.cwd(), `${conn.controlPath}.0123456789abcdef`)
+       assert.ok(Buffer.byteLength(temporaryPath) <= 104)
+@@ -263,4 +290,7 @@ function fakeChild({ code = 0, signal = null, stdout = '', stderr = '', errorEve
 
 -  child.kill = () => {
 +  child.kill = (signal = 'SIGTERM') => {
@@ -13374,22 +13471,22 @@ index 9ccec9b66efc4d4ff815af295322348c0dc25fc4..5b1f6bd24dcdebc39b771a0dc29c8cce
 +
 +    return true
    }
-@@ -345,3 +373,3 @@ test('open() establishes the master when not already alive', async () => {
+@@ -345,3 +375,3 @@ test('open() establishes the master when not already alive', async () => {
 
 -  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, mux: true, controlDir: '/tmp/d' })
 +  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, mux: true, controlDir })
    await conn.open()
-@@ -355,3 +383,3 @@ test('open() abort kills an in-flight SSH child instead of waiting for timeout',
+@@ -355,3 +385,3 @@ test('open() abort kills an in-flight SSH child instead of waiting for timeout',
      { host: 'box', user: 'me' },
 -    { spawnFn: () => child, controlDir: '/tmp/d', connectTimeoutMs: 1000 }
 +    { spawnFn: () => child, controlDir, connectTimeoutMs: 1000 }
    )
-@@ -377,3 +405,3 @@ test('open() is a no-op when the master is already alive and execs verify', asyn
+@@ -377,3 +407,3 @@ test('open() is a no-op when the master is already alive and execs verify', asyn
 
 -  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, mux: true, controlDir: '/tmp/d' })
 +  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, mux: true, controlDir })
    await conn.open()
-@@ -412,6 +440,3 @@ test('open() evicts a wedged master (check passes, exec hangs) and dials fresh',
+@@ -412,6 +442,3 @@ test('open() evicts a wedged master (check passes, exec hangs) and dials fresh',
 
 -  const conn = new SshConnection(
 -    { host: 'box', user: 'me' },
@@ -13397,7 +13494,7 @@ index 9ccec9b66efc4d4ff815af295322348c0dc25fc4..5b1f6bd24dcdebc39b771a0dc29c8cce
 -  )
 +  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, mux: true, controlDir, connectTimeoutMs: 50 })
 
-@@ -425,24 +450,17 @@ test('open() evicts a wedged master (check passes, exec hangs) and dials fresh',
+@@ -425,24 +452,17 @@ test('open() evicts a wedged master (check passes, exec hangs) and dials fresh',
 
 -test('close() removes the control socket when -O exit fails', async () => {
 -  const dir = path.join(os.tmpdir(), `hermes-ssh-close-${process.pid}-${Date.now()}`)
@@ -13407,18 +13504,18 @@ index 9ccec9b66efc4d4ff815af295322348c0dc25fc4..5b1f6bd24dcdebc39b771a0dc29c8cce
 -    if (args.includes('check')) {
 -      return { code: 255 }
 -    } // not alive → open dials master
-+test('failed mux close preserves the socket and refuses a replacement master', async () => {
-+  const spawnFn = scriptedSpawn(args => (args.includes('-M') ? { code: 0 } : { code: 255 }))
-+  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, mux: true })
-+  const other = new SshConnection({ host: 'box', user: 'other' }, { spawnFn, mux: true })
-
+-
 -    if (args.includes('-M')) {
 -      return { code: 0 }
 -    }
 -
 -    return { code: 255, stderr: 'mux: master gone' } // -O exit fails
 -  })
--
++test('failed mux close preserves the socket and refuses a replacement master', async () => {
++  const spawnFn = scriptedSpawn(args => (args.includes('-M') ? { code: 0 } : { code: 255 }))
++  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, mux: true })
++  const other = new SshConnection({ host: 'box', user: 'other' }, { spawnFn, mux: true })
+
 -  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, mux: true, controlDir: dir })
    await conn.open()
 -  fs.writeFileSync(conn.controlPath, '') // simulate the lingering socket file
@@ -13434,99 +13531,99 @@ index 9ccec9b66efc4d4ff815af295322348c0dc25fc4..5b1f6bd24dcdebc39b771a0dc29c8cce
 +  await assert.rejects(conn.open(), /control socket is still present/)
 +  assert.equal(spawnFn.calls.filter(args => args.includes('-M')).length, 1)
  })
-@@ -476,3 +494,3 @@ test('open() surfaces a classified auth error', async () => {
+@@ -476,3 +496,3 @@ test('open() surfaces a classified auth error', async () => {
 
 -  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir: '/tmp/d' })
 +  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir })
    await assert.rejects(
-@@ -502,3 +520,3 @@ test('open() turns a Tailscale browser-check timeout into safe interactive-auth
+@@ -502,3 +522,3 @@ test('open() turns a Tailscale browser-check timeout into safe interactive-auth
 
 -  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir: '/tmp/d', connectTimeoutMs: 20 })
 +  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir, connectTimeoutMs: 20 })
 
-@@ -518,4 +536,4 @@ test('open() turns a Tailscale browser-check timeout into safe interactive-auth
+@@ -518,4 +538,4 @@ test('open() turns a Tailscale browser-check timeout into safe interactive-auth
  test('exec() returns stdout on success and rejects (classified) on failure', async () => {
 -  const okSpawn = scriptedSpawn([{ code: 0, stdout: 'Linux\n' }])
 -  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn: okSpawn, controlDir: '/tmp/d' })
 +  const okSpawn = scriptedSpawn(args => ({ code: 0, stdout: (args.at(-1) === 'uname -s' ? '' : SSH_HELPER_ADMITTED) + 'Linux\n' }))
 +  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn: okSpawn, controlDir })
    assert.equal((await conn.exec('uname -s')).trim(), 'Linux')
-@@ -523,3 +541,3 @@ test('exec() returns stdout on success and rejects (classified) on failure', asy
+@@ -523,3 +543,3 @@ test('exec() returns stdout on success and rejects (classified) on failure', asy
    const failSpawn = scriptedSpawn([{ code: 1, stderr: 'ssh: Could not resolve hostname box' }])
 -  const conn2 = new SshConnection({ host: 'box', user: 'me' }, { spawnFn: failSpawn, controlDir: '/tmp/d' })
 +  const conn2 = new SshConnection({ host: 'box', user: 'me' }, { spawnFn: failSpawn, controlDir })
    await assert.rejects(
-@@ -536,3 +554,3 @@ test('exec() treats a hung ssh as a timeout (half-open connection)', async () =>
+@@ -536,3 +556,3 @@ test('exec() treats a hung ssh as a timeout (half-open connection)', async () =>
    const spawnFn = scriptedSpawn([{ hang: true }])
 -  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir: '/tmp/d' })
 +  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir })
    await assert.rejects(
-@@ -549,3 +567,3 @@ test('forward() issues -O forward with a loopback-bound -L spec', async () => {
+@@ -549,3 +569,3 @@ test('forward() issues -O forward with a loopback-bound -L spec', async () => {
    const spawnFn = scriptedSpawn([{ code: 0 }])
 -  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, mux: true, controlDir: '/tmp/d' })
 +  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, mux: true, controlDir })
    await conn.forward(5000, 6000)
-@@ -564,3 +582,3 @@ test('mux forward keeps the ControlPersist master alive until the final forward
+@@ -564,3 +584,3 @@ test('mux forward keeps the ControlPersist master alive until the final forward
 
 -    const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir: '/tmp/d' })
 +    const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir })
 
-@@ -592,3 +610,3 @@ test('lifecycle logging passes through redaction', async () => {
+@@ -592,3 +612,3 @@ test('lifecycle logging passes through redaction', async () => {
      { host: 'box', user: 'me' },
 -    { spawnFn, mux: true, controlDir: '/tmp/d', rememberLog: l => logs.push(l) }
 +    { spawnFn, mux: true, controlDir, rememberLog: l => logs.push(l) }
    )
-@@ -712,3 +730,3 @@ test('mux open() does not classify a signal-killed master with empty stderr as u
+@@ -712,3 +732,3 @@ test('mux open() does not classify a signal-killed master with empty stderr as u
 
 -  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir: '/tmp/d' })
 +  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir })
 
-@@ -722,3 +740,3 @@ test('exec() does not classify a signal death with empty stderr as unreachable',
+@@ -722,3 +742,3 @@ test('exec() does not classify a signal death with empty stderr as unreachable',
    const spawnFn = scriptedSpawn([{ signal: 'SIGKILL', stderr: '' }])
 -  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir: '/tmp/d' })
 +  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir })
 
-@@ -732,3 +750,3 @@ test('forward() does not classify a signal death with empty stderr as unreachabl
+@@ -732,3 +752,3 @@ test('forward() does not classify a signal death with empty stderr as unreachabl
    const spawnFn = scriptedSpawn([{ signal: 'SIGPIPE', stderr: '' }])
 -  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir: '/tmp/d' })
 +  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir })
 
-@@ -759,3 +777,3 @@ test('close() does not report a signal-killed -O exit with empty stderr as unrea
+@@ -759,3 +779,3 @@ test('close() does not report a signal-killed -O exit with empty stderr as unrea
        spawnFn,
 -      controlDir: '/tmp/d',
 +      controlDir,
        controlMasterHolders: createControlMasterHolders(),
-@@ -1241,3 +1259,3 @@ test('open() enforces 0700 on an existing control dir with lax permissions', asy
+@@ -1241,3 +1261,3 @@ test('open() enforces 0700 on an existing control dir with lax permissions', asy
 
 -test('control socket identity separates installation scope and key identity', () => {
 +test('control socket identity shares profiles and retains SSH key/configuration boundaries', () => {
    const base = controlSocketPath('me', 'box', 22, '/tmp/d', {
-@@ -1256,3 +1274,3 @@ test('control socket identity separates installation scope and key identity', ()
+@@ -1256,3 +1276,3 @@ test('control socket identity separates installation scope and key identity', ()
    )
 -  assert.notEqual(
 +  assert.equal(
      base,
-@@ -1264,3 +1282,3 @@ test('control socket identity separates installation scope and key identity', ()
+@@ -1264,3 +1284,3 @@ test('control socket identity separates installation scope and key identity', ()
    )
 -  assert.notEqual(
 +  assert.equal(
      base,
-@@ -1291,3 +1309,3 @@ test('control socket identity separates installation scope and key identity', ()
+@@ -1291,3 +1311,3 @@ test('control socket identity separates installation scope and key identity', ()
 
 -test('closing one scope addresses only that scope control master', async () => {
 +test('closing one scope preserves the shared master until the last scope closes', async () => {
    const firstSpawn = scriptedSpawn({ code: 0 })
-@@ -1300,3 +1318,3 @@ test('closing one scope addresses only that scope control master', async () => {
+@@ -1300,3 +1320,3 @@ test('closing one scope addresses only that scope control master', async () => {
        mux: true,
 -      controlDir: '/tmp/d',
 +      controlDir,
        ownershipId: 'installation',
-@@ -1311,3 +1329,3 @@ test('closing one scope addresses only that scope control master', async () => {
+@@ -1311,3 +1331,3 @@ test('closing one scope addresses only that scope control master', async () => {
        mux: true,
 -      controlDir: '/tmp/d',
 +      controlDir,
        ownershipId: 'installation',
-@@ -1317,16 +1335,13 @@ test('closing one scope addresses only that scope control master', async () => {
+@@ -1317,16 +1337,13 @@ test('closing one scope addresses only that scope control master', async () => {
 
 -  first._opened = true
 -  second._opened = true
@@ -13550,12 +13647,12 @@ index 9ccec9b66efc4d4ff815af295322348c0dc25fc4..5b1f6bd24dcdebc39b771a0dc29c8cce
 -  // connection marked closed — so the next open dials fresh.
 +test('close marks the connection closed when the control socket is absent', async () => {
    const spawnFn = scriptedSpawn([{ code: 255, stderr: 'master refused exit' }])
-@@ -1335,3 +1350,3 @@ test('failed ControlMaster close disowns the master instead of retrying it', asy
+@@ -1335,3 +1352,3 @@ test('failed ControlMaster close disowns the master instead of retrying it', asy
      { host: 'box', user: 'me' },
 -    { spawnFn, mux: true, controlDir: '/tmp/d', controlMasterHolders: createControlMasterHolders() }
 +    { spawnFn, mux: true, controlDir, controlMasterHolders: createControlMasterHolders() }
    )
-@@ -1463,6 +1478,6 @@ test('exec wraps POSIX payloads in sh -c so a fish login shell never parses them
+@@ -1463,6 +1480,6 @@ test('exec wraps POSIX payloads in sh -c so a fish login shell never parses them
    const spawnFn = scriptedSpawn((args: any) =>
 -    args.at(-1) === 'uname -s' ? { code: 0, stdout: 'Linux\n' } : { code: 0, stdout: 'OK\n' }
 +    args.at(-1) === 'uname -s' ? { code: 0, stdout: 'Linux\n' } : { code: 0, stdout: SSH_HELPER_ADMITTED + 'OK\n' }
@@ -13564,32 +13661,32 @@ index 9ccec9b66efc4d4ff815af295322348c0dc25fc4..5b1f6bd24dcdebc39b771a0dc29c8cce
 -  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir: '/tmp/d' })
 +  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir })
    await conn.exec('help="$(true)"; echo "${X:-y}"')
-@@ -1478,3 +1493,3 @@ test('exec leaves Windows PowerShell payloads unwrapped', async () => {
+@@ -1478,3 +1495,3 @@ test('exec leaves Windows PowerShell payloads unwrapped', async () => {
 
 -  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir: '/tmp/d' })
 +  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir })
    await conn.exec('powershell.exe -NoProfile -Command "echo hi"')
-@@ -1517,3 +1532,3 @@ test('a stale attempt closing late leaves the master its successor attached to (
+@@ -1517,3 +1534,3 @@ test('a stale attempt closing late leaves the master its successor attached to (
    const controlMasterHolders = createControlMasterHolders()
 -  const opts = { spawnFn, mux: true, controlDir: '/tmp/d', controlMasterHolders }
 +  const opts = { spawnFn, mux: true, controlDir, controlMasterHolders }
 
-@@ -1538,3 +1553,3 @@ test('a failed newer attempt does not kill the master an older live connection h
+@@ -1538,3 +1555,3 @@ test('a failed newer attempt does not kill the master an older live connection h
    const controlMasterHolders = createControlMasterHolders()
 -  const opts = { spawnFn, mux: true, controlDir: '/tmp/d', controlMasterHolders }
 +  const opts = { spawnFn, mux: true, controlDir, controlMasterHolders }
 
-@@ -1575,3 +1590,3 @@ test('a stale close while a successor is still dialing does not exit the master
+@@ -1575,3 +1592,3 @@ test('a stale close while a successor is still dialing does not exit the master
 
 -  const opts = { spawnFn, mux: true, controlDir: '/tmp/d', controlMasterHolders, connectTimeoutMs: 5000 }
 +  const opts = { spawnFn, mux: true, controlDir, controlMasterHolders, connectTimeoutMs: 5000 }
    const staleSpawn = scriptedSpawn(args => (args.includes('check') ? { code: 255 } : { code: 0 }))
-@@ -1580,3 +1595,3 @@ test('a stale close while a successor is still dialing does not exit the master
+@@ -1580,3 +1597,3 @@ test('a stale close while a successor is still dialing does not exit the master
      { host: 'box', user: 'me' },
 -    { spawnFn: staleSpawn, mux: true, controlDir: '/tmp/d', controlMasterHolders }
 +    { spawnFn: staleSpawn, mux: true, controlDir, controlMasterHolders }
    )
-@@ -1604,6 +1619,3 @@ test('a failed open releases its claim so the remaining holder can still close t
+@@ -1604,6 +1621,3 @@ test('a failed open releases its claim so the remaining holder can still close t
 
 -  const live = new SshConnection(
 -    { host: 'box', user: 'me' },
@@ -13597,12 +13694,12 @@ index 9ccec9b66efc4d4ff815af295322348c0dc25fc4..5b1f6bd24dcdebc39b771a0dc29c8cce
 -  )
 +  const live = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, mux: true, controlDir, controlMasterHolders })
 
-@@ -1617,3 +1629,3 @@ test('a failed open releases its claim so the remaining holder can still close t
+@@ -1617,3 +1631,3 @@ test('a failed open releases its claim so the remaining holder can still close t
      { host: 'box', user: 'me' },
 -    { spawnFn: authFail, mux: true, controlDir: '/tmp/d', controlMasterHolders }
 +    { spawnFn: authFail, mux: true, controlDir, controlMasterHolders }
    )
-@@ -1649 +1661,20 @@ test('#103288: every spawn uses the injected sshBinary; the default stays bare s
+@@ -1649 +1663,20 @@ test('#103288: every spawn uses the injected sshBinary; the default stays bare s
  })
 +
 +test('POSIX admission status is guard-owned and stripped once without changing child output', async () => {
@@ -14236,10 +14333,10 @@ index f758908f576e5be3f00a18918375cb144c8c7e6d..f89f95ae33ff9c4fbdeefdc0e2a3cee9
      }
 diff --git a/apps/desktop/electron/ssh-exec-lifetime.test.ts b/apps/desktop/electron/ssh-exec-lifetime.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..c6035085101131b43b43c48062a89252ec9c1808
+index 0000000000000000000000000000000000000000..6e54a47f89352c97389c3b7c1a6499fce4b724bb
 --- /dev/null
 +++ b/apps/desktop/electron/ssh-exec-lifetime.test.ts
-@@ -0,0 +1,474 @@
+@@ -0,0 +1,479 @@
 +import assert from 'node:assert/strict'
 +import { execFileSync, spawn } from 'node:child_process'
 +import { EventEmitter } from 'node:events'
@@ -14327,7 +14424,9 @@ index 0000000000000000000000000000000000000000..c6035085101131b43b43c48062a89252
 +  if (modeledMemory) {
 +    fs.writeFileSync(path.join(root, 'vm-stat'), `#!/bin/sh
 +printf '%s\\n' "$PPID" >> '${root}/probes'
-+exec /bin/cat '${root}/memory'
++report=$(/bin/cat '${root}/memory')
++printf '%s\\n' "$report" > '${root}/observed-memory'
++printf '%s\\n' "$report"
 +`, { mode: 0o700 })
 +    fs.writeFileSync(path.join(root, 'memory'), 'unknown')
 +  }
@@ -14562,17 +14661,20 @@ index 0000000000000000000000000000000000000000..c6035085101131b43b43c48062a89252
 +  const f = localSession(true)
 +  const receipt = path.join(f.root, 'spawned')
 +  const input = 'ไทย\u0000tail\n'
-+  const call = f.connection.exec(`printf x >> ${quote(receipt)}; cat`, { stdinData: input, timeoutMs: 6000 })
++  const observed = path.join(f.root, 'observed-memory')
++  const call = f.connection.exec(`printf x >> ${quote(receipt)}; cat`, { stdinData: input, timeoutMs: 12_000 })
 +  void call.catch(() => {})
 +
 +  try {
 +    for (const report of [memoryReport(0), memoryReport(32767), 'unknown']) {
 +      fs.writeFileSync(path.join(f.root, 'memory'), report)
-+      await pause(300)
++      await until(
++        () => fs.existsSync(observed) && fs.readFileSync(observed, 'utf8').trimEnd() === report.trimEnd(),
++        'memory observer did not read the current fixture report'
++      )
 +      assert.equal(fs.existsSync(receipt), false, 'heavy helper starts only after memory recovery')
 +    }
 +
-+    assert.ok(fs.readFileSync(path.join(f.root, 'probes'), 'utf8').length > 0)
 +    fs.writeFileSync(path.join(f.root, 'memory'), memoryReport(32768))
 +    assert.equal(await call, input)
 +    assert.equal(fs.readFileSync(receipt, 'utf8'), 'x')
@@ -27325,6 +27427,15 @@ index d3756eaf1ade80f75e172edbc25e68ee332cfe67..48f68f8d13a39bed207bf94656e4a381
 +  })
 +
    it('maps an unloaded server hit with the backend last_active, not its start time', () => {
+diff --git a/apps/desktop/src/app/chat/sidebar/session-actions-menu.test.tsx b/apps/desktop/src/app/chat/sidebar/session-actions-menu.test.tsx
+index 6d558e718f21f21771d58e9bdfd81a7e0626d51d..1b78afb8ee6efc3e2de772ce1676371c42a99581 100644
+--- a/apps/desktop/src/app/chat/sidebar/session-actions-menu.test.tsx
++++ b/apps/desktop/src/app/chat/sidebar/session-actions-menu.test.tsx
+@@ -15,2 +15,4 @@ afterEach(cleanup)
+ vi.mock('@/components/pane-shell/tree/store', () => ({
++  $activeTreeGroup: atom<null | string>(null),
++  $layoutTree: atom(null),
+   closeAllTreeTabs: vi.fn(),
 diff --git a/apps/desktop/src/app/chat/sidebar/session-row.tsx b/apps/desktop/src/app/chat/sidebar/session-row.tsx
 index 292af34b51bd8a04e900fb53349f1682d7febe13..8ef1d77ab17270446de39e9145c7e6f1343380cb 100644
 --- a/apps/desktop/src/app/chat/sidebar/session-row.tsx
@@ -68672,10 +68783,27 @@ index 817b4662baac4d5267539111a2112a38334a7786..a15b2954cbdaec86b509fe77bfc5d5be
 +                <PetThumb size={40} slug={pet.slug} source={source} spriteUrl={pet.spritesheetUrl} />
                  <span className="w-full truncate text-center text-[0.6rem] text-(--ui-text-tertiary)">
 diff --git a/apps/desktop/src/plugins/hermes-bots/plugin.mentions.test.ts b/apps/desktop/src/plugins/hermes-bots/plugin.mentions.test.ts
-index 89cb62d4ffd4fe95b8d1c5b87a047d14631e537c..32bd210f2912b8046442a4fb51ab43bc29544cde 100644
+index 89cb62d4ffd4fe95b8d1c5b87a047d14631e537c..c38d4f16ba7582b33b7de23366be25fc54ae24a3 100644
 --- a/apps/desktop/src/plugins/hermes-bots/plugin.mentions.test.ts
 +++ b/apps/desktop/src/plugins/hermes-bots/plugin.mentions.test.ts
-@@ -166,3 +166,3 @@ async function contributions({
+@@ -100,2 +100,4 @@ vi.mock('@hermes/plugin-sdk', async () => {
+   const keyOf = (key: unknown[]) => JSON.stringify(key)
++  const getQueryData = (key: unknown[]) => cache.get(keyOf(key))?.value
++  type QueryContext = { client: { getQueryData: typeof getQueryData }; queryKey: unknown[] }
+
+@@ -106,4 +108,4 @@ vi.mock('@hermes/plugin-sdk', async () => {
+         .map(entry => [entry.key, entry.value]),
+-    fetchQuery: async ({ queryFn, queryKey }: { queryFn: () => Promise<unknown>; queryKey: unknown[] }) => {
+-      const value = await queryFn()
++    fetchQuery: async ({ queryFn, queryKey }: { queryFn: (context: QueryContext) => Promise<unknown>; queryKey: unknown[] }) => {
++      const value = await queryFn({ client: { getQueryData }, queryKey })
+       cache.set(keyOf(queryKey), { key: queryKey, value })
+@@ -112,3 +114,3 @@ vi.mock('@hermes/plugin-sdk', async () => {
+     },
+-    getQueryData: (key: unknown[]) => cache.get(keyOf(key))?.value,
++    getQueryData,
+     invalidateQueries: () => undefined,
+@@ -166,3 +168,3 @@ async function contributions({
      plugin.register({
 -      i18n: { register: () => () => undefined },
 +      i18n: { register: () => () => undefined, t: (key: string) => key },
@@ -108498,21 +108626,33 @@ index 0000000000000000000000000000000000000000..a742c9fd4f1ca178e0c2ebfb51899cab
 +# All 25 Unicode61 ignored codepoints lie in this serialized escape prefix.
 +IGNORED_ESCAPE_PREFIX = 'u03'
 diff --git a/locales/_keys.desktop.json b/locales/_keys.desktop.json
-index ae0fe91d3341eb7d3bc13db9bfa17122e1cb8289..5dbd5fb47796d3c26cb047d75e1d3082d1865c1a 100644
+index ae0fe91d3341eb7d3bc13db9bfa17122e1cb8289..b8e021b02ea1f7350da3f4dca4db352de03eb56e 100644
 --- a/locales/_keys.desktop.json
 +++ b/locales/_keys.desktop.json
-@@ -574,2 +574,6 @@
+@@ -167,2 +167,3 @@
+     "assistant.clarify.questionProgress",
++    "assistant.clarify.responseUnconfirmed",
+     "assistant.clarify.sendFailed",
+@@ -493,2 +494,3 @@
+     "boot.causes.installMissing",
++    "boot.causes.noGatewayResult",
+     "boot.causes.permission",
+@@ -532,2 +534,3 @@
+     "boot.failure.retry",
++    "boot.failure.retryResetUnconfirmed",
+     "boot.failure.showRecentLogs",
+@@ -574,2 +577,6 @@
      "butterbar.legal.terms",
 +    "butterbar.paused.composer",
 +    "butterbar.paused.onHold",
 +    "butterbar.paused.since",
 +    "butterbar.paused.title",
      "catalog.about",
-@@ -899,2 +903,3 @@
+@@ -899,2 +906,3 @@
      "composer.attachments",
 +    "composer.autocomplete",
      "composer.commandDescs./agents",
-@@ -1004,4 +1009,8 @@
+@@ -1004,4 +1012,8 @@
      "composer.newSessionPlaceholders",
 +    "composer.nextPrompt",
      "composer.noMatchingThemes",
@@ -108521,14 +108661,20 @@ index ae0fe91d3341eb7d3bc13db9bfa17122e1cb8289..5dbd5fb47796d3c26cb047d75e1d3082
 +    "composer.parkedDraftNotice",
 +    "composer.parkedDraftReturn",
      "composer.pasteImage",
-@@ -1014,2 +1023,3 @@
+@@ -1014,2 +1026,3 @@
      "composer.promptSnippets",
 +    "composer.promptSuggestionHint",
      "composer.queueCancelFailed",
-@@ -1041,2 +1051,13 @@
+@@ -1025,2 +1038,3 @@
+     "composer.queueMessage",
++    "composer.queueOwnerUnconfirmed",
+     "composer.queueResume",
+@@ -1041,2 +1055,16 @@
      "composer.restoredDraftUndo",
 +    "composer.restoredDraftUndoFailed",
++    "composer.retainedSendBrowsingHistory",
 +    "composer.retainedSendBusy",
++    "composer.retainedSendConnectionChanged",
 +    "composer.retainedSendDiscard",
 +    "composer.retainedSendEdit",
 +    "composer.retainedSendEditAction",
@@ -108538,17 +108684,19 @@ index ae0fe91d3341eb7d3bc13db9bfa17122e1cb8289..5dbd5fb47796d3c26cb047d75e1d3082
 +    "composer.retainedSendMissingAttachments",
 +    "composer.retainedSendNotice",
 +    "composer.retainedSendRestore",
++    "composer.retainedSendSwitchFailed",
      "composer.send",
-@@ -1063,2 +1084,3 @@
+@@ -1063,2 +1091,3 @@
      "composer.stopSpeakingReplies",
 +    "composer.suggestPrompt",
      "composer.terminalSelectionMissingBody",
-@@ -1073,2 +1095,4 @@
+@@ -1073,2 +1102,5 @@
      "composer.transcribingDictation",
 +    "composer.unassignedDraftNotice",
 +    "composer.unassignedDraftRestore",
++    "composer.unassignedDraftRestoreFailed",
      "composer.unmuteMic",
-@@ -1917,2 +1941,12 @@
+@@ -1917,2 +1949,12 @@
      "language.switchTo",
 +    "mermaid.copySource",
 +    "mermaid.diagram",
@@ -108561,7 +108709,20 @@ index ae0fe91d3341eb7d3bc13db9bfa17122e1cb8289..5dbd5fb47796d3c26cb047d75e1d3082
 +    "mermaid.timeout",
 +    "mermaid.unavailable",
      "messaging.addListEntry",
-@@ -3168,2 +3202,23 @@
+@@ -2160,2 +2202,4 @@
+     "notifications.errors.gatewayAuthFailed",
++    "notifications.errors.localGatewayIncompatible",
++    "notifications.errors.localGatewayUnsafeControlPath",
+     "notifications.errors.methodNotAllowed",
+@@ -2302,2 +2346,3 @@
+     "preview.binaryTitle",
++    "preview.chartValues",
+     "preview.closePane",
+@@ -2349,2 +2394,3 @@
+     "preview.saveScopeChanged",
++    "preview.scrollableTable",
+     "preview.source",
+@@ -3168,2 +3214,23 @@
      "settings.connections.sshHostTitle",
 +    "settings.connections.sshStatus.disconnected",
 +    "settings.connections.sshStatus.failure.auth-failed",
@@ -108585,23 +108746,23 @@ index ae0fe91d3341eb7d3bc13db9bfa17122e1cb8289..5dbd5fb47796d3c26cb047d75e1d3082
 +    "settings.connections.sshStatus.socketClosed",
 +    "settings.connections.sshStatus.starting",
      "settings.connections.stagedNote",
-@@ -3252,2 +3307,4 @@
+@@ -3252,2 +3319,4 @@
      "settings.fieldDescriptions.fileReadMaxChars",
 +    "settings.fieldDescriptions.goals.allowSelfManagement",
 +    "settings.fieldDescriptions.goals.delegatedDecisions",
      "settings.fieldDescriptions.memory.memoryEnabled",
-@@ -3317,2 +3374,4 @@
+@@ -3317,2 +3386,4 @@
      "settings.fieldLabels.fileReadMaxChars",
 +    "settings.fieldLabels.goals.allowSelfManagement",
 +    "settings.fieldLabels.goals.delegatedDecisions",
      "settings.fieldLabels.memory.memoryCharLimit",
-@@ -3993,2 +4052,5 @@
+@@ -3993,2 +4064,5 @@
      "settings.profileScope.editsProfile",
 +    "settings.profileScope.filter",
 +    "settings.profileScope.showAll",
 +    "settings.profileScope.showLess",
      "settings.providers.collapse",
-@@ -4016,2 +4078,18 @@
+@@ -4016,2 +4090,18 @@
      "settings.providers.searchKeys",
 +    "settings.providers.usage.configuredRoute",
 +    "settings.providers.usage.description",
@@ -108620,7 +108781,7 @@ index ae0fe91d3341eb7d3bc13db9bfa17122e1cb8289..5dbd5fb47796d3c26cb047d75e1d3082
 +    "settings.providers.usage.unavailable",
 +    "settings.providers.usage.updated",
      "settings.quickEntry.active",
-@@ -4125,2 +4203,3 @@
+@@ -4125,2 +4215,3 @@
      "settings.subpages.safetyApprovals",
 +    "settings.subpages.safetyAutonomy",
      "settings.subpages.safetyCheckpoints",
@@ -118095,12 +118256,14 @@ index 3b8a256f9e3e6686c965ace8ba58701228fca0ec..b6c81c404e98a10f45b9292120a49652
 +      "volatile": 1647
      },
 diff --git a/tests/gateway/fixtures/cli_launch_policy_probe.py b/tests/gateway/fixtures/cli_launch_policy_probe.py
-index 2563bf7b29f7d91c80cd13e9c1a556e3a22fcebe..dbe895ea1f36f1f4244826cbd63c2bc96b5e9756 100644
+index 2563bf7b29f7d91c80cd13e9c1a556e3a22fcebe..468c4c22322d08e360b8750b3df0ed17c667bbaa 100644
 --- a/tests/gateway/fixtures/cli_launch_policy_probe.py
 +++ b/tests/gateway/fixtures/cli_launch_policy_probe.py
-@@ -93,3 +93,5 @@ def probe(tmp_path):
-     env = {k: os.environ[k] for k in ('PATH', 'LANG', 'TZ', 'SYSTEMROOT') if k in os.environ}
+@@ -92,4 +92,6 @@ def probe(tmp_path):
+     (home / 'SOUL.md').write_text('SOUL_LAUNCH_MARKER')
+-    env = {k: os.environ[k] for k in ('PATH', 'LANG', 'TZ', 'SYSTEMROOT') if k in os.environ}
 -    env.update(HOME=str(user), USERPROFILE=str(user), HERMES_HOME=str(home), PYTHONPATH=str(root))
++    env = {k: os.environ[k] for k in ('PATH', 'LANG', 'TZ', 'XDG_RUNTIME_DIR', 'SYSTEMROOT') if k in os.environ}
 +    # Keep source completion out of this loopback protocol test and its child processes.
 +    env.update(HOME=str(user), USERPROFILE=str(user), HERMES_HOME=str(home), PYTHONPATH=str(root),
 +               HERMES_DISABLE_LAZY_INSTALLS='1')
@@ -118122,6 +118285,17 @@ index 042908a72ef51b5a3c010f8f6d26c57f8c2182f5..3cb2835c81a298f7e9cdbf7006ee9a4b
 -            receipt.update(goal_continuation=len(turns) >= 4, stable_prefix=len(set(prefixes)) == 1,
 +            receipt.update(goal_continuation=peer.goal_continuation_seen, stable_prefix=len(set(prefixes)) == 1,
                  retry_same_session=same, tools='kanban_complete' in wire,
+diff --git a/tests/gateway/fixtures/local_recovery_probe.py b/tests/gateway/fixtures/local_recovery_probe.py
+index 0ff95d330b66aff6fbed8b6c490b5a78994f562e..fc949c6dd1d6743d5f6007097390e007bc3c9c61 100644
+--- a/tests/gateway/fixtures/local_recovery_probe.py
++++ b/tests/gateway/fixtures/local_recovery_probe.py
+@@ -48,4 +48,4 @@ class Model(BaseHTTPRequestHandler):
+
+-# Windows children need the system environment (Winsock, temp, PATHEXT); POSIX uses the first three.
+-CHILD_ENV_KEYS = ('PATH', 'LANG', 'TZ', 'SYSTEMROOT', 'SYSTEMDRIVE', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'PATHEXT',
++# Preserve the private POSIX socket directory and the Windows system environment.
++CHILD_ENV_KEYS = ('PATH', 'LANG', 'TZ', 'XDG_RUNTIME_DIR', 'SYSTEMROOT', 'SYSTEMDRIVE', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'PATHEXT',
+                   'LOCALAPPDATA', 'APPDATA', 'PROGRAMDATA', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE')
 diff --git a/tests/gateway/fixtures/role_workflow_probe.py b/tests/gateway/fixtures/role_workflow_probe.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..1fb95db7c33b5baa012ac6c2be825526247b1239
@@ -119430,6 +119604,20 @@ index a46dcf76ec4b4a16d41fdc6c48d70ff19061b7a0..db0e0ccff88b8fca139ef7e9f8c97c8c
 -    monkeypatch.setattr(run, '_load_gateway_config', lambda: {'platform_toolsets': {'cli': []}})
 +    monkeypatch.setattr(run, '_load_gateway_config', lambda config_path=None: {'platform_toolsets': {'cli': []}})
      store = SessionStore(tmp_path / 'sessions', GatewayConfig())
+diff --git a/tests/gateway/test_canonical_wire_contract.py b/tests/gateway/test_canonical_wire_contract.py
+index 3b1d6900b5a844ae876fa70fa4bb696509e6963c..0d810b513e635a853ff38e116ada1be3ffea9565 100644
+--- a/tests/gateway/test_canonical_wire_contract.py
++++ b/tests/gateway/test_canonical_wire_contract.py
+@@ -7,3 +7,3 @@ from gateway.session_authority import LiveSession, SessionAuthority
+ from gateway.session_controls import AuthorityConnection
+-from gateway.session_group_controls import GROUP_METHODS
++from gateway.session_group_controls import GROUP_METHODS, PROFILE_READS
+ from hermes_state import SessionDB
+@@ -29,3 +29,3 @@ def test_every_canonical_verb_has_a_declared_contract(owner):
+     connection, _ = owner
+-    served = set(connection.handlers()) | set(GROUP_METHODS) | {'profiles.list'}
++    served = set(connection.handlers()) | set(GROUP_METHODS) | PROFILE_READS
+     assert sorted(served - set(METHODS) - set(CANONICAL_METHODS)) == []
 diff --git a/tests/gateway/test_captain_goal_blocked_native.py b/tests/gateway/test_captain_goal_blocked_native.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..783dae97d3556654792521138c9971a5eebd5cae
@@ -123328,7 +123516,7 @@ index 0000000000000000000000000000000000000000..70701fbfd6062b492a85411d1f0e12b4
 +        assert db.get_meta('goal:s') == before
 diff --git a/tests/gateway/test_session_kanban_aux_accounting.py b/tests/gateway/test_session_kanban_aux_accounting.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..bfbae9f44d5768b7bf47c0e4dc99ac4bbdb52cc8
+index 0000000000000000000000000000000000000000..c6af1efaa841362571aa06a9a2f3880a148be9f7
 --- /dev/null
 +++ b/tests/gateway/test_session_kanban_aux_accounting.py
 @@ -0,0 +1,74 @@
@@ -123383,7 +123571,7 @@ index 0000000000000000000000000000000000000000..bfbae9f44d5768b7bf47c0e4dc99ac4b
 +                if already_terminal or len(turns) == completion_turn:
 +                    with connect_closing() as conn:
 +                        assert kb.complete_task(conn, tid, result="offline evidence", expected_run_id=task.current_run_id)
-+                return {"completed": True, "final_response": "fixture completed"}
++                return {"completed": True, "final_response": f"fixture turn {len(turns)}"}
 +            finally:
 +                reset_accounting_context(token)
 +
@@ -123405,7 +123593,7 @@ index 0000000000000000000000000000000000000000..bfbae9f44d5768b7bf47c0e4dc99ac4b
 +    assert rows == expected
 +    assert len(turns) == completion_turn
 +    assert attempts == ["goal_judge"] * (completion_turn - 1)
-+    assert result["final_response"] == "fixture completed"
++    assert result["final_response"] == f"fixture turn {completion_turn}"
 diff --git a/tests/gateway/test_session_policy.py b/tests/gateway/test_session_policy.py
 index 93f2baba69134f7dbf7ae830accab4a826b5c12d..2ea21cc45d260cc6a53cc694230078dc082fabd6 100644
 --- a/tests/gateway/test_session_policy.py
@@ -125613,16 +125801,22 @@ index 0000000000000000000000000000000000000000..2b3a0591481042ae2ee513ae5fa397d2
 +    assert "DELEGATED DECISIONS" not in seen[0]
 +    assert "DELEGATED DECISIONS" in seen[1]
 diff --git a/tests/hermes_cli/test_goal_dispatch.py b/tests/hermes_cli/test_goal_dispatch.py
-index 2aa63bb7f7b3e6161b9032e3b7f55e9fb37294db..2edc723b4a9f65508b927efb0ff5c9698962b9c6 100644
+index 2aa63bb7f7b3e6161b9032e3b7f55e9fb37294db..873d1be342daa72590c1860354c1af1da49eb6a5 100644
 --- a/tests/hermes_cli/test_goal_dispatch.py
 +++ b/tests/hermes_cli/test_goal_dispatch.py
-@@ -109,3 +109,4 @@ def test_drafts_start_work_but_inspection_and_literal_prefixes_do_not_draft(
+@@ -82,3 +82,4 @@ def test_surface_goal_state_matches_cli(surface, command, monkeypatch):
+             state = asdict(state)
+-            for key in ('created_at', 'updated_at', 'waiting_since'):
++            # The two seeded goals have independent optimistic concurrency revisions.
++            for key in ('created_at', 'updated_at', 'waiting_since', 'revision'):
+                 state.pop(key, None)
+@@ -109,3 +110,4 @@ def test_drafts_start_work_but_inspection_and_literal_prefixes_do_not_draft(
      assert calls == ['build it']
 -    assert prompts == ['build it']
 +    assert [p.split('\n', 1)[0] for p in prompts] == ['build it']
 +    assert ('show the concrete evidence' in prompts[0]) == (draft_result == 'contract')
      execute('show')
-@@ -114,3 +115,3 @@ def test_drafts_start_work_but_inspection_and_literal_prefixes_do_not_draft(
+@@ -114,3 +116,3 @@ def test_drafts_start_work_but_inspection_and_literal_prefixes_do_not_draft(
      assert goals.load_goal(mgr.session_id).goal == 'build it'
 -    assert prompts == ['build it']
 +    assert len(prompts) == 1
@@ -131799,6 +131993,15 @@ index 0000000000000000000000000000000000000000..97157e8572677ffc4e00f946c76f1dff
 +    other = tmp_path / "provider.txt"
 +    other.write_text("register_memory_provider")
 +    assert _read_source_from_origin(str(other)) == ""
+diff --git a/tests/hermes_cli/test_plugin_validate.py b/tests/hermes_cli/test_plugin_validate.py
+index 7ab96bf8b9db66aa2821a59b520122f3e24fd3fb..0423315fe946f396b97149147c4654b883a11190 100644
+--- a/tests/hermes_cli/test_plugin_validate.py
++++ b/tests/hermes_cli/test_plugin_validate.py
+@@ -69,3 +69,3 @@ def test_portable_validation_fails_orphan_and_reports_availability(tmp_path: Pat
+     assert any(
+-        name == "server availability: worker" and ok and detail in {"missing_app", "unsupported_os"}
++        name == "server availability: worker" and ok and detail.split(", ", 1)[0] in {"missing_app", "unsupported_os"}
+         for name, ok, detail in report.checks
 diff --git a/tests/hermes_cli/test_profile_config_cache_release.py b/tests/hermes_cli/test_profile_config_cache_release.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..2feb76097dd9aa6605ae06f7432e4cc0263078c5
@@ -132988,7 +133191,7 @@ index 0000000000000000000000000000000000000000..042bbb5a914f5b50cadd7f2014959a49
 +        assert result == json.loads(expected), (query, result, expected)
 diff --git a/tests/hermes_cli/test_session_export_stream.py b/tests/hermes_cli/test_session_export_stream.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..923cdc045da81959f10a5e17947fd7664f1c458d
+index 0000000000000000000000000000000000000000..1b60f8db35c1b1ab3ff82cbf7e41dd6b2d3f72d6
 --- /dev/null
 +++ b/tests/hermes_cli/test_session_export_stream.py
 @@ -0,0 +1,149 @@
@@ -133007,14 +133210,13 @@ index 0000000000000000000000000000000000000000..923cdc045da81959f10a5e17947fd766
 +from hermes_state import SessionDB
 +
 +
-+def run_cli(args):
++def parse_cli(args):
 +    from hermes_cli._parser import build_top_level_parser
 +    from hermes_cli.sessions_cmd import cmd_sessions
 +    from hermes_cli.subcommands.sessions import build_sessions_parser
 +    parser, subparsers, _ = build_top_level_parser()
 +    build_sessions_parser(subparsers, cmd_sessions=cmd_sessions)
-+    parsed = parser.parse_args(['sessions', 'export', *args])
-+    return parsed.func(parsed)
++    return parser.parse_args(['sessions', 'export', *args])
 +
 +
 +@pytest.mark.parametrize('surface', ['cli', 'console'])
@@ -133032,6 +133234,7 @@ index 0000000000000000000000000000000000000000..923cdc045da81959f10a5e17947fd766
 +    target = tmp_path / f'{surface}.jsonl'
 +    engine = HermesConsoleEngine()
 +    assert engine.execute('sessions stats').status == 'ok'  # Warm native imports before the allocation measurement.
++    command = parse_cli([str(target)]) if surface == 'cli' else None
 +    gc.collect()
 +    tracemalloc.start()
 +    try:
@@ -133039,7 +133242,7 @@ index 0000000000000000000000000000000000000000..923cdc045da81959f10a5e17947fd766
 +            result = engine.execute(f'sessions export {target}', confirmed=True)
 +            assert result.status == 'ok', result.output
 +        else:
-+            run_cli([str(target)])
++            command.func(command)
 +        _, peak = tracemalloc.get_traced_memory()
 +    finally:
 +        tracemalloc.stop()
@@ -134212,7 +134415,7 @@ index a46e3350f2dcb8c52c83fd97a252d9aa5c77b4b8..258bad0dbe9928680298533efd02d879
 +        "hermes_cli/update_host_obligation.py", "hermes_dir_acl.py", "hermes_bootstrap.py", "hermes_constants.py", "hermes_cli/__init__.py", "hermes_cli/_launchers.py",
          "hermes_cli/_early_recovery.py", "hermes_cli/_parser.py", "hermes_cli/runtime_state.py",
 diff --git a/tests/hermes_cli/test_update_target_identity.py b/tests/hermes_cli/test_update_target_identity.py
-index 16abf526fba753c9781066910ca407b2f2186e1d..1ed294aab9d9a62cbd960228a8db99ea0b8b199a 100644
+index 16abf526fba753c9781066910ca407b2f2186e1d..da065658d49aaf7e5a5aea453f0ec7b78b6e195f 100644
 --- a/tests/hermes_cli/test_update_target_identity.py
 +++ b/tests/hermes_cli/test_update_target_identity.py
 @@ -37,5 +37,15 @@ def update_tree(tmp_path, monkeypatch):
@@ -134233,7 +134436,23 @@ index 16abf526fba753c9781066910ca407b2f2186e1d..1ed294aab9d9a62cbd960228a8db99ea
 +    (origin / '.gitignore').write_text('.bytecode-fingerprint\n__pycache__/\n', encoding='utf-8')
 +    git(origin, 'add', '-A')
      git(origin, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'base')
-@@ -414,3 +424,3 @@ def test_update_syntax_failure_restores_pre_update_head(update_tree, monkeypatch
+@@ -239,4 +249,2 @@ def test_stable_git_uses_remote_identity_without_moving_local_tags(update_tree,
+         calls.append(command)
+-        if 'fetch' in command and t.wanted in command and server == 'fetch-refused':
+-            return subprocess.CompletedProcess(command, 128, stdout='', stderr='fixture: raw SHA wants disabled')
+         return run(command, *args, **kwargs)
+@@ -245,2 +253,10 @@ def test_stable_git_uses_remote_identity_without_moving_local_tags(update_tree,
+     if server == 'fetch-refused':
++        git_run = update_cmd._git_run
++
++        def refuse_release_fetch(git_cmd, args, **kwargs):
++            if args[0] == 'fetch' and t.wanted in args:
++                return subprocess.CompletedProcess(args, 128, stdout='', stderr='fixture: raw SHA wants disabled')
++            return git_run(git_cmd, args, **kwargs)
++
++        monkeypatch.setattr(update_cmd, '_git_run', refuse_release_fetch)
+         with pytest.raises(SystemExit) as error:
+@@ -414,3 +430,3 @@ def test_update_syntax_failure_restores_pre_update_head(update_tree, monkeypatch
      bad = remote / 'hermes_cli' / 'config.py'
 -    bad.parent.mkdir()
 +    bad.parent.mkdir(exist_ok=True)
@@ -135614,6 +135833,17 @@ index 3686d7cd5d420512b0ffc4575aa0fb05f0a79193..55ea1c54054aba2393b0b99c64405cc2
 +        finally:
 +            conn.execute("ROLLBACK TO compression_gate_fixture")
 +            conn.execute("RELEASE compression_gate_fixture")
+diff --git a/tests/hermes_state/test_cross_vm_fs_wal_refusal.py b/tests/hermes_state/test_cross_vm_fs_wal_refusal.py
+index 1307385ea79128f63aa523fb72ccfd53846e4d25..fed0d31bb919020318188d0191b8b047d2186af9 100644
+--- a/tests/hermes_state/test_cross_vm_fs_wal_refusal.py
++++ b/tests/hermes_state/test_cross_vm_fs_wal_refusal.py
+@@ -31,2 +31,6 @@ SPACE_VIRTIOFS = "615 25 0:55 / /mnt/my\\040share rw,relatime - virtiofs share r
+ class TestDetectCrossVmFs:
++    @pytest.fixture(autouse=True)
++    def _linux_mountinfo(self, monkeypatch):
++        monkeypatch.setattr(hermes_state_wal.sys, "platform", "linux")
++
+     @pytest.mark.parametrize("path,expected", [
 diff --git a/tests/hermes_state/test_fresh_schema_atomicity.py b/tests/hermes_state/test_fresh_schema_atomicity.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..6b473f4b0decbc2856bca9cb4224eb30dbd635e8
@@ -137094,6 +137324,24 @@ index 0000000000000000000000000000000000000000..cc7476b739a8d7d45b58a7e6cb0904e2
 +    with pytest.raises(TimeoutError, match='timed out'):
 +        db.search_messages('needle')
 +    assert db.search_messages('needle')
+diff --git a/tests/hermes_state/test_guest_durability_barriers.py b/tests/hermes_state/test_guest_durability_barriers.py
+index bfa29bca47fc739c6ae2be04378df323acfb3ddc..38d4c330194473023d9c49ae30ec81ae6e93f3d0 100644
+--- a/tests/hermes_state/test_guest_durability_barriers.py
++++ b/tests/hermes_state/test_guest_durability_barriers.py
+@@ -10,2 +10,3 @@ the guest entry point applies it directly.
+ import sqlite3
++import sys
+
+@@ -42,3 +43,3 @@ def test_guest_barriers_apply_configured_synchronous(monkeypatch, tmp_path):
+
+-def test_guest_barriers_leave_synchronous_alone_when_unset(monkeypatch, tmp_path):
++def test_guest_barriers_keep_platform_defaults_when_unset(monkeypatch, tmp_path):
+     _config(monkeypatch, {})
+@@ -49,3 +50,3 @@ def test_guest_barriers_leave_synchronous_alone_when_unset(monkeypatch, tmp_path
+         apply_durability_barriers(conn)
+-        assert conn.execute("PRAGMA synchronous").fetchone()[0] == 1
++        assert conn.execute("PRAGMA synchronous").fetchone()[0] == (2 if sys.platform == "darwin" else 1)
+     finally:
 diff --git a/tests/hermes_state/test_readonly_cjk.py b/tests/hermes_state/test_readonly_cjk.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..e81b5f6c9bdf3f24006016fb3cd627534fb46079
@@ -138594,12 +138842,50 @@ index 0000000000000000000000000000000000000000..773adda3445facead82d5d515699b5b1
 +    params = {'board': 'default', 'task_id': task.id, 'run_id': task.current_run_id,
 +              'claim_lock': task.claim_lock, 'db': str(kb.kanban_db_path().resolve())}
 +    return build_kanban_policy(connection, params, config)[0]
+diff --git a/tests/plugins/test_disk_cleanup_plugin.py b/tests/plugins/test_disk_cleanup_plugin.py
+index f8f53aac84d564fb145b3e82df9a9b96eff41ca2..ae0c1adb1397283068fbf4fdbb7612a87c24a619 100644
+--- a/tests/plugins/test_disk_cleanup_plugin.py
++++ b/tests/plugins/test_disk_cleanup_plugin.py
+@@ -53,2 +53,13 @@ def _load_lib():
+
++@pytest.fixture
++def _private_tmp_alias(tmp_path, monkeypatch):
++    plugin = _load_lib()
++    private = tmp_path / "private-tmp"
++    private.mkdir()
++    alias = tmp_path / "tmp"
++    alias.symlink_to(private, target_is_directory=True)
++    monkeypatch.setattr(plugin, "Path", lambda path: alias if path == "/tmp" else Path(path))
++    return plugin, alias
++
++
+ _CALL_IDS = itertools.count(1)
+@@ -103,5 +114,5 @@ class TestIsSafePath:
+     @pytest.mark.platforms("macos")
+-    def test_track_accepts_tmp_hermes_path_after_platform_resolution(self, _isolate_env):
+-        dg = _load_lib()
+-        temporary = Path(tempfile.mkdtemp(prefix="hermes-disk-cleanup-", dir="/tmp"))
++    def test_track_accepts_tmp_hermes_path_after_platform_resolution(self, _private_tmp_alias):
++        dg, temporary_root = _private_tmp_alias
++        temporary = Path(tempfile.mkdtemp(prefix="hermes-disk-cleanup-", dir=temporary_root))
+         try:
+@@ -122,6 +133,6 @@ class TestIsSafePath:
+     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink contract")
+-    def test_rejects_final_and_nested_symlink_escapes(self, _isolate_env):
+-        dg = _load_lib()
+-        temporary = Path(tempfile.mkdtemp(prefix="hermes-disk-cleanup-", dir="/tmp"))
+-        outside_dir = Path(tempfile.mkdtemp(prefix="disk-cleanup-outside-", dir="/tmp"))
++    def test_rejects_final_and_nested_symlink_escapes(self, _private_tmp_alias):
++        dg, temporary_root = _private_tmp_alias
++        temporary = Path(tempfile.mkdtemp(prefix="hermes-disk-cleanup-", dir=temporary_root))
++        outside_dir = Path(tempfile.mkdtemp(prefix="disk-cleanup-outside-", dir=temporary_root))
+         outside_file = outside_dir / "file.txt"
 diff --git a/tests/plugins/test_kanban_board_links.py b/tests/plugins/test_kanban_board_links.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..7593405998825c9b877ad1e719776ee615067a6b
+index 0000000000000000000000000000000000000000..23ad54b2d1e8b621ff4015f1b9b3e148825f49c3
 --- /dev/null
 +++ b/tests/plugins/test_kanban_board_links.py
-@@ -0,0 +1,63 @@
+@@ -0,0 +1,67 @@
 +"""Opt-in, bounded native dependency reads for the Desktop Workflow view."""
 +import importlib.util
 +import sys
@@ -138646,6 +138932,10 @@ index 0000000000000000000000000000000000000000..7593405998825c9b877ad1e719776ee6
 +    assert data['links'] == [{'parent_id': parent, 'child_id': child}]
 +    assert data['links_truncated'] is False
 +    assert data['latest_event_id'] == before['latest_event_id']
++    for snapshot in (before, data):
++        for column in snapshot['columns']:
++            for task in column['tasks']:
++                task.pop('age')  # Elapsed time can change between read-only requests.
 +    assert data['columns'] == before['columns']
 +
 +def test_filtered_board_never_exports_other_tenant_identifiers(client):
@@ -139525,6 +139815,15 @@ index 0000000000000000000000000000000000000000..c0b0e80762f938740c26a47e7dcca131
 +    assert second.read() == (str(home_b), 0, 'one')
 +    assert first.read.__code__ is not second.read.__code__
 +    assert cache_counts() == before
+diff --git a/tests/plugins/web/test_web_search_provider_plugins.py b/tests/plugins/web/test_web_search_provider_plugins.py
+index 3c1accf5bd6ce1bfd3afcc055a584ace99e87dbc..a855e73d4675935519b368bd382532501b690b76 100644
+--- a/tests/plugins/web/test_web_search_provider_plugins.py
++++ b/tests/plugins/web/test_web_search_provider_plugins.py
+@@ -286,2 +286,4 @@ class TestFirecrawlScrapeTimeout:
+
++        monkeypatch.setattr(firecrawl_provider, "is_safe_url", lambda url: url == "https://example.com")
++
+         p = firecrawl_provider.FirecrawlWebSearchProvider()
 diff --git a/tests/pm/test_runtime_reuse.py b/tests/pm/test_runtime_reuse.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..826def4dbe8e8b8aa47d5dc6b387dd3ce4d414ce
@@ -144030,6 +144329,22 @@ index 0000000000000000000000000000000000000000..21503b41148859027f4abb8777503684
 +            return original.sub(replacement,text)
 +    monkeypatch.setattr(ansi_strip,'_ANSI_ESCAPE_RE',Guard())
 +    assert ansi_strip.strip_ansi('\x1b]x'*1000)=='x'*1000
+diff --git a/tests/tools/test_local_env_blocklist.py b/tests/tools/test_local_env_blocklist.py
+index 85406883727aa2dd812bc9ddc706943c016f72ed..18c4568e709ac629f4e7d11d80fac8db60de4b1b 100644
+--- a/tests/tools/test_local_env_blocklist.py
++++ b/tests/tools/test_local_env_blocklist.py
+@@ -944,3 +944,3 @@ class TestNativeEnvironmentContracts:
+     @pytest.mark.parametrize("same_env", [True, False])
+-    def test_execute_code_composition_strips_inherited_hermes_entries(self, same_env):
++    def test_execute_code_composition_strips_inherited_hermes_entries(self, same_env, tmp_path, monkeypatch):
+         """Integration: execute_code's real spawn path composes a clean PYTHONPATH.
+@@ -962,2 +962,6 @@ class TestNativeEnvironmentContracts:
+
++        # Popen is mocked, so a relative UNIX socket can stay in the test's own cwd.
++        monkeypatch.chdir(tmp_path)
++        monkeypatch.setattr("hermes_constants.socket_safe_tmpdir", lambda: ".")
++
+         def _mock_handle_function_call(function_name, function_args, task_id=None, user_task=None):
 diff --git a/tests/tools/test_mcp_memory_saving.py b/tests/tools/test_mcp_memory_saving.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..72dda1a2f2ae7a02f00f3b4766f0fd6fcbd4a034
