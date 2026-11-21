@@ -170,6 +170,9 @@ outline. If Desktop cannot reveal the log in your file manager, the
 row shows the failure. Use **Open logs** again to retry.
 The startup recovery dialog also shows a failed log reveal below its
 actions. Retry with **Open logs** to clear the message after success.
+Choose **Show recent logs**, then press Tab to reach the log pane and
+use the arrow keys or Page Down to scroll it. **Copy** copies the
+log entries shown in the pane.
 Keyboard focus stays on **Save and reconnect** while the request is pending
 unless you move it, so you can press Enter again after a refusal.
 You can go back and reopen Gateway settings during the request.
