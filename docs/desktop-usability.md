@@ -58,6 +58,8 @@ While previewing sent messages in the composer, press **Down Arrow** until
 your current draft returns. Saved-message restore is available again then.
 
 Review the recovered message before you press Send. Sending the original payload uses its original submission ID on a gateway that supports idempotent admission. If you revise the text or replace attachments, confirm **Send as new message**. The earlier message may already have reached the gateway.
+With **Cancel** focused, Enter or Space closes the dialog and leaves
+your edited draft in the composer.
 
 When you discard a saved message with the keyboard, focus returns to the recovery summary while other saved messages remain. After the last discard, you can keep typing in the current draft.
 
