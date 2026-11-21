@@ -51,6 +51,9 @@ When you choose a second Hub file while the first is still loading, only the new
 
 A collection search names its scope. No matches are distinct from an empty collection. Use **Clear search and filters** to recover the collection or **Search all Hub** to keep the query and expand its scope. Searching does not grant bot membership or share a private chat file.
 
+Use Tab to reach **Copy** and other message actions. An inset outline
+shows which action has keyboard focus, including in forced colors.
+
 ## Recovering an earlier message
 
 If a refused send restores your draft, release Enter and press it again
