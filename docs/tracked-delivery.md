@@ -8,6 +8,7 @@ Escape closes the menu. Press it again on the board to clear selection.
 After a partial bulk **Move**, focus stays on **Move to** so you can retry
 the remaining cards. After a complete move, focus returns to **Filter cards**
 if you stayed in the Move controls.
+The bulk action buttons show a keyboard focus outline while you navigate.
 
 When cards in the current list share a title, Track work shows their
 status, assignee and card ID so you can choose the right one.
