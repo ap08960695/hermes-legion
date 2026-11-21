@@ -150,6 +150,8 @@ from recovery moves keyboard focus to **Back**. Choose **Back** or press Escape
 in Gateway settings to return to recovery and focus **Gateway settings**.
 **Retry**, **Gateway settings**, and **Back** show a keyboard
 focus outline, including while a focused **Retry** is pending.
+If the reset cannot be confirmed, recovery scrolls its message into
+view when focus is still on **Retry**.
 **Details** keeps its open or closed state when you return to the same startup error.
 With **Details** open, Tab reaches its diagnostic text. Use the arrow
 keys or Page Down to scroll a long message, then Tab to continue.
