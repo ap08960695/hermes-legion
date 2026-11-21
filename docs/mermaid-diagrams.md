@@ -34,7 +34,8 @@ If the clipboard rejects both image and SVG text, the expanded viewer shows
 **Copy failed** below the diagram and keeps Copy and Close in place.
 Open **Source** below a rendered diagram to read the original Mermaid text.
 Tab into the source and use the arrow keys or Page Up and Page Down to scroll
-it. In Chat, the focused source scrolls into view above the composer. Source
+it. The disclosure and source text show a keyboard outline in standard and
+forced colors. In Chat, the focused source scrolls into view above the composer. Source
 keeps focus while the composer finishes opening a saved chat. **Copy source**
 copies the original text.
 **Save SVG** saves a scalable image, and **Save PNG**
