@@ -780,8 +780,9 @@ reveal more columns. Activating **Show more** by keyboard moves focus
 to the first newly shown row so the next Tab can reach its actions.
 If a refresh reorders the focused row, Monitor keeps its control in view.
 If the row moves beyond the displayed page, focus goes to **Show more**.
-If a refresh disables the focused **Open chat** button, focus moves
-to that bot’s name cell so keyboard navigation can continue.
+If a refresh disables the focused **Open chat** button or removes
+the focused **Recent reports** button while its row stays visible,
+focus moves to that bot’s name cell.
 When a focused worker row disappears and there are no more pages,
 focus returns to the parent bot’s name cell or to Search if a filter
 hides the parent. If a focused bot row disappears, focus moves to the
@@ -794,8 +795,9 @@ its connection. The report dialog wraps long names and saved text. Its
 status filter and Close button show keyboard focus. When a report
 overflows, Tab can focus its scrollable body. End reveals the last
 saved result. Escape or Close returns to the report button.
-If a roster refresh removes the report button, focus returns to
-Monitor search or to the Monitor heading when the roster is empty.
+If a roster refresh removes the report button while the dialog is
+open, closing the dialog returns focus to Monitor search or to the
+Monitor heading when the roster is empty.
 From the heading, Tab reaches **Include a sixth character** with a
 visible focus outline.
 An empty current roster says “No bots yet.” A search or filter that
