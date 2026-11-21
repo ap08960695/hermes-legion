@@ -5,7 +5,7 @@ Hub combines the former Library and Spaces in one native Desktop destination. It
 ## Create and use a Space
 
 1. Open **Hub → New collection**, enter a collection title, and select existing bot profiles on that connection. An empty member list is private.
-2. Use **New page** for Markdown or **Add files** to choose files explicitly. The app copies the selected bytes into the Space; it never moves or edits the original file.
+2. Use **New page** for Markdown or **Add files** to choose files explicitly. Collection actions and filters wrap in narrow windows. The app copies the selected bytes into the Space; it never moves or edits the original file.
 3. Open supported files in the internal viewer. If you leave the collection while a preview loads, select the file again when you return. Unsupported formats remain listed with preview disabled. Use **Manage bot access** to add or revoke readers.
 4. Use the trash icon to remove an item after confirmation. **Trash → Restore** recovers it. This is recoverable removal, not secure erasure.
 5. **Copy bot reference** copies instructions and the Space ID. Give that reference to an appropriate bot through the normal work flow when needed; copying never sends a message or calls a model.
