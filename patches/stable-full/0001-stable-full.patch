@@ -67769,10 +67769,10 @@ index 0000000000000000000000000000000000000000..0bc4571b57a9d01e95010694c19cfb30
 +  hermesApiAs<T>(owner, { path: '/api/spaces' + path, method, body })
 diff --git a/apps/desktop/src/plugins/hermes-spaces/page.test.tsx b/apps/desktop/src/plugins/hermes-spaces/page.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..7f47fc9e5cc78307901d2a67a99c2d31609c1a73
+index 0000000000000000000000000000000000000000..85842af90aa14d8889727fbc587a9e664818323c
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-spaces/page.test.tsx
-@@ -0,0 +1,509 @@
+@@ -0,0 +1,568 @@
 +import { act, render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
 +import { afterEach, expect, it, vi } from 'vitest'
 +vi.mock('@/app/artifacts', () => ({
@@ -68075,6 +68075,65 @@ index 0000000000000000000000000000000000000000..7f47fc9e5cc78307901d2a67a99c2d31
 +  }
 +)
 +
++it.each(['removed', 'surviving', 'catalog failure'] as const)(
++  'publishes only confirmed collection items when Refresh requests overlap (%s)',
++  async outcome => {
++    const olderCatalog = deferred<{ spaces: typeof exampleSpace[] }>()
++    const latestCatalog = deferred<{ spaces: typeof exampleSpace[] }>()
++    const olderItems = deferred<{ items: typeof examplePage[] }>()
++    const latestItems = deferred<{ items: typeof examplePage[] }>()
++    const current = { ...examplePage, id: 'current', title: 'Latest brief' }
++    const stale = { ...examplePage, id: 'stale', title: 'Stale brief' }
++    let catalogReads = 0
++
++    io.api.mockImplementation(async (_owner, path) => {
++      if (path === '') {
++        return [{ spaces: [exampleSpace] }, olderCatalog.promise, latestCatalog.promise][catalogReads++]
++      }
++
++      if (path.startsWith('/shared/items?')) {
++        return [{ items: [] }, olderItems.promise, latestItems.promise][catalogReads - 1]
++      }
++
++      return { items: [] }
++    })
++
++    render(<SpacesPage />)
++    fireEvent.click(await screen.findByRole('button', { name: 'Example Space' }))
++    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
++    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
++    expect(catalogReads).toBe(3)
++
++    await act(async () => { latestItems.resolve({ items: [current] }) })
++    const showedUnconfirmedItem = screen.queryByRole('button', { name: 'Latest brief' }) !== null
++    const keptLoading = screen.queryByText('Loading collection items…') !== null
++    await act(async () => {
++      if (outcome === 'catalog failure') {
++        latestCatalog.reject(new Error('Catalog unavailable'))
++      } else {
++        latestCatalog.resolve({ spaces: outcome === 'removed' ? [] : [exampleSpace] })
++      }
++    })
++    await act(async () => {
++      olderCatalog.resolve({ spaces: outcome === 'removed' ? [exampleSpace] : [] })
++      olderItems.resolve({ items: [stale] })
++    })
++
++    const selection = outcome === 'removed' ? 'All items' : 'Example Space'
++    expect(screen.getByRole('button', { name: selection }).getAttribute('data-variant')).toBe('secondary')
++    expect(screen.queryByRole('button', { name: 'Stale brief' })).toBeNull()
++    if (outcome === 'removed') {
++      expect(screen.queryByRole('button', { name: 'Example Space' })).toBeNull()
++      expect(screen.queryByRole('button', { name: 'Latest brief' })).toBeNull()
++    } else {
++      expect(screen.getByRole('button', { name: 'Latest brief' })).toBeTruthy()
++    }
++    expect(screen.queryByText('Loading collection items…')).toBeNull()
++    expect(showedUnconfirmedItem).toBe(false)
++    expect(keptLoading).toBe(true)
++  }
++)
++
 +it.each(['resolve', 'reject'] as const)('retires a preview that %ss after leaving and returning to a collection', async result => {
 +  const earlier = deferred<typeof examplePage & { text: string }>()
 +  let previewReads = 0
@@ -68284,10 +68343,10 @@ index 0000000000000000000000000000000000000000..7f47fc9e5cc78307901d2a67a99c2d31
 +})
 diff --git a/apps/desktop/src/plugins/hermes-spaces/page.tsx b/apps/desktop/src/plugins/hermes-spaces/page.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..41d2ad5b164808a6f1e4206ff9f66e4d12db3f0a
+index 0000000000000000000000000000000000000000..aac09446a018a7dd59f7fe23d63b6d33118c0d9a
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-spaces/page.tsx
-@@ -0,0 +1,954 @@
+@@ -0,0 +1,957 @@
 +import { suppressNonKeyboardFocusOpen, Tip } from '@hermes/plugin-sdk'
 +import { useStore } from '@nanostores/react'
 +import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -68834,25 +68893,28 @@ index 0000000000000000000000000000000000000000..41d2ad5b164808a6f1e4206ff9f66e4d
 +    setError('')
 +    setItemsLoading(selected !== 'chats')
 +    if (selected === 'chats') return
-+    const catalog = selected === 'all' ? null : catalogRequest.current
 +
-+    void request<{ items: SpaceItem[] }>(owner, selected === 'all' ? '/all-items' : `/${selected}/items?trash=${trash}`)
-+      .then(value => {
-+        if (current) setItems(value.items)
-+      })
-+      .catch(async e => {
-+        if (!current) { return }
++    const itemsRequest = request<{ items: SpaceItem[] }>(
++      owner, selected === 'all' ? '/all-items' : `/${selected}/items?trash=${trash}`
++    )
 +
-+        // Refresh may confirm this error belongs to a removed collection.
-+        const result = catalog ? await catalog.catch(() => null) : null
++    // Refresh may drop the selected collection before its items can be shown.
++    void Promise.allSettled([itemsRequest, selected === 'all' ? null : catalogRequest.current]).then(([result, catalog]) => {
++      if (!current) { return }
 +
-+        if (current && (!result || result.spaces.some(row => row.id === selected))) {
-+          setError(String(e))
-+        }
-+      })
-+      .finally(() => {
-+        if (current) setItemsLoading(false)
-+      })
++      if (catalog.status === 'fulfilled' && catalog.value && !catalog.value.spaces.some(row => row.id === selected)) {
++        return
++      }
++
++      if (result.status === 'fulfilled') {
++        setItems(result.value.items)
++      } else {
++        setError(String(result.reason))
++      }
++
++      setItemsLoading(false)
++    })
++
 +    return () => {
 +      current = false
 +    }
