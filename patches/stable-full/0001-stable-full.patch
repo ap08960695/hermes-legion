@@ -73307,12 +73307,12 @@ index 5836071773cff6ceadaf2729448e1777abf1451d..7d2ff2e81e47350241abbcdccb1ce385
      queryKey: boardKey(scope, slug, false),
 diff --git a/apps/desktop/src/plugins/kanban/reviewed-usage-view.tsx b/apps/desktop/src/plugins/kanban/reviewed-usage-view.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..357722d8b6f1b50fbdc9a048c99f6ca4bdb68662
+index 0000000000000000000000000000000000000000..8c2654fb1aa9ef321e8af690ad74c32ab3787904
 --- /dev/null
 +++ b/apps/desktop/src/plugins/kanban/reviewed-usage-view.tsx
-@@ -0,0 +1,198 @@
+@@ -0,0 +1,214 @@
 +import { Button, useQuery } from '@hermes/plugin-sdk'
-+import { useRef, useState } from 'react'
++import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 +
 +import { fetchReviewedUsage, fetchUsageRun, routedToScope } from './api'
 +import type { ReviewedUsageEvidence } from './types'
@@ -73401,6 +73401,14 @@ index 0000000000000000000000000000000000000000..357722d8b6f1b50fbdc9a048c99f6ca4
 +  const u = useKanban().work.usage
 +
 +  const heading = useRef<HTMLHeadingElement>(null)
++  const retryOwnedFocus = useRef(false)
++  const rememberRetryFocus = useCallback((button: HTMLButtonElement | null) => {
++    if (!button) return
++
++    return () => {
++      retryOwnedFocus.current = button.ownerDocument.activeElement === button
++    }
++  }, [])
 +  const [retryKey, setRetryKey] = useState<string | null>(null)
 +  const queryKey = ['kanban', 'reviewed-usage', scope, board, id, review] as const
 +  const key = JSON.stringify(queryKey)
@@ -73414,16 +73422,23 @@ index 0000000000000000000000000000000000000000..357722d8b6f1b50fbdc9a048c99f6ca4
 +    refetchOnWindowFocus: false,
 +    refetchOnReconnect: false
 +  })
++  useLayoutEffect(() => {
++    const title = heading.current
++    const restore = retryOwnedFocus.current
++    retryOwnedFocus.current = false
++    if (!restore || !title || !routedToScope({ queryKey })) return
++
++    const doc = title.ownerDocument
++    if (doc.activeElement === doc.body) title.focus()
++  })
++
 +  const busy = retrying || fetchStatus !== 'idle'
-+  const retry = async (button: HTMLButtonElement) => {
++  const retry = async () => {
 +    if (busy || !routedToScope({ queryKey })) return
 +    setRetryKey(key)
 +
 +    try {
-+      const result = await refetch({ cancelRefetch: false })
-+      if (result.isSuccess && routedToScope({ queryKey }) && button.ownerDocument.activeElement === button) {
-+        heading.current?.focus()
-+      }
++      await refetch({ cancelRefetch: false })
 +    } finally {
 +      setRetryKey(current => current === key ? null : current)
 +    }
@@ -73447,7 +73462,8 @@ index 0000000000000000000000000000000000000000..357722d8b6f1b50fbdc9a048c99f6ca4
 +          aria-disabled={busy || undefined}
 +          className="kanban-usage-retry mt-2 aria-disabled:opacity-60"
 +          key={key}
-+          onClick={event => void retry(event.currentTarget)}
++          onClick={() => void retry()}
++          ref={rememberRetryFocus}
 +          size="sm"
 +          variant="outline"
 +        >
@@ -74191,10 +74207,10 @@ index 0000000000000000000000000000000000000000..386ccacc488d8af2cecb903d602f4065
 +}
 diff --git a/apps/desktop/src/plugins/kanban/work-view.test.tsx b/apps/desktop/src/plugins/kanban/work-view.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..0135b207dd7c4232e13f48de7ea6662081ca68d2
+index 0000000000000000000000000000000000000000..f5c4a2fed23b5ca7ce69123e9356f2b44187781d
 --- /dev/null
 +++ b/apps/desktop/src/plugins/kanban/work-view.test.tsx
-@@ -0,0 +1,962 @@
+@@ -0,0 +1,1007 @@
 +import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 +import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 +import { afterEach, expect, it, vi } from 'vitest'
@@ -75075,6 +75091,51 @@ index 0000000000000000000000000000000000000000..0135b207dd7c4232e13f48de7ea66620
 +  expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Usage for the reviewed result' }))
 +  client.clear()
 +  dispose()
++})
++
++it.each([true, false])('handles focus when a new review replaces a pending usage retry (%s)', async keepFocus => {
++  const { ReviewedUsageView } = await import('./reviewed-usage-view')
++  const dispose = registerPluginLocales('kanban', KANBAN_LOCALES)
++  const client = new QueryClient()
++  const usage = { coverage: 'partial', limited: false, unclassified_runs: 0, stages: [] }
++  let finish!: () => void
++  io.usage.mockRejectedValueOnce(new Error('Offline'))
++    .mockImplementationOnce(() => new Promise(resolve => {
++      finish = () => resolve({ usage: { ...usage, unclassified_runs: 999 } })
++    }))
++    .mockResolvedValueOnce({ usage })
++
++  const view = (review: number) => (
++    <QueryClientProvider client={client}>
++      <ReviewedUsageView board="fixture-board" id="card" review={review} scope="local" />
++      <button type="button">Continue</button>
++    </QueryClientProvider>
++  )
++  try {
++    const { rerender } = render(view(7))
++    const retry = await screen.findByRole('button', { name: 'Retry usage' })
++    retry.focus()
++    fireEvent.click(retry)
++    await waitFor(() => expect(retry.getAttribute('aria-disabled')).toBe('true'))
++    const next = screen.getByRole('button', { name: 'Continue' })
++    if (!keepFocus) next.focus()
++
++    rerender(view(8))
++    await screen.findByText('Partial coverage. Totals include only usage linked to this result.')
++    expect(retry.isConnected).toBe(false)
++    expect(document.activeElement).toBe(keepFocus ? screen.getByRole('heading', { name: 'Usage for the reviewed result' }) : next)
++
++    next.focus()
++    await act(async () => finish())
++    expect(document.activeElement).toBe(next)
++    expect(screen.queryByText(/^999 run/)).toBeNull()
++    expect(io.usage.mock.calls).toEqual([7, 7, 8].map(review => ['card', 'fixture-board', review]))
++  } finally {
++    cleanup()
++    client.clear()
++    io.usage.mockReset()
++    dispose()
++  }
 +})
 +
 +it('shows genuinely unavailable usage without a retry action', async () => {
