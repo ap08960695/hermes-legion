@@ -7511,6 +7511,67 @@ index 6aee08bb557d3c7263314dbc7dc51ca06c6326ad..eea311d3ef161274b83bdaa28a04da9b
 +
 +  assert.equal(path.dirname(socket), `/tmp/hermes-ssh-${process.getuid!()}`)
  })
+diff --git a/apps/desktop/electron/fixtures/source-backend.py b/apps/desktop/electron/fixtures/source-backend.py
+index bccab06c268707d0bf6bf4e1e99ac4ba947dfb01..afb9a415246a5ee9a8cc9d20f14d08bd8374273e 100644
+--- a/apps/desktop/electron/fixtures/source-backend.py
++++ b/apps/desktop/electron/fixtures/source-backend.py
+@@ -9,3 +9,8 @@ from __future__ import annotations
+
++from base64 import urlsafe_b64encode
++import csv
++from hashlib import sha256
+ import importlib
++from importlib.metadata import distribution
++from io import StringIO
+ import json
+@@ -16,2 +21,3 @@ import subprocess
+ import sys
++import tomllib
+ import zipfile
+@@ -19,2 +25,31 @@ import zipfile
+
++def stage_worker_wheels(project: Path, wheels: Path) -> None:
++    # Rebuild the locked pure-Python payloads from the provisioned test interpreter.
++    lock = tomllib.loads((project / "uv.lock").read_text(encoding="utf-8"))
++    for pin in lock["package"]:
++        if "registry" not in pin["source"]:
++            continue
++        dist = distribution(pin["name"])
++        assert dist.version == pin["version"], f"{pin['name']} must match the PM lock"
++        assert "Tag: py3-none-any" in dist.read_text("WHEEL").splitlines()
++        files = dist.files
++        assert files
++        record, = (entry for entry in files if entry.name == "RECORD")
++        name = record.parent.name.removesuffix(".dist-info")
++        records = StringIO()
++        rows = csv.writer(records, lineterminator="\n")
++        with zipfile.ZipFile(wheels / f"{name}-py3-none-any.whl", "w") as wheel:
++            for entry in files:
++                if entry.hash is None:
++                    continue
++                assert not entry.is_absolute() and ".." not in entry.parts, entry
++                data = dist.locate_file(entry).read_bytes()
++                digest = urlsafe_b64encode(sha256(data).digest()).decode().rstrip("=")
++                assert entry.hash.mode == "sha256" and entry.hash.value == digest and entry.size == len(data), entry
++                wheel.writestr(entry.as_posix(), data)
++                rows.writerow((entry.as_posix(), f"sha256={digest}", len(data)))
++            rows.writerow((record.as_posix(), "", ""))
++            wheel.writestr(record.as_posix(), records.getvalue())
++
++
+ def main() -> None:
+@@ -69,5 +104,9 @@ def main() -> None:
+     worker = root / "pm" / "worker.py"
+-    worker_python = stage_runtime(Path(uv), Path(sys.executable), temp / "pm-runtime")
++    pm_wheels = temp / "pm-wheels"
++    pm_wheels.mkdir()
++    stage_worker_wheels(root / "pm", pm_wheels)
++    worker_python = stage_runtime(Path(uv), Path(sys.executable), temp / "pm-runtime", wheelhouse=pm_wheels)
+     worker_code = (
+-        "import runpy, sys; from pathlib import Path; "
++        "import runpy, sys; from pathlib import Path; from importlib.util import find_spec; "
++        "assert find_spec('fastapi') is None; "
+         f"sys.path.insert(0, {str(root)!r}); import pm._uv; "
 diff --git a/apps/desktop/electron/local-gateway-python-admission.test.ts b/apps/desktop/electron/local-gateway-python-admission.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..a78e661523b3a8734bc46ef7050100a8a56c4e79
