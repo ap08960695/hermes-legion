@@ -151,6 +151,8 @@ in Gateway settings to return to recovery and focus **Gateway settings**.
 If Local startup fails again while Gateway settings is open, the panel
 shows the new failure without moving keyboard focus. Choose **Back**
 for the current recovery details.
+When Local startup succeeds and closes recovery, keyboard focus moves
+to the **Connected** status in the main window if focus has not already moved.
 **Retry**, **Gateway settings**, and **Back** show a keyboard
 focus outline, including while a focused **Retry** is pending.
 If the reset cannot be confirmed, recovery scrolls its message into
