@@ -28,6 +28,9 @@ Acceptance describes recorded evidence at handoff, not a new execution of checks
 In the Work card drawer, a comment that fails to send stays in the editor.
 Text you type while another comment is sending stays available as a draft.
 
+**Edit description** focuses the editor. If saving fails, the description
+draft stays open so you can retry. **Cancel edit** discards the draft.
+
 ## Compare a revision
 
 In **Track work**, open **Compare with the round that asked for changes**.
