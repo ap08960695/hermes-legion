@@ -278,3 +278,7 @@ answer** after the chat resumes, matching the refreshed Owner Inbox.
 If Local drops while a split chat is reopening, the chat waits
 for a fresh resume. An interrupted attempt cannot restore a stale
 question after the gateway reconnects.
+
+If Local disconnects while **Refresh inbox** has keyboard focus,
+focus moves to the **Waiting for owner** heading. You can continue
+with Tab after the refreshed list arrives.
