@@ -778,6 +778,8 @@ correction and canonical navigation/report/terminal progress remain open.
 Press Tab to reach the scrollable Monitor table. Use Left and Right to
 reveal more columns. Activating **Show more** by keyboard moves focus
 to the first newly shown row so the next Tab can reach its actions.
+If a refresh reorders the focused row, Monitor keeps its control in view.
+If the row moves beyond the displayed page, focus goes to **Show more**.
 The table and its controls show a focus outline,
 including in high-contrast palettes. Report buttons name the bot and
 its connection. The report dialog wraps long names and saved text. Its
