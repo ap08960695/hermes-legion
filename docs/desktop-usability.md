@@ -62,6 +62,8 @@ With **Cancel** focused, Enter or Space closes the dialog and leaves
 your edited draft in the composer.
 If you’re still in the same split Chat, dismissing the dialog returns
 keyboard focus to that composer.
+If the connection drops while the confirmation is open, your draft
+stays in the editor. Confirm again after reconnecting to send it.
 
 When you discard a saved message with the keyboard, focus returns to the recovery summary while other saved messages remain. After the last discard, you can keep typing in the current draft.
 
