@@ -242,6 +242,9 @@ Saved-chat search retires results from another query or profile immediately. A f
 
 ## Bot Monitor
 
+**Recent task reports** stays open to the same captured report while
+Local reconnects. Reopen it after the roster refresh to see new reports.
+
 When an open Bot Chat asks for an answer, **Monitor** shows **Waiting
 for your answer** under **Needs attention**. The bot stays listed when
 you switch to another chat. Active workers can still report progress
