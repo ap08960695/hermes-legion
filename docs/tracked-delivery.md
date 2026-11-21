@@ -30,6 +30,8 @@ its full summary or error. Page Down scrolls the list.
 
 When cards in the current list share a title, Track work shows their
 status, assignee and card ID so you can choose the right one.
+When **Show more** has focus, activating it moves focus to the first newly
+visible card. Press Enter on a card to select it.
 Use **All work** to clear the selected card and return keyboard focus to its
 picker entry, or to the picker if that entry is hidden.
 
