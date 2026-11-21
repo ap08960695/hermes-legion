@@ -804,8 +804,10 @@ Monitor heading when the roster is empty.
 From the heading, Tab reaches **Include a sixth character** with a
 visible focus outline.
 An empty current roster says “No bots yet.” A search or filter that
-excludes every available row keeps the no-matches message. Waiting or
-failed refresh without rows shows the connection status.
+excludes every available row keeps the no-matches message. When a
+refresh brings back matches while **Clear filters** is focused,
+focus returns to Search and the existing filters stay applied.
+Waiting or failed refresh without rows shows the connection status.
 In a character report without a status filter, Tab reaches the report
 body when it overflows. Page Down and End reveal the remaining text.
 After closing a report opened from a character, focus returns to the
