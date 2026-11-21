@@ -48244,7 +48244,7 @@ index 3d061cf281eab25204c59e58716a12b072e9c7d1..023096534e9d670a35471292b429dc6d
 +  ]
  ]
 diff --git a/apps/desktop/src/components/boot-failure-overlay.test.tsx b/apps/desktop/src/components/boot-failure-overlay.test.tsx
-index 4676b5744eecee3f0480839ae90d713409cb6409..63d658b813f82473f74956255e30aad7e8d5911f 100644
+index 4676b5744eecee3f0480839ae90d713409cb6409..82b0b10ff5a3bd7658e200811ae3b997f1d31612 100644
 --- a/apps/desktop/src/components/boot-failure-overlay.test.tsx
 +++ b/apps/desktop/src/components/boot-failure-overlay.test.tsx
 @@ -7,2 +7,3 @@ import { $notifications } from '@/store/notifications'
@@ -48578,7 +48578,7 @@ index 4676b5744eecee3f0480839ae90d713409cb6409..63d658b813f82473f74956255e30aad7
 +  })
 +
    it('dismisses from the embedded gateway settings view', async () => {
-@@ -387,2 +693,99 @@ describe('BootFailureOverlay', () => {
+@@ -387,2 +693,146 @@ describe('BootFailureOverlay', () => {
 
 +  it.each([
 +    [
@@ -48632,6 +48632,53 @@ index 4676b5744eecee3f0480839ae90d713409cb6409..63d658b813f82473f74956255e30aad7
 +    }
 +  })
 +
++  it.each(['close', 'escape', 'replaced'] as const)('ignores a late successful Retry after recovery changes (%s)', async exit => {
++    const reload = vi.fn()
++    const originalLocation = Object.getOwnPropertyDescriptor(window, 'location')!
++    Object.defineProperty(window, 'location', { configurable: true, value: { ...window.location, reload } })
++    const pending = deferred<{ ok: boolean }>()
++    const resetBootstrap = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValueOnce({ ok: true })
++    const restore = stubDesktop({ mode: 'local' }, { resetBootstrap })
++
++    try {
++      render(<BootFailureOverlay />)
++      fireEvent.click(await screen.findByRole('button', { name: 'Retry' }))
++
++      if (exit === 'replaced') {
++        await act(async () => {
++          $desktopBoot.set({ ...$desktopBoot.get(), error: 'Another startup failure' })
++        })
++        fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
++      } else if (exit === 'close') {
++        fireEvent.click(screen.getByRole('button', { name: /^close$/i }))
++      } else {
++        fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
++      }
++
++      expect(resetBootstrap).toHaveBeenCalledTimes(1)
++
++      await act(async () => pending.resolve({ ok: true }))
++      expect(reload).not.toHaveBeenCalled()
++      expect(screen.queryByRole('alert')).toBeNull()
++
++      if (exit !== 'replaced') {
++        expect(screen.queryByRole('dialog')).toBeNull()
++        await act(async () => {
++          $desktopBoot.set({ ...$desktopBoot.get(), error: 'Another startup failure' })
++        })
++      }
++
++      await act(async () => {
++        fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
++      })
++      expect(resetBootstrap).toHaveBeenCalledTimes(2)
++      expect(reload).toHaveBeenCalledTimes(1)
++    } finally {
++      restore()
++      Object.defineProperty(window, 'location', originalLocation)
++    }
++  })
++
 +  it.each([true, false])('keeps Retry focusable and reveals its refusal only while focused (%s)', async keepsFocus => {
 +    let finishReset!: (result: { ok: boolean }) => void
 +
@@ -48679,13 +48726,13 @@ index 4676b5744eecee3f0480839ae90d713409cb6409..63d658b813f82473f74956255e30aad7
 +
    it.each(['refused', 'thrown', 'unavailable'])('preserves a %s repair failure without reloading', async failure => {
 diff --git a/apps/desktop/src/components/boot-failure-overlay.tsx b/apps/desktop/src/components/boot-failure-overlay.tsx
-index eb04ba27fbf1725e1aaef88cbd1f4a22ed62401b..2a483b1893438432c3e8ab7cdc8853c7381a8dec 100644
+index eb04ba27fbf1725e1aaef88cbd1f4a22ed62401b..3e73461951d0278cc735240d45800fe8944db690 100644
 --- a/apps/desktop/src/components/boot-failure-overlay.tsx
 +++ b/apps/desktop/src/components/boot-failure-overlay.tsx
 @@ -2,5 +2,6 @@ import { useStore } from '@nanostores/react'
  import { Dialog as DialogPrimitive } from 'radix-ui'
 -import { type ComponentProps, lazy, type ReactNode, Suspense, useEffect, useState } from 'react'
-+import { type ComponentProps, lazy, type ReactNode, Suspense, useCallback, useEffect, useId, useRef, useState } from 'react'
++import { type ComponentProps, lazy, type ReactNode, Suspense, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 
  import { Button } from '@/components/ui/button'
 +import { CopyButton } from '@/components/ui/copy-button'
@@ -48752,16 +48799,17 @@ index eb04ba27fbf1725e1aaef88cbd1f4a22ed62401b..2a483b1893438432c3e8ab7cdc8853c7
 +}
 +
  export function BootFailureOverlay() {
-@@ -95,4 +136,7 @@ export function BootFailureOverlay() {
+@@ -95,4 +136,8 @@ export function BootFailureOverlay() {
    const [busy, setBusy] = useState<BusyAction>(null)
 -  const [logs, setLogs] = useState<string[]>([])
 +  const [retryFailedFor, setRetryFailedFor] = useState<string | null>(null)
++  const pendingRetry = useRef<{ cancelled: boolean } | null>(null)
 +  const [retryButton, revealRetryAlert] = useRevealFocusedAlert()
 +  const [logSnapshot, setLogSnapshot] = useState<{ error: string | null; lines: string[] } | null>(null)
    const [showLogs, setShowLogs] = useState(false)
 +  const recentLogsId = useId()
    const [remoteReauth, setRemoteReauth] = useState<RemoteReauth | null>(null)
-@@ -110,2 +154,17 @@ export function BootFailureOverlay() {
+@@ -110,2 +155,17 @@ export function BootFailureOverlay() {
    const [view, setView] = useState<RecoveryView>('recovery')
 +  const [recoveryApply] = useState(createRecoveryGatewayApply)
 +  const { error: recoveryApplyError, pending: recoveryApplyPending } = useStore(recoveryApply)
@@ -48779,7 +48827,17 @@ index eb04ba27fbf1725e1aaef88cbd1f4a22ed62401b..2a483b1893438432c3e8ab7cdc8853c7
 +  }, [])
 +
    // Dismissal hides the modal only. The latched boot error stays so recovery
-@@ -122,5 +181,13 @@ export function BootFailureOverlay() {
+@@ -120,7 +180,23 @@ export function BootFailureOverlay() {
+
++  const cancelRetryContinuation = useCallback(() => {
++    if (pendingRetry.current) {
++      pendingRetry.current.cancelled = true
++    }
++  }, [])
++
++  useLayoutEffect(() => cancelRetryContinuation, [boot.error, cancelRetryContinuation, suppressed, visible])
++
+   useEffect(() => {
      setDismissedError(current => (boot.running || current !== boot.error ? null : current))
 -  }, [boot.error, boot.running])
 +    setRetryFailedFor(null)
@@ -48794,7 +48852,7 @@ index eb04ba27fbf1725e1aaef88cbd1f4a22ed62401b..2a483b1893438432c3e8ab7cdc8853c7
 +    setLogSnapshot(null)
 +
      if (!visible) {
-@@ -129,6 +196,16 @@ export function BootFailureOverlay() {
+@@ -129,6 +205,16 @@ export function BootFailureOverlay() {
 
 +    let cancelled = false
 +
@@ -48812,24 +48870,34 @@ index eb04ba27fbf1725e1aaef88cbd1f4a22ed62401b..2a483b1893438432c3e8ab7cdc8853c7
 +      cancelled = true
 +    }
    }, [boot.error, visible])
-@@ -162,2 +239,3 @@ export function BootFailureOverlay() {
+@@ -162,2 +248,3 @@ export function BootFailureOverlay() {
    // buttons. Runs whenever the overlay becomes visible.
 +  // eslint-disable-next-line no-restricted-syntax -- cancel a pending focus request when recovery closes
    useEffect(() => {
-@@ -167,2 +245,3 @@ export function BootFailureOverlay() {
+@@ -167,2 +254,3 @@ export function BootFailureOverlay() {
        setRemoteFailure(false)
 +      navigatingView.current = false
        setView('recovery')
-@@ -227,5 +306,27 @@ export function BootFailureOverlay() {
+@@ -227,5 +315,42 @@ export function BootFailureOverlay() {
    const retry = async () => {
 +    const apply = recoveryApply.get()
-+    if (busy || apply.pending) {
++    if (busy || pendingRetry.current || apply.pending) {
 +      return
++    }
++
++    const request = { cancelled: false }
++    pendingRetry.current = request
++
++    const isCurrent = () => {
++      const currentBoot = $desktopBoot.get()
++
++      return !request.cancelled && currentBoot.error === boot.error && !currentBoot.running
 +    }
 +
 +    if (apply.error !== null) {
 +      recoveryApply.set({ ...apply, error: null })
 +    }
++
      setBusy('retry')
 -    await window.hermesDesktop?.resetBootstrap().catch(() => undefined)
 -    window.location.reload()
@@ -48838,7 +48906,7 @@ index eb04ba27fbf1725e1aaef88cbd1f4a22ed62401b..2a483b1893438432c3e8ab7cdc8853c7
 +    try {
 +      const reset = await window.hermesDesktop?.resetBootstrap?.()
 +
-+      if (reset?.ok === true) {
++      if (isCurrent() && reset?.ok === true) {
 +        window.location.reload()
 +
 +        return
@@ -48847,13 +48915,19 @@ index eb04ba27fbf1725e1aaef88cbd1f4a22ed62401b..2a483b1893438432c3e8ab7cdc8853c7
 +      // An IPC error doesn't establish whether the reset happened.
 +    }
 +
-+    setRetryFailedFor(boot.error)
++    pendingRetry.current = null
++
++    if (isCurrent()) {
++      setRetryFailedFor(boot.error)
++    }
++
 +    setBusy(null)
    }
-@@ -336,5 +437,11 @@ export function BootFailureOverlay() {
+@@ -336,5 +461,12 @@ export function BootFailureOverlay() {
 
 -  const openLogs = () => void window.hermesDesktop?.revealLogs().catch(() => undefined)
 +  const dismiss = () => {
++    cancelRetryContinuation()
 +    setOpenDetailsFor(null)
 +    setDismissedError(boot.error)
 +  }
@@ -48864,11 +48938,11 @@ index eb04ba27fbf1725e1aaef88cbd1f4a22ed62401b..2a483b1893438432c3e8ab7cdc8853c7
 +    setView(next)
 +  }
 
-@@ -368,2 +475,3 @@ export function BootFailureOverlay() {
+@@ -368,2 +500,3 @@ export function BootFailureOverlay() {
      busy?: Exclude<BusyAction, null>
 +    ref?: ComponentProps<typeof Button>['ref']
    }
-@@ -373,4 +481,8 @@ export function BootFailureOverlay() {
+@@ -373,4 +506,8 @@ export function BootFailureOverlay() {
      label: copy.gatewaySettings,
 -    onClick: () => setView('connect'),
 -    icon: <SlidersHorizontal />
@@ -48879,13 +48953,13 @@ index eb04ba27fbf1725e1aaef88cbd1f4a22ed62401b..2a483b1893438432c3e8ab7cdc8853c7
 +    icon: <SlidersHorizontal />,
 +    ref: focusViewButton
    }
-@@ -382,3 +494,4 @@ export function BootFailureOverlay() {
+@@ -382,3 +519,4 @@ export function BootFailureOverlay() {
      icon: <RefreshCw />,
 -    busy: 'retry'
 +    busy: 'retry',
 +    ref: retryButton
    }
-@@ -475,5 +588,16 @@ export function BootFailureOverlay() {
+@@ -475,5 +613,16 @@ export function BootFailureOverlay() {
    if (view === 'connect') {
 +    const back = () => navigateView('recovery')
 +
@@ -48904,7 +48978,7 @@ index eb04ba27fbf1725e1aaef88cbd1f4a22ed62401b..2a483b1893438432c3e8ab7cdc8853c7
 +      >
 +        <div className="relative flex max-h-[86vh] w-full max-w-[46rem] flex-col overflow-clip rounded-xl border border-(--stroke-nous) bg-(--ui-chat-bubble-background) shadow-nous">
            <DialogCloseButton />
-@@ -482,4 +606,6 @@ export function BootFailureOverlay() {
+@@ -482,4 +631,6 @@ export function BootFailureOverlay() {
            <button
 -            className="flex w-full items-center gap-1.5 px-4 pt-4 text-left text-xs text-muted-foreground transition-colors hover:text-foreground"
 -            onClick={() => setView('recovery')}
@@ -48913,7 +48987,7 @@ index eb04ba27fbf1725e1aaef88cbd1f4a22ed62401b..2a483b1893438432c3e8ab7cdc8853c7
 +            onClick={back}
 +            ref={focusViewButton}
              type="button"
-@@ -489,5 +615,5 @@ export function BootFailureOverlay() {
+@@ -489,5 +640,5 @@ export function BootFailureOverlay() {
            </button>
 -          <div className="min-h-0 flex-1 pt-4">
 +          <div className="min-h-0 flex-1 overflow-y-auto pt-4">
@@ -48921,7 +48995,7 @@ index eb04ba27fbf1725e1aaef88cbd1f4a22ed62401b..2a483b1893438432c3e8ab7cdc8853c7
 -              <GatewaySettings embedded />
 +              <GatewaySettings embedded recoveryApply={recoveryApply} />
              </Suspense>
-@@ -499,5 +625,8 @@ export function BootFailureOverlay() {
+@@ -499,5 +650,8 @@ export function BootFailureOverlay() {
 
 +  const logs = logSnapshot?.error === boot.error ? logSnapshot.lines : []
 +  const recentLogs = showLogs ? logs.slice(-40).join('') : ''
@@ -48931,7 +49005,7 @@ index eb04ba27fbf1725e1aaef88cbd1f4a22ed62401b..2a483b1893438432c3e8ab7cdc8853c7
 -      <div className="relative w-full max-w-[40rem] overflow-hidden rounded-xl border border-(--stroke-nous) bg-(--ui-chat-bubble-background) shadow-nous">
 +      <div className="relative max-h-full w-full max-w-[40rem] overflow-y-auto rounded-xl border border-(--stroke-nous) bg-(--ui-chat-bubble-background) shadow-nous">
          <DialogCloseButton />
-@@ -521,7 +650,16 @@ export function BootFailureOverlay() {
+@@ -521,7 +675,16 @@ export function BootFailureOverlay() {
              {failureCopy.rawDetail ? (
 -              <details className="mt-2 text-muted-foreground">
 +              <details
@@ -48950,7 +49024,7 @@ index eb04ba27fbf1725e1aaef88cbd1f4a22ed62401b..2a483b1893438432c3e8ab7cdc8853c7
 +                  role="region"
 +                  tabIndex={0}
                  >
-@@ -534,14 +672,42 @@ export function BootFailureOverlay() {
+@@ -534,14 +697,42 @@ export function BootFailureOverlay() {
            <div className="grid gap-2">
 +            <p className={recoveryApplyPending ? 'wrap-anywhere text-xs' : 'sr-only'} id={recoveryApplyStatusId} role="status">
 +              {recoveryApplyPending ? t.settings.gateway.restartingTitle : ''}
@@ -49003,7 +49077,7 @@ index eb04ba27fbf1725e1aaef88cbd1f4a22ed62401b..2a483b1893438432c3e8ab7cdc8853c7
 +              </p>
 +            ) : null}
              {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
-@@ -550,5 +716,7 @@ export function BootFailureOverlay() {
+@@ -550,5 +741,7 @@ export function BootFailureOverlay() {
            {logs.length > 0 ? (
 -            <div className="grid gap-2">
 +            <div className="grid gap-2" data-recovery-recent-logs>
@@ -49013,7 +49087,7 @@ index eb04ba27fbf1725e1aaef88cbd1f4a22ed62401b..2a483b1893438432c3e8ab7cdc8853c7
 +                aria-expanded={showLogs}
 +                className="-ml-2 justify-self-start font-medium"
                  onClick={() => setShowLogs(v => !v)}
-@@ -560,3 +728,16 @@ export function BootFailureOverlay() {
+@@ -560,3 +753,16 @@ export function BootFailureOverlay() {
                </Button>
 -              {showLogs ? <LogView className="max-h-48">{logs.slice(-40).join('')}</LogView> : null}
 +              {showLogs ? (

@@ -152,6 +152,8 @@ in Gateway settings to return to recovery and focus **Gateway settings**.
 focus outline, including while a focused **Retry** is pending.
 If the reset cannot be confirmed, recovery scrolls its message into
 view when focus is still on **Retry**.
+Closing recovery while **Retry** is pending leaves the reset running.
+Its reply won't reload the window after you close the dialog.
 **Details** keeps its open or closed state when you return to the same startup error.
 With **Details** open, Tab reaches its diagnostic text. Use the arrow
 keys or Page Down to scroll a long message, then Tab to continue.
