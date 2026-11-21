@@ -56801,25 +56801,52 @@ index 0000000000000000000000000000000000000000..8d3ded0a0ad892036cef1ff15cb60fc4
 +  )
 +}
 diff --git a/apps/desktop/src/plugins/hermes-bots/canonical-chat.ts b/apps/desktop/src/plugins/hermes-bots/canonical-chat.ts
-index 33ecf3c1bc56258b6a06341bed2c0aed9b44bf31..23f93f2f9f45c1c9a0464825926a91518ca091dd 100644
+index 33ecf3c1bc56258b6a06341bed2c0aed9b44bf31..85d38f459e7b3407d4730db435a57cf209d42b00 100644
 --- a/apps/desktop/src/plugins/hermes-bots/canonical-chat.ts
 +++ b/apps/desktop/src/plugins/hermes-bots/canonical-chat.ts
-@@ -357,2 +357,4 @@ interface OpenCanonicalChatOptions {
+@@ -14,3 +14,3 @@ import type { SessionListRow } from '@hermes/plugin-sdk'
+
+-import { $botMeta, botMetaKey, botOwner, persistBotMetaSnapshot } from './data'
++import { $botMeta, $localRosterEpoch, botMetaKey, botOwner, persistBotMetaSnapshot } from './data'
+ import { botsText } from './i18n'
+@@ -281,2 +281,12 @@ async function findExistingCanonicalChat(owner: RosterRow | string): Promise<Can
+   const { bot, name, route } = botOwner(owner)
++  const localGatewayOpen = () => host.state?.connectionId?.get() === 'local' && host.state?.gateway?.get() === 'open'
++  const localEpoch = (route?.connectionId ?? 'local') === 'local' && localGatewayOpen() ? $localRosterEpoch.get() : null
++
++  // Even a successful reply from before a Local reconnect no longer describes the registry.
++  const assertLocalLookupCurrent = () => {
++    if (localEpoch !== null && (!localGatewayOpen() || $localRosterEpoch.get() !== localEpoch)) {
++      throw new Error('Local connection changed while checking the Bot Chat registry.')
++    }
++  }
++
+   // FAIL CLOSED. A failed registry lookup MUST NOT read as "no Bot Chat
+@@ -312,2 +322,3 @@ async function findExistingCanonicalChat(owner: RosterRow | string): Promise<Can
+   } catch (error) {
++    assertLocalLookupCurrent()
+     // Plugin tests and host bridges can return Error-like values from another
+@@ -320,2 +331,4 @@ async function findExistingCanonicalChat(owner: RosterRow | string): Promise<Can
+
++  assertLocalLookupCurrent()
++
+   const rows = res?.sessions ?? []
+@@ -357,2 +370,4 @@ interface OpenCanonicalChatOptions {
    openingStillCurrent?: (() => boolean) | null
 +  /** A preview may open its existing named chat only while this registry row still owns it. */
 +  expectedRegistryId?: string
  }
-@@ -611,3 +613,3 @@ export async function openBotCanonicalChat(
+@@ -611,3 +626,3 @@ export async function openBotCanonicalChat(
    owner: RosterRow | string,
 -  { background = false, openingStillCurrent = null }: OpenCanonicalChatOptions = {}
 +  { background = false, openingStillCurrent = null, expectedRegistryId }: OpenCanonicalChatOptions = {}
  ): Promise<{ openedId: string; registryId: string } | null> {
-@@ -615,2 +617,4 @@ export async function openBotCanonicalChat(
+@@ -615,2 +630,4 @@ export async function openBotCanonicalChat(
 
 +  if (expectedRegistryId !== undefined && existing?.id !== expectedRegistryId) {return null}
 +
    if (existing?.id && typeof host.openSession === 'function') {
-@@ -636,3 +640,3 @@ export async function openBotCanonicalChat(
+@@ -636,3 +653,3 @@ export async function openBotCanonicalChat(
    // of creating a fresh forever-chat under their feet.
 -  if (background) {
 +  if (background || expectedRegistryId !== undefined) {
@@ -61541,10 +61568,10 @@ index 0000000000000000000000000000000000000000..9898ca8640b33a3d3d1aedfd2e9f2324
 +} satisfies Record<keyof typeof CANONICAL_GROUP_LOCALES, MonitorMessages>
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-open.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-open.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..949d0376fdb01884898e4d853a15c32366fe4ca8
+index 0000000000000000000000000000000000000000..f0e9a0f2168c8da4559d2fe88319f8698ac40bbb
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-open.test.tsx
-@@ -0,0 +1,152 @@
+@@ -0,0 +1,186 @@
 +import { atom, host } from '@hermes/plugin-sdk'
 +import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -61553,7 +61580,7 @@ index 0000000000000000000000000000000000000000..949d0376fdb01884898e4d853a15c323
 +import { registerPluginLocales } from '@/i18n/plugin-i18n'
 +
 +import { $openBotChat, $pendingBotOpen, $selectedBot, $selectedRosterKey } from './bot-state'
-+import { $botMeta, botSourceStatus } from './data'
++import { $botMeta, $localRosterEpoch, botSourceStatus } from './data'
 +import { $groupChatWorkspace } from './group-chat'
 +import { BOTS_LOCALES } from './i18n'
 +import { BotMonitor } from './monitor'
@@ -61597,13 +61624,14 @@ index 0000000000000000000000000000000000000000..949d0376fdb01884898e4d853a15c323
 +  vi.restoreAllMocks()
 +})
 +
-+function openMonitor() {
++function openMonitor(hasCanonical = true) {
 +  const now = Date.now()
 +  const side = { id: 'latest-side', last_active: now / 1000, preview: 'Newer side conversation' }
 +
 +  const local: RosterRow = { name: 'writer', display_name: 'Writer', connectionId: 'local',
 +    connectionKind: 'local', connectionLabel: 'Local fixture', sourceScoped: true, sourceReachable: true, route,
-+    canonical_session: { id: 'canonical-root', resolved_id: 'old-snapshot-tip', preview: 'Canonical preview' },
++    description: 'Canonical preview',
++    canonical_session: hasCanonical ? { id: 'canonical-root', resolved_id: 'old-snapshot-tip', preview: 'Canonical preview' } : undefined,
 +    last_session: side, worker_sessions: [{ id: 'live-worker', title: 'Current fixture worker', last_active: now / 1000 }] }
 +
 +  const foreign: RosterRow = { name: 'writer', display_name: 'Writer', connectionId: 'other-fixture',
@@ -61652,6 +61680,39 @@ index 0000000000000000000000000000000000000000..949d0376fdb01884898e4d853a15c323
 +  expect(host.ensureAgent).not.toHaveBeenCalled()
 +  expect(host.newChat).not.toHaveBeenCalled()
 +  expect(host.notify).not.toHaveBeenCalled()
++})
++
++it.each(['row', 'empty', 'rejected'] as const)('discards an obsolete Local registry reply (%s)', async result => {
++  vi.spyOn(host.state.connectionId, 'get').mockReturnValue('local')
++  vi.spyOn(host.state.gateway, 'get').mockReturnValue('open')
++  const epoch = $localRosterEpoch.get()
++  let finish!: () => void
++  vi.mocked(host.requestProfile).mockImplementationOnce(async () => new Promise((resolve, reject) => {
++    finish = () => {
++      if (result === 'rejected') {
++        reject(new Error('method not found'))
++      } else {
++        resolve({ sessions: result === 'empty' ? [] : [{ id: 'canonical-root', resolved_id: 'old-tip', title: 'Bot Chat' }] })
++      }
++    }
++  }))
++
++  try {
++    fireEvent.click(openMonitor(result !== 'empty').bot)
++    await waitFor(() => expect(host.requestProfile).toHaveBeenCalledTimes(1))
++    $localRosterEpoch.set(epoch + 1)
++    finish()
++
++    await waitFor(() => expect($pendingBotOpen.get()).toBeNull())
++    expect(host.openSession).not.toHaveBeenCalled()
++    expect(host.newChat).not.toHaveBeenCalled()
++    expect(host.requestProfile).toHaveBeenCalledTimes(1)
++    expect(host.notify).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
++      title: 'Could not open Writer’s chat', message: 'Try again.', detail: expect.stringContaining('Local connection changed')
++    }))
++  } finally {
++    $localRosterEpoch.set(epoch)
++  }
 +})
 +
 +it('reports a failed registry read without opening or creating a conversation', async () => {
