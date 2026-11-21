@@ -26,9 +26,9 @@ fitted. Zoom in to read their labels while keeping the center point fixed.
 Press **Escape** to close the viewer and return focus to **Open diagram**.
 If a toolbar tooltip is open, Escape dismisses the tooltip first.
 
-In Hub's chat file preview, Escape returns from the expanded diagram to
-**Open diagram**. Press Escape again to close the file preview and return to
-the file in the list.
+In a Work card or Hub file preview, Escape returns from the expanded
+diagram to **Open diagram**. Release Escape and press it again to close the
+card or preview.
 **Copy** keeps focus and runs one copy at a time in the expanded viewer.
 If the clipboard rejects both image and SVG text, the expanded viewer shows
 **Copy failed** below the diagram and keeps Copy and Close in place.
