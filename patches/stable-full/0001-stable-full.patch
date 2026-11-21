@@ -67928,10 +67928,10 @@ index 0000000000000000000000000000000000000000..073d0e38e447a39170d9b8badcb268e4
 +}
 diff --git a/apps/desktop/src/plugins/kanban/board-presentation.test.tsx b/apps/desktop/src/plugins/kanban/board-presentation.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..d743342cc65ef6308036d3c79a7374aa23321571
+index 0000000000000000000000000000000000000000..55fd5f99b31ba16feb59c900783fdf7d9eca1b9d
 --- /dev/null
 +++ b/apps/desktop/src/plugins/kanban/board-presentation.test.tsx
-@@ -0,0 +1,354 @@
+@@ -0,0 +1,416 @@
 +import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 +import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -67944,6 +67944,7 @@ index 0000000000000000000000000000000000000000..d743342cc65ef6308036d3c79a7374aa
 +import { KanbanBoardPage } from './board'
 +import { KANBAN_LOCALES } from './i18n'
 +import type { KanbanBoard } from './types'
++import { $newTaskLane } from './ui'
 +
 +const source = vi.hoisted(() => ({ writes: vi.fn(), history: 2000 }))
 +vi.mock('./api', async original => ({
@@ -68286,6 +68287,67 @@ index 0000000000000000000000000000000000000000..d743342cc65ef6308036d3c79a7374aa
 +  expect(source.writes).toHaveBeenCalledTimes(2)
 +  expect(source.writes.mock.calls[1]).toEqual(source.writes.mock.calls[0])
 +})
++
++it('retries a rejected lane move on the task that was already created', async () => {
++  source.history = 0
++  source.writes
++    .mockResolvedValueOnce({ task: { id: 'new-example', status: 'ready' } })
++    .mockRejectedValueOnce(new Error('Move was rejected'))
++    .mockResolvedValueOnce({ task: null })
++  render(
++    <QueryClientProvider client={client}>
++      <KanbanBoardPage />
++    </QueryClientProvider>
++  )
++  await screen.findByText('Review current guide')
++  act(() => $newTaskLane.set('todo'))
++
++  const dialog = within(await screen.findByRole('dialog', { name: 'New task in Todo' }))
++  fireEvent.change(dialog.getByLabelText('Title'), { target: { value: 'One task only' } })
++  fireEvent.click(dialog.getByRole('button', { name: 'Create task' }))
++  await dialog.findByText(/Move was rejected/)
++  expect(source.writes).toHaveBeenNthCalledWith(2, 'new-example', { status: 'todo' })
++
++  fireEvent.click(dialog.getByRole('button', { name: /^(Retry move|Create task)$/ }))
++  expect(source.writes).toHaveBeenNthCalledWith(3, 'new-example', { status: 'todo' })
++  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
++  expect(source.writes).toHaveBeenCalledTimes(3)
++})
++
++it.each(['create', 'move'] as const)('ignores a late %s response after switching boards', async stage => {
++  source.history = 0
++  const task = { id: 'old-board-task', status: 'ready' }
++  let settle!: () => void
++  const response = new Promise(resolve => {
++    settle = () => resolve(stage === 'create' ? { task } : {})
++  })
++  if (stage === 'move') source.writes.mockResolvedValueOnce({ task })
++  source.writes.mockReturnValueOnce(response)
++  const writesBeforeSwitch = stage === 'move' ? 2 : 1
++  render(
++    <QueryClientProvider client={client}>
++      <KanbanBoardPage />
++    </QueryClientProvider>
++  )
++  await screen.findByText('Review current guide')
++  act(() => $newTaskLane.set('todo'))
++
++  const original = within(await screen.findByRole('dialog', { name: 'New task in Todo' }))
++  fireEvent.change(original.getByLabelText('Title'), { target: { value: 'On the first board' } })
++  fireEvent.click(original.getByRole('button', { name: 'Create task' }))
++  await waitFor(() => expect(source.writes).toHaveBeenCalledTimes(writesBeforeSwitch))
++  act(() => $boardSlug.set('other-board'))
++  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
++
++  fireEvent.click(screen.getByRole('button', { name: 'New task' }))
++  const fresh = within(await screen.findByRole('dialog', { name: 'New task in Triage' }))
++  const title = fresh.getByLabelText<HTMLInputElement>('Title')
++  fireEvent.change(title, { target: { value: 'On the second board' } })
++  await act(async () => settle())
++  expect(source.writes).toHaveBeenCalledTimes(writesBeforeSwitch)
++  expect(title.value).toBe('On the second board')
++  expect(fresh.getByRole('alert').textContent).toBe('')
++})
 diff --git a/apps/desktop/src/plugins/kanban/board-switcher.test.tsx b/apps/desktop/src/plugins/kanban/board-switcher.test.tsx
 index 27051902cbad11528dea7ae35bfb6a5a25c740e2..af869ab9966ffea0b49b9fcfc33f31c7fe8dc16f 100644
 --- a/apps/desktop/src/plugins/kanban/board-switcher.test.tsx
@@ -68405,7 +68467,7 @@ index 0000000000000000000000000000000000000000..63f5d35c5b12d04343e500862b12cbbd
 +  return counts
 +}
 diff --git a/apps/desktop/src/plugins/kanban/board.tsx b/apps/desktop/src/plugins/kanban/board.tsx
-index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f9d2a5b93 100644
+index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..42fbc4ce0348908f949f6e19c6c84af8d4f2d5d7 100644
 --- a/apps/desktop/src/plugins/kanban/board.tsx
 +++ b/apps/desktop/src/plugins/kanban/board.tsx
 @@ -27,4 +27,7 @@ import {
@@ -68422,53 +68484,55 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 +  PopoverContent,
 +  PopoverTrigger,
    SearchField,
-@@ -58,2 +64,3 @@ import {
+@@ -57,3 +63,5 @@ import {
+   type ReactNode,
++  useCallback,
    useEffect,
 +  useLayoutEffect,
    useMemo,
-@@ -78,2 +85,3 @@ import {
+@@ -78,2 +86,3 @@ import {
    fetchProfiles,
 +  kanbanConnectionScope,
    patchTask,
-@@ -83,3 +91,5 @@ import {
+@@ -83,3 +92,5 @@ import {
  } from './api'
 +import { BoardOverview, EmptyBoardView, ShowMore } from './board-overview'
  import { BoardSwitcher } from './board-switcher'
 +import { boardForView, type BoardView, columnTasks, HISTORY_BATCH } from './board-view'
  import { TaskDrawer } from './drawer'
-@@ -107,2 +117,5 @@ import {
+@@ -107,2 +118,5 @@ import {
  } from './ui'
 +import { useWorkSelection } from './use-work-selection'
 +import { WorkView } from './work-view'
 +import { WorkflowView } from './workflow-view'
 
-@@ -169,3 +182,3 @@ function CardFooter({ arc, task }: { arc: ArcState | null; task: KanbanTask }) {
+@@ -169,3 +183,3 @@ function CardFooter({ arc, task }: { arc: ArcState | null; task: KanbanTask }) {
    return (
 -    <div className="flex items-center gap-2 whitespace-nowrap text-[0.625rem] text-(--ui-text-tertiary)">
 +    <span className="flex items-center gap-2 whitespace-nowrap text-[0.625rem] text-(--ui-text-tertiary)">
        {arc === 'queued' && attached ? (
-@@ -225,3 +238,3 @@ function CardFooter({ arc, task }: { arc: ArcState | null; task: KanbanTask }) {
+@@ -225,3 +239,3 @@ function CardFooter({ arc, task }: { arc: ArcState | null; task: KanbanTask }) {
        )}
 -      <div className="ml-auto flex min-w-0 shrink items-center gap-2">
 +      <span className="ml-auto flex min-w-0 shrink items-center gap-2">
          {typeof task.priority === 'number' && task.priority > 0 && <PriorityGlyph priority={task.priority} />}
-@@ -244,4 +257,4 @@ function CardFooter({ arc, task }: { arc: ArcState | null; task: KanbanTask }) {
+@@ -244,4 +258,4 @@ function CardFooter({ arc, task }: { arc: ArcState | null; task: KanbanTask }) {
          <span className="min-w-0 truncate font-mono text-(--ui-text-quaternary)">{shortId(task.id)}</span>
 -      </div>
 -    </div>
 +      </span>
 +    </span>
    )
-@@ -261,3 +274,3 @@ function Card({
+@@ -261,3 +275,3 @@ function Card({
    onMove: (id: string, status: string) => void
 -  onOpen: (id: string) => void
 +  onOpen: (id: string, opener: HTMLButtonElement) => void
    onToggleSelect: (id: string) => void
-@@ -268,2 +281,3 @@ function Card({
+@@ -268,2 +282,3 @@ function Card({
    const [dragging, setDragging] = useState(false)
 +  const cardRef = useRef<HTMLButtonElement>(null)
    const meta = columnMeta(task.status)
-@@ -276,5 +290,8 @@ function Card({
+@@ -276,5 +291,8 @@ function Card({
        <ContextMenuTrigger asChild>
 -        <div
 +        <button
@@ -68479,7 +68543,7 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 -            'group relative flex cursor-grab flex-col gap-2 rounded-md border border-(--ui-stroke-tertiary) border-l-2 bg-(--ui-bg-elevated) p-2.5',
 +            'kanban-card group relative flex cursor-grab flex-col gap-2 rounded-md border border-(--ui-stroke-tertiary) border-l-2 bg-(--ui-bg-elevated) p-2.5 text-start',
              // Hover matches the provider-picker rows: a quiet primary fill;
-@@ -286,3 +303,21 @@ function Card({
+@@ -286,3 +304,21 @@ function Card({
            draggable
 -          onClick={event => (event.metaKey || event.ctrlKey ? onToggleSelect(task.id) : onOpen(task.id))}
 +          onClick={event =>
@@ -68502,18 +68566,18 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 +            )
 +          }}
            onDragEnd={() => setDragging(false)}
-@@ -296,3 +331,5 @@ function Card({
+@@ -296,3 +332,5 @@ function Card({
            }}
 +          ref={cardRef}
            style={{ '--kanban-tone': meta.tone, borderLeftColor: meta.tone } as CSSProperties}
 +          type="button"
          >
-@@ -306,3 +343,3 @@ function Card({
+@@ -306,3 +344,3 @@ function Card({
            )}
 -          <span className="line-clamp-2 text-[0.8125rem] font-medium leading-snug text-foreground">
 +          <span className="kanban-card-title line-clamp-2 text-[0.8125rem] font-medium leading-snug text-foreground">
              {task.title || task.id}
-@@ -310,9 +347,15 @@ function Card({
+@@ -310,9 +348,15 @@ function Card({
            {summary && (
 -            <span className="line-clamp-2 text-[0.6875rem] leading-snug text-(--ui-text-tertiary)">{summary}</span>
 +            <span className="kanban-card-summary line-clamp-2 text-[0.6875rem] leading-snug text-(--ui-text-tertiary)">
@@ -68532,33 +68596,33 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 +          }}
 +        >
            <Codicon name="link-external" size="0.85rem" />
-@@ -356,3 +399,4 @@ function Column({
+@@ -356,3 +400,4 @@ function Column({
    onToggleSelect,
 -  selected
 +  selected,
 +  wide = false
  }: {
-@@ -365,3 +409,3 @@ function Column({
+@@ -365,3 +410,3 @@ function Column({
    onMove: (id: string, status: string) => void
 -  onOpen: (id: string) => void
 +  onOpen: (id: string, opener: HTMLButtonElement) => void
    onToggle: () => void
-@@ -369,2 +413,5 @@ function Column({
+@@ -369,2 +414,5 @@ function Column({
    selected: ReadonlySet<string>
 +  /** The only lane on screen (History's lone Done): fill the width and lay
 +   *  its cards out as a responsive grid instead of one narrow strip. */
 +  wide?: boolean
  }) {
-@@ -372,2 +419,4 @@ function Column({
+@@ -372,2 +420,4 @@ function Column({
    const [over, setOver] = useState(false)
 +  const [limit, setLimit] = useState(HISTORY_BATCH)
 +  const visibleTasks = columnTasks(column, limit)
    const meta = columnMeta(column.name)
-@@ -431,2 +480,3 @@ function Column({
+@@ -431,2 +481,3 @@ function Column({
          aria-label={k.expand(label)}
 +        data-lane-has-cards={visibleTasks.length > 0}
          className={cn(
-@@ -454,3 +504,8 @@ function Column({
+@@ -454,3 +505,8 @@ function Column({
        {...dragHandlers}
 -      className={cn('group/col flex h-full w-64 shrink-0 flex-col rounded-lg p-2 transition-colors', wash)}
 +      className={cn(
@@ -68568,12 +68632,12 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 +      )}
 +      data-lane-has-cards={visibleTasks.length > 0}
      >
-@@ -496,3 +551,3 @@ function Column({
+@@ -496,3 +552,3 @@ function Column({
              ))
 -          : column.tasks.map(task => (
 +          : visibleTasks.map(task => (
                <Card
-@@ -508,2 +563,10 @@ function Column({
+@@ -508,2 +564,10 @@ function Column({
              ))}
 +        <ShowMore
 +          cardSelector=".kanban-card"
@@ -68584,7 +68648,7 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 +          visible={visibleTasks.length}
 +        />
          {/* Jira-style lane add — dashed, faded in on lane hover. Opacity (not
-@@ -546,2 +609,115 @@ function Field({ children, label }: { children: ReactNode; label: string }) {
+@@ -546,2 +610,115 @@ function Field({ children, label }: { children: ReactNode; label: string }) {
 
 +/** Type-to-filter assignee picker: the roster runs to 100+ profiles, where a
 + *  plain Select only jumps on the first letter. '' = the resolved default,
@@ -68700,8 +68764,159 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 +}
 +
  function NewTaskDialog({
-@@ -692,20 +868,23 @@ function NewTaskDialog({
-         <div className="flex max-h-[min(72vh,44rem)] flex-col gap-3 overflow-y-auto pr-0.5">
+@@ -549,2 +726,3 @@ function NewTaskDialog({
+   parents,
++  profile,
+   target
+@@ -553,3 +731,4 @@ function NewTaskDialog({
+   parents: Array<{ id: string; title: string }>
+-  target: null | string
++  profile: string
++  target: string
+ }) {
+@@ -588,2 +767,5 @@ function NewTaskDialog({
+   const [busy, setBusy] = useState(false)
++  const [pendingMove, setPendingMove] = useState<string | null>(null)
++  const retryButton = useRef<HTMLButtonElement>(null)
++  const dialogOpen = useRef(false)
+   const [error, setError] = useState<null | string>(null)
+@@ -605,22 +787,24 @@ function NewTaskDialog({
+
+-  // Reset per open — the dialog is externally controlled (open = target set),
+-  // so onOpenChange(true) never fires; key the reset off `target` (and the
+-  // resolved board default, which may arrive after the first open).
+-  useEffect(() => {
+-    if (target) {
+-      setTitle('')
+-      setBodyText('')
+-      setAssignee('')
+-      setPriority('0')
+-      setSkills('')
+-      setWorkspaceKind(boardDefaultKind)
+-      setWorkspacePath('')
+-      setParent('')
+-      setModelOverride(EMPTY_OVERRIDE)
+-      setGoalMode(false)
+-      setError(null)
+-      setBusy(false)
+-      setEstimate(null)
++  useLayoutEffect(() => {
++    dialogOpen.current = true
++    return () => {
++      dialogOpen.current = false
+     }
+-  }, [target, boardDefaultKind])
++  }, [])
++
++  useEffect(() => setWorkspaceKind(boardDefaultKind), [boardDefaultKind])
++  useEffect(() => {
++    if (pendingMove && !busy) retryButton.current?.focus()
++  }, [busy, pendingMove])
++
++  const close = () => {
++    dialogOpen.current = false
++    onClose()
++  }
++
++  const isCurrentDialog = () =>
++    dialogOpen.current &&
++    (host.activeConnectionId() ?? 'local') === scope &&
++    host.state.profile.get() === profile &&
++    $boardSlug.get() === selectedSlug
+
+@@ -629,3 +813,3 @@ function NewTaskDialog({
+
+-    if (!trimmed || !target || busy) {
++    if ((!trimmed && !pendingMove) || busy || !isCurrentDialog()) {
+       return
+@@ -635,41 +819,45 @@ function NewTaskDialog({
+     setError(null)
++    let moveTaskId = pendingMove
+
+     try {
+-      const skillList = skills
+-        .split(',')
+-        .map(s => s.trim())
+-        .filter(Boolean)
+-
+-      // create() derives status (triage flag → 'triage', else 'ready'); move to
+-      // the requested column when they differ, so a per-column add lands right.
+-      const { task, warning } = await createTask({
+-        assignee: assignee === PARKED ? undefined : assignee || resolvedDefault,
+-        body: bodyText.trim() || undefined,
+-        goal_mode: goalMode,
+-        parents: parent ? [parent] : undefined,
+-        priority: Number(priority) || 0,
+-        skills: skillList.length ? skillList : undefined,
+-        title: trimmed,
+-        triage: isTriage,
+-        workspace_kind: workspaceKind,
+-        ...overrideCreateFields(modelOverride),
+-        // Empty → backend inherits the board's default project dir.
+-        workspace_path: workspaceKind !== 'scratch' && workspacePath.trim() ? workspacePath.trim() : undefined
+-      })
+-
+-      if (task && task.status !== target) {
+-        await patchTask(task.id, { status: target })
++      if (!moveTaskId) {
++        const skillList = skills
++          .split(',')
++          .map(s => s.trim())
++          .filter(Boolean)
++
++        const { task, warning } = await createTask({
++          assignee: assignee === PARKED ? undefined : assignee || resolvedDefault,
++          body: bodyText.trim() || undefined,
++          goal_mode: goalMode,
++          parents: parent ? [parent] : undefined,
++          priority: Number(priority) || 0,
++          skills: skillList.length ? skillList : undefined,
++          title: trimmed,
++          triage: isTriage,
++          workspace_kind: workspaceKind,
++          ...overrideCreateFields(modelOverride),
++          // Empty → backend inherits the board's default project dir.
++          workspace_path: workspaceKind !== 'scratch' && workspacePath.trim() ? workspacePath.trim() : undefined
++        })
++        if (!isCurrentDialog()) return
++
++        // The create endpoint chooses Triage or Ready. Remember the saved task
++        // before attempting a move so a failed move never repeats creation.
++        if (task && task.status !== target) moveTaskId = task.id
++        if (warning) host.notify({ kind: 'warning', message: warning })
+       }
+
+-      // Dispatcher-presence warning ("this ready task will sit idle") — not an
+-      // error, but the user should know.
+-      if (warning) {
+-        host.notify({ kind: 'warning', message: warning })
+-      }
++      if (moveTaskId) await patchTask(moveTaskId, { status: target })
++      if (!isCurrentDialog()) return
+
+       await qc.invalidateQueries({ queryKey: boardKeyPrefix(scope) })
+-      onClose()
++      if (isCurrentDialog()) close()
+     } catch (err) {
+-      setError(errText(err))
++      if (!isCurrentDialog()) return
++
++      setPendingMove(moveTaskId)
++      setError(moveTaskId ? `${k.taskCreatedMoveFailed} ${errText(err)}` : errText(err))
+       setBusy(false)
++      if (moveTaskId) void qc.invalidateQueries({ queryKey: boardKeyPrefix(scope) })
+     }
+@@ -678,3 +866,3 @@ function NewTaskDialog({
+   return (
+-    <Dialog onOpenChange={open => !open && onClose()} open={Boolean(target)}>
++    <Dialog onOpenChange={open => !open && close()} open>
+       {/* `overflow-visible`: DialogContent publishes ITSELF as the portal
+@@ -689,23 +877,28 @@ function NewTaskDialog({
+         <DialogHeader>
+-          <DialogTitle>{target ? k.newTaskIn(columnLabel(k, target)) : k.newTask}</DialogTitle>
++          <DialogTitle>{k.newTaskIn(columnLabel(k, target))}</DialogTitle>
+         </DialogHeader>
+-        <div className="flex max-h-[min(72vh,44rem)] flex-col gap-3 overflow-y-auto pr-0.5">
 -          <Input
 -            autoFocus
 -            onChange={event => setTitle(event.target.value)}
@@ -68720,6 +68935,9 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 -            placeholder={k.descPlaceholder}
 -            value={bodyText}
 -          />
++        <div
++          className={pendingMove ? 'hidden' : 'flex max-h-[min(72vh,44rem)] flex-col gap-3 overflow-y-auto pr-0.5'}
++        >
 +          <Field label={k.titlePlaceholder}>
 +            <Input
 +              autoFocus
@@ -68742,7 +68960,7 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 +            />
 +          </Field>
 
-@@ -746,18 +925,8 @@ function NewTaskDialog({
+@@ -746,18 +939,8 @@ function NewTaskDialog({
            <Field label={k.assignee}>
 -            <Select onValueChange={v => setAssignee(v === NO_PARENT ? '' : v)} value={assignee || NO_PARENT}>
 -              <SelectTrigger>
@@ -68767,7 +68985,7 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 +              value={assignee}
 +            />
            </Field>
-@@ -768,6 +937,11 @@ function NewTaskDialog({
+@@ -768,6 +951,11 @@ function NewTaskDialog({
 
 -          <Field label={k.model}>
 -            <ModelOverrideField onChange={setModelOverride} value={modelOverride} />
@@ -68782,7 +69000,7 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 -          </Field>
 +          </div>
 
-@@ -795,52 +969,55 @@ function NewTaskDialog({
+@@ -795,52 +983,55 @@ function NewTaskDialog({
            </label>
 -
 -          {error && <span className="text-[0.75rem] text-destructive">{error}</span>}
@@ -68803,7 +69021,7 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 +            {error && <p className="mb-3 text-[0.75rem] text-destructive [overflow-wrap:anywhere]">{error}</p>}
 +          </div>
 +          <DialogFooter>
-+            <div className="mr-auto flex items-center gap-1 text-[0.75rem] text-(--ui-text-tertiary)">
++            <div className={cn('mr-auto flex items-center gap-1 text-[0.75rem] text-(--ui-text-tertiary)', pendingMove && 'hidden')}>
 +              {estimate?.ok ? (
 +                <>
 +                  <Tip label={estimate.rationale || k.roughEstimate}>
@@ -68871,16 +69089,16 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 -        </DialogFooter>
 +              )}
 +            </div>
-+            <Button onClick={onClose} variant="text">
-+              {k.cancel}
++            <Button onClick={close} variant="text">
++              {pendingMove ? k.close : k.cancel}
 +            </Button>
-+            <Button disabled={!title.trim() || busy} onClick={() => void submit()}>
-+              {busy ? k.creating : k.createTask}
++            <Button disabled={(!title.trim() && !pendingMove) || busy} onClick={() => void submit()} ref={retryButton}>
++              {pendingMove ? (busy ? k.movingTask : k.retryMove) : busy ? k.creating : k.createTask}
 +            </Button>
 +          </DialogFooter>
 +        </div>
        </DialogContent>
-@@ -863,6 +1040,10 @@ function Intro() {
+@@ -863,6 +1054,10 @@ function Intro() {
    return (
 -    <div
 -      className="mx-4 mb-2 flex flex-col items-start gap-1.5 rounded-lg bg-(--ui-bg-quinary) px-3 py-2.5 text-[0.75rem] leading-relaxed text-(--ui-text-secondary)"
@@ -68893,17 +69111,17 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 +        {k.boardHelp}
 +      </summary>
        <p className="min-w-0">{k.introBody}</p>
-@@ -871,3 +1052,3 @@ function Intro() {
+@@ -871,3 +1066,3 @@ function Intro() {
        </Button>
 -    </div>
 +    </details>
    )
-@@ -900,4 +1081,2 @@ function FilterMenu({
+@@ -900,4 +1095,2 @@ function FilterMenu({
 
 -  const check = (on: boolean) => (on ? <Codicon className="ml-auto" name="check" size="0.8rem" /> : null)
 -
    return (
-@@ -915,13 +1094,11 @@ function FilterMenu({
+@@ -915,13 +1108,11 @@ function FilterMenu({
        <DropdownMenuContent align="start">
 -        <DropdownMenuItem onSelect={() => onAssignee('')}>
 -          {k.allProfiles}
@@ -68926,7 +69144,7 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 +          ))}
 +        </DropdownMenuRadioGroup>
          {board.tenants.length > 0 && (
-@@ -929,12 +1106,8 @@ function FilterMenu({
+@@ -929,12 +1120,8 @@ function FilterMenu({
              <DropdownMenuSeparator />
 -            <DropdownMenuItem onSelect={() => onTenant('')}>
 -              {k.allTenants}
@@ -68945,7 +69163,7 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 +              ))}
 +            </DropdownMenuRadioGroup>
            </>
-@@ -942,10 +1115,8 @@ function FilterMenu({
+@@ -942,10 +1129,8 @@ function FilterMenu({
          <DropdownMenuSeparator />
 -        <DropdownMenuItem onSelect={() => onArchived(!archived)}>
 +        <DropdownMenuCheckboxItem checked={archived} onCheckedChange={onArchived}>
@@ -68960,18 +69178,18 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 -        </DropdownMenuItem>
 +        </DropdownMenuCheckboxItem>
        </DropdownMenuContent>
-@@ -972,3 +1143,3 @@ function SelectionBar({
+@@ -972,3 +1157,3 @@ function SelectionBar({
    onClear: () => void
 -  onDone: (failed: string[]) => void
 +  onDone: (failed: string[], restoreBoardFocus: boolean) => void
    selected: ReadonlySet<string>
-@@ -980,2 +1151,5 @@ function SelectionBar({
+@@ -980,2 +1165,5 @@ function SelectionBar({
 
 +  const moveTrigger = useRef<HTMLButtonElement>(null)
 +  const moveContent = useRef<HTMLDivElement>(null)
 +
    const finish = (failed: Array<{ error?: string; id: string }>) => {
-@@ -990,3 +1164,6 @@ function SelectionBar({
+@@ -990,3 +1178,6 @@ function SelectionBar({
 
 -    onDone(failed.map(f => f.id))
 +    const active = moveTrigger.current?.ownerDocument.activeElement
@@ -68979,7 +69197,7 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 +      Boolean(active && (active === moveTrigger.current || moveContent.current?.contains(active)))
 +    onDone(failed.map(f => f.id), restoreBoardFocus)
    }
-@@ -1022,8 +1199,8 @@ function SelectionBar({
+@@ -1022,8 +1213,8 @@ function SelectionBar({
        {/* Flat overlay: stroke + elevated surface do the separating, no shadow. */}
 -      <div className="pointer-events-auto flex items-center gap-1 rounded-lg border border-(--ui-stroke-secondary) bg-(--ui-bg-elevated) py-1 pr-1 pl-3">
 +      <div className="kanban-selection-bar pointer-events-auto flex items-center gap-1 rounded-lg border border-(--ui-stroke-secondary) bg-(--ui-bg-elevated) py-1 pr-1 pl-3">
@@ -68991,25 +69209,28 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 -            <Button disabled={busy} size="xs" variant="ghost">
 +            <Button aria-disabled={busy || undefined} className="aria-disabled:opacity-50" ref={moveTrigger} size="xs" variant="ghost">
                {k.moveToShort}
-@@ -1032,3 +1209,3 @@ function SelectionBar({
+@@ -1032,3 +1223,3 @@ function SelectionBar({
            </DropdownMenuTrigger>
 -          <DropdownMenuContent align="center">
 +          <DropdownMenuContent align="center" ref={moveContent}>
              {columns
-@@ -1099,2 +1276,3 @@ export function KanbanBoardPage() {
+@@ -1098,3 +1289,5 @@ export function KanbanBoardPage() {
+   const slug = useValue($boardSlug)
++  const profile = useValue(host.state.profile)
    const [archived, setArchived] = useState(false)
 +  const { view, setView } = useWorkSelection()
 
-@@ -1103,4 +1281,4 @@ export function KanbanBoardPage() {
+@@ -1103,4 +1296,4 @@ export function KanbanBoardPage() {
    const { data: board, error } = useQuery({
 -    queryFn: () => fetchBoard(archived),
 -    queryKey: boardKey(scope, slug, archived),
 +    queryFn: () => fetchBoard(archived, view === 'workflow'),
 +    queryKey: boardKey(scope, slug, archived, view === 'workflow'),
      refetchInterval: 60_000
-@@ -1108,5 +1286,14 @@ export function KanbanBoardPage() {
+@@ -1108,5 +1301,22 @@ export function KanbanBoardPage() {
 
 -  const [openId, setOpenId] = useState<null | string>(null)
+-  const [addStatus, setAddStatus] = useState<null | string>(null)
 +  // Keep the trigger mounted while the same board reloads its archived view.
 +  const filterBoard = board ?? qc.getQueryData<KanbanBoard>(boardKey(scope, slug, !archived, view === 'workflow'))
 +
@@ -69019,12 +69240,26 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 +    scope: string
 +    slug: string
 +  } | null>(null)
-   const [addStatus, setAddStatus] = useState<null | string>(null)
++  const [addRequest, setAddRequest] = useState<{ context: string; lane: string } | null>(null)
++  const addContext = JSON.stringify([scope, profile, slug])
++  const activeAddRequest = addRequest?.context === addContext ? addRequest : null
++  const openNewTask = useCallback((lane: string) => {
++    setAddRequest(current => (current?.context === addContext ? current : { context: addContext, lane }))
++  }, [addContext])
++  useLayoutEffect(() => {
++    setAddRequest(current => (current?.context === addContext ? current : null))
++  }, [addContext])
    const [settingsOpen, setSettingsOpen] = useState(false)
 +  const filterInput = useRef<HTMLInputElement>(null)
    const [search, setSearch] = useState('')
-@@ -1131,2 +1318,16 @@ export function KanbanBoardPage() {
+@@ -1127,5 +1337,19 @@ export function KanbanBoardPage() {
 
+-    setAddStatus(requestedLane)
++    openNewTask(requestedLane)
+     $newTaskLane.set(null)
+-  }, [requestedLane])
++  }, [openNewTask, requestedLane])
++
 +  const openCard = (id: string, opener: HTMLButtonElement) => setDrawer({ id, opener, scope, slug })
 +
 +  const restoreDrawerFocus = (event: Event) => {
@@ -69038,18 +69273,17 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 +    if (drawer.opener.isConnected) drawer.opener.focus({ preventScroll: true })
 +    if (doc.activeElement === doc.body) input.focus({ preventScroll: true })
 +  }
-+
-   const toggleSelect = (id: string) => {
-@@ -1165,3 +1366,3 @@ export function KanbanBoardPage() {
+
+@@ -1165,3 +1389,3 @@ export function KanbanBoardPage() {
      const onKey = (event: KeyboardEvent) => {
 -      if (event.key === 'Escape') {
 +      if (event.key === 'Escape' && !event.defaultPrevented) {
          setSelected(new Set())
-@@ -1183,2 +1384,3 @@ export function KanbanBoardPage() {
+@@ -1183,2 +1407,3 @@ export function KanbanBoardPage() {
    // Client-side filters, mirroring the dashboard (search over title/body/id).
 +  const query = search.trim().toLowerCase()
    const filtered = useMemo(() => {
-@@ -1188,6 +1390,4 @@ export function KanbanBoardPage() {
+@@ -1188,6 +1413,4 @@ export function KanbanBoardPage() {
 
 -    const q = search.trim().toLowerCase()
 -
@@ -69057,7 +69291,7 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 -      (!q || `${task.title} ${task.body ?? ''} ${task.id}`.toLowerCase().includes(q)) &&
 +      (!query || `${task.title} ${task.body ?? ''} ${task.id}`.toLowerCase().includes(query)) &&
        (!tenant || task.tenant === tenant) &&
-@@ -1196,5 +1396,6 @@ export function KanbanBoardPage() {
+@@ -1196,5 +1419,6 @@ export function KanbanBoardPage() {
      return { ...board, columns: board.columns.map(col => ({ ...col, tasks: col.tasks.filter(keep) })) }
 -  }, [board, search, tenant, assignee])
 +  }, [board, query, tenant, assignee])
@@ -69066,7 +69300,7 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 +  const displayed = boardForView(filtered, view)
 +  const total = displayed?.columns.reduce((sum, col) => sum + col.tasks.length, 0) ?? 0
 
-@@ -1263,2 +1464,7 @@ export function KanbanBoardPage() {
+@@ -1263,2 +1487,7 @@ export function KanbanBoardPage() {
 
 +  const chooseView = (next: BoardView) => {
 +    setSelected(new Set())
@@ -69074,7 +69308,7 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 +  }
 +
    const errorMessage = error ? errText(error) : null
-@@ -1269,2 +1475,15 @@ export function KanbanBoardPage() {
+@@ -1269,2 +1498,15 @@ export function KanbanBoardPage() {
 
 +  useLayoutEffect(() => {
 +    const strip = lanesRef.current
@@ -69090,31 +69324,31 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 +  }, [query, tenant, assignee, view])
 +
    // Lane collapse: auto (empty → rail) unless the user overrode it. The map
-@@ -1286,4 +1505,4 @@ export function KanbanBoardPage() {
+@@ -1286,4 +1528,4 @@ export function KanbanBoardPage() {
    // it mirrors.
 -  const lanePhase = filtered
 -    ? filtered.columns.map(col => `${col.name}:${col.tasks.length === 0 ? 'empty' : 'full'}`).join('|')
 +  const lanePhase = board
 +    ? board.columns.map(col => `${col.name}:${col.tasks.length === 0 ? 'empty' : 'full'}`).join('|')
      : null
-@@ -1336,4 +1555,4 @@ export function KanbanBoardPage() {
+@@ -1336,4 +1578,4 @@ export function KanbanBoardPage() {
    return (
 -    <div className="relative flex h-full flex-col overflow-hidden bg-(--ui-surface-background)">
 -      <header className="flex shrink-0 flex-wrap items-center gap-2 px-4 py-2">
 +    <div className="kanban-page relative flex h-full flex-col overflow-hidden bg-(--ui-surface-background)">
 +      <header className="kanban-toolbar flex shrink-0 flex-wrap items-center gap-2 px-4 py-2">
          <h1 className="text-sm font-semibold text-foreground">{k.title}</h1>
-@@ -1347,3 +1566,3 @@ export function KanbanBoardPage() {
+@@ -1347,3 +1589,3 @@ export function KanbanBoardPage() {
          </WorkspacePageHeaderControl>
 -        {board && (
 +        {filterBoard && (
            <FilterMenu
-@@ -1351,3 +1570,3 @@ export function KanbanBoardPage() {
+@@ -1351,3 +1593,3 @@ export function KanbanBoardPage() {
              assignee={assignee}
 -            board={board}
 +            board={filterBoard}
              onArchived={setArchived}
-@@ -1358,3 +1577,10 @@ export function KanbanBoardPage() {
+@@ -1358,3 +1600,10 @@ export function KanbanBoardPage() {
          )}
 -        <SearchField aria-label={k.filterCards} onChange={setSearch} placeholder={k.filterCards} value={search} />
 +        <SearchField
@@ -69126,12 +69360,17 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 +          value={search}
 +        />
          <div className="ml-auto flex items-center gap-1">
-@@ -1378,2 +1604,4 @@ export function KanbanBoardPage() {
+@@ -1371,3 +1620,3 @@ export function KanbanBoardPage() {
+           </Tip>
+-          <Button onClick={() => setAddStatus('triage')} size="sm">
++          <Button onClick={() => openNewTask('triage')} size="sm">
+             <Codicon name="add" size="0.8rem" />
+@@ -1378,2 +1627,4 @@ export function KanbanBoardPage() {
 
 +      <BoardOverview board={filtered} k={k} onView={chooseView} view={view} />
 +
        {settingsOpen && <OrchestrationPanel />}
-@@ -1390,16 +1618,17 @@ export function KanbanBoardPage() {
+@@ -1390,16 +1641,17 @@ export function KanbanBoardPage() {
          </div>
 +      ) : view === 'work' ? (
 +        <WorkView board={filtered} key={`${scope}:${slug}`} onOpen={openCard} />
@@ -69151,7 +69390,7 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 +        <EmptyBoardView
 +          filtered={Boolean(search || tenant || assignee)}
 +          k={k}
-+          onAdd={() => setAddStatus('triage')}
++          onAdd={() => openNewTask('triage')}
 +          onCurrent={() => chooseView('current')}
 +          view={view}
 +        />
@@ -69160,26 +69399,28 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 -          className={cn('flex flex-1 gap-2 overflow-x-auto px-4 pt-1 pb-3', grabbing && 'cursor-grabbing')}
 +          className={cn('kanban-lanes flex flex-1 gap-2 overflow-x-auto px-4 pt-1 pb-3', grabbing && 'cursor-grabbing')}
            onMouseDown={onMouseDown}
-@@ -1407,3 +1636,3 @@ export function KanbanBoardPage() {
+@@ -1407,3 +1659,3 @@ export function KanbanBoardPage() {
          >
 -          {filtered.columns.map(col => {
 +          {displayed!.columns.map(col => {
              const auto = boardHasWork && col.tasks.length === 0
-@@ -1415,3 +1644,3 @@ export function KanbanBoardPage() {
+@@ -1415,4 +1667,4 @@ export function KanbanBoardPage() {
                  columns={columnNames}
 -                key={col.name}
+-                onAdd={setAddStatus}
 +                key={`${scope}:${slug}:${col.name}`}
-                 onAdd={setAddStatus}
-@@ -1420,3 +1649,3 @@ export function KanbanBoardPage() {
++                onAdd={openNewTask}
+                 onDelete={id => deleteMut.mutate(id)}
+@@ -1420,3 +1672,3 @@ export function KanbanBoardPage() {
                  onMove={onMove}
 -                onOpen={setOpenId}
 +                onOpen={openCard}
                  onToggle={() => toggleLane(col.name, auto)}
-@@ -1424,2 +1653,3 @@ export function KanbanBoardPage() {
+@@ -1424,2 +1676,3 @@ export function KanbanBoardPage() {
                  selected={selected}
 +                wide={view === 'history' && displayed!.columns.length === 1}
                />
-@@ -1434,3 +1664,11 @@ export function KanbanBoardPage() {
+@@ -1434,3 +1687,11 @@ export function KanbanBoardPage() {
            onClear={() => setSelected(new Set())}
 -          onDone={failed => setSelected(new Set(failed))}
 +          onDone={(failed, restoreBoardFocus) => {
@@ -69192,9 +69433,18 @@ index 8b05b1fbb2c2fab18da0576a1c51618481d3f4fa..e2bc8863f7df85a15b4e86af1f21002f
 +            }
 +          }}
            selected={selected}
-@@ -1440,3 +1678,9 @@ export function KanbanBoardPage() {
-       <NewTaskDialog onClose={() => setAddStatus(null)} parents={parentOptions} target={addStatus} />
+@@ -1439,4 +1700,17 @@ export function KanbanBoardPage() {
+
+-      <NewTaskDialog onClose={() => setAddStatus(null)} parents={parentOptions} target={addStatus} />
 -      <TaskDrawer columns={columnNames} id={openId} onClose={() => setOpenId(null)} onOpen={setOpenId} />
++      {activeAddRequest && (
++        <NewTaskDialog
++          onClose={() => setAddRequest(current => (current === activeAddRequest ? null : current))}
++          parents={parentOptions}
++          profile={profile}
++          target={activeAddRequest.lane}
++        />
++      )}
 +      <TaskDrawer
 +        columns={columnNames}
 +        id={drawer?.id ?? null}
@@ -70989,7 +71239,7 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..27786afe2b1cc6e48d6ab5180c3a6396
 +                    assignee={task.assignee || defaultAssignee || undefined}
                      onChange={next => void mutate(() => patchTask(task.id, overridePatch(next)))()}
 diff --git a/apps/desktop/src/plugins/kanban/i18n.ts b/apps/desktop/src/plugins/kanban/i18n.ts
-index 94cee91d6f22d0f635d302f68a2e30f71a2e8716..f2217017c3abbec71a035ee1f9ff60678d5927d7 100644
+index 94cee91d6f22d0f635d302f68a2e30f71a2e8716..f685937c1c781410092ada1d5f735f8eeece5601 100644
 --- a/apps/desktop/src/plugins/kanban/i18n.ts
 +++ b/apps/desktop/src/plugins/kanban/i18n.ts
 @@ -10,3 +10,6 @@ import { useMemo } from 'react'
@@ -71045,15 +71295,21 @@ index 94cee91d6f22d0f635d302f68a2e30f71a2e8716..f2217017c3abbec71a035ee1f9ff6067
 +  assigneeSearch: string
 +  assigneeNoMatch: string
    skills: string
-@@ -147,2 +184,3 @@ type KanbanMessages = {
+@@ -84,2 +121,5 @@ type KanbanMessages = {
+   createTask: string
++  taskCreatedMoveFailed: string
++  retryMove: string
++  movingTask: string
+   cancel: string
+@@ -147,2 +187,3 @@ type KanbanMessages = {
    comments: (n: number) => string
 +  commentsHelpLabel: string
    commentsHelpRunning: string
-@@ -165,2 +203,3 @@ type KanbanMessages = {
+@@ -165,2 +206,3 @@ type KanbanMessages = {
    copyTaskId: string
 +  copyWorkspacePath: string
    copyTitle: string
-@@ -227,2 +266,31 @@ type KanbanMessages = {
+@@ -227,2 +269,31 @@ type KanbanMessages = {
  export const en: KanbanMessages = {
 +  work: workEnglish,
 +  workViews: 'Work views',
@@ -71085,29 +71341,35 @@ index 94cee91d6f22d0f635d302f68a2e30f71a2e8716..f2217017c3abbec71a035ee1f9ff6067
 +  needsOwner: 'Needs owner',
 +  moreHistory: (visible, total) => `Show more · ${visible} / ${total}`,
    nav: 'Kanban',
-@@ -255,2 +323,4 @@ export const en: KanbanMessages = {
+@@ -255,2 +326,4 @@ export const en: KanbanMessages = {
    noTasks: 'No tasks on this board',
 +  noHistory: 'No completed tasks yet',
 +  backToCurrent: 'Back to current work',
    open: 'Open',
-@@ -295,2 +365,3 @@ export const en: KanbanMessages = {
+@@ -295,2 +368,3 @@ export const en: KanbanMessages = {
    modelInherit: 'Profile default',
 +  modelInheritFrom: name => `Inherit from “${name}”`,
    modelClear: 'Clear model override',
-@@ -303,2 +374,4 @@ export const en: KanbanMessages = {
+@@ -303,2 +377,4 @@ export const en: KanbanMessages = {
    parkedOption: "unassigned (parked — won't run)",
 +  assigneeSearch: 'Search profiles…',
 +  assigneeNoMatch: 'No matching profiles',
    skills: 'Skills (comma-separated)',
-@@ -380,2 +453,3 @@ export const en: KanbanMessages = {
+@@ -310,2 +386,5 @@ export const en: KanbanMessages = {
+   createTask: 'Create task',
++  taskCreatedMoveFailed: 'Task was created, but moving it failed.',
++  retryMove: 'Retry move',
++  movingTask: 'Moving…',
+   cancel: 'Cancel',
+@@ -380,2 +459,3 @@ export const en: KanbanMessages = {
    comments: n => `Comments · ${n}`,
 +  commentsHelpLabel: 'Comment help',
    commentsHelpRunning:
-@@ -400,2 +474,3 @@ export const en: KanbanMessages = {
+@@ -400,2 +480,3 @@ export const en: KanbanMessages = {
    copyTaskId: 'Copy task id',
 +  copyWorkspacePath: 'Copy workspace path',
    copyTitle: 'Copy title',
-@@ -455,2 +530,31 @@ export const en: KanbanMessages = {
+@@ -455,2 +536,31 @@ export const en: KanbanMessages = {
  const ja: KanbanMessages = {
 +  work: workEnglish,
 +  workViews: '作業ビュー',
@@ -71139,29 +71401,35 @@ index 94cee91d6f22d0f635d302f68a2e30f71a2e8716..f2217017c3abbec71a035ee1f9ff6067
 +  needsOwner: '所有者の確認待ち',
 +  moreHistory: (visible, total) => `さらに表示 · ${visible} / ${total}`,
    nav: 'カンバン',
-@@ -483,2 +587,4 @@ const ja: KanbanMessages = {
+@@ -483,2 +593,4 @@ const ja: KanbanMessages = {
    noTasks: 'このボードにタスクはありません',
 +  noHistory: '完了したタスクはまだありません',
 +  backToCurrent: '現在の作業に戻る',
    open: '開く',
-@@ -523,2 +629,3 @@ const ja: KanbanMessages = {
+@@ -523,2 +635,3 @@ const ja: KanbanMessages = {
    modelInherit: 'プロファイル既定',
 +  modelInheritFrom: name => `「${name}」から継承`,
    modelClear: 'モデル指定を解除',
-@@ -531,2 +638,4 @@ const ja: KanbanMessages = {
+@@ -531,2 +644,4 @@ const ja: KanbanMessages = {
    parkedOption: '未割り当て（保留 — 実行されません）',
 +  assigneeSearch: 'プロファイルを検索…',
 +  assigneeNoMatch: '一致するプロファイルはありません',
    skills: 'スキル（カンマ区切り）',
-@@ -607,2 +716,3 @@ const ja: KanbanMessages = {
+@@ -538,2 +653,5 @@ const ja: KanbanMessages = {
+   createTask: 'タスクを作成',
++  taskCreatedMoveFailed: 'タスクは作成されましたが、移動できませんでした。',
++  retryMove: '移動を再試行',
++  movingTask: '移動中…',
+   cancel: 'キャンセル',
+@@ -607,2 +725,3 @@ const ja: KanbanMessages = {
    comments: n => `コメント・${n}`,
 +  commentsHelpLabel: 'コメントのヘルプ',
    commentsHelpRunning:
-@@ -627,2 +737,3 @@ const ja: KanbanMessages = {
+@@ -627,2 +746,3 @@ const ja: KanbanMessages = {
    copyTaskId: 'タスク ID をコピー',
 +  copyWorkspacePath: 'ワークスペースのパスをコピー',
    copyTitle: 'タイトルをコピー',
-@@ -682,2 +793,31 @@ const ja: KanbanMessages = {
+@@ -682,2 +802,31 @@ const ja: KanbanMessages = {
  const zh: KanbanMessages = {
 +  work: workEnglish,
 +  workViews: '工作视图',
@@ -71193,29 +71461,35 @@ index 94cee91d6f22d0f635d302f68a2e30f71a2e8716..f2217017c3abbec71a035ee1f9ff6067
 +  needsOwner: '等待所有者',
 +  moreHistory: (visible, total) => `显示更多 · ${visible} / ${total}`,
    nav: '看板',
-@@ -710,2 +850,4 @@ const zh: KanbanMessages = {
+@@ -710,2 +859,4 @@ const zh: KanbanMessages = {
    noTasks: '此面板暂无任务',
 +  noHistory: '暂无已完成任务',
 +  backToCurrent: '返回当前工作',
    open: '打开',
-@@ -749,2 +891,3 @@ const zh: KanbanMessages = {
+@@ -749,2 +900,3 @@ const zh: KanbanMessages = {
    modelInherit: '配置文件默认',
 +  modelInheritFrom: name => `继承自“${name}”`,
    modelClear: '清除模型覆盖',
-@@ -757,2 +900,4 @@ const zh: KanbanMessages = {
+@@ -757,2 +909,4 @@ const zh: KanbanMessages = {
    parkedOption: '未分配（搁置 — 不会运行）',
 +  assigneeSearch: '搜索配置文件…',
 +  assigneeNoMatch: '没有匹配的配置文件',
    skills: '技能（逗号分隔）',
-@@ -833,2 +978,3 @@ const zh: KanbanMessages = {
+@@ -764,2 +918,5 @@ const zh: KanbanMessages = {
+   createTask: '创建任务',
++  taskCreatedMoveFailed: '任务已创建，但移动失败。',
++  retryMove: '重试移动',
++  movingTask: '正在移动…',
+   cancel: '取消',
+@@ -833,2 +990,3 @@ const zh: KanbanMessages = {
    comments: n => `评论・${n}`,
 +  commentsHelpLabel: '评论帮助',
    commentsHelpRunning:
-@@ -852,2 +998,3 @@ const zh: KanbanMessages = {
+@@ -852,2 +1010,3 @@ const zh: KanbanMessages = {
    copyTaskId: '复制任务 ID',
 +  copyWorkspacePath: '复制工作区路径',
    copyTitle: '复制标题',
-@@ -906,2 +1053,31 @@ const zh: KanbanMessages = {
+@@ -906,2 +1065,31 @@ const zh: KanbanMessages = {
  const zhHant: KanbanMessages = {
 +  work: workEnglish,
 +  workViews: '工作檢視',
@@ -71247,29 +71521,35 @@ index 94cee91d6f22d0f635d302f68a2e30f71a2e8716..f2217017c3abbec71a035ee1f9ff6067
 +  needsOwner: '等待擁有者',
 +  moreHistory: (visible, total) => `顯示更多 · ${visible} / ${total}`,
    nav: '看板',
-@@ -934,2 +1110,4 @@ const zhHant: KanbanMessages = {
+@@ -934,2 +1122,4 @@ const zhHant: KanbanMessages = {
    noTasks: '此面板尚無任務',
 +  noHistory: '尚無已完成任務',
 +  backToCurrent: '返回目前工作',
    open: '開啟',
-@@ -973,2 +1151,3 @@ const zhHant: KanbanMessages = {
+@@ -973,2 +1163,3 @@ const zhHant: KanbanMessages = {
    modelInherit: '設定檔預設',
 +  modelInheritFrom: name => `繼承自「${name}」`,
    modelClear: '清除模型覆寫',
-@@ -981,2 +1160,4 @@ const zhHant: KanbanMessages = {
+@@ -981,2 +1172,4 @@ const zhHant: KanbanMessages = {
    parkedOption: '未指派（擱置 — 不會執行）',
 +  assigneeSearch: '搜尋設定檔…',
 +  assigneeNoMatch: '沒有符合的設定檔',
    skills: '技能（以逗號分隔）',
-@@ -1057,2 +1238,3 @@ const zhHant: KanbanMessages = {
+@@ -988,2 +1181,5 @@ const zhHant: KanbanMessages = {
+   createTask: '建立任務',
++  taskCreatedMoveFailed: '任務已建立，但移動失敗。',
++  retryMove: '重試移動',
++  movingTask: '正在移動…',
+   cancel: '取消',
+@@ -1057,2 +1253,3 @@ const zhHant: KanbanMessages = {
    comments: n => `留言・${n}`,
 +  commentsHelpLabel: '留言說明',
    commentsHelpRunning:
-@@ -1076,2 +1258,3 @@ const zhHant: KanbanMessages = {
+@@ -1076,2 +1273,3 @@ const zhHant: KanbanMessages = {
    copyTaskId: '複製任務 ID',
 +  copyWorkspacePath: '複製工作區路徑',
    copyTitle: '複製標題',
-@@ -1130,3 +1313,24 @@ const zhHant: KanbanMessages = {
+@@ -1130,3 +1328,24 @@ const zhHant: KanbanMessages = {
  /** Registered via `ctx.i18n.register` at plugin load (disposer tracked). */
 -export const KANBAN_LOCALES: PluginLocaleBundles = { en, ja, zh, 'zh-hant': zhHant }
 +export const KANBAN_LOCALES: PluginLocaleBundles = {
@@ -71295,7 +71575,7 @@ index 94cee91d6f22d0f635d302f68a2e30f71a2e8716..f2217017c3abbec71a035ee1f9ff6067
 +  }
 +}
 
-@@ -1169,3 +1373,4 @@ export function useKanban(): KanbanText {
+@@ -1169,3 +1388,4 @@ export function useKanban(): KanbanText {
  // Column labels/help live in i18n; unknown backend statuses fall back to the id.
 -export const columnLabel = (k: KanbanText, name: string) => k.col[name as keyof KanbanText['col']]?.label ?? name
 +export const columnLabel = (k: KanbanText, name: string) =>
