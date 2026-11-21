@@ -152,7 +152,10 @@ in Gateway settings to return to recovery and focus **Gateway settings**.
 In a short window, scroll the settings panel to reach **Save and reconnect**.
 While Local applies the settings, the recovery panel shows **Gateway
 connection restarting**.
-If the Local reconnect request fails, the error appears next to that button.
+If the Local reconnect request fails, the error stays next to
+**Save and reconnect** in both recovery and **Settings → Gateway → Connection**.
+Choosing **Save and reconnect** again clears the previous error as the new
+attempt starts.
 Keyboard focus stays on **Save and reconnect** while the request is pending
 unless you move it, so you can press Enter again after a refusal.
 You can go back and reopen Gateway settings during the request.
