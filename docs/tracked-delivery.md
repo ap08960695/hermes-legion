@@ -18,6 +18,7 @@ Tabbing to a link in a folded card description expands the description and
 brings that link into view.
 Tab into **Activity** or **Worker log** to scroll with the keyboard. Refreshes
 keep your place while you read earlier entries and follow new ones at the end.
+Long **Activity** details wrap below the event label and time.
 The card's feed tabs wrap in narrow windows. Focus or hover over **Comment help**
 to read how comments reach the worker.
 Long card titles and status labels wrap to keep the full text readable and
