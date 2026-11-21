@@ -12,6 +12,8 @@ Hub combines the former Library and Spaces in one native Desktop destination. It
 
 **All items** shows shared collection entries and chat outputs under the same search and type filters. **From chats** narrows the source; selecting a named collection narrows it to that collection. Refresh returns to **All items** if the selected collection is gone. If Refresh removes the collection button you are focused on, keyboard focus moves to **All items**. If the removed collection’s **Trash** filter is focused, focus moves to the **All** filter. Hub outlines the navigation, filter, Remove, or Restore button you reach with the keyboard. **Search all Hub** keeps your query and searches across collections and chat files. **Clear search and filters** clears the query in the current collection. Both return focus to the search field so you can keep typing. Hub checks the collection list before showing items or an item error from a named collection’s refresh. Chat outputs are not automatically added to a collection or granted to its bot members. Collection membership controls only explicitly shared copies. The old `/artifacts` and `/spaces` routes still open Hub, so existing links remain useful. No database migration or old-content re-import is needed.
 
+In **From chats**, open a file and choose **Browse containing folder** to see nearby files. After opening a file from that list, activate **Back** with the keyboard to return focus to its row once it is available. Moving focus while the list reloads keeps focus where you moved it.
+
 The workspace follows its captured native connection/profile. There is no automatic import of old chats, documents or private folders. The owner UI manages content; bot CLI commands are read-only.
 
 ## Read from an existing bot

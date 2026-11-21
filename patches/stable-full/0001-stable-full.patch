@@ -17119,10 +17119,10 @@ index 0000000000000000000000000000000000000000..0e09568165c331990ca000ac4844a359
 +}
 diff --git a/apps/desktop/src/app/artifacts/artifact-preview.test.tsx b/apps/desktop/src/app/artifacts/artifact-preview.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..094df09aaa78ef8d0d2024773c17e87baf8c13fc
+index 0000000000000000000000000000000000000000..45b5edf30cedb53e75b5aaa8e6d97744f78bf04d
 --- /dev/null
 +++ b/apps/desktop/src/app/artifacts/artifact-preview.test.tsx
-@@ -0,0 +1,108 @@
+@@ -0,0 +1,125 @@
 +import { cleanup, render, screen, waitFor, fireEvent } from '@testing-library/react'
 +import { afterEach, expect, it, vi } from 'vitest'
 +import { LibraryFilePreview } from './artifact-preview'
@@ -17197,20 +17197,37 @@ index 0000000000000000000000000000000000000000..094df09aaa78ef8d0d2024773c17e87b
 +  expect(screen.queryByText('late file')).toBeNull()
 +})
 +
-+it('returns to Hub at the root and walks back through folder history', async () => {
++it.each([0, 200])('walks back through folder history with %i rows before the selected item', async preceding => {
 +  io.read.mockImplementation(async (path: string) => ({ path, text: path, mimeType: 'text/plain' }))
-+  io.list.mockResolvedValue({ entries: [{ path: '/work/other.md', name: 'other.md', isDirectory: false }] })
++  io.list.mockResolvedValue({
++    entries: [
++      ...Array.from({ length: preceding }, (_, index) => ({
++        path: `/work/entry-${index}`,
++        name: `Entry ${index}`,
++        isDirectory: true
++      })),
++      { path: '/work/other.md', name: 'other.md', isDirectory: false }
++    ]
++  })
 +  const close = vi.fn()
 +  render(<LibraryFilePreview item={item} onClose={close} />)
 +  await screen.findByText('/work/notes.md', { selector: 'p,pre' })
 +  fireEvent.click(screen.getByRole('button', { name: 'Back' }))
 +  expect(close).toHaveBeenCalledTimes(1)
 +  fireEvent.click(screen.getByRole('button', { name: 'Browse containing folder' }))
++
++  if (preceding) {
++    fireEvent.click(await screen.findByRole('button', { name: /^Expand/ }))
++  }
++
 +  fireEvent.click(await screen.findByRole('button', { name: 'other.md' }))
 +  await waitFor(() => expect(io.read).toHaveBeenLastCalledWith('/work/other.md', item.owner, item.sessionId))
-+  fireEvent.click(screen.getByRole('button', { name: 'Back' }))
-+  expect(await screen.findByRole('button', { name: 'other.md' })).toBeTruthy()
-+  fireEvent.click(screen.getByRole('button', { name: 'Back' }))
++  const back = screen.getByRole('button', { name: 'Back' })
++  back.focus()
++  fireEvent.click(back)
++  const returnedEntry = await screen.findByRole('button', { name: 'other.md' })
++  await waitFor(() => expect(returnedEntry.ownerDocument.activeElement).toBe(returnedEntry))
++  fireEvent.click(back)
 +  await waitFor(() => expect(io.read).toHaveBeenLastCalledWith(item.value, item.owner, item.sessionId))
 +  expect(close).toHaveBeenCalledTimes(1)
 +})
@@ -17233,11 +17250,11 @@ index 0000000000000000000000000000000000000000..094df09aaa78ef8d0d2024773c17e87b
 +})
 diff --git a/apps/desktop/src/app/artifacts/artifact-preview.tsx b/apps/desktop/src/app/artifacts/artifact-preview.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..4ee42059abc69edd7f7e684fcfc8393af809f2c7
+index 0000000000000000000000000000000000000000..f196bf664d6da2c6380280845aae8573bdcae6bc
 --- /dev/null
 +++ b/apps/desktop/src/app/artifacts/artifact-preview.tsx
-@@ -0,0 +1,161 @@
-+import { useEffect, useState, useMemo } from 'react'
+@@ -0,0 +1,220 @@
++import { useEffect, useMemo, useRef, useState } from 'react'
 +import { Button } from '@/components/ui/button'
 +import { Codicon } from '@/components/ui/codicon'
 +import { CopyButton } from '@/components/ui/copy-button'
@@ -17251,18 +17268,33 @@ index 0000000000000000000000000000000000000000..4ee42059abc69edd7f7e684fcfc8393a
 +import { useLibraryAvailability } from './library-availability'
 +import type { HermesReadDirEntry } from '@/global'
 +
++const FOLDER_PAGE_SIZE = 200
++
 +function LibraryBrowser({ item, onClose }: { item: LibraryItem; onClose: () => void }) {
 +  const { t } = useI18n(),
 +    copy = useFocusCopy()
-+  const [history, setHistory] = useState([{ path: item.value, directory: false, label: item.label }])
-+  const { path, directory, label } = history[history.length - 1]
-+  const navigate = (path: string, directory: boolean, label = item.label) =>
-+    setHistory(previous => [...previous, { path, directory, label }])
++
++  const [history, setHistory] = useState([
++    { path: item.value, directory: false, label: item.label, previousLimit: FOLDER_PAGE_SIZE }
++  ])
++
++  const { path, directory, label, previousLimit } = history[history.length - 1]
++  const backButton = useRef<HTMLButtonElement>(null)
++  const folderEntries = useRef<HTMLDivElement>(null)
++  const returnFocus = useRef<{ path: string; limit: number } | null>(null)
 +
 +  const [file, setFile] = useState<LibraryFile | null>(null),
-+    [entries, setEntries] = useState<HermesReadDirEntry[] | null>(null),
++    [listing, setListing] = useState<{ path: string; entries: HermesReadDirEntry[] } | null>(null),
 +    [error, setError] = useState(''),
-+    [limit, setLimit] = useState(200)
++    [limit, setLimit] = useState(FOLDER_PAGE_SIZE)
++
++  const entries = directory && listing?.path === path ? listing.entries : null
++
++  const navigate = (path: string, directory: boolean, label = item.label) => {
++    returnFocus.current = null
++    setHistory(previous => [...previous, { path, directory, label, previousLimit: limit }])
++  }
++
 +  const visibleItems = useMemo(
 +    () =>
 +      (entries || [])
@@ -17272,12 +17304,14 @@ index 0000000000000000000000000000000000000000..4ee42059abc69edd7f7e684fcfc8393a
 +    [entries, limit, item]
 +  )
 +  const availability = useLibraryAvailability(visibleItems)
++
++  // eslint-disable-next-line no-restricted-syntax -- abandon the pending focus request if the folder fails to load.
 +  useEffect(() => {
 +    let current = true
 +    setFile(null)
-+    setEntries(null)
++    setListing(null)
 +    setError('')
-+    setLimit(200)
++    setLimit(returnFocus.current?.limit ?? FOLDER_PAGE_SIZE)
 +    const request = directory
 +      ? readLibraryDirectory(path, item.owner)
 +      : path === item.value && item.initialFile
@@ -17286,16 +17320,43 @@ index 0000000000000000000000000000000000000000..4ee42059abc69edd7f7e684fcfc8393a
 +    void request
 +      .then(value => {
 +        if (!current) return
-+        if ('entries' in value) setEntries(value.entries)
++        if ('entries' in value) setListing({ path, entries: value.entries })
 +        else setFile(value)
 +      })
 +      .catch(error => {
-+        if (current) setError(error instanceof Error ? error.message : t.preview.unavailable)
++        if (current) {
++          returnFocus.current = null
++          setError(error instanceof Error ? error.message : t.preview.unavailable)
++        }
 +      })
 +    return () => {
 +      current = false
 +    }
 +  }, [path, directory, item, t.preview.unavailable])
++
++  // eslint-disable-next-line no-restricted-syntax -- consume the pending focus request after the folder is ready.
++  useEffect(() => {
++    const target = returnFocus.current
++
++    if (!target || !entries) {
++      return
++    }
++
++    const buttons = folderEntries.current?.querySelectorAll<HTMLButtonElement>('[data-library-folder-entry]')
++    const row = Array.from(buttons ?? []).find(button => button.dataset.libraryFolderEntry === target.path)
++
++    if (row?.disabled && availability[target.path] === 'checking') {
++      return
++    }
++
++    returnFocus.current = null
++    const back = backButton.current
++
++    if (row && !row.disabled && back?.ownerDocument.activeElement === back) {
++      row.focus()
++    }
++  }, [availability, entries])
++
 +  const folder = () => {
 +    const full = file?.path || path
 +    const parent = full.replace(/[\\/][^\\/]+$/, '') || full
@@ -17305,12 +17366,26 @@ index 0000000000000000000000000000000000000000..4ee42059abc69edd7f7e684fcfc8393a
 +    <div className="flex h-[min(72vh,800px)] min-h-0 flex-col gap-3">
 +      <div className="flex flex-wrap items-center gap-2">
 +        <Button
++          onBlur={() => {
++            returnFocus.current = null
++          }}
++          onClick={event => {
++            if (history.length === 1) {
++              onClose()
++
++              return
++            }
++
++            const back = event.currentTarget
++            returnFocus.current =
++              history.at(-2)?.directory && back.ownerDocument.activeElement === back
++                ? { path, limit: previousLimit }
++                : null
++            setHistory(previous => previous.slice(0, -1))
++          }}
++          ref={backButton}
 +          size="sm"
 +          variant="ghost"
-+          onClick={() => {
-+            if (history.length > 1) setHistory(previous => previous.slice(0, -1))
-+            else onClose()
-+          }}
 +        >
 +          <Codicon name="arrow-left" />
 +          {t.common.back}
@@ -17326,7 +17401,7 @@ index 0000000000000000000000000000000000000000..4ee42059abc69edd7f7e684fcfc8393a
 +        {error ? (
 +          <ErrorState title={t.preview.unavailable} description={error} />
 +        ) : entries ? (
-+          <div className="flex flex-col gap-1">
++          <div className="flex flex-col gap-1" ref={folderEntries}>
 +            {entries.slice(0, limit).map(entry => (
 +              <Tip
 +                key={entry.path}
@@ -17337,12 +17412,13 @@ index 0000000000000000000000000000000000000000..4ee42059abc69edd7f7e684fcfc8393a
 +                }
 +              >
 +                <Button
-+                  disabled={!entry.isDirectory && availability[entry.path] !== 'ready'}
-+                  variant="ghost"
 +                  className="justify-start"
++                  data-library-folder-entry={entry.path}
++                  disabled={!entry.isDirectory && availability[entry.path] !== 'ready'}
 +                  onClick={() => {
 +                    navigate(entry.path, entry.isDirectory, entry.name)
 +                  }}
++                  variant="ghost"
 +                >
 +                  <Codicon name={entry.isDirectory ? 'folder' : 'file'} />
 +                  {entry.name}
@@ -17350,7 +17426,7 @@ index 0000000000000000000000000000000000000000..4ee42059abc69edd7f7e684fcfc8393a
 +              </Tip>
 +            ))}
 +            {entries.length > limit && (
-+              <Button variant="ghost" onClick={() => setLimit(n => n + 200)}>
++              <Button variant="ghost" onClick={() => setLimit(n => n + FOLDER_PAGE_SIZE)}>
 +                {t.common.expand} · {limit}/{entries.length}
 +              </Button>
 +            )}
@@ -84167,10 +84243,10 @@ index b46d5b4247acbda0b8649e2958b4e8ba1fa01925..1b0cc54843ec80008f3a9ae2926545c4
 +      ))
  
 diff --git a/apps/desktop/src/styles.css b/apps/desktop/src/styles.css
-index 219de061127cb5fcc23b67e1f9f7ceed5777a461..55575c29826372f4c6d3d6c55558dd103088fc0e 100644
+index 219de061127cb5fcc23b67e1f9f7ceed5777a461..5717c3119a89f2db78e8dd442b77a313ab06ffc5 100644
 --- a/apps/desktop/src/styles.css
 +++ b/apps/desktop/src/styles.css
-@@ -1402,2 +1402,44 @@
+@@ -1402,2 +1402,45 @@
 
 +[data-slot='composer-retained-send'] > summary:focus-visible {
 +  outline: 2px solid var(--ui-base);
@@ -84200,6 +84276,7 @@ index 219de061127cb5fcc23b67e1f9f7ceed5777a461..55575c29826372f4c6d3d6c55558dd10
 +[data-hub-preview-dialog] [data-artifact-view-toggle] > button:focus-visible,
 +[data-hub-preview-dialog] .cm-editor:has(.cm-content:focus-visible),
 +[data-hub-preview-edit]:focus-visible,
++[data-library-folder-entry]:focus-visible,
 +[data-hub-remove-dialog] button:focus-visible,
 +[data-monitor-table-scroll]:focus-visible,
 +[data-monitor-table-scroll] button:focus-visible,
@@ -84215,7 +84292,7 @@ index 219de061127cb5fcc23b67e1f9f7ceed5777a461..55575c29826372f4c6d3d6c55558dd10
 +}
 +
  button {
-@@ -1433,2 +1475,19 @@ button {
+@@ -1433,2 +1476,19 @@ button {
 
 +/* Images can paint any color behind the lightbox close control. */
 +[data-variant='media-lightbox'] > [data-slot='dialog-close-button'] {
@@ -84235,7 +84312,7 @@ index 219de061127cb5fcc23b67e1f9f7ceed5777a461..55575c29826372f4c6d3d6c55558dd10
 +}
 +
  [data-slot='dropdown-menu-item']:focus,
-@@ -2539,2 +2598,7 @@ button[data-slot='aui_msg-reactions'] svg {
+@@ -2539,2 +2599,7 @@ button[data-slot='aui_msg-reactions'] svg {
 
 +/* Keep focused chart values and diagram source above the composer and jump-to-bottom button. */
 +[data-chat-surface] [data-slot='aui_thread-viewport']:has(:is([data-slot='chart-values'], [data-slot='mermaid-source']):focus) {
@@ -84243,7 +84320,7 @@ index 219de061127cb5fcc23b67e1f9f7ceed5777a461..55575c29826372f4c6d3d6c55558dd10
 +}
 +
  /* A live tool run, shown as one line. `ToolRunTicker` stacks the run's rows
-@@ -2773,2 +2837,96 @@ button[data-slot='aui_msg-reactions'] svg {
+@@ -2773,2 +2838,96 @@ button[data-slot='aui_msg-reactions'] svg {
 
 +[data-pet-walking] > canvas {
 +  transform: var(--pet-walk-shape, none);
