@@ -784,6 +784,8 @@ overflows, Tab can focus its scrollable body. End reveals the last
 saved result. Escape or Close returns to the report button.
 If a roster refresh removes the report button, focus returns to
 Monitor search or to the Monitor heading when the roster is empty.
+From the heading, Tab reaches **Include a sixth character** with a
+visible focus outline.
 An empty current roster says “No bots yet.” A search or filter that
 excludes every available row keeps the no-matches message. Waiting or
 failed refresh without rows shows the connection status.
