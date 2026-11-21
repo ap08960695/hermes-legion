@@ -781,6 +781,7 @@ colors. Focus stays on the active control when switching views or
 refreshing the roster. **New bot** and **New group chat** also show
 keyboard focus. When a creation dialog was opened by keyboard, Escape
 or Cancel returns focus to its button if the button is still available.
+**New group chat** opens with a keyboard outline around **Search bots to add**.
 In **New bot**, the Name field shows a keyboard outline on entry.
 On a single Local connection, Tab moves from Name to Title. The visible
 Name, Title, and Description labels also name their fields for
