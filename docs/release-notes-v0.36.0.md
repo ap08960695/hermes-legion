@@ -40,6 +40,10 @@ revision rounds and requested a text diff from recorded fixture handoffs.
 
 ![Track Work shows a selected revision round, the two handoff runs, and the button to open answer.txt's text diff.](images/v036-work-revisions.webp)
 
+The full local macOS Desktop test run on integration commit `d1e4800`
+discovered 1,836 test files. It recorded 16,795 passing tests, 37 skips
+and zero failures.
+
 Loopback OpenSSH checks cover connection reuse, helper admission and cleanup,
 and reconnect backoff. The owner's installed Hermes.app, the real ai backend,
 and tablet-to-Desktop answer recovery are outside this release's verification.
