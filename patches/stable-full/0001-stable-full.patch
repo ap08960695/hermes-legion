@@ -67769,11 +67769,11 @@ index 0000000000000000000000000000000000000000..0bc4571b57a9d01e95010694c19cfb30
 +  hermesApiAs<T>(owner, { path: '/api/spaces' + path, method, body })
 diff --git a/apps/desktop/src/plugins/hermes-spaces/page.test.tsx b/apps/desktop/src/plugins/hermes-spaces/page.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..60aabfb718698ea7b8e4f48a181f382ff96d3f97
+index 0000000000000000000000000000000000000000..809593ad991045cc39fa0f51487c8039e5c8db8e
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-spaces/page.test.tsx
-@@ -0,0 +1,680 @@
-+import { act, render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
+@@ -0,0 +1,718 @@
++import { act, render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react'
 +import { afterEach, expect, it, vi } from 'vitest'
 +vi.mock('@/app/artifacts', () => ({
 +  ArtifactsView: ({ searchText }: { searchText?: string }) => <div>Chat files: {searchText}</div>
@@ -67822,6 +67822,44 @@ index 0000000000000000000000000000000000000000..60aabfb718698ea7b8e4f48a181f382f
 +  fireEvent.click(screen.getByRole('button', { name: /^Remove$/ }))
 +  await screen.findByText(/You can restore it/)
 +  expect(io.api.mock.calls.some(([, , method]) => method === 'PATCH')).toBe(false)
++})
++
++it.each(['cancel', 'remove'] as const)('restores collection focus after %s closes the removal dialog', async action => {
++  const item = { ...examplePage }
++  const writes = vi.fn()
++  let moved = false
++
++  io.api.mockImplementation(async (_owner, path, method, body) => {
++    if (path === '') { return { spaces: [exampleSpace] } }
++
++    if (method === 'PATCH') {
++      writes(path, body)
++      moved = true
++      return { ...item, deleted: 1, revision: 2 }
++    }
++
++    return { items: moved ? [] : [item] }
++  })
++
++  render(<SpacesPage />)
++  fireEvent.click(await screen.findByRole('button', { name: 'Example Space' }))
++  await screen.findByRole('button', { name: 'Shared brief' })
++  const opener = screen.getByRole('button', { name: /^Remove$/ })
++  act(() => opener.focus())
++  fireEvent.click(opener)
++  const dialog = within(await screen.findByRole('dialog'))
++  fireEvent.click(dialog.getByRole('button', { name: action === 'cancel' ? 'Cancel' : 'Remove' }))
++
++  if (action === 'remove') {
++    await screen.findByText('No pages or files in this collection')
++    expect(writes).toHaveBeenCalledExactlyOnceWith('/shared/items/notes', { revision: 1, deleted: true })
++  } else {
++    expect(writes).not.toHaveBeenCalled()
++    expect(opener.isConnected).toBe(true)
++  }
++
++  const target = action === 'cancel' ? opener : screen.getByRole('textbox', { name: 'Search Hub' })
++  await waitFor(() => expect(document.activeElement).toBe(target))
 +})
 +
 +it('discards a delayed preview after switching to another Space', async () => {
@@ -68455,10 +68493,10 @@ index 0000000000000000000000000000000000000000..60aabfb718698ea7b8e4f48a181f382f
 +})
 diff --git a/apps/desktop/src/plugins/hermes-spaces/page.tsx b/apps/desktop/src/plugins/hermes-spaces/page.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..8d1631b857414130c2c0a0d7f143dca5d64bf6cc
+index 0000000000000000000000000000000000000000..814d6e32408668b5da22fa094dccf8740c749c11
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-spaces/page.tsx
-@@ -0,0 +1,999 @@
+@@ -0,0 +1,1027 @@
 +import { suppressNonKeyboardFocusOpen, Tip } from '@hermes/plugin-sdk'
 +import { useStore } from '@nanostores/react'
 +import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -68965,6 +69003,7 @@ index 0000000000000000000000000000000000000000..8d1631b857414130c2c0a0d7f143dca5
 +  const catalogRequest = useRef<Promise<{ spaces: Space[] }> | null>(null)
 +  const viewRequest = useRef(0)
 +  const previewOpener = useRef<HTMLButtonElement | null>(null)
++  const removalOpener = useRef<HTMLButtonElement | null>(null)
 +  const searchInput = useRef<HTMLInputElement>(null)
 +  const collectionNav = useRef<HTMLElement>(null)
 +  const allItemsButton = useRef<HTMLButtonElement>(null)
@@ -69111,10 +69150,30 @@ index 0000000000000000000000000000000000000000..8d1631b857414130c2c0a0d7f143dca5
 +      setBusy(false)
 +    }
 +  }
++  const restoreRemovalFocus = (event: Event) => {
++    event.preventDefault()
++    const opener = removalOpener.current
++    const search = searchInput.current
++    removalOpener.current = null
++
++    if (!search) { return }
++
++    const { ownerDocument } = search
++
++    if (ownerDocument.activeElement !== ownerDocument.body) { return }
++
++    if (opener?.isConnected && !opener.disabled) { opener.focus({ preventScroll: true }) }
++
++    if (ownerDocument.activeElement === ownerDocument.body) { search.focus() }
++  }
++
 +  const remove = async (item: SpaceItem, deleted: boolean) => {
 +    setBusy(true)
 +    try {
 +      await request(owner, `/${item.space_id}/items/${item.id}`, 'PATCH', { revision: item.revision, deleted })
++
++      if (deleted) { removalOpener.current = null }
++
 +      setRemoving(null)
 +      refresh()
 +    } catch (e) {
@@ -69254,7 +69313,14 @@ index 0000000000000000000000000000000000000000..8d1631b857414130c2c0a0d7f143dca5
 +                        variant="ghost"
 +                        aria-label={filter === 'trash' ? t.restore : t.remove}
 +                        disabled={busy}
-+                        onClick={() => (filter === 'trash' ? void remove(item, false) : setRemoving(item))}
++                        onClick={event => {
++                          if (filter === 'trash') {
++                            void remove(item, false)
++                          } else {
++                            removalOpener.current = event.currentTarget
++                            setRemoving(item)
++                          }
++                        }}
 +                      >
 +                        <Codicon name={filter === 'trash' ? 'discard' : 'trash'} />
 +                      </Button>
@@ -69359,7 +69425,7 @@ index 0000000000000000000000000000000000000000..8d1631b857414130c2c0a0d7f143dca5
 +          if (!open && !busy) setRemoving(null)
 +        }}
 +      >
-+        <DialogContent aria-describedby={undefined}>
++        <DialogContent aria-describedby={undefined} onCloseAutoFocus={restoreRemovalFocus}>
 +          <DialogTitle>
 +            {t.remove}: {removing?.title}
 +          </DialogTitle>
