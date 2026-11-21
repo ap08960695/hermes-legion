@@ -21,8 +21,9 @@ and on work cards.
 
 Open the diagram to enter the zoom and pan viewer. While the viewer or its
 toolbar has focus, use the arrow keys to pan. Press **+** or **=** to zoom in,
-**−** to zoom out, and **0** to fit and recenter. Zooming keeps the center point
-fixed. Press **Escape** to close the viewer and return focus to **Open diagram**.
+**−** to zoom out, and **0** to fit and recenter. Wide diagrams open fully
+fitted. Zoom in to read their labels while keeping the center point fixed.
+Press **Escape** to close the viewer and return focus to **Open diagram**.
 If a toolbar tooltip is open, Escape dismisses the tooltip first.
 
 In Hub's chat file preview, Escape returns from the expanded diagram to
