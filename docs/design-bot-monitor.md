@@ -776,7 +776,9 @@ correction and canonical navigation/report/terminal progress remain open.
 ## Keyboard access to the wide table
 
 Press Tab to reach the scrollable Monitor table. Use Left and Right to
-reveal more columns. The table and its controls show a focus outline,
+reveal more columns. Activating **Show more** by keyboard moves focus
+to the first newly shown row so the next Tab can reach its actions.
+The table and its controls show a focus outline,
 including in high-contrast palettes. Report buttons name the bot and
 its connection. The report dialog wraps long names and saved text. Its
 status filter and Close button show keyboard focus. When a report
