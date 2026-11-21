@@ -165,6 +165,9 @@ Choosing **Save and reconnect** again clears the previous error as the new
 attempt starts. In **Settings → Gateway → Connection**, a failed Local
 **Save for next restart** also shows its reason beside the save controls.
 Use the same button to retry without restarting the current connection.
+Under **Diagnostics**, Tab reaches **Open logs** and shows its focus
+outline. If Desktop cannot reveal the log in your file manager, the
+row shows the failure. Use **Open logs** again to retry.
 Keyboard focus stays on **Save and reconnect** while the request is pending
 unless you move it, so you can press Enter again after a refusal.
 You can go back and reopen Gateway settings during the request.
