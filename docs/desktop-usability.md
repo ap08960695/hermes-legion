@@ -122,8 +122,9 @@ The composer shows the connection status above the message field, including
 when it is empty. The status wraps in narrow panes and is available to
 assistive technology. It shows Disconnected when retries have stopped
 and clears the status when the connection is ready. You can edit the draft
-while reconnecting. **Suggest prompt** becomes available again when the
-gateway is ready. Any suggestion still pending when the connection dropped
+while reconnecting. If **Send** had keyboard focus, it keeps focus and
+announces the connection status while sending is unavailable.
+**Suggest prompt** becomes available again when the gateway is ready. Any suggestion still pending when the connection dropped
 is discarded. The slash and **@** menus use local choices and fresh cached
 results while reconnecting. An open search resumes when the gateway is ready.
 Automatic sending of queued messages in the open Chat waits for the gateway.
