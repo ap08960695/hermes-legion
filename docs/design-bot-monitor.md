@@ -779,7 +779,9 @@ Press Tab to reach the scrollable Monitor table. Use Left and Right to
 reveal more columns. The table and its controls show a focus outline,
 including in high-contrast palettes. Report buttons name the bot and
 its connection. The report dialog wraps long names and saved text. Its
-status filter and Close button show keyboard focus.
+status filter and Close button show keyboard focus. When a report
+overflows, Tab can focus its scrollable body. End reveals the last
+saved result. Escape or Close returns to the report button.
 If a roster refresh removes the report button, focus returns to
 Monitor search or to the Monitor heading when the roster is empty.
 An empty current roster says “No bots yet.” A search or filter that
