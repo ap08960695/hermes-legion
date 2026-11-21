@@ -284,5 +284,7 @@ focus moves to the **Waiting for owner** heading. You can continue
 with Tab after the refreshed list arrives.
 
 When an Owner Inbox request shows a Work card ID, select **Copy card ID**.
-On that card's board, paste the ID into **Filter cards** to find the
-card even when other cards share its title.
+If the row shows a board slug, match it in the board picker. The picker
+shows the slug below a different display name, so you can distinguish
+boards with the same name. Paste the ID into that board's **Filter cards**
+to find the card even when other cards share its title.
