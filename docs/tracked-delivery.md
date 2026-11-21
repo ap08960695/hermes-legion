@@ -37,6 +37,7 @@ When the assignee is known, **Model** names the profile whose settings the task 
 Choosing an assignee in **New task** returns focus to **Assignee**.
 The **Title** and **Description (optional)** labels stay visible as you type in **New task**.
 When creating a task fails, **New task** shows the error above the action buttons and keeps the draft open.
+If you're unsure whether the task was created, select **Create task** again in that dialog with the same details.
 If the task is saved but its lane move fails, **Retry move** moves the existing card.
 After a lost create reply, resubmitting the same values in the open dialog recovers the saved card until it is archived.
 
