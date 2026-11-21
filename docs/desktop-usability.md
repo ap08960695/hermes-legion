@@ -282,3 +282,7 @@ question after the gateway reconnects.
 If Local disconnects while **Refresh inbox** has keyboard focus,
 focus moves to the **Waiting for owner** heading. You can continue
 with Tab after the refreshed list arrives.
+
+When an Owner Inbox request shows a Work card ID, select **Copy card ID**.
+On that card's board, paste the ID into **Filter cards** to find the
+card even when other cards share its title.
