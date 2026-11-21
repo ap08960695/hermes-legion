@@ -787,6 +787,8 @@ Name, Title, and Description labels also name their fields for
 assistive technology. Under **Advanced → General**, **Clone from
 profile** and **SOUL.md** also name their controls. The expanded dialog
 fits narrow and short windows, with vertical scrolling for longer forms.
+**Edit profile → Advanced** also fits narrow and short windows and keeps
+Save and Cancel within view.
 Press Tab to reach the scrollable Monitor table. Use Left and Right to
 reveal more columns. **Show more** describes how many matching rows are
 shown and how many remain. Activating it by keyboard moves focus to
