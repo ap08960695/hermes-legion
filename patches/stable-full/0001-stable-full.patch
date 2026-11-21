@@ -61568,12 +61568,12 @@ index 0000000000000000000000000000000000000000..9898ca8640b33a3d3d1aedfd2e9f2324
 +} satisfies Record<keyof typeof CANONICAL_GROUP_LOCALES, MonitorMessages>
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor-open.test.tsx b/apps/desktop/src/plugins/hermes-bots/monitor-open.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..f0e9a0f2168c8da4559d2fe88319f8698ac40bbb
+index 0000000000000000000000000000000000000000..a4af3252ce753406e74e34404891330c6ab1c82e
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor-open.test.tsx
-@@ -0,0 +1,186 @@
+@@ -0,0 +1,242 @@
 +import { atom, host } from '@hermes/plugin-sdk'
-+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
++import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 +
 +// eslint-disable-next-line no-restricted-imports
@@ -61680,6 +61680,62 @@ index 0000000000000000000000000000000000000000..f0e9a0f2168c8da4559d2fe88319f869
 +  expect(host.ensureAgent).not.toHaveBeenCalled()
 +  expect(host.newChat).not.toHaveBeenCalled()
 +  expect(host.notify).not.toHaveBeenCalled()
++})
++
++it('keeps the same owner’s action focused and sends one lookup until it settles', async () => {
++  let fail!: (error: Error) => void
++  vi.mocked(host.requestProfile).mockImplementationOnce(async () => new Promise((_, reject) => { fail = reject }))
++
++  const { bot, worker } = openMonitor()
++  bot.focus()
++  fireEvent.click(bot)
++  await waitFor(() => expect(host.requestProfile).toHaveBeenCalledTimes(1))
++
++  fireEvent.click(bot)
++  fireEvent.click(worker)
++  expect(host.requestProfile).toHaveBeenCalledTimes(1)
++  expect(bot.textContent).toBe('Opening chat…')
++  expect(worker.getAttribute('aria-disabled')).toBe('true')
++  expect(bot.ownerDocument.activeElement).toBe(bot)
++
++  fail(new Error('Registry temporarily unavailable'))
++  await waitFor(() => expect(bot.getAttribute('aria-disabled')).toBeNull())
++  expect(bot.ownerDocument.activeElement).toBe(bot)
++  expect(host.openSession).not.toHaveBeenCalled()
++
++  fireEvent.click(bot)
++  await waitFor(() => expect(host.openSession).toHaveBeenCalledTimes(1))
++  expect(host.requestProfile).toHaveBeenCalledTimes(2)
++})
++
++it('lets a newly waiting question supersede a generic lookup and keeps one cold lookup for that question', async () => {
++  const descriptor = Object.getOwnPropertyDescriptor(host.state, 'focusedClarification')!
++  const focused = atom<ReturnType<typeof host.state.focusedClarification.get>>(null)
++  Object.defineProperty(host.state, 'focusedClarification', { configurable: true, value: focused })
++  const finish: (() => void)[] = []
++  vi.mocked(host.requestProfile).mockImplementation(async () => new Promise(resolve => {
++    finish.push(() => resolve({ sessions: [{ id: 'canonical-root', title: 'Bot Chat' }] }))
++  }))
++
++  try {
++    const { bot, worker } = openMonitor()
++    fireEvent.click(worker)
++    await waitFor(() => expect(host.requestProfile).toHaveBeenCalledTimes(1))
++
++    act(() => focused.set({ connectionId: 'local', profile: 'writer', storedSessionId: 'canonical-root', requestId: 'waiting-question' }))
++    expect(bot.getAttribute('aria-disabled')).toBeNull()
++    fireEvent.click(bot)
++    await waitFor(() => expect(host.requestProfile).toHaveBeenCalledTimes(2))
++    fireEvent.click(bot)
++    fireEvent.click(worker)
++    await act(async () => { finish.forEach(resolve => resolve()) })
++
++    expect(host.requestProfile).toHaveBeenCalledTimes(2)
++    expect(host.openSession).toHaveBeenCalledTimes(1)
++    expect($pendingBotOpen.get()).toBeNull()
++  } finally {
++    Object.defineProperty(host.state, 'focusedClarification', descriptor)
++  }
 +})
 +
 +it.each(['row', 'empty', 'rejected'] as const)('discards an obsolete Local registry reply (%s)', async result => {
@@ -63163,10 +63219,10 @@ index 0000000000000000000000000000000000000000..3795f0b17df9582424e3a4732a58202d
 +})
 diff --git a/apps/desktop/src/plugins/hermes-bots/monitor.tsx b/apps/desktop/src/plugins/hermes-bots/monitor.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..d6b57bafa30c9be722ab3aa72051f94be8ad950f
+index 0000000000000000000000000000000000000000..fd10beaff4af208bbef40b9bbb8ba46f19123bc4
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-bots/monitor.tsx
-@@ -0,0 +1,308 @@
+@@ -0,0 +1,326 @@
 +import { atom, Button, Codicon, compactNumber, Dialog, EmptyState, host, SearchField, SegmentedControl, type PluginSessionClarification, useValue } from '@hermes/plugin-sdk'
 +import { useRef, useState } from 'react'
 +
@@ -63178,6 +63234,7 @@ index 0000000000000000000000000000000000000000..d6b57bafa30c9be722ab3aa72051f94b
 +import { BotMonitorReportContent, BotMonitorReports, botRecordedIssue, type ReportSnapshot } from './monitor-reports'
 +import { focusedBotClarificationRow } from './routing'
 +import { activeWorkerSessions, workerProgress } from './row-helpers'
++import { $pendingBotOpen } from './shared'
 +import type { RosterRow, WorkerSession } from './types'
 +
 +export interface BotMonitorProps {
@@ -63261,6 +63318,7 @@ index 0000000000000000000000000000000000000000..d6b57bafa30c9be722ab3aa72051f94b
 +export function BotMonitor({ rows, onOpen, now, stale: refreshFailed = false, waitingForRoster = false }: BotMonitorProps) {
 +  const stale = refreshFailed || waitingForRoster
 +  const includeSixth = useValue($characterExtraActor)
++  const pendingOpen = useValue($pendingBotOpen)
 +  const clarification = useValue(host.state.focusedClarification || noClarification)
 +  const openClarifications = useValue(host.state.openBotClarifications || noOpenClarifications)
 +  const waitingRows = new Map<BotMonitorProps['rows'][number], string>()
@@ -63335,6 +63393,10 @@ index 0000000000000000000000000000000000000000..d6b57bafa30c9be722ab3aa72051f94b
 +    return a.row.name.localeCompare(z.row.name) || a.key.localeCompare(z.key)
 +  })
 +
++  const openingName = pendingOpen && !stale
++    ? shown.slice(0, limit).find(({ row }) => row.source.available && botRosterKey(row.bot) === pendingOpen.key)?.row.name
++    : undefined
++
 +  const sortButton = (value: string, label: string, accessible: string) => (
 +    <Button aria-label={accessible} onClick={() => setSort(value)} size="inline" variant="textStrong">
 +      {label}
@@ -63344,6 +63406,7 @@ index 0000000000000000000000000000000000000000..d6b57bafa30c9be722ab3aa72051f94b
 +
 +  return (
 +    <section aria-label={m.title} className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto px-6 pb-6" data-bot-monitor>
++      <span aria-live="polite" className="sr-only">{openingName ? `${b.bot.openingChat} · ${openingName}` : ''}</span>
 +      <div className="pt-4">
 +        <h2 className="text-lg font-semibold" ref={heading} tabIndex={-1}>{m.title}</h2>
 +        <p className="mt-1 text-xs text-muted-foreground">{m.hint}</p>
@@ -63414,18 +63477,29 @@ index 0000000000000000000000000000000000000000..d6b57bafa30c9be722ab3aa72051f94b
 +                const title = stripPreviewMarkdown(worker?.title || '').replace(/\s+/g, ' ').trim().slice(0, 120)
 +
 +                const signal = monitorSignal(row.bot, worker)
++                const ownerKey = botRosterKey(row.bot)
 +
++                const isOpening = (pending: typeof pendingOpen) =>
++                  pending?.key === ownerKey && (!waiting || pending.waitingSessionId === waiting)
++
++                const opening = !stale && row.source.available && isOpening(pendingOpen)
++                const openLabel = opening ? b.bot.openingChat : b.workspace.open
 +
 +                return (
 +                  <tr className="border-t border-(--ui-stroke-tertiary) align-top" key={key}>
 +                    <td className="p-3">
 +                      <div className="font-medium">{row.name}{worker && ` · ${m.worker}`}</div>
 +                      <div className="mt-1 text-muted-foreground">{row.bot.connectionLabel || row.bot.connectionId}</div>
-+                      <Button aria-label={`${b.workspace.open} · ${row.name}${worker ? ` · ${title || m.worker}` : ''}`}
-+                        className="mt-1 whitespace-nowrap" disabled={stale || !row.source.available}
-+                        onClick={() => void (waiting ? onOpen(row.bot, waiting) : onOpen(row.bot))}
++                      <Button aria-disabled={opening || undefined}
++                        aria-label={`${openLabel} · ${row.name}${worker ? ` · ${title || m.worker}` : ''}`}
++                        className="mt-1 whitespace-nowrap aria-disabled:opacity-60" disabled={stale || !row.source.available}
++                        onClick={() => {
++                          if (!isOpening($pendingBotOpen.get())) {
++                            void (waiting ? onOpen(row.bot, waiting) : onOpen(row.bot))
++                          }
++                        }}
 +                        size="sm" variant="ghost">
-+                        {b.workspace.open}
++                        {openLabel}
 +                      </Button>
 +                    </td>
 +                    <td className="p-3">{stale ? m.retained : waiting ? b.group.waitingForAnswer : monitorStatusLabel(row, status, b)}</td>
@@ -66079,7 +66153,7 @@ index 40bd20a167e2a97fc8eca8c69aaf13fca2b33dca..777fc43954e51ce434fe307b58e6c748
 +      if (sender.route.connectOnDemand || (pushDoor && !routeSignaledOutboxWork(sender.id, work))) {
          continue
 diff --git a/apps/desktop/src/plugins/hermes-bots/roster-actions.ts b/apps/desktop/src/plugins/hermes-bots/roster-actions.ts
-index ab189ac5d2dd7a98496fa66c47c75bea97561b5b..410430b03b01e8dba3060ad958826dd8e939cd06 100644
+index ab189ac5d2dd7a98496fa66c47c75bea97561b5b..fa88506a0614cdc2214e6ec904208bff82473352 100644
 --- a/apps/desktop/src/plugins/hermes-bots/roster-actions.ts
 +++ b/apps/desktop/src/plugins/hermes-bots/roster-actions.ts
 @@ -187,3 +187,3 @@ function settlePendingBotOpen(generation: number) {
@@ -66120,6 +66194,11 @@ index ab189ac5d2dd7a98496fa66c47c75bea97561b5b..410430b03b01e8dba3060ad958826dd8
 +    } else {
 +      refreshOpenBotChat(bot, { allowWhileBusy: true })
 +    }
+
+@@ -301,3 +307,3 @@ export async function openRosterBot(bot: RosterRow): Promise<boolean> {
+   // Highlight, routing, drafts, and running turns are unchanged.
+-  $pendingBotOpen.set({ generation, key })
++  $pendingBotOpen.set({ generation, key, waitingSessionId })
 
 diff --git a/apps/desktop/src/plugins/hermes-bots/roster-pane-dialogs.tsx b/apps/desktop/src/plugins/hermes-bots/roster-pane-dialogs.tsx
 index d0cc9a7e611c318aa0dcca31cfcb0c31c9a59c47..d77d1f58c7198cbd6d7e14cacf8e7824c80103c9 100644
@@ -66387,7 +66466,7 @@ index ec8bd2b691954433f7f2c519b54149fc753dca89..00dacc858d70be1a249f601ffc7eb61f
 +  return out
  }
 diff --git a/apps/desktop/src/plugins/hermes-bots/shared.ts b/apps/desktop/src/plugins/hermes-bots/shared.ts
-index f64552856d4c3711cf09fdda636652a6aba257fc..7c16e597246ab3372342fa92fcfa2ea938ee2f6d 100644
+index f64552856d4c3711cf09fdda636652a6aba257fc..ec0f0a3ee7979cc83b7ce3e6cf7fe550ef50bff5 100644
 --- a/apps/desktop/src/plugins/hermes-bots/shared.ts
 +++ b/apps/desktop/src/plugins/hermes-bots/shared.ts
 @@ -15,6 +15,6 @@ export const ID = 'hermes-bots'
@@ -66404,6 +66483,17 @@ index f64552856d4c3711cf09fdda636652a6aba257fc..7c16e597246ab3372342fa92fcfa2ea9
 -  pluginCtx = ctx
 +  $botPluginCtx.set(ctx)
  }
+@@ -30,7 +30,7 @@ let botOpenGeneration = 0
+
+-/** Cold open still in flight. Published after the fronted-tab miss and before
+- *  source prep. Not chat ownership — never route or highlight from this key.
++/** Cold open still in flight, including an explicit question target. Published
++ *  after the fronted-tab miss and before source prep. Not chat ownership — never route or highlight from this key.
+  *  The generation guards the clear: a superseded flight never releases its
+  *  successor's mark. A bump (another open, a group, or Sessions) drops it. */
+-export const $pendingBotOpen = atom<null | { generation: number; key: string }>(null)
++export const $pendingBotOpen = atom<null | { generation: number; key: string; waitingSessionId?: string }>(null)
+
 diff --git a/apps/desktop/src/plugins/hermes-bots/types.ts b/apps/desktop/src/plugins/hermes-bots/types.ts
 index 860445748c4b9b68b9e6349e6bf26df3c9ad9e85..50510c2a6d33c26a859205266e80a905cd980afe 100644
 --- a/apps/desktop/src/plugins/hermes-bots/types.ts

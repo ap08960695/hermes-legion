@@ -246,6 +246,9 @@ Saved-chat search retires results from another query or profile immediately. A f
 Local reconnects. Reopen it after the roster refresh to see new reports.
 If Local drops while **Open chat** is looking up the chat, choose
 **Open chat** again after Monitor refreshes.
+While Monitor looks up a bot’s chat, the button shows **Opening chat…**
+and keeps keyboard focus. Repeating the action for that bot sends one
+lookup until it settles. If the lookup fails, press Enter to retry.
 
 When an open Bot Chat asks for an answer, **Monitor** shows **Waiting
 for your answer** under **Needs attention**. The bot stays listed when
