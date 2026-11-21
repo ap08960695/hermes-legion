@@ -285,7 +285,8 @@ with Tab after the refreshed list arrives.
 
 For a confirmed Local request linked to a Work card, select **Open card**
 to go to that board and card when Kanban is enabled. **Copy card ID**
-is also available for linked requests.
+is also available for linked requests. If Work says **Card unavailable on
+this board**, close the drawer and use the board picker to continue.
 If the row shows a board slug, match it in the board picker. The picker
 shows the slug below a different display name, so you can distinguish
 boards with the same name. Paste the ID into that board's **Filter cards**
