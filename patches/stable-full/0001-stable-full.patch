@@ -67769,10 +67769,10 @@ index 0000000000000000000000000000000000000000..0bc4571b57a9d01e95010694c19cfb30
 +  hermesApiAs<T>(owner, { path: '/api/spaces' + path, method, body })
 diff --git a/apps/desktop/src/plugins/hermes-spaces/page.test.tsx b/apps/desktop/src/plugins/hermes-spaces/page.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..85842af90aa14d8889727fbc587a9e664818323c
+index 0000000000000000000000000000000000000000..9057a7eabb88426c7416852d800b96bb5b240988
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-spaces/page.test.tsx
-@@ -0,0 +1,568 @@
+@@ -0,0 +1,608 @@
 +import { act, render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
 +import { afterEach, expect, it, vi } from 'vitest'
 +vi.mock('@/app/artifacts', () => ({
@@ -68134,6 +68134,46 @@ index 0000000000000000000000000000000000000000..85842af90aa14d8889727fbc587a9e66
 +  }
 +)
 +
++it.each(['removed', 'survives', 'focus moved'] as const)(
++  'keeps keyboard focus useful when the catalog settles after switching collections (%s)',
++  async outcome => {
++    const pendingCatalog = deferred<{ spaces: typeof exampleSpace[] }>()
++    const review = { ...exampleSpace, id: 'review', title: 'Review collection' }
++    let catalogReads = 0
++
++    io.api.mockImplementation(async (_owner, path) => {
++      if (path === '') {
++        return ++catalogReads === 1 ? { spaces: [exampleSpace, review] } : pendingCatalog.promise
++      }
++
++      return { items: [] }
++    })
++
++    render(<SpacesPage />)
++    fireEvent.click(await screen.findByRole('button', { name: 'Example Space' }))
++    fireEvent.click(screen.getByRole('button', { name: 'Trash' }))
++    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
++    const next = screen.getByRole('button', { name: 'Review collection' })
++    act(() => next.focus())
++    fireEvent.click(next)
++    expect(screen.getByRole('button', { name: 'All' }).getAttribute('data-variant')).toBe('secondary')
++    const search = screen.getByRole('textbox', { name: 'Search Hub' })
++
++    if (outcome === 'focus moved') { act(() => search.focus()) }
++
++    await act(async () => {
++      pendingCatalog.resolve({ spaces: outcome === 'survives' ? [review] : [exampleSpace] })
++    })
++
++    const allItems = screen.getByRole('button', { name: 'All items' })
++    const selected = outcome === 'survives' ? next : allItems
++    const focus = outcome === 'focus moved' ? search : selected
++    expect(selected.getAttribute('data-variant')).toBe('secondary')
++    expect(screen.getByRole('button', { name: 'All' }).getAttribute('data-variant')).toBe('secondary')
++    expect(document.activeElement).toBe(focus)
++  }
++)
++
 +it.each(['resolve', 'reject'] as const)('retires a preview that %ss after leaving and returning to a collection', async result => {
 +  const earlier = deferred<typeof examplePage & { text: string }>()
 +  let previewReads = 0
@@ -68343,10 +68383,10 @@ index 0000000000000000000000000000000000000000..85842af90aa14d8889727fbc587a9e66
 +})
 diff --git a/apps/desktop/src/plugins/hermes-spaces/page.tsx b/apps/desktop/src/plugins/hermes-spaces/page.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..aac09446a018a7dd59f7fe23d63b6d33118c0d9a
+index 0000000000000000000000000000000000000000..24583e30a0b54571ef768012545bb0d1dcdbd696
 --- /dev/null
 +++ b/apps/desktop/src/plugins/hermes-spaces/page.tsx
-@@ -0,0 +1,957 @@
+@@ -0,0 +1,984 @@
 +import { suppressNonKeyboardFocusOpen, Tip } from '@hermes/plugin-sdk'
 +import { useStore } from '@nanostores/react'
 +import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -68761,7 +68801,17 @@ index 0000000000000000000000000000000000000000..aac09446a018a7dd59f7fe23d63b6d33
 +  )
 +}
 +
-+function CollectionNavButton({ onSelect, selected, title }: { onSelect: () => void; selected: boolean; title: string }) {
++function CollectionNavButton({
++  id,
++  onSelect,
++  selected,
++  title
++}: {
++  id: string
++  onSelect: () => void
++  selected: boolean
++  title: string
++}) {
 +  const [tooltipOpen, setTooltipOpen] = useState(false)
 +  // The tooltip closes on scroll, which also happens when Tab reveals the button.
 +  const [showFocusedTitle, setShowFocusedTitle] = useState(false)
@@ -68796,6 +68846,7 @@ index 0000000000000000000000000000000000000000..aac09446a018a7dd59f7fe23d63b6d33
 +    >
 +      <Button
 +        className="max-w-full shrink-0 justify-start"
++        data-collection-id={id}
 +        onBlur={hideFocusedTitle}
 +        onClick={() => {
 +          hideFocusedTitle()
@@ -68843,6 +68894,8 @@ index 0000000000000000000000000000000000000000..aac09446a018a7dd59f7fe23d63b6d33
 +  const viewRequest = useRef(0)
 +  const previewOpener = useRef<HTMLButtonElement | null>(null)
 +  const searchInput = useRef<HTMLInputElement>(null)
++  const collectionNav = useRef<HTMLElement>(null)
++  const allItemsButton = useRef<HTMLButtonElement>(null)
 +
 +  // Returning to a collection starts a new view even if its filters are the same.
 +  useLayoutEffect(
@@ -68869,6 +68922,15 @@ index 0000000000000000000000000000000000000000..aac09446a018a7dd59f7fe23d63b6d33
 +    void catalog
 +      .then(value => {
 +        if (current) {
++          const nav = collectionNav.current
++          const focused = nav?.ownerDocument.activeElement
++          const focusedCollectionId = focused?.getAttribute('data-collection-id')
++
++          // Recover focus while the removed collection's button is still mounted.
++          if (focusedCollectionId && nav?.contains(focused ?? null) && !value.spaces.some(row => row.id === focusedCollectionId)) {
++            allItemsButton.current?.focus()
++          }
++
 +          setSpaces(value.spaces)
 +          setView(view => {
 +            const id = view.selected
@@ -69002,11 +69064,15 @@ index 0000000000000000000000000000000000000000..aac09446a018a7dd59f7fe23d63b6d33
 +        </div>
 +      </header>
 +      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-+        <aside className="flex gap-1 overflow-auto border-b border-(--ui-stroke-tertiary) p-3 md:w-52 md:shrink-0 md:flex-col md:border-r md:border-b-0">
++        <aside
++          className="flex gap-1 overflow-auto border-b border-(--ui-stroke-tertiary) p-3 md:w-52 md:shrink-0 md:flex-col md:border-r md:border-b-0"
++          ref={collectionNav}
++        >
 +          <Button
 +            variant={selected === 'all' ? 'secondary' : 'ghost'}
 +            className="shrink-0 justify-start"
 +            onClick={() => selectView('all')}
++            ref={allItemsButton}
 +          >
 +            <Codicon name="files" />
 +            {t.allItems}
@@ -69022,6 +69088,7 @@ index 0000000000000000000000000000000000000000..aac09446a018a7dd59f7fe23d63b6d33
 +          <p className="px-2 pt-4 pb-2 text-xs text-muted-foreground">{t.collections}</p>
 +          {spaces.map(row => (
 +            <CollectionNavButton
++              id={row.id}
 +              key={row.id}
 +              onSelect={() => selectView(row.id)}
 +              selected={selected === row.id}
