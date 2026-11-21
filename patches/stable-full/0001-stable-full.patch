@@ -67700,14 +67700,16 @@ index 0000000000000000000000000000000000000000..fdd01140f31e7d4e9d7276c0ae45704f
 +  }
 +}
 diff --git a/apps/desktop/src/plugins/kanban/api.connection-scope.test.ts b/apps/desktop/src/plugins/kanban/api.connection-scope.test.ts
-index 0a2d899298ee8b67e1323f0908f3bd9e641405d0..a8fae8519e9258eb1432c4b0a50cf4081c5a69e8 100644
+index 0a2d899298ee8b67e1323f0908f3bd9e641405d0..b7dc25b13435c6e0f98ee696c83f6321631bd4e4 100644
 --- a/apps/desktop/src/plugins/kanban/api.connection-scope.test.ts
 +++ b/apps/desktop/src/plugins/kanban/api.connection-scope.test.ts
-@@ -15,3 +15,3 @@ vi.mock('@/store/gateway', async importOriginal => ({
+@@ -15,4 +15,4 @@ vi.mock('@/store/gateway', async importOriginal => ({
 
 -const { $boardSlug, bindApi, boardsKey, useKanbanScope } = await import('./api')
+-const { setConnection } = await import('@/store/session')
 +const { $boardSlug, bindApi, boardsKey, fetchBoard, useKanbanScope } = await import('./api')
- const { setConnection } = await import('@/store/session')
++const { setConnection, setGatewayState } = await import('@/store/session')
+ const { queryClient } = await import('@/lib/query-client')
 @@ -93,2 +93,19 @@ describe('kanban connection scope', () => {
 
 +  it('uses the board captured by the query even after the picker changes', async () => {
@@ -67728,6 +67730,57 @@ index 0a2d899298ee8b67e1323f0908f3bd9e641405d0..a8fae8519e9258eb1432c4b0a50cf408
 +  })
 +
    it('an observer still keyed to the outgoing scope is not refetched onto the incoming backend', async () => {
+@@ -129,2 +146,50 @@ describe('kanban connection scope', () => {
+   })
++
++  it('retries only failed, visible Local usage after the gateway reopens', async () => {
++    setGatewayState('open')
++    const dispose = bindApi(async () => ({}) as never, noopStorage, vi.fn(() => vi.fn()))
++    const usage = (card: string, scope = 'local') => ({
++      queryKey: ['kanban', 'reviewed-usage', scope, 'ops', card, 9],
++      queryFn: vi.fn(async () => ({ usage: null })),
++      staleTime: 60_000,
++      retry: false
++    })
++    const failed = usage('active')
++    const healthy = usage('healthy')
++    const inactive = usage('inactive')
++    failed.queryFn.mockRejectedValueOnce(new Error('Gateway disconnected'))
++    inactive.queryFn.mockRejectedValueOnce(new Error('Gateway disconnected'))
++    const failedObserver = new QueryObserver(queryClient, failed)
++    const healthyObserver = new QueryObserver(queryClient, healthy)
++    const stopFailed = failedObserver.subscribe(() => undefined)
++    const stopHealthy = healthyObserver.subscribe(() => undefined)
++    try {
++      await vi.waitFor(() => expect(failedObserver.getCurrentResult().status).toBe('error'))
++      await vi.waitFor(() => expect(healthyObserver.getCurrentResult().status).toBe('success'))
++      await expect(queryClient.fetchQuery(inactive)).rejects.toThrow('Gateway disconnected')
++      expect(failed.queryFn).toHaveBeenCalledTimes(1)
++
++      routed.id = 'spark'
++      setGatewayState('closed')
++      setGatewayState('connecting')
++      setGatewayState('open')
++      await Promise.resolve()
++      expect(failed.queryFn).toHaveBeenCalledTimes(1)
++
++      routed.id = null
++      setGatewayState('closed')
++      setGatewayState('connecting')
++      setGatewayState('open')
++      await vi.waitFor(() => expect(failedObserver.getCurrentResult().status).toBe('success'))
++      expect(failed.queryFn).toHaveBeenCalledTimes(2)
++      expect(healthy.queryFn).toHaveBeenCalledTimes(1)
++      expect(inactive.queryFn).toHaveBeenCalledTimes(1)
++    } finally {
++      stopFailed()
++      stopHealthy()
++      dispose()
++      setGatewayState('idle')
++    }
++  })
++
+ })
 diff --git a/apps/desktop/src/plugins/kanban/api.events-cursor.test.ts b/apps/desktop/src/plugins/kanban/api.events-cursor.test.ts
 index 520ed894c44d337259c473d6220c0214f1d053de..452359860e00006548b7ab610df453dd237c97e3 100644
 --- a/apps/desktop/src/plugins/kanban/api.events-cursor.test.ts
@@ -67776,7 +67829,7 @@ index 520ed894c44d337259c473d6220c0214f1d053de..452359860e00006548b7ab610df453dd
 +
    it('resumes this connection from the last frame, and does not lend that cursor to another gateway', async () => {
 diff --git a/apps/desktop/src/plugins/kanban/api.ts b/apps/desktop/src/plugins/kanban/api.ts
-index fdab9c789571716d5c0ea31ddac050bd896e7281..6c9a84aa2b0490bb0349e08d849a91c1f8496dda 100644
+index fdab9c789571716d5c0ea31ddac050bd896e7281..f8c27fffae906490cea55e259851088bcec9b4df 100644
 --- a/apps/desktop/src/plugins/kanban/api.ts
 +++ b/apps/desktop/src/plugins/kanban/api.ts
 @@ -29,3 +29,2 @@ import {
@@ -67799,7 +67852,11 @@ index fdab9c789571716d5c0ea31ddac050bd896e7281..6c9a84aa2b0490bb0349e08d849a91c1
 +// Native completion notification.
 +import { bindWorkStorage } from './work-selection'
 
-@@ -165,7 +171,19 @@ function onEventsFrame(scope: string, slug: string, data: unknown, selectedSlug
+@@ -70,2 +76,3 @@ const LOCAL_SCOPE = 'local'
+ const KANBAN_KEY_ROOT = ['kanban'] as const
++const REVIEWED_USAGE_KEY = [...KANBAN_KEY_ROOT, 'reviewed-usage'] as const
+
+@@ -165,7 +172,19 @@ function onEventsFrame(scope: string, slug: string, data: unknown, selectedSlug
 
 +  let events = frame?.events
 +
@@ -67808,40 +67865,63 @@ index fdab9c789571716d5c0ea31ddac050bd896e7281..6c9a84aa2b0490bb0349e08d849a91c1
 -  }
 +    const key = cursorKey(scope, slug)
 +    const seen = eventCursorByBoard.get(key)
-
--  const events = frame?.events
++
 +    // A reconnect can replay from the socket's original since= cursor.
 +    if (seen !== undefined) {
 +      if (frame.cursor <= seen) {
 +        return
 +      }
-+
+
+-  const events = frame?.events
 +      events = events?.filter(event => typeof event.id !== 'number' || event.id > seen)
 +    }
 +
 +    eventCursorByBoard.set(key, frame.cursor)
 +  }
 
-@@ -213,3 +231,3 @@ export function bindApi(
+@@ -213,3 +232,3 @@ export function bindApi(
    bindCompletionNotify(r, notifyDoors?.t, notifyDoors?.os)
 -  const unsubs: Array<() => void> = []
 +  const unsubs: Array<() => void> = [bindWorkStorage(storage)]
 
-@@ -358,5 +376,4 @@ function call<T>(path: string, opts?: PluginRestOptions): Promise<T> {
+@@ -339,2 +358,19 @@ export function bindApi(
+
++  unsubs.push(host.state.gateway.listen(state => {
++    if (state !== 'open' || routedScope() !== LOCAL_SCOPE) return
++
++    // Gateway activation publishes the state before updating the REST route.
++    const generation = socketGeneration
++    queueMicrotask(() => {
++      if (generation !== socketGeneration || host.state.gateway.get() !== 'open' ||
++          routedScope() !== LOCAL_SCOPE || kanbanConnectionScope() !== LOCAL_SCOPE) return
++
++      void queryClient.refetchQueries({
++        queryKey: [...REVIEWED_USAGE_KEY, LOCAL_SCOPE],
++        type: 'active',
++        predicate: query => query.state.status === 'error' && query.state.fetchStatus === 'idle'
++      }, { cancelRefetch: false })
++    })
++  }))
++
+   return () => {
+@@ -358,5 +394,4 @@ function call<T>(path: string, opts?: PluginRestOptions): Promise<T> {
  /** Append the selected board (and other params) to a path. */
 -function withBoard(path: string, params: Record<string, string> = {}): string {
 +function withBoard(path: string, params: Record<string, string> = {}, slug = $boardSlug.get()): string {
    const search = new URLSearchParams(params)
 -  const slug = $boardSlug.get()
 
-@@ -376,4 +393,4 @@ function withBoard(path: string, params: Record<string, string> = {}): string {
+@@ -376,5 +411,7 @@ function withBoard(path: string, params: Record<string, string> = {}): string {
  export const boardKeyPrefix = (scope: string) => ['kanban', 'board', scope] as const
 -export const boardKey = (scope: string, slug: string, archived: boolean) =>
 -  [...boardKeyPrefix(scope), slug, archived] as const
 +export const boardKey = (scope: string, slug: string, archived: boolean, links = false) =>
 +  [...boardKeyPrefix(scope), slug, archived, ...(links ? ['links'] : [])] as const
  export const taskKey = (scope: string, slug: string, id: string) => ['kanban', 'task', scope, slug, id] as const
-@@ -387,8 +404,20 @@ export const orchestrationKey = (scope: string) => ['kanban', 'orchestration', s
++export const reviewedUsageKey = (scope: string, slug: string, id: string, review: number) =>
++  [...REVIEWED_USAGE_KEY, scope, slug, id, review] as const
+ export const logKey = (scope: string, slug: string, id: string) => ['kanban', 'log', scope, slug, id] as const
+@@ -387,8 +424,20 @@ export const orchestrationKey = (scope: string) => ['kanban', 'orchestration', s
 
 -export const fetchBoard = (archived: boolean) =>
 -  call<KanbanBoard>(withBoard('/board', archived ? { include_archived: 'true' } : {}))
@@ -67866,7 +67946,7 @@ index fdab9c789571716d5c0ea31ddac050bd896e7281..6c9a84aa2b0490bb0349e08d849a91c1
 +    board ? `/tasks/${encodeURIComponent(id)}?board=${encodeURIComponent(board)}` : withBoard(`/tasks/${id}`)
 +  )
 
-@@ -397,2 +426,25 @@ export const fetchTask = async (id: string) => {
+@@ -397,2 +446,25 @@ export const fetchTask = async (id: string) => {
 
 +export const fetchRevisionDiff = (id: string, board: string, name: string, before: number, after: number) => {
 +  const params = new URLSearchParams({ name, before: String(before), after: String(after) })
@@ -67892,7 +67972,7 @@ index fdab9c789571716d5c0ea31ddac050bd896e7281..6c9a84aa2b0490bb0349e08d849a91c1
 +  call<{ run: KanbanRun & { task_id: string } }>(`/runs/${id}${board ? `?board=${encodeURIComponent(board)}` : ''}`)
 +
  /** Worker stdout/stderr tail (last 16 KiB — plenty for the drawer). */
-@@ -438,2 +490,18 @@ function nudged<T>(write: Promise<T>): Promise<T> {
+@@ -438,2 +510,18 @@ function nudged<T>(write: Promise<T>): Promise<T> {
 
 +export async function reviewPlannedAction(id: string, input: PlannedActionInput) {
 +  const scope = routedScope()
@@ -73438,14 +73518,14 @@ index 5836071773cff6ceadaf2729448e1777abf1451d..7d2ff2e81e47350241abbcdccb1ce385
      queryKey: boardKey(scope, slug, false),
 diff --git a/apps/desktop/src/plugins/kanban/reviewed-usage-view.tsx b/apps/desktop/src/plugins/kanban/reviewed-usage-view.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..8c2654fb1aa9ef321e8af690ad74c32ab3787904
+index 0000000000000000000000000000000000000000..b10cdaf785eaf1f47f3739ee8c8a238987a272f3
 --- /dev/null
 +++ b/apps/desktop/src/plugins/kanban/reviewed-usage-view.tsx
 @@ -0,0 +1,214 @@
 +import { Button, useQuery } from '@hermes/plugin-sdk'
 +import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 +
-+import { fetchReviewedUsage, fetchUsageRun, routedToScope } from './api'
++import { fetchReviewedUsage, fetchUsageRun, reviewedUsageKey, routedToScope } from './api'
 +import type { ReviewedUsageEvidence } from './types'
 +import { useKanban } from './ui'
 +
@@ -73541,7 +73621,7 @@ index 0000000000000000000000000000000000000000..8c2654fb1aa9ef321e8af690ad74c32a
 +    }
 +  }, [])
 +  const [retryKey, setRetryKey] = useState<string | null>(null)
-+  const queryKey = ['kanban', 'reviewed-usage', scope, board, id, review] as const
++  const queryKey = reviewedUsageKey(scope, board, id, review)
 +  const key = JSON.stringify(queryKey)
 +  const retrying = retryKey === key
 +  const { data, isError, fetchStatus, refetch } = useQuery({
