@@ -2,6 +2,8 @@
 
 Open **Work → Track work** on an enabled Kanban board to follow an objective, its success criteria, responsible profile, recorded step, next action, latest summary, result and delivery evidence. Long task instructions are folded initially. Results use the existing rich Markdown renderer; declared outputs reuse the native download action. The selected card and view are saved by connection and resolved board. Opening or restoring this view does not dispatch work.
 
+On the board, use Tab to focus a card and Enter or Space to open it.
+
 When cards in the current list share a title, Track work shows their
 status, assignee and card ID so you can choose the right one.
 Use **All work** to clear the selected card and return keyboard focus to its
