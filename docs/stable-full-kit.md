@@ -1109,6 +1109,21 @@ with the existing Vitest runner, then run the full native TypeScript check and D
 build. Test and packaging tools must already be admitted by the native package manager.
 Do not use a running user's renderer or provider account as a test fixture.
 
+For fenced macOS runs, use a fresh, empty scratch directory with a short
+absolute path. The loopback sandbox profile must admit that directory for
+writes and Unix sockets. Select the prepared Node version on PATH and pass the
+prepared Hermes test interpreter:
+
+```sh
+python3 scripts/run_macos_desktop_tests.py "$HERMES_CHECKOUT" "$SHORT_SCRATCH" \
+  "$LOOPBACK_PROFILE" "$HERMES_TEST_PYTHON" -- --project electron \
+  electron/backend-claim.test.ts electron/local-gateway.test.ts
+```
+
+The runner uses a fresh home and socket directories. It stages an unprivileged,
+ad hoc signed copy of the system `ps` for the test process probes. Reuse the same
+sandbox rules and test filters with a fresh scratch directory for each revision.
+
 For a Desktop merge comparison, run the same Vitest selection and environment
 on both revisions. Keep the console output and add
 `--reporter default --reporter json --outputFile.json /path/to/receipt.json`.
