@@ -778,7 +778,8 @@ correction and canonical navigation/report/terminal progress remain open.
 The workspace **Monitor** and **Manage team** toggles and the
 **Refresh** button show keyboard focus outlines, including in forced
 colors. Focus stays on the active control when switching views or
-refreshing the roster.
+refreshing the roster. **New group chat** also shows the keyboard outline.
+Escape or Cancel returns focus to that button after dismissing the dialog.
 Press Tab to reach the scrollable Monitor table. Use Left and Right to
 reveal more columns. **Show more** describes how many matching rows are
 shown and how many remain. Activating it by keyboard moves focus to
