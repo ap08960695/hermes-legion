@@ -149,6 +149,8 @@ logs while keeping the recovery buttons reachable. Opening **Gateway settings**
 from recovery moves keyboard focus to **Back**. Choose **Back** or press Escape
 in Gateway settings to return to recovery and focus **Gateway settings**.
 **Details** keeps its open or closed state when you return to the same startup error.
+With **Details** open, Tab reaches its diagnostic text. Use the arrow
+keys or Page Down to scroll a long message, then Tab to continue.
 Under **Connection mode**, the selected card has a checkmark and exposes
 its selection to assistive technology. Tab moves the focus outline between
 cards. Enter or Space chooses the focused mode in the form. Saving is a
