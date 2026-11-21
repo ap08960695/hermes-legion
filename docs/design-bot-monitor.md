@@ -52,8 +52,9 @@ evidence and limits are detailed in [verification](verification.md); round182 is
 **Bots → Monitor** opens one dashboard instead of scanning individual cards.
 It lists the visible bots and their bounded, current worker observations, with
 task/step, elapsed time, tokens, model and attention/source status. Search, status
-filters and sorting are local. If your filters hide every row, **Clear filters**
-restores the full table, preserves the sort, and returns focus to search.
+filters and sorting are local. When the table is empty, **Clear filters**
+resets active filters, preserves the sort, and returns focus to search.
+If the roster itself is empty, Monitor still shows **No bots yet**.
 Search also matches the latest signal, including the Bot Chat preview.
 **Open chat** sits beside the bot or worker name, so it is visible before
 scrolling across the metrics. It uses the existing source-qualified canonical
