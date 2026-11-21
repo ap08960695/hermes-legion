@@ -31,6 +31,9 @@ Text you type while another comment is sending stays available as a draft.
 **Edit description** focuses the editor. If saving fails, the description
 draft stays open so you can retry. **Cancel edit** discards the draft.
 
+Long attachment names wrap so the full name stays readable. A pending
+download stays in the tab order and ignores repeat activation.
+
 ## Compare a revision
 
 In **Track work**, open **Compare with the round that asked for changes**.
