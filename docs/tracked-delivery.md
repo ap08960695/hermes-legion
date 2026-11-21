@@ -9,6 +9,7 @@ After a partial bulk **Move**, focus stays on **Move to** so you can retry
 the remaining cards. After a complete move, focus returns to **Filter cards**
 if you stayed in the Move controls.
 The bulk action buttons show a keyboard focus outline while you navigate.
+In narrow panes, the Work views wrap below the board filters and **New task**.
 
 When cards in the current list share a title, Track work shows their
 status, assignee and card ID so you can choose the right one.
