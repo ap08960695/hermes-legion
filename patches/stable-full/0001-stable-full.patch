@@ -70650,7 +70650,7 @@ index 0000000000000000000000000000000000000000..b190a863d8d2a94ccd7d462c3b3fc82d
 +  )
 +}
 diff --git a/apps/desktop/src/plugins/kanban/drawer.test.tsx b/apps/desktop/src/plugins/kanban/drawer.test.tsx
-index d627664d7ff0bfdda5d7ee46f90d8fda9aa49386..8b6d1ae6a813c8ab4d3b522a1ba7206e6bca3f17 100644
+index d627664d7ff0bfdda5d7ee46f90d8fda9aa49386..53480f08a08c0ef714559064b58fc9f9496a84cf 100644
 --- a/apps/desktop/src/plugins/kanban/drawer.test.tsx
 +++ b/apps/desktop/src/plugins/kanban/drawer.test.tsx
 @@ -2,3 +2,3 @@ import type { PluginRestOptions } from '@hermes/plugin-sdk'
@@ -70667,13 +70667,14 @@ index d627664d7ff0bfdda5d7ee46f90d8fda9aa49386..8b6d1ae6a813c8ab4d3b522a1ba7206e
 -import type { KanbanTaskDetail } from './types'
 +import type { KanbanTaskDetail, WorkerLog } from './types'
 
-@@ -31,2 +31,5 @@ const legacyDetail: Omit<KanbanTaskDetail, 'attachments'> = {
+@@ -31,2 +31,6 @@ const legacyDetail: Omit<KanbanTaskDetail, 'attachments'> = {
  let detail: object
 +let taskReadError: Error | undefined
 +let reviewedUsage: Promise<unknown> | undefined
++let pendingTask: Promise<unknown> | undefined
 +let workerLog: WorkerLog
  let client: QueryClient
-@@ -46,3 +49,31 @@ const rest = vi.fn(async (path: string, options?: PluginRestOptions): Promise<un
+@@ -46,8 +50,39 @@ const rest = vi.fn(async (path: string, options?: PluginRestOptions): Promise<un
 
 +  if (path === '/tasks/t_example/planned-action') {
 +    if ((options?.body as { decision?: string })?.decision === 'sequence') {
@@ -70702,25 +70703,55 @@ index d627664d7ff0bfdda5d7ee46f90d8fda9aa49386..8b6d1ae6a813c8ab4d3b522a1ba7206e
 +  }
 +
    if (path === '/tasks/t_example') {
+-    return detail
 +    if (taskReadError) throw taskReadError
 +
-     return detail
-@@ -50,4 +81,6 @@ const rest = vi.fn(async (path: string, options?: PluginRestOptions): Promise<un
++    return pendingTask ?? detail
+   }
 
++  if (path === '/tasks/t_example/revision-diff?name=report.txt&before=3&after=5') return { status: 'stale' }
 +  if (path === '/tasks/t_example/reviewed-usage?review=9' && reviewedUsage) return reviewedUsage
 +
    if (path.startsWith('/tasks/t_example/log?')) {
 -    return { exists: false, content: '', size_bytes: 0, truncated: false }
 +    return workerLog
    }
-@@ -66,2 +99,5 @@ const rest = vi.fn(async (path: string, options?: PluginRestOptions): Promise<un
+@@ -66,2 +101,6 @@ const rest = vi.fn(async (path: string, options?: PluginRestOptions): Promise<un
  beforeEach(() => {
 +  taskReadError = undefined
 +  reviewedUsage = undefined
++  pendingTask = undefined
 +  workerLog = { exists: false, content: '', size_bytes: 0, truncated: false }
    client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-@@ -95,2 +131,124 @@ function openDrawer() {
+@@ -95,2 +134,151 @@ function openDrawer() {
 
++it.each([false, true])('refreshes a stale drawer comparison while honoring moved focus (%s)', async moveFocus => {
++  const revision = { before_run_id: 3, request_run_id: 4, after_run_id: 5,
++    files: [{ name: 'report.txt', status: 'changed' }], criteria: [] }
++  detail = { ...legacyDetail, delivery: { verification: { status: 'unverified' }, revision } }
++  openDrawer()
++  const evidence = await screen.findByRole('tab', { name: 'Delivery evidence' })
++  fireEvent.mouseDown(evidence, { button: 0, ctrlKey: false })
++  const summary = screen.getByText('Compare with the round that asked for changes')
++  fireEvent.click(summary)
++  fireEvent.click(screen.getByRole('button', { name: 'View text diff for report.txt' }))
++  const refresh = await screen.findByRole('button', { name: 'Refresh card' })
++  const cardReads = () => rest.mock.calls.filter(([path]) => path === '/tasks/t_example')
++  let finishRefresh!: (value: unknown) => void
++  pendingTask = new Promise(resolve => { finishRefresh = resolve })
++  refresh.focus()
++  act(() => { fireEvent.click(refresh); fireEvent.click(refresh) })
++  await waitFor(() => expect(refresh.getAttribute('aria-disabled')).toBe('true'))
++  expect(cardReads()).toHaveLength(2)
++  if (moveFocus) evidence.focus()
++  await act(async () => finishRefresh({ ...legacyDetail, delivery: { verification: { status: 'unverified' },
++    revision: { ...revision, before_run_id: 8, request_run_id: 10, after_run_id: 11 } } }))
++  expect(await screen.findByText('Original handoff · Run 8 · Revised handoff · Run 11')).toBeTruthy()
++  expect(screen.queryByRole('button', { name: 'Refresh card' })).toBeNull()
++  expect(document.activeElement).toBe(moveFocus ? evidence : summary)
++  expect(screen.getByRole('tabpanel', { name: 'Delivery evidence' })).toBeTruthy()
++})
++
 +it.each(['evidence removed', 'card switched'])('loads evidence on demand and ignores retired usage (%s)', async change => {
 +  let finishUsage!: (value: unknown) => void
 +  reviewedUsage = new Promise(resolve => { finishUsage = resolve })
@@ -70844,33 +70875,33 @@ index d627664d7ff0bfdda5d7ee46f90d8fda9aa49386..8b6d1ae6a813c8ab4d3b522a1ba7206e
 +})
 +
  describe('task attachment compatibility', () => {
-@@ -163,3 +321,3 @@ describe('task attachment compatibility', () => {
+@@ -163,3 +351,3 @@ describe('task attachment compatibility', () => {
      )
 -    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false))
 +    await waitFor(() => expect(button.getAttribute('aria-disabled')).toBeNull())
      save.mockResolvedValueOnce({ saved: true })
-@@ -169,3 +327,3 @@ describe('task attachment compatibility', () => {
+@@ -169,3 +357,3 @@ describe('task attachment compatibility', () => {
 
 -  it('disables a pending download and treats save-dialog cancellation quietly', async () => {
 +  it('keeps focus during a pending download and treats save-dialog cancellation quietly', async () => {
      let finish!: (value: { saved: boolean; canceled: boolean }) => void
-@@ -183,4 +341,8 @@ describe('task attachment compatibility', () => {
+@@ -183,4 +371,8 @@ describe('task attachment compatibility', () => {
      const button = await screen.findByRole('button', { name: 'Download report.md' })
 +    button.focus()
-+    fireEvent.click(button)
      fireEvent.click(button)
 -    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(true))
++    fireEvent.click(button)
 +    await waitFor(() => expect(button.getAttribute('aria-disabled')).toBe('true'))
 +    expect((button as HTMLButtonElement).disabled).toBe(false)
 +    expect(document.activeElement).toBe(button)
      fireEvent.click(button)
-@@ -188,3 +350,4 @@ describe('task attachment compatibility', () => {
+@@ -188,3 +380,4 @@ describe('task attachment compatibility', () => {
      await act(async () => finish({ saved: false, canceled: true }))
 -    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false))
 +    await waitFor(() => expect(button.getAttribute('aria-disabled')).toBeNull())
 +    expect(document.activeElement).toBe(button)
      expect($notifications.get()).toEqual([])
-@@ -256,2 +419,130 @@ describe('task modal dialog', () => {
+@@ -256,2 +449,130 @@ describe('task modal dialog', () => {
 
 +  it('names the workspace copy control for keyboard users', async () => {
 +    detail = {
@@ -71001,7 +71032,7 @@ index d627664d7ff0bfdda5d7ee46f90d8fda9aa49386..8b6d1ae6a813c8ab4d3b522a1ba7206e
 +  })
 +
    it('posts a comment from the named icon action in the field', async () => {
-@@ -274,2 +565,71 @@ describe('task modal dialog', () => {
+@@ -274,2 +595,71 @@ describe('task modal dialog', () => {
 
 +  it.each([false, true])('clears only an acknowledged comment draft (edit while pending: %s)', async edit => {
 +    detail = { ...legacyDetail, attachments: [] }
@@ -71073,7 +71104,7 @@ index d627664d7ff0bfdda5d7ee46f90d8fda9aa49386..8b6d1ae6a813c8ab4d3b522a1ba7206e
 +  })
 +
    it('shows the workspace path as its own value, not prefixed with the raw kind', async () => {
-@@ -311,4 +671,105 @@ describe('task modal dialog', () => {
+@@ -311,4 +701,105 @@ describe('task modal dialog', () => {
      const commentsLabel = en.comments(legacyDetail.comments.length)
 -    expect(await screen.findByRole('button', { name: commentsLabel, pressed: true })).toBeTruthy()
 +    expect(await screen.findByRole('tab', { name: commentsLabel, selected: true })).toBeTruthy()
@@ -71180,13 +71211,13 @@ index d627664d7ff0bfdda5d7ee46f90d8fda9aa49386..8b6d1ae6a813c8ab4d3b522a1ba7206e
 +    await screen.findByText('Keep this description readable.')
 +    expect(screen.queryByRole('button', { name: en.expand(en.description) })).toBeNull()
    })
-@@ -317,2 +778,5 @@ describe('task modal dialog', () => {
+@@ -317,2 +808,5 @@ describe('task modal dialog', () => {
  describe('dependency chips resolve titles', () => {
 +  const prefix = 'Review shipment manifest ' + 'evidencebundle'.repeat(4)
 +  const north = prefix + ' — North'
 +  const south = prefix + ' — South'
    const linkedDetail = {
-@@ -320,5 +784,6 @@ describe('dependency chips resolve titles', () => {
+@@ -320,5 +814,6 @@ describe('dependency chips resolve titles', () => {
      attachments: [] as [],
 -    links: { parents: ['t_parent'], children: ['t_child'] },
 +    links: { parents: ['t_parent', 't_south-destination'], children: ['t_child'] },
@@ -71195,12 +71226,12 @@ index d627664d7ff0bfdda5d7ee46f90d8fda9aa49386..8b6d1ae6a813c8ab4d3b522a1ba7206e
 +      { id: 't_parent', title: north, status: 'todo' },
 +      { id: 't_south-destination', title: south, status: 'todo' },
        { id: 't_child', title: 'Child title', status: 'running' }
-@@ -327,3 +792,3 @@ describe('dependency chips resolve titles', () => {
+@@ -327,3 +822,3 @@ describe('dependency chips resolve titles', () => {
 
 -  it('renders linked task titles, not raw ids, and opens on click', async () => {
 +  it('distinguishes similarly titled dependencies and opens the exact card', async () => {
      detail = linkedDetail
-@@ -337,8 +802,8 @@ describe('dependency chips resolve titles', () => {
+@@ -337,8 +832,8 @@ describe('dependency chips resolve titles', () => {
      expect(await screen.findByRole('heading', { name: legacyDetail.task.title })).toBeTruthy()
 -    expect(screen.getByText('Parent title')).toBeTruthy()
 -    expect(screen.getByText('Child title')).toBeTruthy()
@@ -71213,7 +71244,7 @@ index d627664d7ff0bfdda5d7ee46f90d8fda9aa49386..8b6d1ae6a813c8ab4d3b522a1ba7206e
 +    fireEvent.click(screen.getByRole('button', { name: south }))
 +    expect(onOpen.mock.calls).toEqual([['t_south-destination']])
    })
-@@ -436 +901,420 @@ describe('blocked task detail', () => {
+@@ -436 +931,420 @@ describe('blocked task detail', () => {
  })
 +
 +it('shows overlapping ACTION scopes before sending an explicit sequencing decision', async () => {
@@ -71635,7 +71666,7 @@ index d627664d7ff0bfdda5d7ee46f90d8fda9aa49386..8b6d1ae6a813c8ab4d3b522a1ba7206e
 +  }
 +)
 diff --git a/apps/desktop/src/plugins/kanban/drawer.tsx b/apps/desktop/src/plugins/kanban/drawer.tsx
-index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d8677390f156 100644
+index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..65f47d453e97a477d213a76d9d5bfc962825ff9f 100644
 --- a/apps/desktop/src/plugins/kanban/drawer.tsx
 +++ b/apps/desktop/src/plugins/kanban/drawer.tsx
 @@ -27,7 +27,7 @@ import {
@@ -71662,7 +71693,7 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
    reclaimTask,
 +  retryKanbanRead,
    routedToScope,
-@@ -58,3 +60,7 @@ import {
+@@ -58,4 +60,9 @@ import {
  } from './api'
 +import { DeliveryRevisionView } from './delivery-revision-view'
  import { ModelOverrideField, overridePatch } from './model-override'
@@ -71670,15 +71701,17 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
 +import { ReviewedUsageView } from './reviewed-usage-view'
 +import { AttachmentDownload, TaskMarkdown } from './task-content'
  import {
-@@ -64,2 +70,3 @@ import {
++  type DeliveryRevisionHistory,
+   type Diagnostic,
+@@ -64,2 +71,3 @@ import {
    type KanbanEvent,
 +  type KanbanRun,
    type KanbanTaskDetail,
-@@ -80,3 +87,2 @@ import {
+@@ -80,3 +88,2 @@ import {
    PriorityGlyph,
 -  ScrollFade,
    Section,
-@@ -184,14 +190,2 @@ function eventText(event: KanbanEvent, k: KanbanText): { detail?: string; label:
+@@ -184,14 +191,2 @@ function eventText(event: KanbanEvent, k: KanbanText): { detail?: string; label:
 
 -// Task bodies, results, summaries and comments are agent-written markdown;
 -// rendering them raw left `**Goal:**` and backticks literal. Same renderer as
@@ -71693,30 +71726,30 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
 -}
 -
  // Sidebar property row: a Section (so every sidebar label — these, Estimate,
-@@ -210,2 +204,4 @@ function MetaRow({ children, label }: { children: ReactNode; label: string }) {
+@@ -210,2 +205,4 @@ function MetaRow({ children, label }: { children: ReactNode; label: string }) {
  function WorkspaceValue({ kind, path }: { kind: null | string | undefined; path: string }) {
 +  const k = useKanban()
 +
    return (
-@@ -224,3 +220,4 @@ function WorkspaceValue({ kind, path }: { kind: null | string | undefined; path:
+@@ -224,3 +221,4 @@ function WorkspaceValue({ kind, path }: { kind: null | string | undefined; path:
          buttonVariant="ghost"
 -        className="-mt-0.5 shrink-0"
 +        className="kanban-workspace-copy -mt-0.5 shrink-0"
 +        label={k.copyWorkspacePath}
          text={path}
-@@ -341,2 +338,4 @@ function AssigneeMenu({
+@@ -341,2 +339,4 @@ function AssigneeMenu({
 
 +type PostComment = (body: string, onPosted: () => void) => Promise<unknown>
 +
  // Mirrors the review pane's commit-message field: one row tall to start
-@@ -356,4 +355,4 @@ function CommentComposer({
+@@ -356,4 +356,4 @@ function CommentComposer({
  }: {
 -  onRequeue?: (body: string) => void
 -  onSubmit: (body: string) => void
 +  onRequeue?: PostComment
 +  onSubmit: PostComment
    pending: boolean
-@@ -364,17 +363,22 @@ function CommentComposer({
+@@ -364,17 +364,22 @@ function CommentComposer({
 
 -  const submit = () => {
 -    const trimmed = body.trim()
@@ -71751,12 +71784,12 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
 +    } finally {
 +      sending.current = false
      }
-@@ -382,3 +386,3 @@ function CommentComposer({
+@@ -382,3 +387,3 @@ function CommentComposer({
 
 -  const empty = !body.trim() || pending
 +  const empty = !body.trim()
    const sendLabel = running ? k.send : k.comment
-@@ -393,3 +397,6 @@ function CommentComposer({
+@@ -393,3 +398,6 @@ function CommentComposer({
            className="field-sizing-content max-h-40 resize-none pr-9 text-[0.8125rem]"
 -          onChange={event => setBody(event.target.value)}
 +          onChange={event => {
@@ -71764,25 +71797,25 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
 +            setBody(event.target.value)
 +          }}
            onKeyDown={event => {
-@@ -397,3 +404,3 @@ function CommentComposer({
+@@ -397,3 +405,3 @@ function CommentComposer({
                event.preventDefault()
 -              submit()
 +              void send(onSubmit)
              }
-@@ -401,2 +408,3 @@ function CommentComposer({
+@@ -401,2 +409,3 @@ function CommentComposer({
            placeholder={running ? k.messageWorker : k.addComment}
 +          ref={editor}
            value={body}
-@@ -405,2 +413,3 @@ function CommentComposer({
+@@ -405,2 +414,3 @@ function CommentComposer({
            <Button
 +            aria-disabled={pending || undefined}
              aria-label={sendLabel}
-@@ -408,3 +417,3 @@ function CommentComposer({
+@@ -408,3 +418,3 @@ function CommentComposer({
              disabled={empty}
 -            onClick={submit}
 +            onClick={event => void send(onSubmit, event.currentTarget)}
              size="icon-xs"
-@@ -420,3 +429,10 @@ function CommentComposer({
+@@ -420,3 +430,10 @@ function CommentComposer({
            <span className="text-[0.625rem] leading-tight text-(--ui-text-quaternary)">{k.deliveredLive}</span>
 -          <Button className="shrink-0" disabled={empty} onClick={requeue} size="xs" variant="outline">
 +          <Button
@@ -71794,7 +71827,7 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
 +            variant="outline"
 +          >
              <Codicon name="debug-restart" size="0.7rem" />
-@@ -430,3 +446,9 @@ function CommentComposer({
+@@ -430,3 +447,9 @@ function CommentComposer({
 
 -function DescriptionSection({ body, onSave }: { body: null | string | undefined; onSave: (body: string) => void }) {
 +function DescriptionSection({
@@ -71805,7 +71838,7 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
 +  onSave: (body: string, onSaved: () => void) => Promise<unknown>
 +}) {
    const k = useKanban()
-@@ -434,2 +456,28 @@ function DescriptionSection({ body, onSave }: { body: null | string | undefined;
+@@ -434,2 +457,28 @@ function DescriptionSection({ body, onSave }: { body: null | string | undefined;
    const [draft, setDraft] = useState('')
 +  const [expanded, setExpanded] = useState(false)
 +  const [pending, setPending] = useState(false)
@@ -71834,7 +71867,7 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
 +    }
 +  }
 
-@@ -439,7 +487,12 @@ function DescriptionSection({ body, onSave }: { body: null | string | undefined;
+@@ -439,7 +488,12 @@ function DescriptionSection({ body, onSave }: { body: null | string | undefined;
          <Button
 +          aria-disabled={pending || undefined}
            aria-label={editing ? k.cancelEdit : k.editDescription}
@@ -71848,7 +71881,7 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
            }}
 +          ref={toggle}
            size="icon-xs"
-@@ -453,6 +506,9 @@ function DescriptionSection({ body, onSave }: { body: null | string | undefined;
+@@ -453,6 +507,9 @@ function DescriptionSection({ body, onSave }: { body: null | string | undefined;
        {editing ? (
 -        <div className="flex flex-col gap-1.5">
 +        <div className="flex flex-col gap-1.5" ref={editor}>
@@ -71860,7 +71893,7 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
              onChange={event => setDraft(event.target.value)}
 +            readOnly={pending}
              value={draft}
-@@ -460,7 +516,5 @@ function DescriptionSection({ body, onSave }: { body: null | string | undefined;
+@@ -460,7 +517,5 @@ function DescriptionSection({ body, onSave }: { body: null | string | undefined;
            <Button
 -            className="self-end"
 -            onClick={() => {
@@ -71871,7 +71904,7 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
 +            className="kanban-description-control self-end"
 +            onClick={() => void save()}
              size="xs"
-@@ -472,3 +526,34 @@ function DescriptionSection({ body, onSave }: { body: null | string | undefined;
+@@ -472,3 +527,34 @@ function DescriptionSection({ body, onSave }: { body: null | string | undefined;
        ) : body ? (
 -        <TaskMarkdown text={body} />
 +        <div className="flex flex-col gap-1">
@@ -71907,7 +71940,7 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
 +          )}
 +        </div>
        ) : (
-@@ -484,37 +569,2 @@ const isAdminSummary = (summary: string) => /^status changed to \w+ \(dashboard\
+@@ -484,37 +570,2 @@ const isAdminSummary = (summary: string) => /^status changed to \w+ \(dashboard\
 
 -// The filename is the download action. The path is the backend's own
 -// stored_path, saved through the connection/profile that returned this detail;
@@ -71945,13 +71978,13 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
 -}
 -
  function AttachmentsSection({
-@@ -649,4 +699,3 @@ function EstimateSection({ id }: { id: string }) {
+@@ -649,4 +700,3 @@ function EstimateSection({ id }: { id: string }) {
  // Sidebar dependency chips: one wrap of title-labeled buttons per side
 -// (Blocked by = parents, Blocks = children). Titles come from the backend's
 -// `link_tasks`; ids remain in the tooltip + as the fallback label.
 +// (Blocked by = parents, Blocks = children). Older backends may only supply ids.
  function LinkChips({
-@@ -665,14 +714,12 @@ function LinkChips({
+@@ -665,14 +715,12 @@ function LinkChips({
 
 -        // Chips truncate in the narrow sidebar; the tip reveals the full title.
          return (
@@ -71975,7 +72008,7 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
 +            {label}
 +          </button>
          )
-@@ -683,2 +730,117 @@ function LinkChips({
+@@ -683,2 +731,117 @@ function LinkChips({
 
 +function useFollowTail(update: unknown) {
 +  const ref = useRef<HTMLDivElement>(null)
@@ -72093,11 +72126,11 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
 +}
 +
  /** The main column's feed: Comments (default) / Activity / Runs / Worker log,
-@@ -689,2 +851,3 @@ function FeedTabs({
+@@ -689,2 +852,3 @@ function FeedTabs({
    detail,
 +  evidence,
    log,
-@@ -696,5 +859,6 @@ function FeedTabs({
+@@ -696,5 +860,6 @@ function FeedTabs({
    detail: KanbanTaskDetail
 +  evidence?: ReactNode
    log: null | WorkerLog
@@ -72106,7 +72139,7 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
 +  onComment: PostComment
 +  onRequeue: PostComment
    running: boolean
-@@ -702,17 +866,13 @@ function FeedTabs({
+@@ -702,17 +867,13 @@ function FeedTabs({
    const k = useKanban()
 -  const [tab, setTab] = useState<'activity' | 'comments' | 'log' | 'runs'>('comments')
 -
@@ -72133,7 +72166,7 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
 +    { id: 'evidence', label: k.work.evidence, show: Boolean(evidence) || tab === 'evidence' }
 +  ].filter(t => t.show)
 
-@@ -720,3 +880,8 @@ function FeedTabs({
+@@ -720,3 +881,8 @@ function FeedTabs({
      <Tip label={running ? k.commentsHelpRunning : k.commentsHelp}>
 -      <span className="grid size-5 place-items-center rounded text-(--ui-text-quaternary) hover:text-(--ui-text-secondary)">
 +      <span
@@ -72143,7 +72176,7 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
 +        tabIndex={0}
 +      >
          <Codicon name="question" size="0.8rem" />
-@@ -746,64 +911,17 @@ function FeedTabs({
+@@ -746,64 +912,17 @@ function FeedTabs({
        )}
 -      {tab === 'activity' && (
 -        <ScrollFade deps={detail.events.length} max="7rem">
@@ -72219,12 +72252,12 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
 +      {tab === 'log' && <WorkerLogOutput content={log?.content || k.workerLogEmpty} label={k.workerLog} />}
 +      {tab === 'evidence' && (evidence ?? <p>{k.work.noEvidence}</p>)}
      </div>
-@@ -813,3 +931,3 @@ function FeedTabs({
+@@ -813,3 +932,3 @@ function FeedTabs({
    // label above it only repeated the active tab ("Comments · 2" twice).
 -  if (!switchable) {
 +  if (tabs.length === 1) {
      return (
-@@ -823,7 +941,31 @@ function FeedTabs({
+@@ -823,7 +942,31 @@ function FeedTabs({
      <section className="flex flex-col gap-3">
 -      <div className="flex items-center justify-between gap-2">
 -        <SegmentedControl onChange={setTab} options={tabs} value={tab} />
@@ -72260,34 +72293,40 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
        </div>
 -      {body}
      </section>
-@@ -832,2 +974,36 @@ function FeedTabs({
+@@ -832,2 +975,42 @@ function FeedTabs({
 
 +// Capture focus before a card change removes the focused control.
 +class TaskDrawerFocus extends Component<{
 +  closeButton: RefObject<HTMLButtonElement | null>
 +  hasEvidence: boolean
++  revision?: DeliveryRevisionHistory | null
 +  taskId: string
 +  unavailable: boolean
 +}> {
-+  getSnapshotBeforeUpdate(previous: this['props']): Element | null {
++  getSnapshotBeforeUpdate(previous: this['props']) {
 +    const close = this.props.closeButton.current
++    const focused = close?.ownerDocument.activeElement
++    if (!focused || !close?.closest('[role="dialog"]')?.contains(focused)) return null
++
 +    const changedCard = previous.taskId !== this.props.taskId
 +    const becameUnavailable = this.props.unavailable && !previous.unavailable
 +    const lostEvidence = previous.hasEvidence && !this.props.hasEvidence
-+    if (!close || (!changedCard && !becameUnavailable && !lostEvidence)) return null
++    const summary = !changedCard && !becameUnavailable && previous.revision !== this.props.revision
++      ? focused.closest('.kanban-revision')?.querySelector('summary')
++      : undefined
 +
-+    const focused = close.ownerDocument.activeElement
-+    return close.closest('[role="dialog"]')?.contains(focused) ? focused : null
++    return changedCard || becameUnavailable || lostEvidence || summary ? { focused, summary } : null
 +  }
 +
-+  componentDidUpdate(_previous: this['props'], _state: unknown, previousFocus: Element | null) {
++  componentDidUpdate(_previous: this['props'], _state: unknown, snapshot: ReturnType<TaskDrawerFocus['getSnapshotBeforeUpdate']>) {
 +    const close = this.props.closeButton.current
-+    if (!close || !previousFocus || previousFocus.isConnected) return
++    if (!close || !snapshot || snapshot.focused.isConnected) return
 +
 +    const doc = close.ownerDocument
 +    const focused = doc.activeElement
 +    if (focused === doc.body || focused === close.closest('[role="dialog"]')) {
-+      close.focus({ preventScroll: true })
++      const target = snapshot.summary?.isConnected ? snapshot.summary : close
++      target.focus({ preventScroll: true })
 +    }
 +  }
 +
@@ -72297,24 +72336,28 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
 +}
 +
  export function TaskDrawer({
-@@ -836,2 +1012,3 @@ export function TaskDrawer({
+@@ -836,2 +1019,3 @@ export function TaskDrawer({
    onClose,
 +  onCloseAutoFocus,
    onOpen
-@@ -841,2 +1018,3 @@ export function TaskDrawer({
+@@ -841,2 +1025,3 @@ export function TaskDrawer({
    onClose: () => void
 +  onCloseAutoFocus?: (event: Event) => void
    onOpen: (id: string) => void
-@@ -847,3 +1025,5 @@ export function TaskDrawer({
+@@ -847,12 +1032,17 @@ export function TaskDrawer({
    const slug = useValue($boardSlug)
++  const profile = useValue(host.state.profile)
 +  const closeButton = useRef<HTMLButtonElement>(null)
 
 +  const queryKey = taskKey(scope, slug, id ?? '')
    // Socket-invalidated (bindApi); the interval is only the socketless heartbeat.
-@@ -852,7 +1032,9 @@ export function TaskDrawer({
-     queryFn: () => fetchTask(id!),
+-  const { data: detail, error } = useQuery({
++  const { data: detail, error, fetchStatus, refetch } = useQuery({
+     enabled: query => !!id && routedToScope(query),
+-    queryFn: () => fetchTask(id!),
 -    queryKey: taskKey(scope, slug, id ?? ''),
 -    refetchInterval: 30_000
++    queryFn: () => fetchTask(id!, slug),
 +    queryKey,
 +    refetchInterval: 30_000,
 +    retry: retryKanbanRead(qc.defaultQueryOptions({ queryKey }).retry)
@@ -72324,12 +72367,12 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
 +  const taskUnavailable = isKanbanNotFound(error)
 +  const task = taskUnavailable ? undefined : detail?.task
    const running = task?.status === 'running'
-@@ -861,3 +1043,3 @@ export function TaskDrawer({
+@@ -861,3 +1051,3 @@ export function TaskDrawer({
    const { data: log } = useQuery({
 -    enabled: query => !!id && routedToScope(query),
 +    enabled: query => !!id && !!task && routedToScope(query),
      queryFn: () => fetchLog(id!),
-@@ -915,4 +1097,6 @@ export function TaskDrawer({
+@@ -915,4 +1105,6 @@ export function TaskDrawer({
    const requeueMut = useMutation({
 -    mutationFn: async (body: string) => {
 +    mutationFn: async ({ body, onPosted }: { body: string; onPosted: () => void }) => {
@@ -72337,7 +72380,7 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
 +      // A failed reclaim must not make the posted note look unsent.
 +      onPosted()
        await reclaimTask(id!)
-@@ -941,3 +1125,7 @@ export function TaskDrawer({
+@@ -941,3 +1133,7 @@ export function TaskDrawer({
 
 -  const errorMessage = error ? errText(error) : null
 +  const errorMessage = taskUnavailable ? k.taskUnavailable : error ? errText(error) : null
@@ -72346,7 +72389,7 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
 +  const review = verification?.status === 'accepted' ? verification.receipt?.review_run_id : undefined
 +  const hasEvidence = Boolean(revision || review)
 
-@@ -964,5 +1152,4 @@ export function TaskDrawer({
+@@ -964,5 +1160,4 @@ export function TaskDrawer({
    // assignee, actions and model menus open inside it (no z-index rung needed).
 -  // The body box is split into two independently scrolling columns, so it
 -  // clips instead of scrolling itself; its height follows the content up to
@@ -72354,31 +72397,31 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
 +  // Wide drawers scroll each column independently. Narrow drawers stack both
 +  // columns in one scroll area so the details keep the full width.
    return (
-@@ -973,5 +1160,7 @@ export function TaskDrawer({
+@@ -973,5 +1168,7 @@ export function TaskDrawer({
          className="w-[min(62rem,94vw)] max-w-none"
 +        onCloseAutoFocus={onCloseAutoFocus}
          showCloseButton={false}
        >
 -        <header className="flex flex-col gap-2 px-5 pt-4 pb-3">
-+        <TaskDrawerFocus closeButton={closeButton} hasEvidence={hasEvidence} taskId={id} unavailable={taskUnavailable} />
++        <TaskDrawerFocus closeButton={closeButton} hasEvidence={hasEvidence} revision={revision} taskId={id} unavailable={taskUnavailable} />
 +        <header className="kanban-card-header flex flex-col gap-2 px-5 pt-4 pb-3">
            <div className="flex items-center gap-2">
-@@ -987,3 +1176,3 @@ export function TaskDrawer({
+@@ -987,3 +1184,3 @@ export function TaskDrawer({
              )}
 -            <div className="ml-auto flex items-center gap-0.5">
 +            <div className="ml-auto flex shrink-0 items-center gap-0.5">
                {task && (
-@@ -1029,3 +1218,3 @@ export function TaskDrawer({
+@@ -1029,3 +1226,3 @@ export function TaskDrawer({
                )}
 -              <Button aria-label={k.close} onClick={onClose} size="icon-xs" variant="ghost">
 +              <Button aria-label={k.close} onClick={onClose} ref={closeButton} size="icon-xs" variant="ghost">
                  <Codicon name="close" />
-@@ -1034,3 +1223,3 @@ export function TaskDrawer({
+@@ -1034,3 +1231,3 @@ export function TaskDrawer({
            </div>
 -          <DialogTitle className="leading-snug" data-selectable-text="true">
 +          <DialogTitle className="leading-snug [overflow-wrap:anywhere]" data-selectable-text="true">
              {task ? task.title || task.id : shortId(id)}
-@@ -1041,3 +1230,7 @@ export function TaskDrawer({
+@@ -1041,3 +1238,7 @@ export function TaskDrawer({
            {errorMessage ? (
 -            <ErrorState title={errorMessage} />
 +            <ErrorState
@@ -72387,14 +72430,14 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
 +              title={errorMessage}
 +            />
            ) : !detail || !task ? (
-@@ -1047,4 +1240,4 @@ export function TaskDrawer({
+@@ -1047,4 +1248,4 @@ export function TaskDrawer({
            ) : (
 -            <div className="flex min-h-0 flex-1">
 -              <div className="min-w-0 flex-1 overflow-y-auto px-5 pb-5">
 +            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto sm:flex-row sm:overflow-visible">
 +              <div className="min-w-0 px-5 pb-5 sm:flex-1 sm:overflow-y-auto">
                  <div className="flex flex-col gap-5">
-@@ -1058,2 +1251,12 @@ export function TaskDrawer({
+@@ -1058,2 +1259,12 @@ export function TaskDrawer({
 
 +                  {detail.planned_action && (
 +                    <PlannedActionReview
@@ -72407,17 +72450,39 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
 +                  )}
 +
                    {task.diagnostics && task.diagnostics.length > 0 && (
-@@ -1075,3 +1278,4 @@ export function TaskDrawer({
+@@ -1075,3 +1286,4 @@ export function TaskDrawer({
                      body={task.body}
 -                    onSave={body => void mutate(() => patchTask(task.id, { body }))()}
 +                    key={JSON.stringify(['description', scope, slug, task.id])}
 +                    onSave={(body, onSaved) => mutate(() => patchTask(task.id, { body }), onSaved)()}
                    />
-@@ -1093,5 +1297,12 @@ export function TaskDrawer({
+@@ -1093,5 +1305,34 @@ export function TaskDrawer({
                      detail={detail}
 +                    evidence={hasEvidence ? (
 +                      <div className="flex min-w-0 flex-col gap-4 [overflow-wrap:anywhere]">
-+                        {revision && <DeliveryRevisionView board={slug} id={task.id} revision={revision} />}
++                        {revision && (
++                          <DeliveryRevisionView
++                            board={slug}
++                            id={task.id}
++                            refreshAction={
++                              <Button
++                                aria-disabled={fetchStatus !== 'idle' || undefined}
++                                className="aria-disabled:opacity-60"
++                                onClick={() => {
++                                  if (fetchStatus === 'idle' && $boardSlug.get() === slug &&
++                                      host.state.profile.get() === profile && routedToScope({ queryKey })) {
++                                    void refetch({ cancelRefetch: false })
++                                  }
++                                }}
++                                size="sm"
++                                variant="outline"
++                              >
++                                {k.work.revision.refreshCard}
++                              </Button>
++                            }
++                            revision={revision}
++                          />
++                        )}
 +                        {review && <ReviewedUsageView board={slug} id={task.id} review={review} scope={scope} />}
 +                      </div>
 +                    ) : undefined}
@@ -72428,12 +72493,12 @@ index a398c9f06b5cad06e92b7aeadf28d40b0f82d148..4eb8a73bafb95cfeffb057008b16d867
 +                    onComment={(body, onPosted) => commentMut.mutateAsync(body).then(onPosted)}
 +                    onRequeue={(body, onPosted) => requeueMut.mutateAsync({ body, onPosted })}
                      running={running}
-@@ -1100,3 +1311,3 @@ export function TaskDrawer({
+@@ -1100,3 +1341,3 @@ export function TaskDrawer({
                </div>
 -              <aside className="flex w-64 shrink-0 flex-col gap-4 overflow-y-auto border-l border-(--ui-stroke-tertiary) px-4 pb-5">
 +              <aside className="flex shrink-0 flex-col gap-4 border-t border-(--ui-stroke-tertiary) px-5 py-5 sm:w-64 sm:overflow-y-auto sm:border-t-0 sm:border-l sm:px-4 sm:pt-0">
                  <MetaRow label={k.assignee}>
-@@ -1147,2 +1358,3 @@ export function TaskDrawer({
+@@ -1147,2 +1388,3 @@ export function TaskDrawer({
                    <ModelOverrideField
 +                    assignee={task.assignee || defaultAssignee || undefined}
                      onChange={next => void mutate(() => patchTask(task.id, overridePatch(next)))()}
