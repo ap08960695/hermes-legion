@@ -782,7 +782,8 @@ refreshing the roster. **New bot** and **New group chat** also show
 keyboard focus. When a creation dialog was opened by keyboard, Escape
 or Cancel returns focus to its button if the button is still available.
 **New group chat** opens with a keyboard outline around **Search bots to add**.
-Selected members’ remove buttons name the action and the bot.
+Selected members’ remove buttons name the action and the bot. Keyboard
+removal returns focus to **Search bots to add**.
 In **New bot**, the Name field shows a keyboard outline on entry.
 On a single Local connection, Tab moves from Name to Title. The visible
 Name, Title, and Description labels also name their fields for
