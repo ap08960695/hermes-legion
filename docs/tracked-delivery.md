@@ -18,6 +18,8 @@ Tabbing to a link in a folded card description expands the description and
 brings that link into view.
 Tab into **Activity** or **Worker log** to scroll with the keyboard. Refreshes
 keep your place while you read earlier entries and follow new ones at the end.
+The card's feed tabs wrap in narrow windows. Focus or hover over **Comment help**
+to read how comments reach the worker.
 
 When cards in the current list share a title, Track work shows their
 status, assignee and card ID so you can choose the right one.
