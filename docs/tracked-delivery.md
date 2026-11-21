@@ -35,6 +35,7 @@ The **Model** menu identifies the pinned model as current for assistive technolo
 Tab to **Clear model override** and press Enter or Space to use the profile default.
 When the assignee is known, **Model** names the profile whose settings the task inherits.
 Choosing an assignee in **New task** returns focus to **Assignee**.
+The **Title** and **Description (optional)** labels stay visible as you type in **New task**.
 An empty assignee search reports **No matching profiles** as an accessibility status.
 In **Runs**, focus a run with a long result and press Enter or Space to read
 its full summary or error. Page Down scrolls the list.
