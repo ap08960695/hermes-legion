@@ -812,6 +812,8 @@ While search or a status filter is active, a polite live region
 exposes the number of matching bot and worker rows across all pages.
 The region stays quiet when the count is unchanged or the roster is stale.
 Waiting or failed refresh without rows shows the connection status.
+After a failed Local refresh, the first fresh roster shows a recovery
+message without moving focus.
 In a character report without a status filter, Tab reaches the report
 body when it overflows. Page Down and End reveal the remaining text.
 After closing a report opened from a character, focus returns to the
