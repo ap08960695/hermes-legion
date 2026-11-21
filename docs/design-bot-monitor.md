@@ -784,7 +784,10 @@ If a refresh disables the focused **Open chat** button, focus moves
 to that bot’s name cell so keyboard navigation can continue.
 When a focused worker row disappears and there are no more pages,
 focus returns to the parent bot’s name cell or to Search if a filter
-hides the parent. If the roster is empty, focus goes to the heading.
+hides the parent. If a focused bot row disappears, focus moves to the
+row that takes its place or to the last visible row. If a filter leaves
+no rows, focus goes to Search. If the roster is empty, focus goes to the
+heading.
 The table and its controls show a focus outline,
 including in high-contrast palettes. Report buttons name the bot and
 its connection. The report dialog wraps long names and saved text. Its
