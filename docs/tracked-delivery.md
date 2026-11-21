@@ -22,6 +22,8 @@ The card's feed tabs wrap in narrow windows. Focus or hover over **Comment help*
 to read how comments reach the worker.
 Long card titles and status labels wrap to keep the full text readable and
 the header controls within reach.
+**Copy workspace path** copies the full path. It and the **Model** picker
+show an outline when focused with the keyboard.
 
 When cards in the current list share a title, Track work shows their
 status, assignee and card ID so you can choose the right one.
