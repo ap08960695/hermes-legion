@@ -34,6 +34,9 @@ draft stays open so you can retry. **Cancel edit** discards the draft.
 Long attachment names wrap so the full name stays readable. A pending
 download stays in the tab order and ignores repeat activation.
 
+**Blocked by** and **Blocks** show full card titles and a visible keyboard
+focus outline. Activate a title to open its card.
+
 ## Compare a revision
 
 In **Track work**, open **Compare with the round that asked for changes**.
