@@ -12,6 +12,7 @@ The bulk action buttons show a keyboard focus outline while you navigate.
 In narrow panes, the Work views wrap below the board filters and **New task**.
 The **Filters** menu reports selected profiles and tenants and checked toggles to assistive technology.
 The **Board** menu marks the active board as selected.
+The card’s **Status** menu marks the current status and explains system-managed choices.
 **Filter cards** uses its own row in narrow panes, so typing keeps nearby controls in place.
 **Clear search** restores the full board and returns focus to **Filter cards**.
 Filtering **Current work** in a narrow pane brings the first matching lane into view.
