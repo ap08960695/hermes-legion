@@ -54,6 +54,10 @@ A collection search names its scope. No matches are distinct from an empty colle
 Use Tab to reach **Copy** and other message actions. An inset outline
 shows which action has keyboard focus, including in forced colors.
 
+After you drag a column narrower in a Chat Markdown table, its heading
+wraps so you can still read the full label. Double-click the divider to
+restore the original column widths.
+
 ## Recovering an earlier message
 
 If a refused send restores your draft, release Enter and press it again
