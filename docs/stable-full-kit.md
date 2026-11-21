@@ -1109,6 +1109,21 @@ with the existing Vitest runner, then run the full native TypeScript check and D
 build. Test and packaging tools must already be admitted by the native package manager.
 Do not use a running user's renderer or provider account as a test fixture.
 
+For a Desktop merge comparison, run the same Vitest selection and environment
+on both revisions. Keep the console output and add
+`--reporter default --reporter json --outputFile.json /path/to/receipt.json`.
+Compare the reports with:
+
+```sh
+python3 scripts/compare_desktop_receipts.py baseline.json /path/to/baseline/apps/desktop \
+  candidate.json /path/to/candidate/apps/desktop
+```
+
+The comparison flags new failing assertions, changed error headlines,
+suite failures and previously executed assertions that are missing or skipped.
+Review the console logs for startup failures and unhandled errors, which the
+Vitest JSON reporter omits. The Python selection needs its own comparison.
+
 ## Owner-safe history and draft recovery
 
 A link with an explicit connection/profile opens that owner's retained history.
