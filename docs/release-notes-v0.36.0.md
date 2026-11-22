@@ -85,6 +85,11 @@ switching from Default to Research and back. The same gateway served fresh,
 profile-scoped Accounts requests. The trial used synthetic account status
 and sent zero inference prompts.
 
+In isolated Local Desktop, the gateway refused a send before accepting
+it. Chat showed the error and restored the exact multiline draft. A
+second click on Send delivered the message once in the same chat.
+The trial used a loopback mock provider.
+
 The packaging check now refuses missing lock-pinned builder packages
 before starting a build. The current Mac package trial stopped at the
 missing arm64 preparation receipt.

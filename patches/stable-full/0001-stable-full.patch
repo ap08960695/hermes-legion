@@ -5837,6 +5837,203 @@ index 0000000000000000000000000000000000000000..ba682beb0289e37028f0537ed6a3ce63
 +    sandbox.cleanup()
 +  }
 +})
+diff --git a/apps/desktop/e2e/local-failed-send-recovery.spec.ts b/apps/desktop/e2e/local-failed-send-recovery.spec.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..91c889f9d5c009e8f5703c18bb3969096bfa608f
+--- /dev/null
++++ b/apps/desktop/e2e/local-failed-send-recovery.spec.ts
+@@ -0,0 +1,191 @@
++import { spawn, spawnSync } from 'node:child_process'
++import { once } from 'node:events'
++import * as fs from 'node:fs'
++import * as path from 'node:path'
++
++import { waitForChatReady } from '../../../tests-js/scripts/desktop-chat-smoke'
++import { writeEnvFile, writeMockProviderConfig } from '../../../tests-js/scripts/mock-provider-config'
++import { MOCK_REPLY, startMockServer } from '../../../tests-js/scripts/mock-server'
++
++import { buildAppEnv, createSandbox, launchDesktop } from './fixtures'
++import { allowErrorBanners, expect, test } from './test'
++
++const root = path.resolve(import.meta.dirname, '..', '..', '..')
++const python = process.env.HERMES_E2E_FAILED_SEND_PYTHON
++const output = process.env.HERMES_E2E_FAILED_SEND_OUTPUT
++const draft = 'Keep this draft: สีฟ้า\n\nSecond line — retry once.'
++const refusal = 'The test gateway refused the first send.'
++
++const gatewayFixture = `
++import json
++from pathlib import Path
++import sys
++
++from gateway.session_controls import AuthorityConnection, _profile_label
++from hermes_cli.main import main
++from hermes_state_runtime import RuntimeStoreError
++
++audit = Path(sys.argv.pop(1))
++draft = sys.argv.pop(1)
++refusal = sys.argv.pop(1)
++submit = AuthorityConnection.submit
++first = True
++
++def record(row):
++    with audit.open('a', encoding='utf-8') as stream:
++        stream.write(json.dumps(row) + '\\n')
++
++async def submit_with_refusal(self, ref, params):
++    global first
++    attempt = dict(sessionId=ref.session_id, profile=_profile_label(ref.profile_id),
++                   submissionId=params.get('submission_id'), text=params.get('text'))
++    # Refuse before the authority can admit the prompt or write a user row.
++    if first and attempt['text'] == draft:
++        first = False
++        record(dict(attempt, result='refused'))
++        raise RuntimeStoreError('invalid_params', detail=refusal)
++    receipt = await submit(self, ref, params)
++    record(dict(attempt, result='admitted', admissionId=receipt['admission_id']))
++    return receipt
++
++AuthorityConnection.submit = submit_with_refusal
++main()
++`
++
++const inspectStore = `
++import json
++from pathlib import Path
++import sqlite3
++import sys
++
++file, session = sys.argv[1:]
++with sqlite3.connect(Path(file).as_uri() + '?mode=ro', uri=True) as db:
++    admissions = db.execute("SELECT admission_id, request_id, status, outcome "
++                            "FROM session_admissions WHERE target_session_id = ?", (session,)).fetchall()
++    messages = db.execute("SELECT content FROM messages WHERE session_id = ? AND role = 'user' "
++                          "ORDER BY id", (session,)).fetchall()
++print(json.dumps(dict(admissions=admissions, messages=[row[0] for row in messages])))
++`
++
++type Attempt = {
++  sessionId: string
++  profile: string
++  submissionId: string
++  text: string
++  result: 'refused' | 'admitted'
++  admissionId?: string
++}
++
++test.skip(!python || !output, 'Requires a prepared Python and isolated Local failed-send runner')
++
++test('a refused Local send restores the exact draft for one explicit retry', async () => {
++  test.setTimeout(110_000)
++  allowErrorBanners()
++  const sandbox = createSandbox('local-failed-send')
++  const mock = await startMockServer()
++  let gateway: ReturnType<typeof spawn> | undefined
++  let exited: Promise<unknown[]> | undefined
++  let app: Awaited<ReturnType<typeof launchDesktop>>['app'] | undefined
++
++  try {
++    writeMockProviderConfig(sandbox.hermesHome, mock.url)
++    writeEnvFile(sandbox.hermesHome, 'e2e-mock-key', mock.url)
++    const config = path.join(sandbox.userDataDir, 'connection.json')
++    fs.writeFileSync(config, '{"mode":"local"}\n', { mode: 0o600, flag: 'wx' })
++    const env = buildAppEnv(sandbox, { HERMES_DESKTOP_PYTHON: python!, HERMES_DISABLE_LAZY_INSTALLS: '1' })
++    const state = () => {
++      try {
++        return JSON.parse(fs.readFileSync(path.join(sandbox.hermesHome, 'gateway_state.json'), 'utf8'))
++      } catch {
++        return {}
++      }
++    }
++    const audit = path.join(sandbox.root, 'submit-attempts.jsonl')
++    fs.writeFileSync(audit, '', { mode: 0o600 })
++    const attempts = (): Attempt[] => fs.readFileSync(audit, 'utf8').trim().split('\n').filter(Boolean)
++      .map(line => JSON.parse(line))
++    const snapshot = (session: string) => {
++      const result = spawnSync(python!, ['-B', '-c', inspectStore, path.join(sandbox.hermesHome, 'state.db'), session], {
++        cwd: root, env, encoding: 'utf8', timeout: 5_000
++      })
++      expect(result.status, result.error?.message || result.stderr).toBe(0)
++      return JSON.parse(result.stdout)
++    }
++
++    const log = fs.openSync(path.join(output!, 'gateway-run.log'), 'w')
++    try {
++      gateway = spawn(python!, ['-c', gatewayFixture, audit, draft, refusal, 'gateway', 'run'], {
++        cwd: root, env, stdio: ['ignore', log, log]
++      })
++    } finally {
++      fs.closeSync(log)
++    }
++    exited = once(gateway, 'exit')
++    await expect.poll(() => state().gateway_state, { timeout: 25_000 }).toBe('running')
++    expect(state().pid).toBe(gateway.pid)
++
++    const launched = await launchDesktop(env)
++    app = launched.app
++    const { page } = launched
++    expect(await app.evaluate(({ app }) => app.getPath('userData'))).toBe(sandbox.userDataDir)
++    const editor = await waitForChatReady(page, 35_000)
++    const desktopPid = app.process().pid
++    const send = page.getByRole('button', { name: 'Send', exact: true })
++    const status = page.locator('[data-slot="gateway-connection-status"]')
++    await expect(status).toHaveAttribute('data-state', 'connected')
++    const [firstLine, secondLine] = draft.split('\n\n')
++    await editor.click()
++    await page.keyboard.insertText(firstLine!)
++    await editor.press('Shift+Enter')
++    await editor.press('Shift+Enter')
++    await page.keyboard.insertText(secondLine!)
++    await expect.poll(() => editor.innerText()).toBe(draft)
++    await send.click()
++
++    await expect(page.getByText('Prompt failed', { exact: true })).toBeVisible({ timeout: 20_000 })
++    await expect.poll(() => editor.innerText()).toBe(draft)
++    await expect(send).toBeEnabled()
++    const first = attempts()
++    expect(first).toEqual([{
++      sessionId: expect.any(String), profile: 'default', submissionId: expect.any(String), text: draft, result: 'refused'
++    }])
++    const { sessionId, submissionId, profile } = first[0]!
++    expect(sessionId).not.toBe('')
++    expect(submissionId).not.toBe('')
++    const refused = snapshot(sessionId)
++    expect(refused).toEqual({ admissions: [], messages: [] })
++    expect(mock.receivedPrompts).toEqual([])
++    await page.screenshot({ path: path.join(output!, 'draft-restored.png'), animations: 'disabled' })
++
++    await send.click()
++    const chat = page.locator('[data-slot="aui_thread-viewport"]').filter({ visible: true })
++    await expect(chat.getByText(MOCK_REPLY, { exact: true })).toBeVisible({ timeout: 40_000 })
++    await expect.poll(() => editor.innerText()).toBe('')
++    await expect(status).toHaveAttribute('data-state', 'connected')
++    const retried = attempts()
++    expect(retried).toEqual([first[0], {
++      sessionId, profile, submissionId, text: draft, result: 'admitted', admissionId: expect.any(String)
++    }])
++    const { admissionId } = retried[1]!
++    const completed = { admissions: [[admissionId, submissionId, 'terminal', 'completed']], messages: [draft] }
++    await expect.poll(() => snapshot(sessionId), { timeout: 10_000 }).toEqual(completed)
++    expect(mock.receivedPrompts).toEqual([draft])
++    expect(mock.receivedModels).toEqual(['mock-model'])
++    expect(JSON.parse(fs.readFileSync(config, 'utf8')).mode).toBe('local')
++    expect(state().pid).toBe(gateway.pid)
++    expect(app.process().pid).toBe(desktopPid)
++    await page.screenshot({ path: path.join(output!, 'draft-delivered.png'), animations: 'disabled' })
++    fs.writeFileSync(path.join(output!, 'walkthrough.json'), JSON.stringify({
++      connection: 'local', attempts: retried, refused, completed,
++      sameForegroundGateway: true, sameDesktopProcess: true, mockPrompts: mock.receivedPrompts
++    }, null, 2) + '\n')
++  } finally {
++    await app?.close().catch(() => undefined)
++    if (gateway && gateway.exitCode === null && gateway.signalCode === null) {
++      gateway.kill('SIGTERM')
++      await exited
++    }
++    await mock.close()
++    sandbox.cleanup()
++  }
++})
 diff --git a/apps/desktop/e2e/local-saved-message-search.spec.ts b/apps/desktop/e2e/local-saved-message-search.spec.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..172bdcd7382d1bcb283803ebe6c68f7c84941135
