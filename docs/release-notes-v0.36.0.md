@@ -74,6 +74,11 @@ showed Disconnected, connected again automatically and kept the unsent
 draft intact. The window stayed open, the gateway stayed up and the test
 sent zero inference prompts.
 
+Saved-message search in isolated Local Desktop opened the matching
+Research transcript even though Default had a chat with the same title
+and ID. Chat history reopened the same four messages. Both stored
+transcripts stayed unchanged, and the test sent zero inference prompts.
+
 The packaging check now refuses missing lock-pinned builder packages
 before starting a build. The current Mac package trial stopped at the
 missing arm64 preparation receipt.

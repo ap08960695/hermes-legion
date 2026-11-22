@@ -5651,6 +5651,183 @@ index 0000000000000000000000000000000000000000..ba682beb0289e37028f0537ed6a3ce63
 +    sandbox.cleanup()
 +  }
 +})
+diff --git a/apps/desktop/e2e/local-saved-message-search.spec.ts b/apps/desktop/e2e/local-saved-message-search.spec.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..172bdcd7382d1bcb283803ebe6c68f7c84941135
+--- /dev/null
++++ b/apps/desktop/e2e/local-saved-message-search.spec.ts
+@@ -0,0 +1,171 @@
++import { spawn, spawnSync } from 'node:child_process'
++import { once } from 'node:events'
++import * as fs from 'node:fs'
++import * as path from 'node:path'
++
++import { waitForChatReady } from '../../../tests-js/scripts/desktop-chat-smoke'
++import { writeEnvFile, writeMockProviderConfig } from '../../../tests-js/scripts/mock-provider-config'
++import { startMockServer } from '../../../tests-js/scripts/mock-server'
++
++import { recordWebSockets } from './core/harness'
++import { buildAppEnv, createSandbox, launchDesktop } from './fixtures'
++import { expect, test } from './test'
++
++const root = path.resolve(import.meta.dirname, '..', '..', '..')
++const python = process.env.HERMES_E2E_SAVED_SEARCH_PYTHON
++const output = process.env.HERMES_E2E_SAVED_SEARCH_OUTPUT
++const profile = 'research'
++const sessionId = '20261122_084100_000cab'
++const title = 'Saved notebook'
++const query = 'cobalt841'
++const decoy = [['user', 'Read the default notebook'], ['assistant', 'The default notebook ends with amber841.']]
++const transcript = [
++  ['user', 'Open the research notebook'],
++  ['assistant', 'The research notebook describes cobalt841.'],
++  ['user', 'What was the final research finding?'],
++  ['assistant', 'The research notebook ends with riverstone841.']
++]
++
++const fixture = `
++from pathlib import Path
++import json, sys
++from hermes_state import SessionDB
++
++phase, launch_home, profile, session_id = sys.argv[1:]
++data = json.load(sys.stdin)
++root = Path(launch_home)
++snapshots = {}
++for name, home in [('default', root), (profile, root / 'profiles' / profile)]:
++    with SessionDB(db_path=home / 'state.db', read_only=phase == 'read') as db:
++        if phase == 'seed':
++            db.create_session(session_id, source='desktop', model='mock-model')
++            for role, text in data['messages'][name]:
++                db.append_message(session_id, role, text)
++            assert db.set_session_title(session_id, data['title'])
++        snapshots[name] = [[row['role'], row['content']] for row in db.get_messages(session_id)]
++print(json.dumps(snapshots))
++`
++
++test.skip(!python || !output, 'Requires a prepared Python and isolated Local saved-message search runner')
++
++test('saved-message search opens the matching Local profile despite a duplicate chat identity', async () => {
++  test.setTimeout(110_000)
++  const sandbox = createSandbox('local-saved-message-search')
++  const mock = await startMockServer()
++  let gateway: ReturnType<typeof spawn> | undefined
++  let exited: Promise<unknown[]> | undefined
++  let app: Awaited<ReturnType<typeof launchDesktop>>['app'] | undefined
++
++  try {
++    const researchHome = path.join(sandbox.hermesHome, 'profiles', profile)
++    fs.mkdirSync(researchHome, { recursive: true })
++    for (const home of [sandbox.hermesHome, researchHome]) {
++      writeMockProviderConfig(home, mock.url)
++      writeEnvFile(home, 'e2e-mock-key', mock.url)
++    }
++    const env = buildAppEnv(sandbox, { HERMES_DESKTOP_PYTHON: python!, HERMES_DISABLE_LAZY_INSTALLS: '1' })
++    const expected = { default: decoy, [profile]: transcript }
++    const snapshot = (phase: 'seed' | 'read') => {
++      const result = spawnSync(python!, ['-c', fixture, phase, sandbox.hermesHome, profile, sessionId], {
++        cwd: root, env, encoding: 'utf8', timeout: 10_000,
++        input: JSON.stringify({ title, messages: expected })
++      })
++      expect(result.status, result.error?.message || result.stderr).toBe(0)
++      return JSON.parse(result.stdout)
++    }
++    expect(snapshot('seed')).toEqual(expected)
++    const state = () => {
++      try {
++        return JSON.parse(fs.readFileSync(path.join(sandbox.hermesHome, 'gateway_state.json'), 'utf8'))
++      } catch {
++        return {}
++      }
++    }
++    const log = fs.openSync(path.join(output!, 'gateway-run.log'), 'w')
++    gateway = spawn(python!, ['-m', 'hermes_cli.main', 'gateway', 'run'], {
++      cwd: root, env, stdio: ['ignore', log, log]
++    })
++    fs.closeSync(log)
++    exited = once(gateway, 'exit')
++    await expect.poll(() => state().gateway_state, { timeout: 25_000 }).toBe('running')
++    expect(state().pid).toBe(gateway.pid)
++
++    const launched = await launchDesktop(env)
++    app = launched.app
++    const { page } = launched
++    const wire = recordWebSockets(page)
++    await waitForChatReady(page, 35_000)
++    expect(await app.evaluate(({ app }) => app.getPath('userData'))).toBe(sandbox.userDataDir)
++
++    const profileTrigger = page.getByRole('button', { name: /^Profile for new chats:/ })
++    const selectProfile = async (name: string) => {
++      const selected = page.getByRole('button', { name: `Profile for new chats: ${name}`, exact: true })
++      if (!(await selected.isVisible())) {
++        await profileTrigger.click({ timeout: 8_000 })
++        await page.getByRole('menuitemradio', { name, exact: true }).click({ timeout: 8_000 })
++      }
++      await expect(selected).toBeEnabled({ timeout: 20_000 })
++      await expect(page.locator('[data-slot="gateway-connection-status"]')).toHaveAttribute('data-state', 'connected')
++      await waitForChatReady(page, 25_000)
++      return selected
++    }
++    await selectProfile('default')
++    const profileControl = await selectProfile(profile)
++
++    const rail = page.locator('.hermes-focus-rail')
++    await rail.getByRole('button', { name: 'Search', exact: true }).click()
++    const palette = page.getByRole('dialog', { name: 'Command palette' })
++    await palette.getByRole('combobox').fill(query)
++    await palette.getByRole('option', { name: 'Search in messages', exact: true }).click({ timeout: 10_000 })
++    await expect(palette.getByText('1 matching chat shown.', { exact: true })).toBeVisible({ timeout: 20_000 })
++    const hit = palette.getByRole('option', { name: new RegExp(title) })
++    await expect(hit).toHaveCount(1)
++    await expect(hit.locator('mark')).toHaveText(query)
++    await expect(hit).toContainText('research notebook')
++    await page.screenshot({ path: path.join(output!, 'saved-message-match.png'), animations: 'disabled' })
++    const sentBeforeOpen = wire.sent.length
++    await hit.click()
++    await expect(palette).toBeHidden()
++
++    const viewport = page.locator('[data-slot="aui_thread-viewport"]').filter({ visible: true })
++    const checkTranscript = async () => {
++      await expect(viewport.getByText(transcript.at(-1)![1], { exact: true })).toBeVisible({ timeout: 25_000 })
++      const visible = (await viewport.innerText()).trim()
++      for (const [, message] of transcript) expect(visible).toContain(message)
++      expect(transcript.map(([, message]) => visible.indexOf(message))).toEqual(
++        transcript.map(([, message]) => visible.indexOf(message)).sort((a, b) => a - b)
++      )
++      await expect(viewport.getByText(decoy[1][1], { exact: true })).toHaveCount(0)
++      await expect(page.getByText('Resume failed', { exact: true })).toHaveCount(0)
++      await expect(profileControl).toBeVisible()
++      await waitForChatReady(page, 25_000)
++    }
++    await checkTranscript()
++    await expect.poll(() => wire.sent.slice(sentBeforeOpen).some(frame => frame.method === 'session.resume' &&
++      frame.params?.session_id === sessionId && frame.params?.profile === profile &&
++      new URL(wire.sockets[frame.socket]!.url).hostname === '127.0.0.1')).toBe(true)
++    await page.screenshot({ path: path.join(output!, 'saved-message-opened.png'), animations: 'disabled' })
++
++    await rail.getByRole('button', { name: 'Chat history', exact: true }).click()
++    const history = page.getByRole('region', { name: 'Chat history', exact: true })
++    await history.getByText(title, { exact: true }).click({ timeout: 10_000 })
++    await checkTranscript()
++    expect(snapshot('read')).toEqual(expected)
++    expect(state().pid).toBe(gateway.pid)
++    expect(mock.receivedPrompts).toHaveLength(0)
++    fs.writeFileSync(path.join(output!, 'walkthrough.json'), JSON.stringify({
++      sessionId, identicalTitlesAndIds: true, searchMatches: 1, connection: 'local', profile,
++      loopbackResumeMatchedStoredIdAndProfile: true, researchTranscriptMessages: transcript.length,
++      historyReopenedCorrectTranscript: true, storedTranscriptsUnchanged: true,
++      sameForegroundGateway: true, scratchUserData: true, inferencePrompts: 0
++    }, null, 2) + '\n')
++  } finally {
++    await app?.close().catch(() => undefined)
++    if (gateway && gateway.exitCode === null && gateway.signalCode === null) {
++      gateway.kill('SIGTERM')
++      await exited
++    }
++    await mock.close()
++    sandbox.cleanup()
++  }
++})
 diff --git a/apps/desktop/e2e/local-settings-reconnect.spec.ts b/apps/desktop/e2e/local-settings-reconnect.spec.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..863db9d9b84927cdb28775d6a0b1868be6a1b09a
