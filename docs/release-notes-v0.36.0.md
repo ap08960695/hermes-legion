@@ -42,7 +42,8 @@ revision rounds and requested a text diff from recorded fixture handoffs.
 
 The full local macOS Desktop test run on integration commit `d1e4800`
 discovered 1,836 test files. It recorded 16,795 passing tests, 37 skips
-and zero failures.
+and zero failures. The macOS release patch also passed Desktop typecheck
+for the renderer, Electron, end-to-end tests and packaging configuration.
 
 The declared macOS Python selection covered all 1,547 files. The full
 sweep reported 24 test failures across seven files with harness issues.
