@@ -5603,6 +5603,142 @@ index 0000000000000000000000000000000000000000..ba682beb0289e37028f0537ed6a3ce63
 +    sandbox.cleanup()
 +  }
 +})
+diff --git a/apps/desktop/e2e/local-settings-reconnect.spec.ts b/apps/desktop/e2e/local-settings-reconnect.spec.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..863db9d9b84927cdb28775d6a0b1868be6a1b09a
+--- /dev/null
++++ b/apps/desktop/e2e/local-settings-reconnect.spec.ts
+@@ -0,0 +1,130 @@
++import { spawn } from 'node:child_process'
++import { once } from 'node:events'
++import * as fs from 'node:fs'
++import * as path from 'node:path'
++
++import { waitForChatReady } from '../../../tests-js/scripts/desktop-chat-smoke'
++import { writeEnvFile, writeMockProviderConfig } from '../../../tests-js/scripts/mock-provider-config'
++import { startMockServer } from '../../../tests-js/scripts/mock-server'
++
++import { buildAppEnv, createSandbox, launchDesktop } from './fixtures'
++import { expect, test } from './test'
++
++const root = path.resolve(import.meta.dirname, '..', '..', '..')
++const python = process.env.HERMES_E2E_RECONNECT_PYTHON
++const output = process.env.HERMES_E2E_RECONNECT_OUTPUT
++
++test.skip(!python || !output, 'Requires a prepared Python and isolated Local reconnect runner')
++
++test('Local Settings recovers from a refused save and reconnects to the existing gateway', async () => {
++  test.setTimeout(100_000)
++  const sandbox = createSandbox('local-settings-reconnect')
++  const mock = await startMockServer()
++  let gateway: ReturnType<typeof spawn> | undefined
++  let exited: Promise<unknown[]> | undefined
++  let app: Awaited<ReturnType<typeof launchDesktop>>['app'] | undefined
++
++  try {
++    writeMockProviderConfig(sandbox.hermesHome, mock.url)
++    writeEnvFile(sandbox.hermesHome, 'e2e-mock-key', mock.url)
++    const config = path.join(sandbox.userDataDir, 'connection.json')
++    const savedConfig = path.join(sandbox.userDataDir, 'before-fixture-write-refusal.json')
++    fs.writeFileSync(config, '{"mode":"local"}\n', { mode: 0o600, flag: 'wx' })
++    const env = buildAppEnv(sandbox, { HERMES_DESKTOP_PYTHON: python!, HERMES_DISABLE_LAZY_INSTALLS: '1' })
++
++    const state = () => {
++      try {
++        return JSON.parse(fs.readFileSync(path.join(sandbox.hermesHome, 'gateway_state.json'), 'utf8'))
++      } catch {
++        return {}
++      }
++    }
++    const log = fs.openSync(path.join(output!, 'gateway-run.log'), 'w')
++    gateway = spawn(python!, ['-m', 'hermes_cli.main', 'gateway', 'run'], {
++      cwd: root, env, stdio: ['ignore', log, log]
++    })
++    fs.closeSync(log)
++    exited = once(gateway, 'exit')
++    await expect.poll(() => state().gateway_state, { timeout: 25_000 }).toBe('running')
++    expect(state().pid).toBe(gateway.pid)
++
++    const launched = await launchDesktop(env)
++    app = launched.app
++    const { page } = launched
++    await waitForChatReady(page, 35_000)
++    expect(await app.evaluate(({ app }) => app.getPath('userData'))).toBe(sandbox.userDataDir)
++    await expect.poll(() => app!.evaluate(({ BrowserWindow }) =>
++      BrowserWindow.getAllWindows().some(window => window.isVisible() && !window.isMinimized())
++    )).toBe(true)
++    const desktopPid = app.process().pid
++    const status = page.locator('[data-slot="gateway-connection-status"]')
++    await expect(status).toHaveAttribute('data-state', 'connected')
++    const localSockets: string[] = []
++    page.on('websocket', ws => {
++      const url = new URL(ws.url())
++      if (url.pathname === '/api/ws') localSockets.push(url.hostname)
++    })
++
++    await page.getByRole('button', { name: 'All features', exact: true }).click()
++    const menu = page.getByRole('dialog')
++    await menu.getByRole('textbox').fill('Settings')
++    await menu.getByRole('button', { name: 'Settings', exact: true }).click()
++    await page.getByRole('button', { name: 'Gateways', exact: true }).click()
++    await page.getByRole('button', { name: 'This window', exact: true }).click()
++    const modes = page.locator('[data-gateway-connection-modes]')
++    await expect(modes.getByRole('button', { name: /^Local gateway/, pressed: true })).toBeVisible()
++    const save = page.getByRole('button', { name: 'Save and reconnect', exact: true })
++    await expect(save).toBeEnabled()
++
++    const socketsBeforeFailure = localSockets.length
++    // The main process really attempts its atomic write. A directory at the
++    // scratch file's path refuses replacement without touching the gateway.
++    fs.renameSync(config, savedConfig)
++    fs.mkdirSync(config)
++    const failure = page.getByRole('alert').filter({ hasText: 'Could not apply gateway settings' })
++    try {
++      await save.focus()
++      await save.press('Enter')
++      await expect(failure).toBeVisible()
++      await expect(save).toBeEnabled()
++      await expect(save).toBeFocused()
++      expect(localSockets).toHaveLength(socketsBeforeFailure)
++      expect(state().pid).toBe(gateway.pid)
++      await failure.scrollIntoViewIfNeeded()
++      await page.screenshot({ path: path.join(output!, 'reconnect-refusal.png'), animations: 'disabled' })
++    } finally {
++      fs.rmdirSync(config)
++      fs.renameSync(savedConfig, config)
++    }
++
++    const socketsBeforeRetry = localSockets.length
++    await save.press('Enter')
++    await expect(failure).toHaveCount(0)
++    await expect(save).toBeEnabled()
++    await expect.poll(() => localSockets.length, { timeout: 20_000 }).toBeGreaterThan(socketsBeforeRetry)
++    const retryHosts = localSockets.slice(socketsBeforeRetry)
++    expect(retryHosts.every(host => ['127.0.0.1', 'localhost', '[::1]'].includes(host))).toBe(true)
++    await page.getByRole('button', { name: 'Close settings', exact: true }).click()
++    await expect(status).toHaveAttribute('data-state', 'connected')
++    await waitForChatReady(page, 25_000)
++    await page.screenshot({ path: path.join(output!, 'reconnect-recovered.png'), animations: 'disabled' })
++
++    expect(JSON.parse(fs.readFileSync(config, 'utf8')).mode).toBe('local')
++    expect(state().pid).toBe(gateway.pid)
++    expect(app.process().pid).toBe(desktopPid)
++    expect(mock.receivedPrompts).toHaveLength(0)
++    fs.writeFileSync(path.join(output!, 'walkthrough.json'), JSON.stringify({
++      localSaveRefusalVisible: true, retryRetainedKeyboardFocus: true, refusalOpenedNoSockets: true,
++      retryLoopbackWebSockets: retryHosts.length, composerReady: true, configMode: 'local',
++      sameForegroundGateway: true, sameDesktopProcess: true, scratchUserData: true, inferencePrompts: 0
++    }, null, 2) + '\n')
++  } finally {
++    await app?.close().catch(() => undefined)
++    if (gateway && gateway.exitCode === null && gateway.signalCode === null) {
++      gateway.kill('SIGTERM')
++      await exited
++    }
++    await mock.close()
++    sandbox.cleanup()
++  }
++})
 diff --git a/apps/desktop/e2e/mermaid-renderer.spec.ts b/apps/desktop/e2e/mermaid-renderer.spec.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..e8cbeeb013e543fff7ff524155fe0455eee759ba

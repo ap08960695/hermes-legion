@@ -64,6 +64,11 @@ history. Its Markdown table, chart values and Mermaid diagram rendered.
 Escape returned focus from the diagram viewer to its opener, and the
 source matched the saved text. Both stored messages stayed unchanged.
 
+In the isolated Local Desktop, a refused Settings save showed an inline
+error and kept keyboard focus on Save and reconnect. After the scratch
+config was restored, retry opened one loopback connection to the same
+gateway. Chat was usable again and the test sent zero inference prompts.
+
 The packaging check now refuses missing lock-pinned builder packages
 before starting a build. The current Mac package trial stopped at the
 missing arm64 preparation receipt.
