@@ -50,10 +50,10 @@ preload and native helpers offline with cached Electron 44.9.3. The
 isolated launch stopped at Chromium's singleton socket before a window
 opened. Packaged Desktop and Local session restore still need verification.
 
-The declared macOS Python selection covered all 1,547 files. The full
-sweep reported 24 test failures across seven files with harness issues.
-All seven files passed on corrected reruns, giving 15,021 passing tests
-and 228 skips across the combined results.
+A single macOS Python 3.14.9 run covered all 1,547 declared files.
+It recorded 15,021 passing tests, 228 skips and zero failures.
+Eight plugin test files used an isolated PM worker fixture prepared
+from local dependencies. Frozen PM acquisition remains open.
 
 Loopback OpenSSH checks cover connection reuse, helper admission and cleanup,
 and reconnect backoff. The owner's installed Hermes.app, the real ai backend,
