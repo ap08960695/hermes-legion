@@ -49,6 +49,10 @@ A separate Apple Silicon trial built Desktop offline with cached
 Electron 44.9.3. On relaunch, Desktop restored a synthetic chat absent
 from the first 50 history results. Both launches used the same
 foreground Local gateway. The test sent zero inference prompts.
+In the same isolated setup, Settings showed Local gateway selected.
+Searching Bots for the seeded profile narrowed the results to its
+This device card, and Edit profile opened the matching profile.
+
 Packaged Desktop and the owner's installed app still need verification.
 
 A single macOS Python 3.14.9 run covered all 1,547 declared files.
