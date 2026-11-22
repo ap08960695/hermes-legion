@@ -59,6 +59,11 @@ found the worker. After the fixture marked it done, Refresh removed it
 from current work and Recent reports showed its completed report. The
 test exercised stored activity and sent zero inference prompts.
 
+The isolated Local Desktop also reopened a synthetic legacy Desktop reply from Chat
+history. Its Markdown table, chart values and Mermaid diagram rendered.
+Escape returned focus from the diagram viewer to its opener, and the
+source matched the saved text. Both stored messages stayed unchanged.
+
 Packaged Desktop and the owner's installed app still need verification.
 
 A single macOS Python 3.14.9 run covered all 1,547 declared files.

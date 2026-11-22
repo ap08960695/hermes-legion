@@ -5420,6 +5420,189 @@ index 0000000000000000000000000000000000000000..8f2de495145773f95aaa1acc5b24e5e9
 +    sandbox.cleanup()
 +  }
 +})
+diff --git a/apps/desktop/e2e/local-chat-formatting.spec.ts b/apps/desktop/e2e/local-chat-formatting.spec.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..ba682beb0289e37028f0537ed6a3ce63a7a3bce5
+--- /dev/null
++++ b/apps/desktop/e2e/local-chat-formatting.spec.ts
+@@ -0,0 +1,177 @@
++import { spawn, spawnSync } from 'node:child_process'
++import { once } from 'node:events'
++import * as fs from 'node:fs'
++import * as path from 'node:path'
++
++import { waitForChatReady } from '../../../tests-js/scripts/desktop-chat-smoke'
++import { writeEnvFile, writeMockProviderConfig } from '../../../tests-js/scripts/mock-provider-config'
++import { startMockServer } from '../../../tests-js/scripts/mock-server'
++
++import { buildAppEnv, createSandbox, launchDesktop } from './fixtures'
++import { expect, test } from './test'
++
++const root = path.resolve(import.meta.dirname, '..', '..', '..')
++const python = process.env.HERMES_E2E_FORMATTING_PYTHON
++const output = process.env.HERMES_E2E_FORMATTING_OUTPUT
++const sessionId = '20261122_013000_000cab'
++const title = 'Local formatting fixture'
++const chartTitle = 'Review measurements'
++const diagramTitle = 'Saved review workflow'
++const diagram = `flowchart LR
++  accTitle: ${diagramTitle}
++  Saved --> Opened --> Verified
++`
++const reply = [
++  'Local formatting sample',
++  '| Item | Value |\n| --- | ---: |\n| Alpha | 0 |\n| Beta | -2.5 |\n| Alpha | 3.25 |',
++  '```chart\n' + JSON.stringify({
++    type: 'bar', title: chartTitle, unit: 'units',
++    labels: ['Alpha', 'Beta', 'Alpha'],
++    series: [{ name: 'Actual', values: [0, -2.5, 3.25] }, { name: 'Reference', values: [1, 2, 3] }]
++  }) + '\n```',
++  '```mermaid\n' + diagram + '```'
++].join('\n\n')
++
++const historyFixture = `
++import json, sys
++from pathlib import Path
++from hermes_state import SessionDB
++
++phase, home, session_id = sys.argv[1:]
++db_path = Path(home) / 'state.db'
++with SessionDB(db_path=db_path, read_only=phase == 'read') as db:
++    if phase == 'seed':
++        data = json.load(sys.stdin)
++        # An unrouted Desktop row exercises native legacy history adoption.
++        db.create_session(session_id, source='desktop', model='mock-model')
++        db.append_message(session_id, 'user', 'Show the review measurements')
++        db.append_message(session_id, 'assistant', data['reply'])
++        assert db.set_session_title(session_id, data['title'])
++    print(json.dumps([(row['role'], row['content']) for row in db.get_messages(session_id)]))
++`
++
++test.skip(!python || !output, 'Requires a prepared Python and isolated Local chat-formatting runner')
++
++test('saved Local chat renders its table, chart and diagram when reopened', async () => {
++  test.setTimeout(105_000)
++  const sandbox = createSandbox('local-chat-formatting')
++  const mock = await startMockServer()
++  let gateway: ReturnType<typeof spawn> | undefined
++  let exited: Promise<unknown[]> | undefined
++  let app: Awaited<ReturnType<typeof launchDesktop>>['app'] | undefined
++
++  try {
++    writeMockProviderConfig(sandbox.hermesHome, mock.url)
++    writeEnvFile(sandbox.hermesHome, 'e2e-mock-key', mock.url)
++    const env = buildAppEnv(sandbox, { HERMES_DESKTOP_PYTHON: python!, HERMES_DISABLE_LAZY_INSTALLS: '1' })
++    const messages = (phase: 'seed' | 'read') => {
++      const result = spawnSync(python!, ['-c', historyFixture, phase, sandbox.hermesHome, sessionId], {
++        cwd: root, env, encoding: 'utf8', timeout: 10_000, input: JSON.stringify({ title, reply })
++      })
++      expect(result.status, result.error?.message || result.stderr).toBe(0)
++      return JSON.parse(result.stdout)
++    }
++    const seeded = messages('seed')
++    expect(seeded).toEqual([['user', 'Show the review measurements'], ['assistant', reply]])
++
++    const state = () => {
++      try {
++        return JSON.parse(fs.readFileSync(path.join(sandbox.hermesHome, 'gateway_state.json'), 'utf8'))
++      } catch {
++        return {}
++      }
++    }
++    const log = fs.openSync(path.join(output!, 'gateway-run.log'), 'w')
++    gateway = spawn(python!, ['-m', 'hermes_cli.main', 'gateway', 'run'], {
++      cwd: root, env, stdio: ['ignore', log, log]
++    })
++    fs.closeSync(log)
++    exited = once(gateway, 'exit')
++    await expect.poll(() => state().gateway_state, { timeout: 25_000 }).toBe('running')
++    expect(state().pid).toBe(gateway.pid)
++
++    const launched = await launchDesktop(env)
++    app = launched.app
++    const { page } = launched
++    await waitForChatReady(page, 35_000)
++    expect(await app.evaluate(({ app }) => app.getPath('userData'))).toBe(sandbox.userDataDir)
++    await expect.poll(() => app!.evaluate(({ BrowserWindow }) =>
++      BrowserWindow.getAllWindows().some(window => window.isVisible() && !window.isMinimized())
++    )).toBe(true)
++
++    const history = page.locator('.hermes-focus-rail').getByRole('button', { name: 'Chat history', exact: true })
++    async function openSavedChat() {
++      await history.click({ timeout: 10_000 })
++      const workspace = page.getByRole('region', { name: 'Chat history', exact: true })
++      await workspace.getByText(title, { exact: true }).click({ timeout: 10_000 })
++      await expect(page).toHaveURL(new RegExp(sessionId))
++      await waitForChatReady(page, 25_000)
++    }
++
++    const table = page.getByRole('table').filter({ has: page.getByRole('columnheader', { name: 'Item', exact: true }) })
++    const chart = page.locator('[data-slot="chart"]').filter({ hasText: chartTitle })
++    const chartValues = chart.getByRole('region', { name: 'Chart values' })
++    const diagramOpener = page.getByRole('button', { name: `Open diagram: ${diagramTitle}`, exact: true })
++    const svgImage = diagramOpener.locator('img')
++    async function checkRenderedReply() {
++      await expect(table.getByRole('columnheader')).toHaveText(['Item', 'Value'])
++      await expect(table.getByRole('cell')).toHaveText(['Alpha', '0', 'Beta', '-2.5', 'Alpha', '3.25'])
++      await expect(chart.getByRole('img', { name: chartTitle })).toBeVisible()
++      await expect(svgImage).toBeVisible({ timeout: 15_000 })
++      expect(await svgImage.evaluate(async (element: HTMLImageElement) => {
++        await element.decode()
++        return element.naturalWidth
++      })).toBeGreaterThan(0)
++      await expect(page.getByText('Resume failed', { exact: true })).toHaveCount(0)
++    }
++
++    await openSavedChat()
++    await checkRenderedReply()
++    await chart.getByText('Chart values', { exact: true }).click()
++    await expect(chartValues.getByRole('rowheader')).toHaveText(['Alpha', 'Beta', 'Alpha'])
++    await expect(chartValues.getByRole('cell')).toHaveText(['0', '1', '-2.5', '2', '3.25', '3'])
++    await table.scrollIntoViewIfNeeded()
++    await page.screenshot({ path: path.join(output!, 'chat-markdown-table.png'), animations: 'disabled' })
++    await chartValues.scrollIntoViewIfNeeded()
++    await page.screenshot({ path: path.join(output!, 'chat-table-chart.png'), animations: 'disabled' })
++    await chart.locator('summary').click()
++    await expect(chartValues).toHaveCount(0)
++
++    await diagramOpener.click()
++    const viewer = page.getByRole('dialog', { name: `Open diagram: ${diagramTitle}` })
++    await expect(viewer.getByRole('img', { name: diagramTitle })).toBeVisible()
++    await page.screenshot({ path: path.join(output!, 'chat-mermaid-viewer.png'), animations: 'disabled' })
++    await page.keyboard.press('Escape')
++    await expect(viewer).toBeHidden()
++    await expect(diagramOpener).toBeFocused()
++    const disclosure = page.locator('[data-slot="mermaid-source-disclosure"]')
++    await disclosure.getByText(/^source$/i).click({ timeout: 10_000 })
++    const source = disclosure.getByRole('region', { name: /^source$/i })
++    await expect(source).toBeVisible()
++    expect(await source.textContent()).toBe(diagram)
++    await source.scrollIntoViewIfNeeded()
++    await page.screenshot({ path: path.join(output!, 'chat-mermaid-source.png'), animations: 'disabled' })
++
++    await openSavedChat()
++    await checkRenderedReply()
++    await chart.getByText('Chart values', { exact: true }).click()
++    await expect(chartValues.getByRole('rowheader')).toHaveText(['Alpha', 'Beta', 'Alpha'])
++    await expect(chartValues.getByRole('cell')).toHaveText(['0', '1', '-2.5', '2', '3.25', '3'])
++    expect(messages('read')).toEqual(seeded)
++    expect(state().pid).toBe(gateway.pid)
++    expect(mock.receivedPrompts).toHaveLength(0)
++    fs.writeFileSync(path.join(output!, 'walkthrough.json'), JSON.stringify({
++      sessionId, historyOpens: 2, resumeErrorAbsent: true, markdownRows: 3, chartValues: [[0, 1], [-2.5, 2], [3.25, 3]],
++      diagramDecoded: true, diagramViewerEscapeRestoredFocus: true, diagramSourceExact: true,
++      storedMessagesUnchanged: 2, scratchUserData: true, sameForegroundGateway: true, inferencePrompts: 0
++    }, null, 2) + '\n')
++  } finally {
++    await app?.close().catch(() => undefined)
++    if (gateway && gateway.exitCode === null && gateway.signalCode === null) {
++      gateway.kill('SIGTERM')
++      await exited
++    }
++    await mock.close()
++    sandbox.cleanup()
++  }
++})
 diff --git a/apps/desktop/e2e/mermaid-renderer.spec.ts b/apps/desktop/e2e/mermaid-renderer.spec.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..e8cbeeb013e543fff7ff524155fe0455eee759ba
