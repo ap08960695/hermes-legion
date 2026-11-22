@@ -90,8 +90,9 @@ it. Chat showed the error and restored the exact multiline draft. A
 second click on Send delivered the message once in the same chat.
 The error card's Retry button now uses that same saved send when the
 draft still matches. After the gateway confirms it, Chat clears the
-draft and the failure card. Both paths were tried with a loopback
-mock provider.
+draft and the failure card. A second refusal also preserves a newer
+draft while the original remains available to restore and resend.
+These paths were tried with a loopback mock provider.
 
 The packaging check now refuses missing lock-pinned builder packages
 before starting a build. The current Mac package trial stopped at the

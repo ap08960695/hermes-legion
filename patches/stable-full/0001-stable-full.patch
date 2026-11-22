@@ -5839,10 +5839,10 @@ index 0000000000000000000000000000000000000000..ba682beb0289e37028f0537ed6a3ce63
 +})
 diff --git a/apps/desktop/e2e/local-failed-send-recovery.spec.ts b/apps/desktop/e2e/local-failed-send-recovery.spec.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..41c83afa62272a2b263c65aac25b6a463f27b303
+index 0000000000000000000000000000000000000000..87e1fc680af8f38116d4a2fde7bdc9b226c2dddf
 --- /dev/null
 +++ b/apps/desktop/e2e/local-failed-send-recovery.spec.ts
-@@ -0,0 +1,204 @@
+@@ -0,0 +1,261 @@
 +import { spawn, spawnSync } from 'node:child_process'
 +import { once } from 'node:events'
 +import * as fs from 'node:fs'
@@ -5859,9 +5859,11 @@ index 0000000000000000000000000000000000000000..41c83afa62272a2b263c65aac25b6a46
 +const python = process.env.HERMES_E2E_FAILED_SEND_PYTHON
 +const output = process.env.HERMES_E2E_FAILED_SEND_OUTPUT
 +const draft = 'Keep this draft: สีฟ้า\n\nSecond line — retry once.'
-+const refusal = 'The test gateway refused the first send.'
++const refusal = 'The test gateway refused this send.'
++const newerDraft = 'Unsent follow-up: keep this separate.'
 +
 +const gatewayFixture = `
++import asyncio
 +import json
 +from pathlib import Path
 +import sys
@@ -5873,20 +5875,27 @@ index 0000000000000000000000000000000000000000..41c83afa62272a2b263c65aac25b6a46
 +audit = Path(sys.argv.pop(1))
 +draft = sys.argv.pop(1)
 +refusal = sys.argv.pop(1)
++barrier = sys.argv.pop(1)
 +submit = AuthorityConnection.submit
-+first = True
++refusals_remaining = 2 if barrier else 1
 +
 +def record(row):
 +    with audit.open('a', encoding='utf-8') as stream:
 +        stream.write(json.dumps(row) + '\\n')
 +
 +async def submit_with_refusal(self, ref, params):
-+    global first
++    global refusals_remaining
 +    attempt = dict(sessionId=ref.session_id, profile=_profile_label(ref.profile_id),
 +                   submissionId=params.get('submission_id'), text=params.get('text'))
 +    # Refuse before the authority can admit the prompt or write a user row.
-+    if first and attempt['text'] == draft:
-+        first = False
++    if refusals_remaining and attempt['text'] == draft:
++        refusals_remaining -= 1
++        if barrier and refusals_remaining == 0:
++            # The test types into the cleared editor while this retry is still pending.
++            Path(barrier).with_suffix('.waiting').touch()
++            async with asyncio.timeout(30):
++                while not Path(barrier).with_suffix('.release').exists():
++                    await asyncio.sleep(0.05)
 +        record(dict(attempt, result='refused'))
 +        raise RuntimeStoreError('invalid_params', detail=refusal)
 +    receipt = await submit(self, ref, params)
@@ -5923,7 +5932,7 @@ index 0000000000000000000000000000000000000000..41c83afa62272a2b263c65aac25b6a46
 +
 +test.skip(!python || !output, 'Requires a prepared Python and isolated Local failed-send runner')
 +
-+async function retryRefusedSend(action: 'composer' | 'inline') {
++async function retryRefusedSend(action: 'composer' | 'inline' | 'retained') {
 +  test.setTimeout(110_000)
 +  allowErrorBanners()
 +  const trialOutput = path.join(output!, action)
@@ -5948,6 +5957,7 @@ index 0000000000000000000000000000000000000000..41c83afa62272a2b263c65aac25b6a46
 +      }
 +    }
 +    const audit = path.join(sandbox.root, 'submit-attempts.jsonl')
++    const barrier = action === 'retained' ? path.join(sandbox.root, 'retry-refusal') : ''
 +    fs.writeFileSync(audit, '', { mode: 0o600 })
 +    const attempts = (): Attempt[] => fs.readFileSync(audit, 'utf8').trim().split('\n').filter(Boolean)
 +      .map(line => JSON.parse(line))
@@ -5961,7 +5971,7 @@ index 0000000000000000000000000000000000000000..41c83afa62272a2b263c65aac25b6a46
 +
 +    const log = fs.openSync(path.join(trialOutput, 'gateway-run.log'), 'w')
 +    try {
-+      gateway = spawn(python!, ['-c', gatewayFixture, audit, draft, refusal, 'gateway', 'run'], {
++      gateway = spawn(python!, ['-c', gatewayFixture, audit, draft, refusal, barrier, 'gateway', 'run'], {
 +        cwd: root, env, stdio: ['ignore', log, log]
 +      })
 +    } finally {
@@ -6009,18 +6019,53 @@ index 0000000000000000000000000000000000000000..41c83afa62272a2b263c65aac25b6a46
 +    expect(mock.receivedPrompts).toEqual([])
 +    await page.screenshot({ path: path.join(trialOutput, 'draft-restored.png'), animations: 'disabled' })
 +
-+    await (action === 'inline' ? retry : send).click()
-+    await expect.poll(() => attempts().length, { timeout: 12_000 }).toBe(2)
++    const retained = page.locator('[data-slot="composer-retained-send"]')
++    const summary = retained.locator('summary')
++    const returnDraft = retained.getByRole('button', { name: 'Return to parked draft', exact: true })
++    const refusals = [...first]
++    await (action === 'composer' ? send : retry).click()
++    if (barrier) {
++      await expect.poll(() => fs.existsSync(barrier + '.waiting')).toBe(true)
++      await expect.poll(() => editor.innerText()).toBe('')
++      await editor.click()
++      await page.keyboard.insertText(newerDraft)
++      await expect.poll(() => editor.innerText()).toBe(newerDraft)
++      fs.writeFileSync(barrier + '.release', '', { flag: 'wx' })
++
++      refusals.push(first[0]!)
++      await expect.poll(attempts).toEqual(refusals)
++      await expect(summary).toContainText('Your current draft is unchanged.')
++      await expect.poll(() => editor.innerText()).toBe(newerDraft)
++      await expect(errorCard).toHaveCount(1)
++      expect(snapshot(sessionId)).toEqual(refused)
++      expect(mock.receivedPrompts).toEqual([])
++      await summary.click()
++      const preview = retained.getByText(draft, { exact: true })
++      await expect(preview).toBeVisible()
++      await expect.poll(() => preview.textContent()).toBe(draft)
++      await page.screenshot({ path: path.join(trialOutput, 'second-refusal.png'), animations: 'disabled' })
++
++      await retained.getByRole('button', { name: 'Park draft and edit failed message', exact: true }).click()
++      await expect.poll(() => editor.innerText()).toBe(draft)
++      await expect(retained.getByText(newerDraft, { exact: true })).toBeVisible()
++      await expect(returnDraft).toBeVisible()
++      expect(attempts()).toEqual(refusals)
++      expect(mock.receivedPrompts).toEqual([])
++      await page.screenshot({ path: path.join(trialOutput, 'original-restored.png'), animations: 'disabled' })
++      await send.click()
++    }
++
++    await expect.poll(() => attempts().length, { timeout: 12_000 }).toBe(refusals.length + 1)
 +    await expect(chat.getByText(MOCK_REPLY, { exact: true })).toBeVisible({ timeout: 40_000 })
 +    await expect(errorCard).toHaveCount(0)
 +    await expect(retry).toHaveCount(0)
 +    await expect.poll(() => editor.innerText()).toBe('')
 +    await expect(status).toHaveAttribute('data-state', 'connected')
 +    const retried = attempts()
-+    expect(retried).toEqual([first[0], {
++    expect(retried).toEqual([...refusals, {
 +      sessionId, profile, submissionId, text: draft, result: 'admitted', admissionId: expect.any(String)
 +    }])
-+    const { admissionId } = retried[1]!
++    const { admissionId } = retried.at(-1)!
 +    const completed = { admissions: [[admissionId, submissionId, 'terminal', 'completed']], messages: [draft] }
 +    await expect.poll(() => snapshot(sessionId), { timeout: 10_000 }).toEqual(completed)
 +    expect(mock.receivedPrompts).toEqual([draft])
@@ -6029,8 +6074,18 @@ index 0000000000000000000000000000000000000000..41c83afa62272a2b263c65aac25b6a46
 +    expect(state().pid).toBe(gateway.pid)
 +    expect(app.process().pid).toBe(desktopPid)
 +    await page.screenshot({ path: path.join(trialOutput, 'draft-delivered.png'), animations: 'disabled' })
++    if (barrier) {
++      await returnDraft.click()
++      await expect.poll(() => editor.innerText()).toBe(newerDraft)
++      await expect(retained).toHaveCount(0)
++      expect(attempts()).toEqual(retried)
++      expect(snapshot(sessionId)).toEqual(completed)
++      expect(mock.receivedPrompts).toEqual([draft])
++      await page.screenshot({ path: path.join(trialOutput, 'newer-draft-returned.png'), animations: 'disabled' })
++    }
 +    fs.writeFileSync(path.join(trialOutput, 'walkthrough.json'), JSON.stringify({
 +      connection: 'local', action, attempts: retried, refused, completed,
++      ...(barrier ? { returnedUnsentDraft: await editor.innerText() } : {}),
 +      staleRetryCardRemoved: true, sameForegroundGateway: true, sameDesktopProcess: true,
 +      mockPrompts: mock.receivedPrompts
 +    }, null, 2) + '\n')
@@ -6047,6 +6102,8 @@ index 0000000000000000000000000000000000000000..41c83afa62272a2b263c65aac25b6a46
 +
 +test('composer Send retries the exact refused Local draft once', () => retryRefusedSend('composer'))
 +test('inline Retry resends the exact refused Local draft once', () => retryRefusedSend('inline'))
++
++test('restores the twice-refused Local draft while preserving the newer draft', () => retryRefusedSend('retained'))
 diff --git a/apps/desktop/e2e/local-saved-message-search.spec.ts b/apps/desktop/e2e/local-saved-message-search.spec.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..172bdcd7382d1bcb283803ebe6c68f7c84941135
