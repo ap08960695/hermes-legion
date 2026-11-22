@@ -5145,6 +5145,63 @@ index 0000000000000000000000000000000000000000..d80ca0a6a3a135101147dae5c0f63f9c
 +    sandbox.cleanup()
 +  }
 +})
+diff --git a/apps/desktop/e2e/bot-monitor-fixture.py b/apps/desktop/e2e/bot-monitor-fixture.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..6b37161cf0c3220585477c8cceb1d5313de38e9c
+--- /dev/null
++++ b/apps/desktop/e2e/bot-monitor-fixture.py
+@@ -0,0 +1,51 @@
++"""Seed or complete one synthetic Local worker in the scratch Alpha profile."""
++import json
++import os
++from pathlib import Path
++import sys
++import time
++
++from gateway.session_group_controls import _read_bot_sessions
++from hermes_state import SessionDB
++
++
++phase, home_arg = sys.argv[1:]
++home = Path(home_arg)
++assert home.name == "alpha" and home.parent.name == "profiles"
++chat = "20261122_010000_000abc"
++worker = "20261122_010001_000def"
++task = "Review synthetic inventory"
++summary = "Synthetic inventory review completed."
++now = time.time()
++subject = f"uid:{os.getuid()}"
++
++with SessionDB(db_path=home / "state.db") as db:
++    if phase == "seed":
++        db.create_session(chat, source="local", model="mock-model", user_id=subject, chat_id=f"local-{chat}")
++        db.append_message(chat, "user", "Local Alpha synthetic chat", timestamp=now)
++        assert db.set_session_title(chat, "Bot Chat")
++        db.create_session(worker, source="kanban", model="mock-worker-model",
++                          model_config={"max_iterations": 8})
++        assert db.set_session_title(worker, task)
++        db.update_token_counts(worker, api_call_count=2, absolute=True, source="kanban")
++        db.touch_session_activity(worker, description="executing tool: read_file")
++    elif phase == "complete":
++        db.end_session(worker, "completed")
++        db._execute_write(lambda conn: conn.execute(
++            "INSERT INTO async_delegations (delegation_id,origin_session,parent_session_id,state,"
++            "dispatched_at,completed_at,updated_at,task_json,result_json) VALUES (?,?,?,?,?,?,?,?,?)",
++            ("r836-fixture-report", chat, chat, "completed", now - 1, now, now,
++             json.dumps({"goal": task}), json.dumps({"status": "completed", "summary": summary}))))
++    else:
++        raise ValueError(f"Unknown fixture phase: {phase}")
++
++    record = db.get_session(worker)
++    roster = _read_bot_sessions(db, subject, False)
++    canonical = roster["canonical_session"]
++    assert canonical["id"] == chat
++    assert roster["worker_session"]["id"] == worker
++    reports = canonical["delegation_reports"]
++    assert bool(record["ended_at"]) == (phase == "complete")
++    assert len(reports) == int(phase == "complete")
++    print(json.dumps({"canonicalSession": chat, "worker": worker, "ended": bool(record["ended_at"]),
++                      "iteration": record["api_call_count"], "reports": reports}))
 diff --git a/apps/desktop/e2e/core/focus-navigation-layout.spec.ts b/apps/desktop/e2e/core/focus-navigation-layout.spec.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..cc044b0a230bba8f19bd5a0616b953507e5259b3
@@ -5200,6 +5257,165 @@ index 0000000000000000000000000000000000000000..cc044b0a230bba8f19bd5a0616b95350
 +    expect(mock.receivedPrompts).toHaveLength(0)
 +  } finally {
 +    await app.close()
++    await mock.close()
++    sandbox.cleanup()
++  }
++})
+diff --git a/apps/desktop/e2e/local-bot-monitor.spec.ts b/apps/desktop/e2e/local-bot-monitor.spec.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..8f2de495145773f95aaa1acc5b24e5e90c657cd9
+--- /dev/null
++++ b/apps/desktop/e2e/local-bot-monitor.spec.ts
+@@ -0,0 +1,153 @@
++import { spawn, spawnSync } from 'node:child_process'
++import { once } from 'node:events'
++import * as fs from 'node:fs'
++import * as path from 'node:path'
++
++import { waitForChatReady } from '../../../tests-js/scripts/desktop-chat-smoke'
++import { writeEnvFile, writeMockProviderConfig } from '../../../tests-js/scripts/mock-provider-config'
++import { startMockServer } from '../../../tests-js/scripts/mock-server'
++
++import { buildAppEnv, createSandbox, launchDesktop } from './fixtures'
++import { expect, test } from './test'
++
++const root = path.resolve(import.meta.dirname, '..', '..', '..')
++const task = 'Review synthetic inventory'
++const summary = 'Synthetic inventory review completed.'
++const fixture = path.join(import.meta.dirname, 'bot-monitor-fixture.py')
++
++const python = process.env.HERMES_E2E_MONITOR_PYTHON
++const output = process.env.HERMES_E2E_MONITOR_OUTPUT
++
++test.skip(!python || !output, 'Requires a prepared Python and isolated Local Monitor runner')
++
++test('Local Bots Monitor refreshes a seeded worker and opens its completed report', async () => {
++  test.setTimeout(95_000)
++  const sandbox = createSandbox('local-walkthrough')
++  const mock = await startMockServer()
++  const alpha = path.join(sandbox.hermesHome, 'profiles', 'alpha')
++  for (const home of [sandbox.hermesHome, alpha]) {
++    writeMockProviderConfig(home, mock.url)
++    writeEnvFile(home, 'e2e-mock-key', mock.url)
++  }
++  const env = buildAppEnv(sandbox, { HERMES_DESKTOP_PYTHON: python!, HERMES_DISABLE_LAZY_INSTALLS: '1' })
++  // Keep the app's scratch HOME and credentials, but make the source tree
++  // importable when Python executes a file from the Desktop E2E directory.
++  const fixtureEnv = { ...env, PYTHONPATH: root }
++  const record = (phase: 'seed' | 'complete') => {
++    const result = spawnSync(python!, [fixture, phase, alpha], {
++      cwd: root, env: fixtureEnv, encoding: 'utf8', timeout: 10_000
++    })
++    expect(result.status, result.error?.message || result.stderr).toBe(0)
++    return JSON.parse(result.stdout)
++  }
++  let gateway: ReturnType<typeof spawn> | undefined
++  let exited: Promise<unknown[]> | undefined
++  let app: Awaited<ReturnType<typeof launchDesktop>>['app'] | undefined
++
++  const state = () => {
++    try {
++      return JSON.parse(fs.readFileSync(path.join(sandbox.hermesHome, 'gateway_state.json'), 'utf8'))
++    } catch {
++      return {}
++    }
++  }
++
++  try {
++    const seeded = record('seed')
++    expect(seeded).toMatchObject({ ended: false, iteration: 2, reports: [] })
++    const log = fs.openSync(path.join(output!, 'gateway-run.log'), 'w')
++    gateway = spawn(python!, ['-m', 'hermes_cli.main', 'gateway', 'run'], {
++      cwd: root, env, stdio: ['ignore', log, log]
++    })
++    fs.closeSync(log)
++    exited = once(gateway, 'exit')
++    await expect.poll(() => state().gateway_state, { timeout: 25_000 }).toBe('running')
++    expect(state().pid).toBe(gateway.pid)
++
++    const launched = await launchDesktop(env)
++    app = launched.app
++    const { page } = launched
++    await waitForChatReady(page, 35_000)
++    expect(await app.evaluate(({ app }) => app.getPath('userData'))).toBe(sandbox.userDataDir)
++    await expect.poll(() => app!.evaluate(({ BrowserWindow }) =>
++      BrowserWindow.getAllWindows().some(window => window.isVisible() && !window.isMinimized())
++    )).toBe(true)
++
++    async function capture(name: string) {
++      await page.evaluate(async () => {
++        await document.fonts.ready
++        await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
++      })
++      await page.screenshot({ path: path.join(output!, name), animations: 'disabled' })
++    }
++
++    const bots = page.getByRole('button', { name: 'Bots', exact: true }).or(page.getByRole('tab', { name: 'Bots', exact: true }))
++    await bots.first().click()
++    const workspace = page.getByRole('region', { name: 'Bots', exact: true })
++    const toggle = workspace.locator('[data-bot-monitor-toggle]')
++    await expect(toggle).toHaveAccessibleName('Monitor')
++    await toggle.click()
++    const monitor = workspace.getByRole('region', { name: 'Monitor', exact: true })
++    const workerRows = monitor.locator('[data-monitor-worker-owner]')
++    const worker = monitor.locator('[data-monitor-worker-owner="local::alpha"]')
++    const alphaBot = monitor.locator('[data-monitor-bot-key="local::alpha"]')
++    await expect(worker).toBeVisible({ timeout: 20_000 })
++    await expect(workerRows).toHaveCount(1)
++    await expect(worker).toContainText('alpha · Worker')
++    await expect(worker.getByRole('cell', { name: 'Working', exact: true })).toBeVisible()
++    await expect(worker).toContainText(task)
++    await expect(worker).toContainText('step 2/8')
++    await expect(worker).toContainText('Recorded worker model: mock-worker-model')
++    await expect(worker.getByRole('cell').nth(5)).toHaveText('Not reported')
++    const elapsed = worker.getByRole('cell').nth(3)
++    await expect(elapsed).toHaveText(/^\d+[sm]$/)
++    const initialElapsed = (await elapsed.innerText()).trim()
++    const seconds = (value: string) => Number.parseInt(value, 10) * (value.endsWith('m') ? 60 : 1)
++    await capture('monitor-working.png')
++    await expect.poll(async () => seconds((await elapsed.innerText()).trim()), { timeout: 20_000 })
++      .toBeGreaterThan(seconds(initialElapsed))
++    const laterElapsed = (await elapsed.innerText()).trim()
++
++    const search = monitor.getByRole('textbox', { name: 'Search bots, workers and tasks' })
++    await search.fill(task)
++    await monitor.getByRole('button', { name: 'Working', exact: true }).click()
++    await expect(worker).toBeVisible()
++    await expect(monitor.getByRole('row')).toHaveCount(2)
++    await capture('monitor-filtered.png')
++    await search.fill('')
++    await monitor.getByRole('button', { name: 'All', exact: true }).click()
++    await expect(alphaBot).toBeVisible()
++    const recent = alphaBot.getByRole('button', { name: /^Recent reports · alpha · / })
++    await expect(recent).toHaveText('Recent reports (0)')
++
++    const completed = record('complete')
++    expect(completed).toMatchObject({ canonicalSession: seeded.canonicalSession, worker: seeded.worker,
++      ended: true, reports: [{ delegation_id: 'r836-fixture-report', status: 'completed', goal: task, summary }] })
++    await workspace.getByRole('button', { name: 'Refresh', exact: true }).click()
++    await expect(workerRows).toHaveCount(0, { timeout: 20_000 })
++    await expect(monitor.getByText('step 2/8', { exact: true })).toHaveCount(0)
++    await expect(recent).toHaveText('Recent reports (1)', { timeout: 20_000 })
++    await recent.click()
++    const report = page.getByRole('dialog')
++    await expect(report.getByText(task, { exact: true })).toBeVisible()
++    await expect(report.getByText('Completed', { exact: true })).toBeVisible()
++    await expect(report.getByText(summary, { exact: true })).toBeVisible()
++    await capture('monitor-completed-report.png')
++
++    expect(state().pid).toBe(gateway.pid)
++    expect(mock.receivedPrompts).toHaveLength(0)
++    fs.writeFileSync(path.join(output!, 'walkthrough.json'), JSON.stringify({
++      seeded, completed, localOwner: 'local::alpha', initialElapsed, laterElapsed,
++      taskSearchAndWorkingFilter: true, workerRemovedOnRefresh: true, reportVisible: true,
++      scratchUserData: true, sameForegroundGateway: true, inferencePrompts: 0
++    }, null, 2) + '\n')
++  } finally {
++    await app?.close().catch(() => undefined)
++    if (gateway && gateway.exitCode === null && gateway.signalCode === null) {
++      gateway.kill('SIGTERM')
++      await exited
++    }
 +    await mock.close()
 +    sandbox.cleanup()
 +  }

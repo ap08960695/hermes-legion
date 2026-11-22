@@ -53,6 +53,12 @@ In the same isolated setup, Settings showed Local gateway selected.
 Searching Bots for the seeded profile narrowed the results to its
 This device card, and Edit profile opened the matching profile.
 
+In another isolated Local trial, Bots → Monitor showed a seeded worker's
+task, step and increasing elapsed time. Search and the Working filter
+found the worker. After the fixture marked it done, Refresh removed it
+from current work and Recent reports showed its completed report. The
+test exercised stored activity and sent zero inference prompts.
+
 Packaged Desktop and the owner's installed app still need verification.
 
 A single macOS Python 3.14.9 run covered all 1,547 declared files.
