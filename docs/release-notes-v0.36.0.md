@@ -79,6 +79,12 @@ Research transcript even though Default had a chat with the same title
 and ID. Chat history reopened the same four messages. Both stored
 transcripts stayed unchanged, and the test sent zero inference prompts.
 
+Settings → Providers → Accounts in isolated Local Desktop showed each
+profile's configured Local endpoint and its matching fixture account when
+switching from Default to Research and back. The same gateway served fresh,
+profile-scoped Accounts requests. The trial used synthetic account status
+and sent zero inference prompts.
+
 The packaging check now refuses missing lock-pinned builder packages
 before starting a build. The current Mac package trial stopped at the
 missing arm64 preparation receipt.
