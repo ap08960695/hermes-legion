@@ -5839,10 +5839,10 @@ index 0000000000000000000000000000000000000000..ba682beb0289e37028f0537ed6a3ce63
 +})
 diff --git a/apps/desktop/e2e/local-failed-send-recovery.spec.ts b/apps/desktop/e2e/local-failed-send-recovery.spec.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..91c889f9d5c009e8f5703c18bb3969096bfa608f
+index 0000000000000000000000000000000000000000..08c7d5c6b6022b4db527916aeb42d3c41b538f71
 --- /dev/null
 +++ b/apps/desktop/e2e/local-failed-send-recovery.spec.ts
-@@ -0,0 +1,191 @@
+@@ -0,0 +1,198 @@
 +import { spawn, spawnSync } from 'node:child_process'
 +import { once } from 'node:events'
 +import * as fs from 'node:fs'
@@ -5987,7 +5987,12 @@ index 0000000000000000000000000000000000000000..91c889f9d5c009e8f5703c18bb396909
 +    await expect.poll(() => editor.innerText()).toBe(draft)
 +    await send.click()
 +
++    const chat = page.locator('[data-slot="aui_thread-viewport"]').filter({ visible: true })
++    const errorCard = chat.getByText("Hermes couldn't finish this reply", { exact: true })
++    const retry = chat.getByRole('button', { name: 'Retry', exact: true })
 +    await expect(page.getByText('Prompt failed', { exact: true })).toBeVisible({ timeout: 20_000 })
++    await expect(errorCard).toBeVisible()
++    await expect(retry).toBeVisible()
 +    await expect.poll(() => editor.innerText()).toBe(draft)
 +    await expect(send).toBeEnabled()
 +    const first = attempts()
@@ -6003,8 +6008,9 @@ index 0000000000000000000000000000000000000000..91c889f9d5c009e8f5703c18bb396909
 +    await page.screenshot({ path: path.join(output!, 'draft-restored.png'), animations: 'disabled' })
 +
 +    await send.click()
-+    const chat = page.locator('[data-slot="aui_thread-viewport"]').filter({ visible: true })
 +    await expect(chat.getByText(MOCK_REPLY, { exact: true })).toBeVisible({ timeout: 40_000 })
++    await expect(errorCard).toHaveCount(0)
++    await expect(retry).toHaveCount(0)
 +    await expect.poll(() => editor.innerText()).toBe('')
 +    await expect(status).toHaveAttribute('data-state', 'connected')
 +    const retried = attempts()
@@ -6022,7 +6028,8 @@ index 0000000000000000000000000000000000000000..91c889f9d5c009e8f5703c18bb396909
 +    await page.screenshot({ path: path.join(output!, 'draft-delivered.png'), animations: 'disabled' })
 +    fs.writeFileSync(path.join(output!, 'walkthrough.json'), JSON.stringify({
 +      connection: 'local', attempts: retried, refused, completed,
-+      sameForegroundGateway: true, sameDesktopProcess: true, mockPrompts: mock.receivedPrompts
++      staleRetryCardRemoved: true, sameForegroundGateway: true, sameDesktopProcess: true,
++      mockPrompts: mock.receivedPrompts
 +    }, null, 2) + '\n')
 +  } finally {
 +    await app?.close().catch(() => undefined)
@@ -42104,6 +42111,49 @@ index 15454be5de03e79f33484ceac32e8e48b9ee2a39..1095d23c07a66190a5bae43401d268f4
 -      executeSlash: async () => undefined,
 +      executeSlash: async () => true,
        interruptSession: async () => undefined,
+diff --git a/apps/desktop/src/app/session/hooks/use-prompt-actions/index.test.tsx b/apps/desktop/src/app/session/hooks/use-prompt-actions/index.test.tsx
+index 45d7dc93fe6b12e19ba5752e28cc5a8ed494705a..507d0ac0f902e769f27663cc0fcb3d3f48d25ffe 100644
+--- a/apps/desktop/src/app/session/hooks/use-prompt-actions/index.test.tsx
++++ b/apps/desktop/src/app/session/hooks/use-prompt-actions/index.test.tsx
+@@ -69,2 +69,38 @@ const SLASH_METRIC = 'shared_metrics.slash_command'
+ describe('durable submit acknowledgement', () => {
++  it.each([
++    { status: 'started', outcome: null, clearsRefusal: true },
++    { status: 'terminal', outcome: 'completed', clearsRefusal: true },
++    { status: 'terminal', outcome: 'failed', clearsRefusal: false },
++    { status: 'unknown', outcome: null, clearsRefusal: false }
++  ])('only clears the matching submit error when the retry is confirmed: $status/$outcome', async ({
++    status, outcome, clearsRefusal
++  }) => {
++    const otherError = { id: 'provider-error-from-another-turn', role: 'assistant', parts: [], error: 'send refused' } as const
++    const options = { submission_id: 'retry-this-input' }
++    let handle: HarnessHandle | null = null
++    const errors = () => handle!.state().messages.filter(message => message.error).map(message => message.id)
++    let expectRetry: () => void
++    const requestGateway = vi.fn(async (method: string, params?: Record<string, unknown>) => {
++      if (method !== 'prompt.submit') return {} as never
++      expectRetry()
++      return { admission_id: params?.submission_id, status, outcome } as never
++    })
++    expectRetry = () => { throw new Error('send refused') }
++    await actRender(
++      <Harness
++        onReady={h => (handle = h)}
++        rawAdmissionReceipts
++        refreshSessions={async () => undefined}
++        requestGateway={requestGateway}
++        seedMessages={[{ ...otherError, parts: [] }]}
++      />
++    )
++    expect(await handle!.submitText('retry these words', options)).toBe(false)
++    const originalErrors = errors()
++    expect(originalErrors).toHaveLength(2)
++    expectRetry = () => expect(errors()).toEqual(originalErrors)
++    expect(await handle!.submitText('retry these words', options)).toBe(true)
++    expect(errors()).toEqual(clearsRefusal ? [otherError.id] : originalErrors)
++  })
++
+   it('retires the native private-file journal only after a matching canonical receipt', async () => {
 diff --git a/apps/desktop/src/app/session/hooks/use-prompt-actions/slash-desktop-commands.test.tsx b/apps/desktop/src/app/session/hooks/use-prompt-actions/slash-desktop-commands.test.tsx
 index 503ec92296299f6e806a34abbb89520b16fdbc19..375891bab22079b0b2dcd05c00fa7524b4e33736 100644
 --- a/apps/desktop/src/app/session/hooks/use-prompt-actions/slash-desktop-commands.test.tsx
@@ -42258,7 +42308,7 @@ index c3ca2749e50731d48a0546463f03a47cda8e8ef3..b316209b42f7ef7b7abe97af78585631
 +
    it.each(['missing', 'wrong', '4094', 'lost-legacy'])(
 diff --git a/apps/desktop/src/app/session/hooks/use-prompt-actions/submit.ts b/apps/desktop/src/app/session/hooks/use-prompt-actions/submit.ts
-index df0fc7b7c36a8ed28b16a6aec0f2f77058de5a73..e91feb9e9d42d947aa3728a601a2d8ddb8b064fc 100644
+index df0fc7b7c36a8ed28b16a6aec0f2f77058de5a73..891ea14326418fadea23eb36d5edeebddad31015 100644
 --- a/apps/desktop/src/app/session/hooks/use-prompt-actions/submit.ts
 +++ b/apps/desktop/src/app/session/hooks/use-prompt-actions/submit.ts
 @@ -24,3 +24,3 @@ import {
@@ -42271,7 +42321,11 @@ index df0fc7b7c36a8ed28b16a6aec0f2f77058de5a73..e91feb9e9d42d947aa3728a601a2d8dd
 -import { profileScopeForSessionOwner } from '@/store/session-request-router'
 +import { isSessionOwnerRoute, profileScopeForSessionOwner } from '@/store/session-request-router'
  import { $sessionStates, $sessionTiles } from '@/store/session-states'
-@@ -235,2 +235,15 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
+@@ -199,2 +199,3 @@ type SubmitReceipt = Pick<PromptSubmitResult, 'forwarded' | 'user_row_id'> & {
+   status?: string
++  outcome?: string | null
+   /** TUI-26: the owner ended the session's voice chat on a typed stop phrase and admitted nothing. */
+@@ -235,2 +236,15 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
      async (rawText: string, options?: SubmitTextOptions) => {
 +      // Renderer-managed queue entries carry an id and stored key, without the owner that queued them.
 +      if (
@@ -42287,7 +42341,7 @@ index df0fc7b7c36a8ed28b16a6aec0f2f77058de5a73..e91feb9e9d42d947aa3728a601a2d8dd
 +      }
 +
        const usingComposerAttachments = !options?.attachments
-@@ -471,2 +484,8 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
+@@ -471,2 +485,8 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
 
 +      if (!queuedPromptDestinationMatches(options?.queuedOwnerScope, captured.owner)) {
 +        options?.onQueuedOwnerBlocked?.()
@@ -42296,7 +42350,7 @@ index df0fc7b7c36a8ed28b16a6aec0f2f77058de5a73..e91feb9e9d42d947aa3728a601a2d8dd
 +      }
 +
        const retryKeyForTarget = () =>
-@@ -514,2 +533,8 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
+@@ -514,2 +534,8 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
 
 +      if (!queuedPromptDestinationMatches(options?.queuedOwnerScope, destination.owner)) {
 +        options?.onQueuedOwnerBlocked?.()
@@ -42305,13 +42359,50 @@ index df0fc7b7c36a8ed28b16a6aec0f2f77058de5a73..e91feb9e9d42d947aa3728a601a2d8dd
 +      }
 +
        let requestGateway = destination.requestGateway
-@@ -1169,2 +1194,6 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
+@@ -578,2 +604,7 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
+       const optimisticId = `user-${submissionId}`
++      const submitErrorId = `assistant-submit-error-${submissionId}`
++      const withoutSubmitError = (messages: ChatMessage[]) =>
++        messages.some(message => message.id === submitErrorId)
++          ? messages.filter(message => message.id !== submitErrorId)
++          : messages
+
+@@ -1169,2 +1200,6 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
 
 +                  if (options?.requireIdempotentSubmit) {
 +                    throw new Error(translateNow('promptNotices.legacySendUnconfirmed'))
 +                  }
 +
                    prepared.legacyAttempted = true
+@@ -1237,2 +1272,20 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
+             if ((result?.submission_id ?? result?.admission_id) === submissionId) {
++              if (
++                result.status === 'queued' ||
++                result.status === 'started' ||
++                (result.status === 'terminal' && result.outcome === 'completed')
++              ) {
++                // Clear the matching card from the visible thread first, so the
++                // session cache's next sync cannot merge the old error back in.
++                if (targetIsCurrentView() && activeSessionIdRef.current === receiptSessionId) {
++                  scope.setMessages(withoutSubmitError)
++                }
++
++                updateSessionState(receiptSessionId, state => {
++                  const messages = withoutSubmitError(state.messages)
++
++                  return messages === state.messages ? state : { ...state, messages }
++                }, targetStoredSessionId)
++              }
++
+               trackPendingSubmission(targetStoredSessionId ?? liveSessionId, {
+@@ -1380,5 +1433,5 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
+             messages: [
+-              ...state.messages,
++              ...withoutSubmitError(state.messages),
+               {
+-                id: `assistant-error-${Date.now()}`,
++                id: submitErrorId,
+                 role: 'assistant',
 diff --git a/apps/desktop/src/app/session/hooks/use-prompt-actions/utils.ts b/apps/desktop/src/app/session/hooks/use-prompt-actions/utils.ts
 index b504be19559ad3a91439f14fdfb6ff85c69aeee1..b597c34c2ea3067cf948d6f2b0d1d0e94aec3f20 100644
 --- a/apps/desktop/src/app/session/hooks/use-prompt-actions/utils.ts

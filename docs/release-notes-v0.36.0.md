@@ -88,7 +88,9 @@ and sent zero inference prompts.
 In isolated Local Desktop, the gateway refused a send before accepting
 it. Chat showed the error and restored the exact multiline draft. A
 second click on Send delivered the message once in the same chat.
-The trial used a loopback mock provider.
+Chat now clears the original failure card and its Retry button when
+the gateway confirms the same send. The trial used a loopback mock
+provider.
 
 The packaging check now refuses missing lock-pinned builder packages
 before starting a build. The current Mac package trial stopped at the
