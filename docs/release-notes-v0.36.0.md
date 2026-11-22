@@ -45,10 +45,11 @@ discovered 1,836 test files. It recorded 16,795 passing tests, 37 skips
 and zero failures. The macOS release patch also passed Desktop typecheck
 for the renderer, Electron, end-to-end tests and packaging configuration.
 
-A separate Apple Silicon trial built the Desktop renderer, main process,
-preload and native helpers offline with cached Electron 44.9.3. The
-isolated launch stopped at Chromium's singleton socket before a window
-opened. Packaged Desktop and Local session restore still need verification.
+A separate Apple Silicon trial built Desktop offline with cached
+Electron 44.9.3. On relaunch, Desktop restored a synthetic chat absent
+from the first 50 history results. Both launches used the same
+foreground Local gateway. The test sent zero inference prompts.
+Packaged Desktop and the owner's installed app still need verification.
 
 A single macOS Python 3.14.9 run covered all 1,547 declared files.
 It recorded 15,021 passing tests, 228 skips and zero failures.

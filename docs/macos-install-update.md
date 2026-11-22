@@ -281,6 +281,14 @@ JS
 
 Keep this application in the trial directory. This command does not launch it or configure which source/private home a future GUI launch will use. Do not double-click it as a shortcut around the isolated-home/runtime selection checks.
 
+For a workspace-fenced Electron trial on macOS, set
+`MAC_CHROMIUM_TMPDIR` in the trial process's environment to a short,
+existing directory under the trial root. Electron 44.9.3 can choose
+the system temp directory for its singleton socket when only
+`TMPDIR` is set. The trial used a scratch profile and a foreground
+`hermes gateway run` in that same isolated home so Desktop could
+attach without using launchd. Keep the nonlocal network deny in place.
+
 After the backend import repair, two native Electron interaction tests passed on the Mac: answer cards fit beside an open artifact in a narrow chat tile, and the freshly packaged app cold-restored a synthetic older session absent from the first history page. Local mock-provider requests remained zero. Tests used an isolated home and a network sandbox that permitted loopback/Unix IPC but denied external networking. An earlier guard that also blocked Chromium's local singleton socket was a harness error, not evidence that a real owner instance should be terminated. These two checks are not a full Mac UI audit, signed distribution or production-app migration.
 
 Adopt only after the [deployment acceptance checklist](acceptance-checklist.md) passes in the intended environment. Keep the exact previous source/package until the new version has been accepted, then retire only explicitly owned trial outputs. See [storage and backups](storage-and-backups.md) for retention boundaries.
