@@ -242,6 +242,11 @@ legion_mac_build scripts/run-electron-builder.mjs \
   "-c.directories.output=$LEGION_MAC_OUTPUT"
 ```
 
+Before building, run the packaging command above with `--validate-only`
+added. It checks the prepared receipts and both lock-pinned builder
+packages without launching the packager. Prepare fresh receipts for the
+current source whenever the packaging recipe changes.
+
 The child environment excludes inherited provider and Apple credentials. The renderer used a 4 GiB Node heap ceiling; the upstream packaging wrapper sets its own larger ceiling. Neither ceiling is a measured RSS result or a limit on Hermes workers.
 
 Disabling certificate discovery can leave an unsigned bundle. In the pilot, the initial package completed but failed `codesign --verify --deep --strict`; packaging exit zero was insufficient. A **separate copied trial package** was sealed using the already installed `@electron/osx-sign` library, ad-hoc identity `-`, native main/inherited entitlement files, no timestamp, and disabled automatic entitlement/provisioning-profile changes. Its strict signature check passed. This uses no Apple account and is not notarization. Do not pass `-c.mac.identity=-` to this pinned electron-builder 27: that obsolete field is rejected by its schema. Do not change the native signing configuration or use a real certificate as a workaround.

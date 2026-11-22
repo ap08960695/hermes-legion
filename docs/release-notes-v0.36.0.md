@@ -64,6 +64,10 @@ history. Its Markdown table, chart values and Mermaid diagram rendered.
 Escape returned focus from the diagram viewer to its opener, and the
 source matched the saved text. Both stored messages stayed unchanged.
 
+The packaging check now refuses missing lock-pinned builder packages
+before starting a build. The current Mac package trial stopped at the
+missing arm64 preparation receipt.
+
 Packaged Desktop and the owner's installed app still need verification.
 
 A single macOS Python 3.14.9 run covered all 1,547 declared files.
