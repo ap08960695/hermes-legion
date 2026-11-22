@@ -190,6 +190,25 @@ Mac. It is not installed-app activation, Desktop UX, original-session adoption,
 live goal judging, Linux runtime proof or a performance saving. Native kit bytes
 and dependencies are unchanged; only the companion recipe/fixture changed.
 
+### Check frozen PM inputs on Apple Silicon
+
+Before an offline frozen PM staging run, put the original wheel files and
+standalone Python archive in local directories. Use the patched upstream
+checkout, whose `pm/uv.lock` supplies the PM worker's dependency wheel digests
+and whose `pm/lock.json` supplies the `darwin-arm64` Python archive digest.
+
+```sh
+"$HERMES_BOOTSTRAP_PYTHON" "$LEGION_ROOT/scripts/verify_frozen_pm_inputs.py" \
+  "$HERMES_CHECKOUT" --wheelhouse "$PM_WHEELHOUSE" --archives "$PM_ARCHIVES"
+```
+
+Use Python 3.11 or newer for this command. It reads local files and exits zero
+only when every locked wheel and the archive match. Keep the original filenames
+so each missing or mismatched file is identifiable. Installed distributions and
+an extracted interpreter cannot establish the hashes of their original files.
+Matching hashes establish input identity. Frozen runtime staging is a separate
+check using the pinned PM toolchain and a clean trial home.
+
 ## 5. Keep Desktop activation separate
 
 Passing the CLI checks does not rebuild an installed `.app`. Desktop needs native Apple Silicon/Intel dependencies, a build of the patched renderer/main/preload and the normal platform packaging lifecycle. A Linux build or a copied renderer alone is insufficient.
